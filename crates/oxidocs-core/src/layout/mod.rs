@@ -9487,7 +9487,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && std::env::var("OXI_S813_DISABLE").is_err();
             let mut s813_first = true;
             let mut s813_prev_sa: Option<f32> = None;
-            for block in blocks {
+            if std::env::var("OXI_DBG_HDR").is_ok() {
+                eprintln!("[DBG_HDR] blocks.len()={} blocktypes={:?}",
+                    blocks.len(),
+                    blocks.iter().map(|b| match b {
+                        Block::Paragraph(_) => "P",
+                        Block::Table(_) => "T",
+                        Block::Image(_) => "I",
+                        _ => "?",
+                    }).collect::<Vec<_>>());
+            }
+            // S1HDR (2026-08-04, opt-out OXI_S1HDR_DISABLE): a Latin header
+            // TEXT paragraph whose inline images were extracted into sibling
+            // Block::Image entries (S742) must price those images INTO its
+            // LINES — Word renders each soft-broken line as max(text line, the
+            // inline images sitting on it), NOT as one text line + N separate
+            // image blocks. educational__002a301d para0: text 1 line (16.099,
+            // Arial 14 hhea) + img1 22.8 + img2 22.2 = 61.099, but Word =
+            // 22.8 + 22.2 = 45.0 (measured body top 94.64 -> 58.64 reserved).
+            // The loop walks blocks by index so a paragraph can consume the
+            // following inline images (they are skipped by the S742 arm below).
+            let mut bi = 0;
+            while bi < blocks.len() {
+                let block = &blocks[bi];
                 if let Block::Paragraph(para) = block {
                     // S862 (2026-07-15, opt-out OXI_S862_DISABLE): empty header
                     // paragraphs derive their line from the paragraph mark's
@@ -9500,8 +9522,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // leaves an empty run whose rPr [sz=80 in forms__0010349d]
                     // must NOT be read as the empty-paragraph mark formatting) —
                     // use the first run with visible text, else the ¶-mark rPr.
+                    // S1HDR (2026-08-04): "visible text" must mean a run carrying
+                    // an actual glyph, not whitespace. `!r.text.is_empty()`
+                    // accepted a TAB run (text = "\t", rPr Arial-Black sz=32 on
+                    // educational__002a301d's logo header), pricing the header
+                    // line at Arial-Black 16pt hhea (22.562) instead of the
+                    // real text 'Polar Coordinates' (Arial 14pt hhea 16.099) —
+                    // Word's measured line pitch is 16.1. Use the first run with
+                    // a non-whitespace character; empty/whitespace-only headers
+                    // fall through to the ¶-mark rPr (S862) unchanged.
                     let visible_run = if s1010 {
-                        para.runs.iter().find(|r| !r.text.is_empty())
+                        para.runs
+                            .iter()
+                            .find(|r| r.text.chars().any(|c| !c.is_whitespace()))
                     } else {
                         para.runs.first()
                     };
@@ -9565,6 +9598,90 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         lh
                     };
+                    // S1HDR (2026-08-04): soft-break line count + inline-image
+                    // line merge. When this paragraph is followed by inline
+                    // (position.is_none()) Image blocks, merge them into the
+                    // paragraph's LINES instead of adding them as separate
+                    // blocks (the S742 arm below then skips them via `bi`).
+                    // Line count = soft breaks + 1 + width wrap (S731's
+                    // est/one technique). Images are assigned row-sequentially;
+                    // each row height = max(lh, images on that row).
+                    let s1hdr = !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1HDR_DISABLE").is_err()
+                        && std::env::var("OXI_S742_DISABLE").is_err();
+                    let has_real_text = para
+                        .runs
+                        .iter()
+                        .any(|r| r.text.chars().any(|c| !c.is_whitespace()));
+                    if s1hdr && has_real_text {
+                        // Collect the immediately-following inline images.
+                        let mut j = bi + 1;
+                        let mut img_heights: Vec<f32> = Vec::new();
+                        while j < blocks.len() {
+                            match &blocks[j] {
+                                Block::Image(img) if img.position.is_none() => {
+                                    img_heights.push(img.height);
+                                    j += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+                        if !img_heights.is_empty() {
+                            let br_count = para
+                                .runs
+                                .iter()
+                                .map(|r| r.text.matches('\n').count())
+                                .sum::<usize>();
+                            let mut wrap = 0usize;
+                            if std::env::var("OXI_S731_DISABLE").is_err() {
+                                let est = self.estimate_para_height(
+                                    para, hdr_cw, None, None, false, None, None,
+                                );
+                                let one = self.estimate_para_height(
+                                    para, 1.0e6, None, None, false, None, None,
+                                );
+                                if one > 0.1 {
+                                    wrap = ((est / one).round() as i32 - 1).max(0) as usize;
+                                }
+                            }
+                            let line_count = (br_count + 1 + wrap).max(1);
+                            let mut line_hs = vec![lh; line_count];
+                            for (k, h) in img_heights.iter().enumerate() {
+                                let row = k.min(line_count - 1);
+                                line_hs[row] = line_hs[row].max(*h);
+                            }
+                            let para_h: f32 = line_hs.iter().sum();
+                            hdr_h += para_h;
+                            if std::env::var("OXI_DBG_HDR").is_ok() {
+                                eprintln!("[DBG_HDR-S1HDR] br={} wrap={} lines={} imgs={:?} para_h={:.3}",
+                                    br_count, wrap, line_count, img_heights, para_h);
+                            }
+                            bi = j;
+                            // S1014 Stage B: the s813 before/after collapse for
+                            // this paragraph (kept in sync with the non-S1HDR
+                            // path below).
+                            let s1014_hdr = std::env::var("OXI_S1014_DISABLE").is_err();
+                            if s813 && (s1014_hdr || !para.style.has_direct_spacing) {
+                                let sb = para.style.space_before.unwrap_or(0.0);
+                                let sa = para.style.space_after.unwrap_or(0.0);
+                                if s813_first {
+                                    hdr_h += sb.max(0.0);
+                                } else if let Some(prev) = s813_prev_sa {
+                                    hdr_h += prev.max(sb);
+                                }
+                                s813_prev_sa = Some(sa);
+                                s813_first = false;
+                            } else {
+                                hdr_h += para.style.space_after.unwrap_or(0.0);
+                                s813_prev_sa = None;
+                                s813_first = false;
+                            }
+                            if std::env::var("OXI_DBG_HDR").is_ok() {
+                                eprintln!("[DBG_HDR] end-of-block hdr_h={:.3}", hdr_h);
+                            }
+                            continue;
+                        }
+                    }
                     hdr_h += lh_used;
                     // S1014 Stage B (2026-07-26, opt-out OXI_S1014_DISABLE): the
                     // s813 before/after collapse also applies to DIRECT-spacing
@@ -9610,6 +9727,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if one > 0.1 {
                             let extra_lines = ((est / one).round() as i32 - 1).max(0);
                             hdr_h += extra_lines as f32 * lh;
+                            if std::env::var("OXI_DBG_HDR").is_ok() {
+                                let txt: String = para.runs.iter().flat_map(|r| r.text.chars()).take(20).collect();
+                                eprintln!("[DBG_HDR-S731] text={:?} est={:.3} one={:.3} est/one={:.3} extra={} lh={:.3}",
+                                    txt, est, one, est / one, extra_lines, lh);
+                            }
                         }
                     }
                 } else if let Block::Table(t) = block {
@@ -9657,7 +9779,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if std::env::var("OXI_S742_DISABLE").is_err() && img.position.is_none() {
                         hdr_h += img.height;
                     }
+                    if std::env::var("OXI_DBG_HDR").is_ok() {
+                        eprintln!("[DBG_HDR] Image block h={:.3} pos={:?} -> hdr_h={:.3}",
+                            img.height, img.position.as_ref().map(|p| p.y), hdr_h);
+                    }
                 }
+                if std::env::var("OXI_DBG_HDR").is_ok() {
+                    eprintln!("[DBG_HDR] end-of-block hdr_h={:.3}", hdr_h);
+                }
+                bi += 1;
             }
             // S813: the LAST header paragraph's after-spacing sits between the
             // header text and the body top (Word's Annex body top 72.1 =
@@ -22892,6 +23022,39 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 }
             }
 
+            // S1067 (2026-08-04, default ON, opt-out OXI_S1067_DISABLE): a
+            // table row that whole-moves to become the FIRST content of a fresh
+            // continuation page COLLAPSES its leading empty cell paragraphs to
+            // zero height. Word render-truth: educational__002a301d's ROW2
+            // (1-col, 8-row table → not a single-cell row, whole-moved) opens
+            // p6 with "b." as its FIRST line (baseline 105.39/105.50) — the 6
+            // leading 16pt empties render ~0. The faithful minimal repro
+            // (s1065_reproA: 30 filler + a 2-row fixed table whose row2 = 6
+            // empties + "b.") whole-moves row2 to p2 where "b." is the first
+            // content at baseline 84.98 with the 6 empties collapsed. A
+            // whole-TABLE move (row NOT at the page top) does NOT collapse; a
+            // mid-page empty renders full (reproB control). Mirrors
+            // S570/S719b's re-anchor-to-first-non-empty, which only existed in
+            // the R7.56 single-cell overflow loop. The gate `!pages.is_empty()
+            // && cursor==page_top` identifies a just-whole-moved row (the
+            // whole-move push above does cursor.set(page_top)); a row that
+            // naturally starts a fresh page has pages empty or cursor ≠
+            // page_top (a following row sits at page_top + prior row_height).
+            // Latin-scoped (JP form cells = the calibrated cell-height
+            // tombstone area).
+            // ★HELD OPT-IN (2026-08-05, `OXI_S1067=1`, default OFF = byte-identical).
+            // The rule above is Word-measured, but an isolation run on its own
+            // target (educational__002a301d, all three flags swept) shows it is
+            // INERT there: ALL-ON 0.5984 pcd+2 == -S1067 0.5984 pcd+2, while
+            // removing S1HDR or S1066 drops back to 0.2623 pcd+3. A rule with
+            // no measured gate benefit buys only blast radius, so it ships when
+            // a doc actually needs it (it was implemented but never verified —
+            // the "12 -> 11 pages" claim was never measured).
+            let s1067_row_at_page_top = std::env::var("OXI_S1067").is_ok()
+                && !self.doc_body_has_real_cjk
+                && !pages.is_empty()
+                && (cursor.cursor_y - page_top).abs() < 0.5;
+
             // Second pass: render cells
             // Track actual content height per cell for row_height correction
             let is_exact_row = row.height_rule.as_deref() == Some("exact");
@@ -23178,6 +23341,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && std::env::var("OXI_S751_DISABLE").is_err()
                     && cell.blocks.iter().all(|b| matches!(b, Block::Paragraph(p)
                         if p.runs.iter().all(|r| r.text.is_empty())));
+                // S1067: collapse this cell's leading empty paragraphs when the
+                // row was just whole-moved to a fresh page top (see the row-level
+                // flag above). Reset to false once a content-bearing paragraph is
+                // placed so subsequent empties in the same cell render normally.
+                let mut s1067_skip_empties = s1067_row_at_page_top;
                 for (block_pos, block) in cell.blocks.iter().enumerate() {
                 // S488: snapshot this block's content_h-relative top (aligns with
                 // block_pos via enumerate; pushed before the exact-clip break so
@@ -23409,6 +23577,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         cell_para_counter += 1;
                         continue;
                     }
+                    // S1067: collapse a just-whole-moved row's leading empty
+                    // paragraphs (before ANY spacing math — Word's p6 opens with
+                    // "b." as the first line; the 6 empties render ~0, so no
+                    // space_before survives either). The skip predicate is the
+                    // codebase's standard "no visible text" test. Reset the flag
+                    // so a later empty in the same cell renders full height.
+                    if s1067_skip_empties
+                        && para.runs.iter().all(|r| r.text.trim().is_empty()) {
+                        continue;
+                    }
+                    s1067_skip_empties = false;
                     // Apply table style pPr as fallback (ECMA-376: table style pPr < paragraph style < direct)
                     // Word resets line spacing to Single and space_after to 0 for table cell
                     // paragraphs that inherit from Normal style (no direct spacing in pPr).
@@ -25375,11 +25554,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // line to fit an inline OLE object. The F8FE fragment carries
                             // the object EXTENT as width but line_height_inner priced it
                             // at the run font_size (~13.8), so a 17-21pt object overflowed
-                            // (negative y in step 5). Apply the body S851/S875 fold to the
-                            // cell line: target = obj_h + text_win_descent + auto_extra
-                            // (mixed: descent>0 → max with text lh; solo: descent=0 →
-                            // obj+extra). Gated on s982_cell → a default line has no F8FE
-                            // fragment so obj_h=0 and this is inert (byte-identical).
+                            // (negative y in step 5). ★S1066b correction (2026-08-05): the
+                            // FAITHFUL repro (real Navigator/Compatible cell paragraphs in
+                            // minimal tables, Word COM) proves Word's cell line =
+                            // max(paragraph_line, image_height) PER LINE — a raised
+                            // (w:position=-6) inline image sits within the line box, so it
+                            // does NOT add the text win-descent on top. nav_on row grows
+                            // +3.84pt over nav_off (16 atLeast → 19.8 = max(16, 19.79));
+                            // comp 3 images across 2 lines grow +7.20 (≈2×3.8). The old
+                            // `obj_h + descent + extra` over-counted by descent (21.92 vs
+                            // Word 19.8). target = max(lh, obj_h) (+ S875 auto-extra for a
+                            // multiple>1 auto rule, which is 0 for atLeast). Gated on
+                            // s982_cell → a default line has no F8FE fragment so obj_h=0
+                            // and this is inert (byte-identical).
                             if s982_cell {
                                 let obj_h: f32 = line.iter()
                                     .filter_map(|(text, ..)| text.strip_prefix('\u{F8FE}')
@@ -25387,15 +25574,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     .filter_map(|i| cell_inline_objects.get(i).map(|im| im.height))
                                     .fold(0.0_f32, f32::max);
                                 if obj_h > 0.0 {
-                                    let descent: f32 = line.iter()
-                                        .filter(|(text, ..)| !text.starts_with('\u{F8FE}') && !text.trim().is_empty())
-                                        .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
-                                            let metrics = match font_family.as_deref() {
-                                                Some(ff) => self.registry.get(ff),
-                                                None => self.registry.default_metrics(),
-                                            };
-                                            metrics.win_descent * *fs
-                                        }).fold(0.0_f32, f32::max);
                                     // S875 auto-rule extra leading (multiple > 1 only).
                                     let factor = if matches!(para.style.line_spacing_rule.as_deref(),
                                         None | Some("auto"))
@@ -25403,11 +25581,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0)
                                     } else { 1.0 };
                                     let extra = if factor > 1.0 { lh * (1.0 - 1.0 / factor) } else { 0.0 };
-                                    let target = obj_h + descent + extra;
+                                    let target = obj_h.max(lh) + extra;
                                     if std::env::var("OXI_DBG_CELLOLE").is_ok() {
-                                        eprintln!("[CELL-OLE] phase=height {} obj_h={} desc={:.2} extra={:.2} text_lh={:.2} chosen={:.2}",
-                                            if descent > 0.0 { "mixed" } else { "solo" },
-                                            obj_h, descent, extra, lh, target.max(lh));
+                                        eprintln!("[CELL-OLE] phase=height obj_h={:.2} extra={:.2} text_lh={:.2} chosen={:.2}",
+                                            obj_h, extra, lh, target);
                                     }
                                     if target > lh { lh = target; }
                                 }

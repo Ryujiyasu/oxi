@@ -2787,9 +2787,59 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         // `!text.is_empty()` they flowed inline and cost it 0.9655 → 0.9616).
         && runs.iter().any(|run| !run.text.trim().is_empty())
         && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty());
-    if (allow_inline_flow || s984_cell_flow) && inline_img_runs.len() >= 2
+    // S1066 (2026-08-05, default ON, opt-out OXI_S1066_DISABLE): the S854/S984
+    // horizontal inline-image flow, extended to a TABLE CELL whose paragraph
+    // ALSO has visible TEXT. S984 covers the cell case where the paragraph is
+    // VISUAL-ONLY (all runs text-empty); a cell paragraph with text + ≥2 inline
+    // images fell to SPLIT-BLOCK, so each image got its own sibling Block::Image
+    // and pushed to its own line → a near-empty page. educational__002a301d
+    // (blindC50, 0.2623, pcd +3): the 'Compatible TI Technologies: ' cell
+    // paragraph (3× 19.8pt wp:inline icons) — Word flows all three on p1 bottom
+    // (text line + one more line; a301d_word.pdf images [226.8,680..699.8] /
+    // [77.4,699.8..719] / [226.5,700.7..719.3] beside the span y0=687.8), Oxi
+    // split-blocked them → p2 = 3 images only = +1. The cell builder (S982
+    // F8FE registry) + cell emit (step 5) + fold (step 6) already draw a run
+    // inline_object_image, so this is a parser-routing-only fix. GATE: fires on
+    // ONLY the target (census: golden 0 / real_en 0 / corp_ja 0 / corp_en 3
+    // where 00161422 is single-image [n=1 excluded] and 002c8a33's images are
+    // v:textbox-embedded [not inline_img_runs]) → canary-safe by construction.
+    // Placeholder images (data-less S537b/S741) keep the block path; sum(width)
+    // ≤ tcW keeps a wider-than-cell run on the block path (S984 gate).
+    let s1066_cell_text_flow = std::env::var("OXI_S1066_DISABLE").is_err()
+        && std::env::var("OXI_S984_DISABLE").is_err()
+        && std::env::var("OXI_S982_DISABLE").is_err()
+        && in_cell
+        // ★VISIBLE text (S1034's gate: whitespace-only is image-only)
+        && runs.iter().any(|run| !run.text.trim().is_empty())
+        && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty())
+        && cell_inline_flow_width.map_or(false, |w| s984_inline_w <= w + 0.01);
+    // S1066b (2026-08-05, default ON, opt-out OXI_S1066_DISABLE): the S1066
+    // cell text+image flow, extended to a SINGLE inline image. S1066 required
+    // ≥2 images (mirroring S854's body ≥2 gate); a cell paragraph with text +
+    // exactly 1 inline image still fell to SPLIT-BLOCK, giving the image its
+    // OWN body-level sibling Block::Image line → a phantom ~16-20pt line.
+    // educational__002a301d 'TI-Nspire™ Navigator™' cell paragraph (1× 33.7×
+    // 19.8pt wp:inline icon, WIDE) — Word grows the cell line to
+    // max(atLeast-16 line, 19.79 image) = 19.8 and flows the icon on the text
+    // line (FAITHFUL repro: nav_on row grows +3.84pt over nav_off = 19.8-16;
+    // a301d_word.pdf Navigator icon [77.4,532.2..552.0] beside the text line).
+    // Oxi split-blocked it → image on its own line at y=538.96 → the front
+    // matter drifted +1 line → 13 pages vs Word 10. GATE: identical to S1066
+    // (visible text + all non-placeholder + sum(w) ≤ tcW); the faithful repro
+    // + the real doc both confirm Word's max(line, image) cell model.
+    let s1066_cell_single_flow = s1066_cell_text_flow && inline_img_runs.len() == 1;
+    if ((allow_inline_flow || s984_cell_flow || s1066_cell_text_flow)
+        && inline_img_runs.len() >= 2)
         || s1034_single_inline
+        || s1066_cell_single_flow
     {
+        if std::env::var("OXI_DBG_S854").is_ok() {
+            let txt: String = runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
+            eprintln!("[S854] KEEP-IN-RUN allow_inline_flow={} s984={} s1066={} s1066b={} n={} s1034={} has_text={} txt={:?}",
+                allow_inline_flow, s984_cell_flow, s1066_cell_text_flow, s1066_cell_single_flow,
+                inline_img_runs.len(), s1034_single_inline,
+                runs.iter().any(|r| !r.text.trim().is_empty()), txt);
+        }
         for (ridx, image) in inline_img_runs {
             if let Some(run) = runs.get_mut(ridx) {
                 run.style.inline_object_extent = Some((image.width, image.height));
@@ -2797,6 +2847,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             }
         }
     } else {
+        if std::env::var("OXI_DBG_S854").is_ok() && !inline_img_runs.is_empty() {
+            let txt: String = runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
+            eprintln!("[S854] SPLIT-BLOCK allow_inline_flow={} n={} s1034={} has_text={} txt={:?}",
+                allow_inline_flow, inline_img_runs.len(), s1034_single_inline,
+                runs.iter().any(|r| !r.text.trim().is_empty()), txt);
+        }
         for (_ridx, image) in inline_img_runs {
             images.push(image);
         }
