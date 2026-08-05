@@ -2016,6 +2016,11 @@ thread_local! {
     /// Body flow only (`body_para_index.is_some()`), so a textbox/header
     /// first paragraph keeps its space-before as before.
     static S816_PAST_FIRST_SECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// S1073: the space-after of the LAST body paragraph of the previous
+    /// section. A nextPage section starts a fresh `layout_page`, so the local
+    /// `prev_space_after` resets to 0 and the excess model would see nothing to
+    /// collapse against.
+    static S1073_PREV_SECTION_AFTER: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 /// RAII guard for IN_FOOTNOTE_LAYOUT (SG0RAW footnote scope-out).
@@ -2270,6 +2275,7 @@ impl LayoutEngine {
 
         // S816: reset the past-first-section flag for this layout run.
         S816_PAST_FIRST_SECTION.with(|c| c.set(false));
+        S1073_PREV_SECTION_AFTER.with(|c| c.set(0.0));
         for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
             // S816: sections after the first count as "page 2+" for the
             // page-top space-before suppression.
@@ -8625,6 +8631,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         }
 
+        // S1073: hand this section's trailing space-after to the next one.
+        S1073_PREV_SECTION_AFTER.with(|c| c.set(prev_space_after));
+
         pages
     }
 
@@ -10776,35 +10785,46 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // before=240, render at y=72=margin). Body flow only.
         // Default ON (opt-out OXI_S816_DISABLE) since the Latin exact-cell
         // bundle (S815-S819) shipped together 2026-07-13.
-        // S1073 (2026-08-05, HELD OPT-IN `OXI_S1073=1`, default byte-identical):
-        // whether the first page of a NEW SECTION suppresses space-before is
-        // UNRESOLVED — a controlled probe and a frozen document disagree, and no
-        // discriminator has been found, so the S816 behaviour stands by default.
-        //   probe `scratchpad/a1c2f/sbsec_probe.py` (5 nextPage sections,
-        //     identical pgMar, NO header, one 16pt TNR heading each): Word KEEPS
-        //     the space-before at every section top, +14.04pt for before=280tw,
-        //     identically for all FOUR provenances (style / style+keepNext /
-        //     DIRECT pPr / basedOn-inherited); the before=0 control sits at the
-        //     margin, so the arms are not degenerate.
-        //   reference__0069c0f7 (ActHead2, style before=280, section top): Word
-        //     KEEPS it — its heading's glyph ink top is 131.0 against Oxi's
-        //     117.36 (both ink tops), i.e. +13.64. Suppressing it lifts the page
-        //     by one line and spills `(a) the pharmaceutical benefits` onto p5.
-        //   uk_local_spending (Heading1, before=240 inherited from Normal): Word
-        //     SUPPRESSES at its section tops — Annex I's box sits at 72.0 with a
-        //     header-driven body top of 72.099 — while KEEPING the full 12pt at a
-        //     non-section page top (Annex III, box 84.0). Its Annex II box lands
-        //     at 78.0, i.e. +5.9, which no reading explains yet.
-        // Enabling this outright takes uk_local_spending from PASS 1.0000 to
-        // 0.9979 {+1:2}, so it is held until the discriminator is derived. The
-        // probe and uk_local_spending differ in: a header part, `before`
-        // inherited from Normal vs declared on the style, Arial 18pt vs TNR 16pt,
-        // and Normal's `widowControl w:val="0"` — the next probe should carry
-        // uk_local_spending's shape verbatim.
+        // S1073 (2026-08-05, opt-out OXI_S1073_DISABLE): at a SECTION top and at
+        // a pageBreakBefore top, the space-before that survives is the EXCESS
+        // over the previous paragraph's space-after — `max(0, before - prev
+        // after)` — i.e. the S874 "lower layer" is consumed by the break and
+        // only the excess layer shows. A `<w:br type="page"/>` top (and a
+        // natural one) still suppress ENTIRELY, whatever the previous after is.
+        // DERIVED by `scratchpad/a1c2f/sbsec{3,4}_probe.py` (nextPage sections /
+        // br-page / pageBreakBefore x prev.after in {0, 6, 12, 24}, identical
+        // pgMar, heading before=240tw):
+        //     break kind   prev.after   Word applies
+        //     section          0pt        12.000     <- excess
+        //     section          6pt         6.000     <- excess
+        //     section         12pt         0.000     <- excess
+        //     section         24pt         0.000     <- excess
+        //     pageBreakBefore  0pt        12.000     <- excess
+        //     pageBreakBefore 12pt         0.000     <- excess (NOT a full keep)
+        //     br-page          0pt         0.000     <- suppressed regardless
+        //     br-page         12pt         0.000
+        // This reconciles the two readings that motivated S816. Its own probe
+        // saw "pageBreakBefore KEEPS" only because that probe's previous
+        // paragraph had after=0; and uk_local_spending's three IDENTICAL
+        // Heading1 section tops render at +0 / +6 / +12 in Word, which no other
+        // model explains and the excess model gives exactly (their preceding
+        // paragraphs carry after = 12 / 6 / 0). reference__0069c0f7's ActHead2
+        // section top takes the full +14 because nothing in its style chain
+        // declares an `after` at all.
+        // Latin scope, like the pbb exception below.
+        // HELD OPT-IN `OXI_S1073=1` (default byte-identical): the model is
+        // Word-derived, but uk_local_spending still keeps one paragraph of
+        // space Word drops (PASS 1.0000 -> 0.9990), so it does not ship yet.
+        let s1073 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1073").is_ok()
+            && std::env::var("OXI_S816_DISABLE").is_err();
         let s816_section_2_plus = body_para_index.is_some()
             && std::env::var("OXI_S816_DISABLE").is_err()
-            && std::env::var("OXI_S1073").is_err()
             && S816_PAST_FIRST_SECTION.with(|c| c.get());
+        // The first page of a non-first section: the per-section page vecs are
+        // still empty, so only `s816_section_2_plus` makes this a page top.
+        let s1073_section_first_page =
+            s816_section_2_plus && pages.is_empty() && current_elements.is_empty();
         // S1072 (2026-08-05, opt-out OXI_S1072_DISABLE): an AUTO space-before
         // (w:beforeAutospacing) collapses to ZERO at a page top even on PAGE 1,
         // where an EXPLICIT w:before is kept (the COM confirmation above). HTML
@@ -10829,10 +10849,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // natural and hard-break (<w:br type=page>) tops suppress
             // (y=72.33 = margin). Latin scope for the pbb exception — the JP
             // corpus is calibrated with unconditional suppression.
-            if !(para.style.page_break_before
+            // S1073 refines the "keeps" to the EXCESS over prev.after and
+            // extends the same treatment to a section top (see above).
+            let pbb_top = para.style.page_break_before
                 && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S816_DISABLE").is_err())
-            {
+                && std::env::var("OXI_S816_DISABLE").is_err();
+            if s1072_auto_top {
+                // An AUTO space-before never survives a page top.
+                effective_spacing = 0.0;
+            } else if s1073 && (pbb_top || s1073_section_first_page) {
+                // At a section top the local `prev_space_after` is 0 (a fresh
+                // `layout_page`); the previous section's trailing after is
+                // still sitting in the thread-local at this point.
+                let consumed = if s1073_section_first_page {
+                    prev_space_after.max(S1073_PREV_SECTION_AFTER.with(|c| c.get()))
+                } else {
+                    prev_space_after
+                };
+                effective_spacing = (effective_spacing - consumed).max(0.0);
+            } else if !pbb_top {
                 effective_spacing = 0.0;
             }
         }
