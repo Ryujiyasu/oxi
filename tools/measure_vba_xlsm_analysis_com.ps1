@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $probeRoot = Join-Path ([IO.Path]::GetTempPath()) ("oxivba-xlsm-analysis-" + [guid]::NewGuid().ToString('N'))
 $workbookPath = Join-Path $probeRoot 'probe.xlsm'
 $workbookCopyPath = Join-Path $probeRoot 'probe-copy.xlsm'
+$workbookVariantPath = Join-Path $probeRoot 'probe-variant.xlsm'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $cliPath = Join-Path $repoRoot 'target\debug\oxidocs.exe'
 $excel = $null
@@ -35,6 +36,15 @@ Private Function HiddenHelper(ByVal value As Long) As Long
 End Function
 '@)
     $workbook.SaveAs($workbookPath, 52)
+    $workbook.SaveCopyAs($workbookCopyPath)
+    $module.CodeModule.ReplaceLine(11, '    HiddenHelper = value + 2')
+    $module.CodeModule.AddFromString(@'
+
+Private Function VariantOnly(ByVal value As Long) As Long
+    VariantOnly = value * 2
+End Function
+'@)
+    $workbook.SaveAs($workbookVariantPath, 52)
     $workbook.Close($false)
     $workbook = $null
     $excel.Quit()
@@ -64,7 +74,6 @@ End Function
     }
 
     $output.TrimEnd()
-    Copy-Item -LiteralPath $workbookPath -Destination $workbookCopyPath
     $inventory = (& $cliPath vba-inventory $probeRoot | Out-String)
     if ($LASTEXITCODE -ne 0) {
         throw "vba-inventory failed with exit code $LASTEXITCODE"
@@ -73,7 +82,10 @@ End Function
         'Structurally identical modules (standard fingerprint):',
         'probe.xlsm::AnalysisProbe',
         'probe-copy.xlsm::AnalysisProbe',
-        'Inventory: 2 succeeded, 0 failed'
+        'Related modules (standard fingerprint):',
+        'probe-variant.xlsm::AnalysisProbe',
+        '25.0% (shared 1; only 1/2; diverged: HiddenHelper)',
+        'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {
         if (-not $inventory.Contains($expected)) {

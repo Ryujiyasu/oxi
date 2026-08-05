@@ -2,12 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use oxidocs_common::archive::OoxmlArchive;
-use oxivba_core::fingerprint::{fingerprint_module, ModuleFingerprint, Strength};
+use oxivba_core::fingerprint::{compare, fingerprint_module, ModuleFingerprint, Strength};
 use oxivba_core::{analyse, parse_module, Analysis, Class};
 
 struct ModuleReport {
@@ -113,6 +113,7 @@ pub(crate) fn inventory(input: &str) -> Result<(), String> {
     }
 
     print_duplicate_modules(&reports);
+    print_related_modules(&reports);
     println!();
     println!(
         "Inventory: {} succeeded, {} failed",
@@ -211,6 +212,84 @@ fn print_duplicate_modules(reports: &[ProjectReport]) {
     println!("Structurally identical modules (standard fingerprint):");
     for members in duplicates {
         println!("  {}", members.join(" = "));
+    }
+}
+
+fn print_related_modules(reports: &[ProjectReport]) {
+    let modules: Vec<_> = reports
+        .iter()
+        .flat_map(|report| {
+            report.modules.iter().filter_map(move |module| {
+                (!module.fingerprint.procedures.is_empty()).then_some((report, module))
+            })
+        })
+        .collect();
+    let mut by_hash: BTreeMap<u128, Vec<usize>> = BTreeMap::new();
+    let mut by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, (_, module)) in modules.iter().enumerate() {
+        for procedure in &module.fingerprint.procedures {
+            by_hash.entry(procedure.hash).or_default().push(index);
+            by_name
+                .entry(procedure.name.to_ascii_lowercase())
+                .or_default()
+                .push(index);
+        }
+    }
+
+    let mut candidates = BTreeSet::new();
+    for members in by_hash.values().chain(by_name.values()) {
+        for (position, &left) in members.iter().enumerate() {
+            for &right in &members[position + 1..] {
+                if left != right {
+                    candidates.insert((left.min(right), left.max(right)));
+                }
+            }
+        }
+    }
+
+    let mut related = Vec::new();
+    for (left, right) in candidates {
+        let (left_report, left_module) = modules[left];
+        let (right_report, right_module) = modules[right];
+        if left_report.path == right_report.path
+            || left_module.fingerprint.combined == right_module.fingerprint.combined
+        {
+            continue;
+        }
+        let similarity = compare(&left_module.fingerprint, &right_module.fingerprint);
+        if (similarity.shared > 0 && similarity.jaccard >= 0.5) || !similarity.diverged.is_empty() {
+            related.push((
+                similarity,
+                format!("{}::{}", left_report.path.display(), left_module.name),
+                format!("{}::{}", right_report.path.display(), right_module.name),
+            ));
+        }
+    }
+    related.sort_by(|a, b| {
+        b.0.jaccard
+            .total_cmp(&a.0.jaccard)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    if related.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("Related modules (standard fingerprint):");
+    for (similarity, left, right) in related {
+        let diverged = if similarity.diverged.is_empty() {
+            String::new()
+        } else {
+            format!("; diverged: {}", similarity.diverged.join(", "))
+        };
+        println!(
+            "  {left} <> {right}: {:.1}% (shared {}; only {}/{}{diverged})",
+            similarity.jaccard * 100.0,
+            similarity.shared,
+            similarity.only_a,
+            similarity.only_b
+        );
     }
 }
 
