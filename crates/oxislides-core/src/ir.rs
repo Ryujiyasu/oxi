@@ -9,6 +9,17 @@ pub struct Presentation {
     pub slides: Vec<Slide>,
     pub slide_width: f32,  // in points (default 960pt = 10 inches)
     pub slide_height: f32, // in points (default 540pt = 7.5 inches)
+    /// Theme minor-font latin typeface (default font for body text / most shapes).
+    /// From ppt/theme/themeN.xml <a:minorFont><a:latin typeface="..."/>. Default "Calibri".
+    #[serde(default = "default_theme_font")]
+    pub minor_font: String,
+    /// Theme major-font latin typeface (title placeholders). Default "Calibri".
+    #[serde(default = "default_theme_font")]
+    pub major_font: String,
+}
+
+pub fn default_theme_font() -> String {
+    "Calibri".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +39,11 @@ pub struct Shape {
     /// PresentationML shape type (a:prstGeom/@prst e.g. "rect", "ellipse", "roundRect", "chevron").
     /// None for picture / graphicFrame / plain textbox without a preset geometry.
     pub shape_type: Option<String>,
+    /// Placeholder type (p:nvPr/p:ph/@type, "title" / "body" / "subTitle" / "obj"...).
+    /// None for a plain (non-placeholder) shape. Title placeholders use the theme
+    /// MAJOR font; everything else (incl. body placeholders) uses the MINOR font.
+    #[serde(default)]
+    pub ph_type: Option<String>,
     pub content: ShapeContent,
     pub fill_color: Option<String>,   // hex color for solid fill
     pub border_color: Option<String>, // hex color for outline

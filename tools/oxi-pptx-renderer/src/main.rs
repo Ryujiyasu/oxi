@@ -144,6 +144,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                     let mut cursor_pt = sh.y + MARGIN_TOP;
                                     for (i, para_json) in arr.iter_mut().enumerate() {
                                         if let Some(para) = sh_para(&sh.content, i) {
+                                            let def_family = resolve_font(pres, sh);
                                             let bases = layout_paragraph_baselines(
                                                 dc,
                                                 para,
@@ -151,6 +152,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 sh.width,
                                                 scale,
                                                 i == 0,
+                                                &def_family,
                                             );
                                             para_json["line_baselines"] = json!(
                                                 bases
@@ -203,6 +205,22 @@ fn sh_para(content: &ShapeContent, i: usize) -> Option<&oxislides_core::ir::Slid
             paragraphs.get(i)
         }
         _ => None,
+    }
+}
+
+/// Theme-default font resolution (Ra loop, theme_default probes, PPTX COM/PDF
+/// render-truth): a run with NO explicit `font.name` is rendered in the theme
+/// font for its context —
+///   * title placeholders (`p:ph @type="title"`) use the theme MAJOR font
+///     (`<a:majorFont><a:latin typeface=.../>`),
+///   * everything else (plain textboxes, body placeholders, table cells) uses
+///     the theme MINOR font (`<a:minorFont><a:latin typeface=.../>`).
+/// An explicit run font (already resolved by the caller via `font_family`) wins
+/// over the theme; this function is only the fallback for unset runs.
+fn resolve_font(pres: &Presentation, sh: &Shape) -> String {
+    match sh.ph_type.as_deref() {
+        Some("title") => pres.major_font.clone(),
+        _ => pres.minor_font.clone(),
     }
 }
 
@@ -415,7 +433,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .runs
                                 .iter()
                                 .find_map(|r| r.font_family.clone())
-                                .unwrap_or_else(|| "Calibri".to_string());
+                                .unwrap_or_else(|| resolve_font(pres, sh));
                             let color = p.runs.iter().find_map(|r| r.color.clone());
                             let lines = layout_paragraph_baselines(
                                 mem_dc,
@@ -424,6 +442,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 sh.width,
                                 scale,
                                 pi == 0,
+                                &family,
                             );
                             let is_justify = matches!(
                                 p.alignment,
@@ -515,7 +534,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         .runs
                                         .iter()
                                         .find_map(|r| r.font_family.clone())
-                                        .unwrap_or_else(|| "Calibri".to_string());
+                                        .unwrap_or_else(|| resolve_font(pres, sh));
                                     let color = p.runs.iter().find_map(|r| r.color.clone());
                                     draw_text_line(
                                         mem_dc,
@@ -797,6 +816,7 @@ fn layout_paragraph_baselines(
     shape_width: f32,
     scale: f64,
     is_first: bool,
+    default_family: &str,
 ) -> Vec<(String, f32, f32)> {
     use windows::Win32::Graphics::Gdi::*;
     let fs = para
@@ -810,7 +830,7 @@ fn layout_paragraph_baselines(
         .runs
         .iter()
         .find_map(|r| r.font_family.clone())
-        .unwrap_or_else(|| "Calibri".to_string());
+        .unwrap_or_else(|| default_family.to_string());
 
     if let Some(sb) = para.space_before {
         *cursor_pt += sb;

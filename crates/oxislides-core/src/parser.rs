@@ -34,6 +34,59 @@ struct SlideInfo {
     r_id: String,
 }
 
+/// Parse themeN.xml for the minor/major latin typefaces.
+///
+/// A run with no explicit `a:latin`/`a:ea` font resolves to the theme minor
+/// font (body text / textboxes / body placeholders); a TITLE placeholder
+/// resolves to the theme MAJOR font. Falls back to "Calibri" (PowerPoint's
+/// default theme font) when the theme part is absent or has no latin face.
+fn parse_theme(xml: &str) -> Result<(String, String), PptxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut minor = "Calibri".to_string();
+    let mut major = "Calibri".to_string();
+    let mut in_minor = false;
+    let mut in_major = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "minorFont" => in_minor = true,
+                    "majorFont" => in_major = true,
+                    "latin" if in_minor => {
+                        if let Some(t) = get_attr(&e, "typeface") {
+                            if !t.is_empty() {
+                                minor = t;
+                            }
+                        }
+                    }
+                    "latin" if in_major => {
+                        if let Some(t) = get_attr(&e, "typeface") {
+                            if !t.is_empty() {
+                                major = t;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "minorFont" => in_minor = false,
+                    "majorFont" => in_major = false,
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok((minor, major))
+}
+
 /// Parse presentation.xml to get slide relationship IDs (in order).
 fn parse_presentation_slides(xml: &str) -> Result<(Vec<SlideInfo>, f32, f32), PptxError> {
     let mut reader = Reader::from_str(xml);
@@ -686,6 +739,7 @@ fn parse_slide(
                             height: use_h,
                             rotation: shape_rotation,
                             shape_type: shape_prst.take(),
+                            ph_type: shape_ph_type.take(),
                             content,
                             fill_color: shape_fill_color.take(),
                             border_color: shape_border_color.take(),
@@ -753,6 +807,7 @@ fn parse_slide(
                             height: shape_h,
                             rotation: shape_rotation,
                             shape_type: shape_prst.take(),
+                            ph_type: None,
                             content,
                             fill_color: shape_fill_color.take(),
                             border_color: shape_border_color.take(),
@@ -1044,6 +1099,14 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         .map(|(id, rel)| (id, rel.target))
         .collect();
 
+    // 2.5. Parse the theme for minor/major latin typefaces.
+    // Standard path is ppt/theme/theme1.xml; a theme without a latin face or
+    // an absent theme part falls back to "Calibri".
+    let (minor_font, major_font) = match archive.try_read_part("ppt/theme/theme1.xml")? {
+        Some(theme_xml) => parse_theme(&theme_xml)?,
+        None => ("Calibri".to_string(), "Calibri".to_string()),
+    };
+
     // 3. Parse each slide
     let mut slides = Vec::new();
     for (i, info) in slide_infos.iter().enumerate() {
@@ -1088,6 +1151,8 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         slides,
         slide_width,
         slide_height,
+        minor_font,
+        major_font,
     })
 }
 
