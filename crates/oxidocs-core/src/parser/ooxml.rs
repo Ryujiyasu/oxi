@@ -14,7 +14,7 @@ use super::relationships::{parse_relationships, Relationship};
 use super::styles::parse_styles;
 use super::theme::{parse_theme, ThemeColors};
 use super::ParseError;
-use crate::ir::{*, VerticalAlign};
+use crate::ir::{VerticalAlign, *};
 
 pub struct OoxmlParser {
     archive: ZipArchive<Cursor<Vec<u8>>>,
@@ -128,12 +128,20 @@ impl OoxmlParser {
             // WATERMARK: collected from any of this section's header parts.
             let mut watermark_found: Option<crate::ir::Watermark> = None;
             let hdr_type = if std::env::var("OXI_S755_DISABLE").is_ok()
-                && section.properties.title_pg && page_index == 0 { "first" } else { "default" };
-            let use_headers: Vec<HdrFtrRef> = effective_header_refs.iter()
+                && section.properties.title_pg
+                && page_index == 0
+            {
+                "first"
+            } else {
+                "default"
+            };
+            let use_headers: Vec<HdrFtrRef> = effective_header_refs
+                .iter()
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
-            let use_footers: Vec<HdrFtrRef> = effective_footer_refs.iter()
+            let use_footers: Vec<HdrFtrRef> = effective_footer_refs
+                .iter()
                 .filter(|r| r.ref_type == hdr_type)
                 .cloned()
                 .collect();
@@ -167,14 +175,21 @@ impl OoxmlParser {
             // style-level framePr parsing first (styles.rs has none, so footer5's frame
             // paragraphs would count as ~5 real lines) — deliberately NOT bundled here.
             fn pick_fallback(refs: &[HdrFtrRef]) -> Vec<HdrFtrRef> {
-                let defaults: Vec<HdrFtrRef> = refs.iter()
-                    .filter(|r| r.ref_type == "default").cloned().collect();
+                let defaults: Vec<HdrFtrRef> = refs
+                    .iter()
+                    .filter(|r| r.ref_type == "default")
+                    .cloned()
+                    .collect();
                 if !defaults.is_empty() {
                     return defaults;
                 }
                 if std::env::var("OXI_S913_DISABLE").is_ok() {
                     // Legacy: keep "even" as a last resort, drop "first" (§17.10.2).
-                    return refs.iter().filter(|r| r.ref_type != "first").cloned().collect();
+                    return refs
+                        .iter()
+                        .filter(|r| r.ref_type != "first")
+                        .cloned()
+                        .collect();
                 }
                 Vec::new()
             }
@@ -206,24 +221,37 @@ impl OoxmlParser {
             let fh = hf_variant(effective_header_refs, "first");
             let header_first = if section.properties.title_pg && !fh.is_empty() {
                 self.parse_header_footer_blocks(&fh, &ctx, &styles, &mut watermark_found)
-            } else { Vec::new() };
+            } else {
+                Vec::new()
+            };
             let ff = hf_variant(effective_footer_refs, "first");
             let footer_first = if section.properties.title_pg && !ff.is_empty() {
                 self.parse_header_footer_blocks(&ff, &ctx, &styles, &mut watermark_found)
-            } else { Vec::new() };
+            } else {
+                Vec::new()
+            };
             let eh = hf_variant(effective_header_refs, "even");
             let header_even = if even_odd_hf && !eh.is_empty() {
                 self.parse_header_footer_blocks(&eh, &ctx, &styles, &mut watermark_found)
-            } else { Vec::new() };
+            } else {
+                Vec::new()
+            };
             let ef = hf_variant(effective_footer_refs, "even");
             let footer_even = if even_odd_hf && !ef.is_empty() {
                 self.parse_header_footer_blocks(&ef, &ctx, &styles, &mut watermark_found)
-            } else { Vec::new() };
+            } else {
+                Vec::new()
+            };
 
             // Collect referenced footnotes and endnotes for this section
             let mut footnotes_list = Vec::new();
             let mut endnotes_list = Vec::new();
-            collect_note_refs(&section.blocks, &ctx, &mut footnotes_list, &mut endnotes_list);
+            collect_note_refs(
+                &section.blocks,
+                &ctx,
+                &mut footnotes_list,
+                &mut endnotes_list,
+            );
             footnotes_list.sort_by_key(|f| f.number);
             endnotes_list.sort_by_key(|f| f.number);
 
@@ -233,11 +261,13 @@ impl OoxmlParser {
             // is reserved for the separator) and have arbitrary gaps. Word
             // displays them as 1,2,3..., so we need to remap. The parser had
             // set Run.text = "[id]" which is wrong; rewrite it here to "[seq]".
-            let mut fn_id_to_seq: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+            let mut fn_id_to_seq: std::collections::HashMap<u32, u32> =
+                std::collections::HashMap::new();
             for (i, f) in footnotes_list.iter().enumerate() {
                 fn_id_to_seq.insert(f.number, (i as u32) + 1);
             }
-            let mut en_id_to_seq: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+            let mut en_id_to_seq: std::collections::HashMap<u32, u32> =
+                std::collections::HashMap::new();
             for (i, f) in endnotes_list.iter().enumerate() {
                 en_id_to_seq.insert(f.number, (i as u32) + 1);
             }
@@ -250,15 +280,22 @@ impl OoxmlParser {
             // reservation looks them up by the sentinel numbers.
             if !footnotes_list.is_empty() {
                 if let Some(blocks) = ctx.footnotes.get("__sep__") {
-                    footnotes_list.push(Footnote { number: u32::MAX, blocks: blocks.clone() });
+                    footnotes_list.push(Footnote {
+                        number: u32::MAX,
+                        blocks: blocks.clone(),
+                    });
                 }
                 if let Some(blocks) = ctx.footnotes.get("__notice__") {
-                    footnotes_list.push(Footnote { number: u32::MAX - 1, blocks: blocks.clone() });
+                    footnotes_list.push(Footnote {
+                        number: u32::MAX - 1,
+                        blocks: blocks.clone(),
+                    });
                 }
             }
 
             // Continuous section: merge into previous page instead of creating a new one
-            if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty() {
+            if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty()
+            {
                 let last: &mut Page = pages.last_mut().unwrap();
                 // S394: also update LRPB count when extending existing section
                 fn count_lrpbs_in_blocks_local(blocks: &[crate::ir::Block]) -> usize {
@@ -267,7 +304,9 @@ impl OoxmlParser {
                     for b in blocks {
                         match b {
                             Block::Paragraph(p) => {
-                                n += p.runs.iter()
+                                n += p
+                                    .runs
+                                    .iter()
                                     .filter(|r| r.has_last_rendered_page_break)
                                     .count();
                             }
@@ -291,15 +330,24 @@ impl OoxmlParser {
                 // the whole merged page to the LAST section's column count,
                 // mis-laying-out earlier sections (kyotei36spec: a 1-col form
                 // table rendered in the trailing 2-col 記載心得 context).
-                last.column_runs.push((last.blocks.len(), section.properties.columns.clone()));
+                last.column_runs
+                    .push((last.blocks.len(), section.properties.columns.clone()));
                 // S729: parallel per-section margin run (left, right).
-                last.margin_runs.push((last.blocks.len(),
-                    section.properties.margin.left, section.properties.margin.right));
-                last.vertical_runs.push((last.blocks.len(),
-                    section.properties.margin.top, section.properties.margin.bottom,
-                    section.properties.header_distance, section.properties.footer_distance));
+                last.margin_runs.push((
+                    last.blocks.len(),
+                    section.properties.margin.left,
+                    section.properties.margin.right,
+                ));
+                last.vertical_runs.push((
+                    last.blocks.len(),
+                    section.properties.margin.top,
+                    section.properties.margin.bottom,
+                    section.properties.header_distance,
+                    section.properties.footer_distance,
+                ));
                 // S735: parallel per-section grid pitch run.
-                last.grid_runs.push((last.blocks.len(), section.properties.grid_line_pitch));
+                last.grid_runs
+                    .push((last.blocks.len(), section.properties.grid_line_pitch));
                 // S730: the paragraph that ENDED the previous section (it
                 // carries the in-body sectPr and is the last block merged so
                 // far) is a CONTINUOUS section-break mark — Word renders it
@@ -322,7 +370,9 @@ impl OoxmlParser {
                     for b in blocks {
                         match b {
                             Block::Paragraph(p) => {
-                                n += p.runs.iter()
+                                n += p
+                                    .runs
+                                    .iter()
                                     .filter(|r| r.has_last_rendered_page_break)
                                     .count();
                             }
@@ -344,11 +394,18 @@ impl OoxmlParser {
                 // later append their own (block_start, columns) entries.
                 let column_runs = vec![(0usize, section.properties.columns.clone())];
                 // S729: seed the margin-run list with the first section's margins.
-                let margin_runs = vec![(0usize,
-                    section.properties.margin.left, section.properties.margin.right)];
-                let vertical_runs = vec![(0usize,
-                    section.properties.margin.top, section.properties.margin.bottom,
-                    section.properties.header_distance, section.properties.footer_distance)];
+                let margin_runs = vec![(
+                    0usize,
+                    section.properties.margin.left,
+                    section.properties.margin.right,
+                )];
+                let vertical_runs = vec![(
+                    0usize,
+                    section.properties.margin.top,
+                    section.properties.margin.bottom,
+                    section.properties.header_distance,
+                    section.properties.footer_distance,
+                )];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];
                 pages.push(Page {
@@ -388,7 +445,10 @@ impl OoxmlParser {
                     page_borders: section.properties.page_borders,
                     total_lrpb_count: total_lrpb,
                     bidi_columns: section.properties.bidi,
-                    vertical_section: section.properties.text_direction.as_deref()
+                    vertical_section: section
+                        .properties
+                        .text_direction
+                        .as_deref()
                         .map(|d| d == "tbRl" || d == "tbRlV")
                         .unwrap_or(false),
                 });
@@ -425,10 +485,14 @@ impl OoxmlParser {
         // cw output is unchanged for b35123; this fix preserves the
         // SectionProperties invariants required by future L2 (per-run fs
         // inheritance) and L3 (formula recalibration) work.
-        let default_font_size = styles.doc_default_run_style.as_ref()
+        let default_font_size = styles
+            .doc_default_run_style
+            .as_ref()
             .and_then(|rs| rs.font_size)
             .or_else(|| {
-                styles.styles.get("Normal")
+                styles
+                    .styles
+                    .get("Normal")
                     .or_else(|| styles.styles.get("a"))
                     .and_then(|s| s.paragraph.default_run_style.as_ref())
                     .and_then(|rs| rs.font_size)
@@ -453,7 +517,8 @@ impl OoxmlParser {
                     if (default_font_size - 10.5).abs() > 0.01 {
                         // 2026-04-18: Use saved charSpace to recompute correctly.
                         // ECMA-376 §17.6.5: raw_pitch = default_font_size + charSpace/4096
-                        let char_space_pt = page.grid_char_space_raw
+                        let char_space_pt = page
+                            .grid_char_space_raw
                             .map(|cs| cs as f32 / 4096.0)
                             .unwrap_or(0.0);
                         let raw_pitch = default_font_size + char_space_pt;
@@ -564,8 +629,7 @@ impl OoxmlParser {
         let mut blocks = Vec::new();
         for hdr_ref in refs {
             // Look up the relationship target path
-            let target = ctx._rels.get(&hdr_ref.rel_id)
-                .map(|r| r.target.clone());
+            let target = ctx._rels.get(&hdr_ref.rel_id).map(|r| r.target.clone());
             if let Some(target) = target {
                 let part_path = if target.starts_with('/') {
                     target[1..].to_string()
@@ -613,7 +677,12 @@ impl OoxmlParser {
         }
     }
 
-    fn build_context_with_theme(&mut self, numbering: NumberingDefinitions, theme: ThemeColors, styles: &StyleSheet) -> Result<ParseContext, ParseError> {
+    fn build_context_with_theme(
+        &mut self,
+        numbering: NumberingDefinitions,
+        theme: ThemeColors,
+        styles: &StyleSheet,
+    ) -> Result<ParseContext, ParseError> {
         // Parse relationships
         let rels = match self.read_part("word/_rels/document.xml.rels") {
             Ok(xml) => parse_relationships(&xml)?,
@@ -625,23 +694,35 @@ impl OoxmlParser {
         let mut media = HashMap::new();
         let mut media_types = HashMap::new();
         let mut hyperlinks = HashMap::new();
-        let image_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
-        let hyperlink_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+        let image_rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+        let hyperlink_rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
         for (id, rel) in &rels {
             if rel.rel_type == image_rel_type {
                 // Skip external targets (e.g., file:/// URLs)
-                if rel.target.starts_with("file:") || rel.target.starts_with("http:") || rel.target.starts_with("https:") {
+                if rel.target.starts_with("file:")
+                    || rel.target.starts_with("http:")
+                    || rel.target.starts_with("https:")
+                {
                     continue;
                 }
                 // Validate relationship target path against traversal attacks
-                let path = match oxidocs_common::security::sanitize_rel_target("word", &rel.target) {
+                let path = match oxidocs_common::security::sanitize_rel_target("word", &rel.target)
+                {
                     Ok(p) => p,
                     Err(_e) => {
                         continue;
                     }
                 };
                 if let Ok(data) = self.read_binary_part(&path) {
-                    let ct = match rel.target.rsplit('.').next().map(|s| s.to_lowercase()).as_deref() {
+                    let ct = match rel
+                        .target
+                        .rsplit('.')
+                        .next()
+                        .map(|s| s.to_lowercase())
+                        .as_deref()
+                    {
                         Some("png") => "image/png",
                         Some("jpg") | Some("jpeg") => "image/jpeg",
                         Some("gif") => "image/gif",
@@ -666,9 +747,12 @@ impl OoxmlParser {
         // resolves to empty data unless we load them. The rId namespace is
         // per-part; add only image rIds not already present (document images
         // win — a header image rId rarely collides with a document image rId).
-        let header_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
-        let footer_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
-        let hf_targets: Vec<String> = rels.values()
+        let header_rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
+        let footer_rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
+        let hf_targets: Vec<String> = rels
+            .values()
             .filter(|r| r.rel_type == header_rel_type || r.rel_type == footer_rel_type)
             .map(|r| r.target.clone())
             .collect();
@@ -676,18 +760,35 @@ impl OoxmlParser {
             let part_name = target.rsplit('/').next().unwrap_or(&target);
             let rels_path = format!("word/_rels/{}.rels", part_name);
             let hrels = match self.read_part(&rels_path) {
-                Ok(xml) => match parse_relationships(&xml) { Ok(r) => r, Err(_) => continue },
+                Ok(xml) => match parse_relationships(&xml) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                },
                 Err(_) => continue,
             };
             for (hid, hrel) in &hrels {
-                if hrel.rel_type != image_rel_type || media.contains_key(hid) { continue; }
-                if hrel.target.starts_with("file:") || hrel.target.starts_with("http:") || hrel.target.starts_with("https:") { continue; }
-                let path = match oxidocs_common::security::sanitize_rel_target("word", &hrel.target) {
+                if hrel.rel_type != image_rel_type || media.contains_key(hid) {
+                    continue;
+                }
+                if hrel.target.starts_with("file:")
+                    || hrel.target.starts_with("http:")
+                    || hrel.target.starts_with("https:")
+                {
+                    continue;
+                }
+                let path = match oxidocs_common::security::sanitize_rel_target("word", &hrel.target)
+                {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
                 if let Ok(data) = self.read_binary_part(&path) {
-                    let ct = match hrel.target.rsplit('.').next().map(|s| s.to_lowercase()).as_deref() {
+                    let ct = match hrel
+                        .target
+                        .rsplit('.')
+                        .next()
+                        .map(|s| s.to_lowercase())
+                        .as_deref()
+                    {
                         Some("png") => "image/png",
                         Some("jpg") | Some("jpeg") => "image/jpeg",
                         Some("gif") => "image/gif",
@@ -805,7 +906,8 @@ impl OoxmlParser {
                     if local == "font" {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "name" {
-                                current_font = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                current_font =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                                 current_info = crate::ir::FontInfo::default();
                             }
                         }
@@ -820,35 +922,40 @@ impl OoxmlParser {
                         "altName" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
-                                    current_info.alt_name = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    current_info.alt_name =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
                                 }
                             }
                         }
                         "panose1" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
-                                    current_info.panose1 = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    current_info.panose1 =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
                                 }
                             }
                         }
                         "charset" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
-                                    current_info.charset = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    current_info.charset =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
                                 }
                             }
                         }
                         "family" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
-                                    current_info.family = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    current_info.family =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
                                 }
                             }
                         }
                         "pitch" => {
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
-                                    current_info.pitch = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    current_info.pitch =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
                                 }
                             }
                         }
@@ -858,7 +965,9 @@ impl OoxmlParser {
                 Ok(Event::End(e)) => {
                     if local_name(e.name().as_ref()) == "font" {
                         if let Some(name) = current_font.take() {
-                            styles.font_table.insert(name, std::mem::take(&mut current_info));
+                            styles
+                                .font_table
+                                .insert(name, std::mem::take(&mut current_info));
                         }
                     }
                 }
@@ -924,8 +1033,12 @@ impl OoxmlParser {
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let v = String::from_utf8_lossy(&attr.value).to_string();
-                            if key == "name" && v == "compatibilityMode" { is_compat_mode = true; }
-                            if key == "val" { val = v; }
+                            if key == "name" && v == "compatibilityMode" {
+                                is_compat_mode = true;
+                            }
+                            if key == "val" {
+                                val = v;
+                            }
                         }
                         if is_compat_mode {
                             return (val.parse().unwrap_or(15), true);
@@ -1101,7 +1214,11 @@ fn effective_shading_color(val: &str, fill: &str, color: &str) -> Option<String>
 }
 
 /// Parse the w:body content of document.xml into sections
-fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<ParsedSection>, ParseError> {
+fn parse_body(
+    xml: &str,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<Vec<ParsedSection>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut sections: Vec<ParsedSection> = Vec::new();
     let mut current_blocks = Vec::new();
@@ -1124,8 +1241,13 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     "p" if in_body && depth == 0 => {
                         let mut pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
                         if dbg_bodywalk() {
-                            let t: String = pr.paragraph.runs.iter().map(|r| r.text.as_str()).collect();
-                            eprintln!("[BODYWALK] p blocks={} {:?}", current_blocks.len(), &t.chars().take(28).collect::<String>());
+                            let t: String =
+                                pr.paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+                            eprintln!(
+                                "[BODYWALK] p blocks={} {:?}",
+                                current_blocks.len(),
+                                &t.chars().take(28).collect::<String>()
+                            );
                         }
                         // S525 (coverage): a paragraph whose ONLY content is display
                         // math (oMathPara, no runs/images/shapes) must NOT emit an
@@ -1167,9 +1289,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         // previously-correct paras) — an S559 pair. Ships default-ON with
                         // its p71 counterpart (a separate empty-para page-bottom
                         // under-reservation), co-gated per the merge gate.
-                        let s997_single_ascii_space_host = pr.inline_images.len() == 1
-                            && std::env::var("OXI_S997").is_ok()
-                            && {
+                        let s997_single_ascii_space_host =
+                            pr.inline_images.len() == 1 && std::env::var("OXI_S997").is_ok() && {
                                 let mut chars =
                                     pr.paragraph.runs.iter().flat_map(|r| r.text.chars());
                                 matches!(chars.next(), Some(' ')) && chars.next().is_none()
@@ -1195,21 +1316,27 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                         } else {
                             None
                         };
-                        let s965_sp: Option<(f32, f32)> = if image_only
-                            && std::env::var("OXI_S965_DISABLE").is_err()
-                        {
-                            Some((pr.paragraph.style.space_before.unwrap_or(0.0),
-                                  pr.paragraph.style.space_after.unwrap_or(0.0)))
-                        } else {
-                            None
-                        };
+                        let s965_sp: Option<(f32, f32)> =
+                            if image_only && std::env::var("OXI_S965_DISABLE").is_err() {
+                                Some((
+                                    pr.paragraph.style.space_before.unwrap_or(0.0),
+                                    pr.paragraph.style.space_after.unwrap_or(0.0),
+                                ))
+                            } else {
+                                None
+                            };
                         // S898a: capture the frame before pr.paragraph may move.
                         let s898_fp: Option<crate::ir::FrameProperties> =
                             if std::env::var("OXI_S898_DISABLE").is_err() && image_only {
-                                pr.paragraph.style.frame_pr.as_ref()
-                                    .filter(|fp| fp.drop_cap.is_none()
-                                        && fp.v_anchor.as_deref() == Some("text")
-                                        && fp.y < -0.01)
+                                pr.paragraph
+                                    .style
+                                    .frame_pr
+                                    .as_ref()
+                                    .filter(|fp| {
+                                        fp.drop_cap.is_none()
+                                            && fp.v_anchor.as_deref() == Some("text")
+                                            && fp.y < -0.01
+                                    })
                                     .cloned()
                             } else {
                                 None
@@ -1244,7 +1371,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     // margin + para1's firstLine=720; para2's pPr wins
                                     // for everything else).
                                     if joined.style.indent_first_line.is_none() {
-                                        joined.style.indent_first_line = prev.style.indent_first_line;
+                                        joined.style.indent_first_line =
+                                            prev.style.indent_first_line;
                                     }
                                     current_blocks.push(Block::Paragraph(joined));
                                 }
@@ -1276,7 +1404,9 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                                 "page"
                                             } else {
                                                 "column"
-                                            }.to_string()),
+                                            }
+                                            .to_string(),
+                                        ),
                                         v_relative: Some("paragraph".to_string()),
                                         h_align: None,
                                         v_align: None,
@@ -1307,14 +1437,11 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             let last = pr.inline_images.len() - 1;
                             for (i, block) in pr.inline_images.iter_mut().enumerate() {
                                 if let Block::Image(img) = block {
-                                    img.paragraph_space_before =
-                                        if i == 0 { before } else { 0.0 };
-                                    img.paragraph_space_after =
-                                        if i == last { after } else { 0.0 };
+                                    img.paragraph_space_before = if i == 0 { before } else { 0.0 };
+                                    img.paragraph_space_after = if i == last { after } else { 0.0 };
                                     // S971: keep the host's line metrics reachable.
                                     if std::env::var("OXI_S971_DISABLE").is_err() {
-                                        img.host_paragraph =
-                                            s971_host.clone().map(Box::new);
+                                        img.host_paragraph = s971_host.clone().map(Box::new);
                                     }
                                 }
                             }
@@ -1369,7 +1496,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                 let s_empty = matches!(current_blocks.last(), Some(Block::Paragraph(p))
                                     if p.runs.iter().all(|r| r.text.trim().is_empty()));
                                 if s_empty && n >= 2 {
-                                    if let Some(Block::Paragraph(x)) = current_blocks.get_mut(n - 2) {
+                                    if let Some(Block::Paragraph(x)) = current_blocks.get_mut(n - 2)
+                                    {
                                         // S794b (2026-07-18): the trailing \x0C often
                                         // sits in its OWN run after the text runs
                                         // (reports__000e8acd caption: [Table ][SEQ 1]
@@ -1409,7 +1537,8 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                             // S945: mark the section-ending paragraph (it
                             // carries the in-body sectPr) — an EMPTY one never
                             // opens a new page by natural overflow.
-                            if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut() {
+                            if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut()
+                            {
                                 bp.style.page_section_break = true;
                             }
                             sections.push(ParsedSection {
@@ -1424,7 +1553,11 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     "tbl" if in_body && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
                         if dbg_bodywalk() {
-                            eprintln!("[BODYWALK] tbl rows={} blocks={}", table.rows.len(), current_blocks.len());
+                            eprintln!(
+                                "[BODYWALK] tbl rows={} blocks={}",
+                                table.rows.len(),
+                                current_blocks.len()
+                            );
                         }
                         current_blocks.push(Block::Table(table));
                     }
@@ -1463,16 +1596,26 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                         continue;
                                     }
                                     match sl.as_str() {
-                                        "sdt" => { sdt_open += 1; }
+                                        "sdt" => {
+                                            sdt_open += 1;
+                                        }
                                         "sdtContent" => {}
                                         "p" => {
-                                            let pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
+                                            let pr = parse_paragraph(
+                                                &mut reader,
+                                                ctx,
+                                                styles,
+                                                true,
+                                                false,
+                                                None,
+                                            )?;
                                             current_blocks.push(Block::Paragraph(pr.paragraph));
                                             for mb in pr.math_blocks {
                                                 current_blocks.push(Block::Math(mb));
                                             }
                                             current_blocks.extend(pr.inline_images);
-                                            let anchor_idx2 = current_blocks.len().saturating_sub(1);
+                                            let anchor_idx2 =
+                                                current_blocks.len().saturating_sub(1);
                                             for mut img in pr.floating_images {
                                                 img.anchor_block_index = anchor_idx2;
                                                 current_floating_images.push(img);
@@ -1483,14 +1626,20 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                                 current_text_boxes.push(tb);
                                             }
                                             if let Some(sp) = pr.sect_pr {
-                                                if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut() {
+                                                if let Some(crate::ir::Block::Paragraph(bp)) =
+                                                    current_blocks.last_mut()
+                                                {
                                                     bp.style.page_section_break = true;
                                                 }
                                                 sections.push(ParsedSection {
                                                     blocks: std::mem::take(&mut current_blocks),
                                                     properties: sp,
-                                                    floating_images: std::mem::take(&mut current_floating_images),
-                                                    text_boxes: std::mem::take(&mut current_text_boxes),
+                                                    floating_images: std::mem::take(
+                                                        &mut current_floating_images,
+                                                    ),
+                                                    text_boxes: std::mem::take(
+                                                        &mut current_text_boxes,
+                                                    ),
                                                     shapes: std::mem::take(&mut current_shapes),
                                                 });
                                             }
@@ -1499,7 +1648,9 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                             let table = parse_table(&mut reader, ctx, styles)?;
                                             current_blocks.push(Block::Table(table));
                                         }
-                                        _ => { skip_depth = 1; }
+                                        _ => {
+                                            skip_depth = 1;
+                                        }
                                     }
                                 }
                                 Event::End(ee) if s1069 => {
@@ -1516,12 +1667,12 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     }
                                 }
                                 Event::Empty(ee) if s1069 => {
-                                    if skip_depth == 0
-                                        && local_name(ee.name().as_ref()) == "p"
-                                    {
+                                    if skip_depth == 0 && local_name(ee.name().as_ref()) == "p" {
                                         // Self-closing <w:p/> inside sdtContent — an
                                         // empty paragraph, same as the body loop's arm.
-                                        current_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
+                                        current_blocks.push(Block::Paragraph(
+                                            empty_para_with_defaults(styles),
+                                        ));
                                     }
                                 }
                                 Event::Start(se) => {
@@ -1531,13 +1682,21 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                     } else if in_sdt_content {
                                         match sl.as_str() {
                                             "p" => {
-                                                let pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
+                                                let pr = parse_paragraph(
+                                                    &mut reader,
+                                                    ctx,
+                                                    styles,
+                                                    true,
+                                                    false,
+                                                    None,
+                                                )?;
                                                 current_blocks.push(Block::Paragraph(pr.paragraph));
                                                 for mb in pr.math_blocks {
                                                     current_blocks.push(Block::Math(mb));
                                                 }
                                                 current_blocks.extend(pr.inline_images);
-                                                let anchor_idx2 = current_blocks.len().saturating_sub(1);
+                                                let anchor_idx2 =
+                                                    current_blocks.len().saturating_sub(1);
                                                 for mut img in pr.floating_images {
                                                     img.anchor_block_index = anchor_idx2;
                                                     current_floating_images.push(img);
@@ -1548,14 +1707,20 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                                     current_text_boxes.push(tb);
                                                 }
                                                 if let Some(sp) = pr.sect_pr {
-                                                    if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut() {
+                                                    if let Some(crate::ir::Block::Paragraph(bp)) =
+                                                        current_blocks.last_mut()
+                                                    {
                                                         bp.style.page_section_break = true;
                                                     }
                                                     sections.push(ParsedSection {
                                                         blocks: std::mem::take(&mut current_blocks),
                                                         properties: sp,
-                                                        floating_images: std::mem::take(&mut current_floating_images),
-                                                        text_boxes: std::mem::take(&mut current_text_boxes),
+                                                        floating_images: std::mem::take(
+                                                            &mut current_floating_images,
+                                                        ),
+                                                        text_boxes: std::mem::take(
+                                                            &mut current_text_boxes,
+                                                        ),
                                                         shapes: std::mem::take(&mut current_shapes),
                                                     });
                                                 }
@@ -1564,7 +1729,9 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                                                 let table = parse_table(&mut reader, ctx, styles)?;
                                                 current_blocks.push(Block::Table(table));
                                             }
-                                            _ => { sdt_depth += 1; }
+                                            _ => {
+                                                sdt_depth += 1;
+                                            }
                                         }
                                     } else {
                                         sdt_depth += 1;
@@ -1651,7 +1818,12 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
     // 72pt default stays byte-identical). Scoped to the sectionless branch only
     // (1/669 corpus docs). Layout column-width redistribute (Stage 2) is separate.
     let sectionless_margin = if std::env::var("OXI_S1002").is_ok() {
-        Margin { top: 99.25, bottom: 85.05, left: 85.05, right: 85.05 }
+        Margin {
+            top: 99.25,
+            bottom: 85.05,
+            left: 85.05,
+            right: 85.05,
+        }
     } else {
         Margin::default()
     };
@@ -1734,7 +1906,14 @@ fn application_default_font_size_override(default_paragraph_size: Option<f32>) -
     }
 }
 
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, allow_inline_flow: bool, in_cell: bool, cell_inline_flow_width: Option<f32>) -> Result<ParagraphResult, ParseError> {
+fn parse_paragraph(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    allow_inline_flow: bool,
+    in_cell: bool,
+    cell_inline_flow_width: Option<f32>,
+) -> Result<ParagraphResult, ParseError> {
     let mut runs = Vec::new();
     let mut images = Vec::new();
     // S854: (run_index, image) for INLINE (non-positioned) images. A paragraph
@@ -1771,7 +1950,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "pPr" if depth == 0 => {
-                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) = parse_paragraph_properties(reader, &ctx.theme)?;
+                        let (s, explicit_align, sid, npr, spr, ppr_change_parsed, pmark_rev) =
+                            parse_paragraph_properties(reader, &ctx.theme)?;
                         style = s;
                         if let Some(a) = explicit_align {
                             alignment = a;
@@ -1809,11 +1989,20 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 for e in exprs {
                                     match e {
                                         crate::ir::math::MathExpr::Text(t) => s.push_str(t),
-                                        crate::ir::math::MathExpr::Run { text, .. } => s.push_str(text),
-                                        _ => { ok = false; break; }
+                                        crate::ir::math::MathExpr::Run { text, .. } => {
+                                            s.push_str(text)
+                                        }
+                                        _ => {
+                                            ok = false;
+                                            break;
+                                        }
                                     }
                                 }
-                                if ok && !s.trim().is_empty() { Some(s) } else { None }
+                                if ok && !s.trim().is_empty() {
+                                    Some(s)
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
                             }
@@ -1850,7 +2039,8 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         math_blocks.push(mb);
                     }
                     "r" if depth == 0 => {
-                        let (mut run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                        let (mut run, dr) =
+                            parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                         // Track field state: fldChar begin/separate/end spans across runs.
                         // Remember a CrossRef field so its cached result run is KEPT.
                         if run.field_type.is_some() {
@@ -1877,9 +2067,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         // KEEP the cache for CrossRef (S685) and Cached (S708,
                         // DATE/TIME/AUTHOR/…); only PAGE/NUMPAGES results are suppressed
                         // (Oxi computes and substitutes those in the layout post-pass).
-                        if field_result_depth > 0 && run.field_type.is_none()
-                            && !matches!(current_field_type,
-                                Some(FieldType::CrossRef) | Some(FieldType::Cached))
+                        if field_result_depth > 0
+                            && run.field_type.is_none()
+                            && !matches!(
+                                current_field_type,
+                                Some(FieldType::CrossRef) | Some(FieldType::Cached)
+                            )
                         {
                             run.text.clear();
                         }
@@ -1889,11 +2082,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         // makes it a U+FFFC fragment of the drawing's extent and
                         // the emit loop draws tb.vector_shapes at the fragment x.
                         if let Some(tb) = dr.as_ref().and_then(|d| d.text_box.as_ref()) {
-                            if !tb.vector_shapes.is_empty() && tb.blocks.is_empty()
+                            if !tb.vector_shapes.is_empty()
+                                && tb.blocks.is_empty()
                                 && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
-                                && tb.position.as_ref().map_or(false, |tp| tp.x == 0.0 && tp.y == 0.0
-                                    && tp.h_relative.as_deref() == Some("column")
-                                    && tp.v_relative.as_deref() == Some("paragraph"))
+                                && tb.position.as_ref().map_or(false, |tp| {
+                                    tp.x == 0.0
+                                        && tp.y == 0.0
+                                        && tp.h_relative.as_deref() == Some("column")
+                                        && tp.v_relative.as_deref() == Some("paragraph")
+                                })
                             {
                                 run.style.inline_object_extent = Some((tb.width, tb.height));
                             }
@@ -1935,14 +2132,22 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 link_url = Some(format!("#{}", val));
                             }
                         }
-                        let hyperlink_runs = parse_hyperlink_runs(reader, ctx, styles, link_url, allow_inline_flow, in_cell)?;
+                        let hyperlink_runs = parse_hyperlink_runs(
+                            reader,
+                            ctx,
+                            styles,
+                            link_url,
+                            allow_inline_flow,
+                            in_cell,
+                        )?;
                         // Word does NOT apply the "Hyperlink" character style inside a
                         // TOC entry: ToC links render in the paragraph text colour
                         // (black), no underline — while body hyperlinks with the SAME
                         // rStyle="Hyperlink" stay blue+underlined (measured: this doc's
                         // body cross-refs are #0000FF, its ToC entries #000000).
                         // Discriminator = the paragraph is a TOC style (TOC1-9).
-                        let toc_para = style_id.as_deref()
+                        let toc_para = style_id
+                            .as_deref()
                             .map_or(false, |s| s.to_ascii_lowercase().starts_with("toc"));
                         // Apply the same field-boundary handling as top-level runs so
                         // fields INSIDE a hyperlink (ToC entries wrap the PAGEREF page
@@ -1964,9 +2169,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     current_field_type = None;
                                 }
                             }
-                            if field_result_depth > 0 && run.field_type.is_none()
-                                && !matches!(current_field_type,
-                                    Some(FieldType::CrossRef) | Some(FieldType::Cached))
+                            if field_result_depth > 0
+                                && run.field_type.is_none()
+                                && !matches!(
+                                    current_field_type,
+                                    Some(FieldType::CrossRef) | Some(FieldType::Cached)
+                                )
                             {
                                 run.text.clear();
                             }
@@ -2021,7 +2229,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                             pair_id,
                         };
                         let end_tag = local.clone();
-                        let tracked_runs = parse_tracked_change_runs(reader, ctx, styles, &end_tag, tc, allow_inline_flow, in_cell)?;
+                        let tracked_runs = parse_tracked_change_runs(
+                            reader,
+                            ctx,
+                            styles,
+                            &end_tag,
+                            tc,
+                            allow_inline_flow,
+                            in_cell,
+                        )?;
                         runs.extend(tracked_runs);
                     }
                     // mc:AlternateContent at paragraph level
@@ -2054,7 +2270,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                         }
                                     } else if in_choice && sl == "r" && ac_depth == 1 {
                                         // Text runs inside mc:Choice belong to this paragraph
-                                        let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                                        let (run, dr) = parse_run(
+                                            reader,
+                                            ctx,
+                                            styles,
+                                            None,
+                                            allow_inline_flow,
+                                            in_cell,
+                                        )?;
                                         runs.push(run);
                                         if let Some(drawing) = dr {
                                             if let Some(image) = drawing.image {
@@ -2076,9 +2299,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     if sl == "AlternateContent" && ac_depth == 0 {
                                         break;
                                     }
-                                    if sl == "Choice" && in_choice { in_choice = false; }
-                                    if sl == "Fallback" && in_fallback { in_fallback = false; }
-                                    if ac_depth > 0 { ac_depth -= 1; }
+                                    if sl == "Choice" && in_choice {
+                                        in_choice = false;
+                                    }
+                                    if sl == "Fallback" && in_fallback {
+                                        in_fallback = false;
+                                    }
+                                    if ac_depth > 0 {
+                                        ac_depth -= 1;
+                                    }
                                 }
                                 Event::Eof => break,
                                 _ => {}
@@ -2116,10 +2345,19 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                             continue;
                                         }
                                         match sl.as_str() {
-                                            "sdt" => { sdt_open += 1; }
+                                            "sdt" => {
+                                                sdt_open += 1;
+                                            }
                                             "sdtContent" => {}
                                             "r" => {
-                                                let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                                                let (run, dr) = parse_run(
+                                                    reader,
+                                                    ctx,
+                                                    styles,
+                                                    None,
+                                                    allow_inline_flow,
+                                                    in_cell,
+                                                )?;
                                                 runs.push(run);
                                                 if let Some(drawing) = dr {
                                                     if let Some(image) = drawing.image {
@@ -2133,7 +2371,9 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                                     }
                                                 }
                                             }
-                                            _ => { skip_depth = 1; }
+                                            _ => {
+                                                skip_depth = 1;
+                                            }
                                         }
                                     }
                                     Event::End(ee) => {
@@ -2163,7 +2403,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "r" {
-                                        let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                                        let (run, dr) = parse_run(
+                                            reader,
+                                            ctx,
+                                            styles,
+                                            None,
+                                            allow_inline_flow,
+                                            in_cell,
+                                        )?;
                                         runs.push(run);
                                         if let Some(drawing) = dr {
                                             if let Some(image) = drawing.image {
@@ -2201,7 +2448,10 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         if !math_text.is_empty() {
                             runs.push(Run {
                                 text: math_text,
-                                style: RunStyle { font_family: Some("Cambria Math".to_string()), ..RunStyle::default() },
+                                style: RunStyle {
+                                    font_family: Some("Cambria Math".to_string()),
+                                    ..RunStyle::default()
+                                },
                                 url: None,
                                 footnote_ref: None,
                                 endnote_ref: None,
@@ -2358,14 +2608,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // pPr) AND no style in the basedOn chain has hard-set indent. This snapshot
     // captures pPr-explicit; the style chain check is implicit in the order of
     // operations below.
-    let ppr_explicit_indent_left =
-        style.indent_left.is_some() || style.indent_left_chars.is_some();
+    let ppr_explicit_indent_left = style.indent_left.is_some() || style.indent_left_chars.is_some();
     let ppr_explicit_first_line =
         style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
 
     // Apply style inheritance from StyleSheet (basedOn already resolved)
     // ECMA-376: paragraph with no pStyle implicitly uses the default paragraph style (w:default="1")
-    let effective_style_id = style_id.clone()
+    let effective_style_id = style_id
+        .clone()
         .or_else(|| styles.default_paragraph_style_id.clone());
     if let Some(ref sid) = effective_style_id {
         if let Some(defined) = styles.styles.get(sid) {
@@ -2417,15 +2667,26 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // the rule is independent of the selected typeface).
             if std::env::var("OXI_S924_DISABLE").is_err()
                 && defined.based_on.is_none()
-                && style.default_run_style.as_ref().and_then(|r| r.font_size).is_none()
-                && styles.doc_default_run_style.as_ref().and_then(|r| r.font_size).is_none()
+                && style
+                    .default_run_style
+                    .as_ref()
+                    .and_then(|r| r.font_size)
+                    .is_none()
+                && styles
+                    .doc_default_run_style
+                    .as_ref()
+                    .and_then(|r| r.font_size)
+                    .is_none()
             {
-                let normal_size = styles.default_paragraph_style_id.as_ref()
+                let normal_size = styles
+                    .default_paragraph_style_id
+                    .as_ref()
                     .and_then(|id| styles.styles.get(id))
                     .and_then(|normal| normal.paragraph.default_run_style.as_ref())
                     .and_then(|r| r.font_size);
                 if let Some(app_size) = application_default_font_size_override(normal_size) {
-                    style.default_run_style
+                    style
+                        .default_run_style
                         .get_or_insert_with(RunStyle::default)
                         .font_size = Some(app_size);
                 }
@@ -2441,8 +2702,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         style.keep_next = true;
                     }
                 }
-            } else if ds.keep_next { style.keep_next = true; }
-            if ds.keep_lines { style.keep_lines = true; }
+            } else if ds.keep_next {
+                style.keep_next = true;
+            }
+            if ds.keep_lines {
+                style.keep_lines = true;
+            }
             // S782 (2026-07-11): a DIRECT `<w:contextualSpacing w:val="0"/>`
             // (explicit OFF) wins over the style's contextualSpacing — the
             // merge used to clobber it back to true (CT_OnOff val=0 class,
@@ -2520,15 +2785,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // override; the first cut leaked and flipped 4 EN PASS docs whose
             // NormalWeb paras carry direct spacing).
             if std::env::var("OXI_S895_DISABLE").is_err() {
-                if ds.before_autospacing && !style.before_autospacing
-                    && !style.has_direct_before
-                {
+                if ds.before_autospacing && !style.before_autospacing && !style.has_direct_before {
                     style.before_autospacing = true;
                     style.autospacing_from_style = true;
                 }
-                if ds.after_autospacing && !style.after_autospacing
-                    && !style.has_direct_after
-                {
+                if ds.after_autospacing && !style.after_autospacing && !style.has_direct_after {
                     style.after_autospacing = true;
                     style.autospacing_from_style = true;
                 }
@@ -2604,13 +2865,23 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                 para_rs.font_size = doc_rs.font_size;
                 style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
             }
-            if para_rs.font_family.is_none() { para_rs.font_family = doc_rs.font_family.clone(); }
-            if para_rs.font_family_east_asia.is_none() { para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone(); }
-            if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia { para_rs.has_explicit_east_asia = true; }
-            if para_rs.color.is_none() { para_rs.color = doc_rs.color.clone(); }
+            if para_rs.font_family.is_none() {
+                para_rs.font_family = doc_rs.font_family.clone();
+            }
+            if para_rs.font_family_east_asia.is_none() {
+                para_rs.font_family_east_asia = doc_rs.font_family_east_asia.clone();
+            }
+            if !para_rs.has_explicit_east_asia && doc_rs.has_explicit_east_asia {
+                para_rs.has_explicit_east_asia = true;
+            }
+            if para_rs.color.is_none() {
+                para_rs.color = doc_rs.color.clone();
+            }
             // S547 (2026-06-12): w:kern gates the yakumono pair halving — must
             // survive the docDefaults merge like the font fields.
-            if para_rs.kern.is_none() { para_rs.kern = doc_rs.kern; }
+            if para_rs.kern.is_none() {
+                para_rs.kern = doc_rs.kern;
+            }
         } else {
             style.default_run_style = styles.doc_default_run_style.clone();
             style.font_size_from_doc_defaults = doc_rs.font_size.is_some();
@@ -2766,9 +3037,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                         ms.font_family_east_asia = Some(f.clone());
                         ms.has_explicit_east_asia = true;
                     }
-                    if let Some(b) = resolved.marker_bold { ms.bold = b; }
-                    if let Some(i) = resolved.marker_italic { ms.italic = i; }
-                    if let Some(sz) = resolved.marker_size { ms.font_size = Some(sz); }
+                    if let Some(b) = resolved.marker_bold {
+                        ms.bold = b;
+                    }
+                    if let Some(i) = resolved.marker_italic {
+                        ms.italic = i;
+                    }
+                    if let Some(sz) = resolved.marker_size {
+                        ms.font_size = Some(sz);
+                    }
                     style.list_marker_style = Some(Box::new(ms));
                 }
                 style.list_marker = Some(resolved.text);
@@ -2780,7 +3057,11 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // suffix-tab stop only for a DIRECT numPr (style-inherited lists
             // keep the style ind — nyserda ListBullet2 level left=274.5pt as
             // a stop re-created the S771 over-indent, Exhibit E +1 page).
-            style.list_level_left = if num_pr_is_direct { resolved.level_left } else { None };
+            style.list_level_left = if num_pr_is_direct {
+                resolved.level_left
+            } else {
+                None
+            };
             if let Some(ind) = resolved.hanging {
                 // Paragraph's explicit hanging indent overrides numbering level's hanging.
                 // COM-confirmed (LOD_Handbook P3: XML hanging=426tw=21.3pt overrides
@@ -2834,18 +3115,15 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
             // 56 = Word (Exhibit boundaries aligned). framework neutral.
             // See [[english_corpus_bug_mine]].
             let s771_on = std::env::var("OXI_S771_DISABLE").is_err();
-            let s771_apply_num_ind = !s771_on
-                || num_pr_is_direct
-                || style.indent_left.is_none();
+            let s771_apply_num_ind = !s771_on || num_pr_is_direct || style.indent_left.is_none();
             if !ppr_explicit_indent_left && s771_apply_num_ind {
                 if let Some(left) = ctx.numbering.get_level_indent(&npr.num_id, npr.ilvl) {
                     style.indent_left = Some(left);
                     style.indent_left_chars = None;
                 }
             }
-            let s771_apply_num_hang = !s771_on
-                || num_pr_is_direct
-                || style.indent_first_line.is_none();
+            let s771_apply_num_hang =
+                !s771_on || num_pr_is_direct || style.indent_first_line.is_none();
             if !ppr_explicit_first_line && s771_apply_num_hang {
                 if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
                     style.indent_first_line = Some(-hanging);
@@ -2876,8 +3154,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // See `project_empty_br_para_stub.md`.
     if let Some(first_run) = runs.first() {
         if first_run.text.trim() == "\x0C" || first_run.text == "\x0C" {
-            let only_br = runs.len() == 1
-                || runs.iter().skip(1).all(|r| r.text.is_empty());
+            let only_br = runs.len() == 1 || runs.iter().skip(1).all(|r| r.text.is_empty());
             if only_br {
                 style.page_break_after = true;
             } else {
@@ -2923,8 +3200,13 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         && s984_visual_only
         && cell_inline_flow_width.map_or(false, |w| s984_inline_w <= w + 0.01);
     if s984_cell_flow && inline_img_runs.len() >= 2 && std::env::var("OXI_DBG_CELLOLE").is_ok() {
-        eprintln!("[S984] in_cell=1 n={} visual_only={} image_w={:.3} tc_w={:?} eligible=1",
-            inline_img_runs.len(), s984_visual_only as u8, s984_inline_w, cell_inline_flow_width);
+        eprintln!(
+            "[S984] in_cell=1 n={} visual_only={} image_w={:.3} tc_w={:?} eligible=1",
+            inline_img_runs.len(),
+            s984_visual_only as u8,
+            s984_inline_w,
+            cell_inline_flow_width
+        );
     }
     // S1034 (2026-07-29, default ON, opt-out OXI_S1034_DISABLE): a SINGLE inline
     // image in a paragraph that ALSO has text flows on the text's line — Word
@@ -2991,8 +3273,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     // (visible text + all non-placeholder + sum(w) ≤ tcW); the faithful repro
     // + the real doc both confirm Word's max(line, image) cell model.
     let s1066_cell_single_flow = s1066_cell_text_flow && inline_img_runs.len() == 1;
-    if ((allow_inline_flow || s984_cell_flow || s1066_cell_text_flow)
-        && inline_img_runs.len() >= 2)
+    if ((allow_inline_flow || s984_cell_flow || s1066_cell_text_flow) && inline_img_runs.len() >= 2)
         || s1034_single_inline
         || s1066_cell_single_flow
     {
@@ -3012,9 +3293,14 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
     } else {
         if std::env::var("OXI_DBG_S854").is_ok() && !inline_img_runs.is_empty() {
             let txt: String = runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
-            eprintln!("[S854] SPLIT-BLOCK allow_inline_flow={} n={} s1034={} has_text={} txt={:?}",
-                allow_inline_flow, inline_img_runs.len(), s1034_single_inline,
-                runs.iter().any(|r| !r.text.trim().is_empty()), txt);
+            eprintln!(
+                "[S854] SPLIT-BLOCK allow_inline_flow={} n={} s1034={} has_text={} txt={:?}",
+                allow_inline_flow,
+                inline_img_runs.len(),
+                s1034_single_inline,
+                runs.iter().any(|r| !r.text.trim().is_empty()),
+                txt
+            );
         }
         for (_ridx, image) in inline_img_runs {
             images.push(image);
@@ -3147,7 +3433,9 @@ fn parse_paragraph_properties(
                                         for a in e2.attributes().flatten() {
                                             if local_name(a.key.as_ref()) == "val" {
                                                 if let Ok(v) = std::str::from_utf8(&a.value) {
-                                                    if let Ok(hp) = v.parse::<f32>() { ppr_rpr.font_size = Some(hp / 2.0); }
+                                                    if let Ok(hp) = v.parse::<f32>() {
+                                                        ppr_rpr.font_size = Some(hp / 2.0);
+                                                    }
                                                 }
                                             }
                                         }
@@ -3165,10 +3453,13 @@ fn parse_paragraph_properties(
                                                 // 14pt empty wrongly snapped to 1 cell. Opt-out
                                                 // OXI_S583_DISABLE restores the old last-wins behavior
                                                 // (keeps the layout-side gate's canary complete).
-                                                "ascii" => { ppr_rpr.font_family = Some(v); }
+                                                "ascii" => {
+                                                    ppr_rpr.font_family = Some(v);
+                                                }
                                                 "hAnsi" => {
                                                     if ppr_rpr.font_family.is_none()
-                                                        || std::env::var("OXI_S583_DISABLE").is_ok() {
+                                                        || std::env::var("OXI_S583_DISABLE").is_ok()
+                                                    {
                                                         ppr_rpr.font_family = Some(v);
                                                     }
                                                 }
@@ -3182,10 +3473,13 @@ fn parse_paragraph_properties(
                                                 // ascii/hAnsi win when both present.
                                                 "asciiTheme" | "hAnsiTheme" => {
                                                     if ppr_rpr.font_family.is_none()
-                                                        && std::env::var("OXI_S877_DISABLE").is_err()
+                                                        && std::env::var("OXI_S877_DISABLE")
+                                                            .is_err()
                                                     {
                                                         if let Some(f) =
-                                                            super::styles::resolve_theme_font_pub(&v, theme)
+                                                            super::styles::resolve_theme_font_pub(
+                                                                &v, theme,
+                                                            )
                                                         {
                                                             ppr_rpr.font_family = Some(f);
                                                         }
@@ -3193,10 +3487,13 @@ fn parse_paragraph_properties(
                                                 }
                                                 "eastAsiaTheme" => {
                                                     if ppr_rpr.font_family_east_asia.is_none()
-                                                        && std::env::var("OXI_S877_DISABLE").is_err()
+                                                        && std::env::var("OXI_S877_DISABLE")
+                                                            .is_err()
                                                     {
                                                         if let Some(f) =
-                                                            super::styles::resolve_theme_font_pub(&v, theme)
+                                                            super::styles::resolve_theme_font_pub(
+                                                                &v, theme,
+                                                            )
                                                         {
                                                             ppr_rpr.font_family_east_asia = Some(f);
                                                         }
@@ -3205,8 +3502,9 @@ fn parse_paragraph_properties(
                                                 _ => {}
                                             }
                                         }
-                                    } else if l == "b" { ppr_rpr.bold = true; }
-                                    else if l == "vanish" {
+                                    } else if l == "b" {
+                                        ppr_rpr.bold = true;
+                                    } else if l == "vanish" {
                                         // S673v (2026-06-26): the ¶ MARK is hidden. An empty
                                         // paragraph with a hidden mark COLLAPSES to 0 height in
                                         // Word (invisible separator before a table idiom —
@@ -3216,13 +3514,15 @@ fn parse_paragraph_properties(
                                         // NOTE: webHidden is web-only (rendered in print), so it
                                         // does NOT trigger the collapse — only true w:vanish does.
                                         ppr_rpr.vanish = true;
-                                    }
-                                    else if (l == "ins" || l == "del") && paragraph_mark_revision.is_none() {
+                                    } else if (l == "ins" || l == "del")
+                                        && paragraph_mark_revision.is_none()
+                                    {
                                         // Paragraph-mark revision: `<w:pPr>/<w:rPr>/<w:ins>` or
                                         // `<w:pPr>/<w:rPr>/<w:del>` marks the pilcrow (¶) itself
                                         // as inserted or deleted (revisions_notes.md §2). Empty
                                         // element, attrs only.
-                                        let change_type = if l == "ins" { "insert" } else { "delete" };
+                                        let change_type =
+                                            if l == "ins" { "insert" } else { "delete" };
                                         let mut author = None;
                                         let mut date = None;
                                         let mut pair_id = None;
@@ -3244,8 +3544,15 @@ fn parse_paragraph_properties(
                                         });
                                     }
                                 }
-                                Event::Start(_) => { rd += 1; }
-                                Event::End(_) => { if rd == 0 { break; } rd -= 1; }
+                                Event::Start(_) => {
+                                    rd += 1;
+                                }
+                                Event::End(_) => {
+                                    if rd == 0 {
+                                        break;
+                                    }
+                                    rd -= 1;
+                                }
                                 Event::Eof => break,
                                 _ => {}
                             }
@@ -3278,14 +3585,12 @@ fn parse_paragraph_properties(
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
                                 "before" => {
-                                    style.space_before =
-                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    style.space_before = val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
                                     style.has_direct_before = true;
                                 }
                                 "after" => {
-                                    style.space_after =
-                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    style.space_after = val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
                                     style.has_direct_after = true;
                                 }
@@ -3376,8 +3681,15 @@ fn parse_paragraph_properties(
                             match reader.read_event()? {
                                 Event::Start(inner) => {
                                     if local_name(inner.name().as_ref()) == "pPr" {
-                                        let (prior, prior_explicit_align, _sid, _npr, _spr, _nested, _pmr) =
-                                            parse_paragraph_properties(reader, theme)?;
+                                        let (
+                                            prior,
+                                            prior_explicit_align,
+                                            _sid,
+                                            _npr,
+                                            _spr,
+                                            _nested,
+                                            _pmr,
+                                        ) = parse_paragraph_properties(reader, theme)?;
                                         pc.prior_paragraph_style = Some(Box::new(prior));
                                         // R72: capture prior <w:jc> if the inner pPr
                                         // declared one. Only set when explicit — a
@@ -3519,14 +3831,12 @@ fn parse_paragraph_properties(
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
                                 "before" => {
-                                    style.space_before =
-                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    style.space_before = val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
                                     style.has_direct_before = true;
                                 }
                                 "after" => {
-                                    style.space_after =
-                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    style.space_after = val.parse::<f32>().ok().map(|v| v / 20.0);
                                     style.has_direct_before_after = true;
                                     style.has_direct_after = true;
                                 }
@@ -3601,12 +3911,10 @@ fn parse_paragraph_properties(
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
                                 "left" | "start" => {
-                                    style.indent_left =
-                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    style.indent_left = val.parse::<f32>().ok().map(|v| v / 20.0);
                                 }
                                 "right" | "end" => {
-                                    style.indent_right =
-                                        val.parse::<f32>().ok().map(|v| v / 20.0);
+                                    style.indent_right = val.parse::<f32>().ok().map(|v| v / 20.0);
                                 }
                                 "leftChars" | "startChars" => {
                                     // COM-confirmed: leftChars overrides left (not additive)
@@ -3670,8 +3978,12 @@ fn parse_paragraph_properties(
                         for attr in e.attributes().flatten() {
                             match local_name(attr.key.as_ref()).as_str() {
                                 "val" => shd_val = String::from_utf8_lossy(&attr.value).to_string(),
-                                "fill" => shd_fill = String::from_utf8_lossy(&attr.value).to_string(),
-                                "color" => shd_color = String::from_utf8_lossy(&attr.value).to_string(),
+                                "fill" => {
+                                    shd_fill = String::from_utf8_lossy(&attr.value).to_string()
+                                }
+                                "color" => {
+                                    shd_color = String::from_utf8_lossy(&attr.value).to_string()
+                                }
                                 _ => {}
                             }
                         }
@@ -3685,7 +3997,9 @@ fn parse_paragraph_properties(
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
-                                enabled = val.as_ref() != "0" && val.as_ref() != "false" && val.as_ref() != "off";
+                                enabled = val.as_ref() != "0"
+                                    && val.as_ref() != "false"
+                                    && val.as_ref() != "off";
                             }
                         }
                         style.page_break_before = enabled;
@@ -3793,7 +4107,8 @@ fn parse_paragraph_properties(
                     "textAlignment" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                style.text_alignment = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                style.text_alignment =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -3816,7 +4131,15 @@ fn parse_paragraph_properties(
 
     style.has_explicit_widow_control = has_explicit_widow_control;
     style.has_explicit_snap_to_grid = has_explicit_snap_to_grid;
-    Ok((style, alignment, style_id, num_pr, sect_pr, ppr_change, paragraph_mark_revision))
+    Ok((
+        style,
+        alignment,
+        style_id,
+        num_pr,
+        sect_pr,
+        ppr_change,
+        paragraph_mark_revision,
+    ))
 }
 
 /// Parse w:numPr element
@@ -3873,9 +4196,15 @@ fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<NumPrRef, ParseError> {
 }
 
 /// Parse w:pBdr element containing border children (top, bottom, left, right, between)
-pub(crate) fn parse_paragraph_borders(reader: &mut Reader<&[u8]>) -> Result<ParagraphBorders, ParseError> {
+pub(crate) fn parse_paragraph_borders(
+    reader: &mut Reader<&[u8]>,
+) -> Result<ParagraphBorders, ParseError> {
     let mut borders = ParagraphBorders {
-        top: None, bottom: None, left: None, right: None, between: None,
+        top: None,
+        bottom: None,
+        left: None,
+        right: None,
+        between: None,
     };
 
     loop {
@@ -3942,7 +4271,12 @@ fn parse_border_attrs(e: &quick_xml::events::BytesStart) -> Option<BorderDef> {
         return None;
     }
 
-    Some(BorderDef { style, width, color, space })
+    Some(BorderDef {
+        style,
+        width,
+        color,
+        space,
+    })
 }
 
 /// Parse w:tabs element containing w:tab children
@@ -4007,13 +4341,24 @@ pub(crate) fn parse_tab_stops(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>
     }
 
     // Sort by position
-    stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+    stops.sort_by(|a, b| {
+        a.position
+            .partial_cmp(&b.position)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(stops)
 }
 
 /// Parse a w:r element (run). Returns the Run, optionally an Image, and field info.
 /// `url` is set when this run is inside a w:hyperlink element.
-fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>, allow_inline_flow: bool, in_cell: bool) -> Result<(Run, Option<DrawingResult>), ParseError> {
+fn parse_run(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    url: Option<String>,
+    allow_inline_flow: bool,
+    in_cell: bool,
+) -> Result<(Run, Option<DrawingResult>), ParseError> {
     let mut text = String::new();
     let mut style = RunStyle::default();
     let mut drawing_result: Option<DrawingResult> = None;
@@ -4058,14 +4403,18 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             // A generic inline Shape (position None) is otherwise
                             // dropped by the layout (mod.rs shape loop only draws
                             // positioned shapes). forms only; JP byte-identical.
-                            let is_hr_shape = vml.shape.as_ref()
-                                .map_or(false, |s| s.shape_type == "hr");
+                            let is_hr_shape =
+                                vml.shape.as_ref().map_or(false, |s| s.shape_type == "hr");
                             if is_hr_shape && std::env::var("OXI_S852_DISABLE").is_err() {
                                 let sh = vml.shape.as_ref().unwrap();
                                 let hr_w = if sh.width > 1.0 { sh.width } else { 468.0 };
                                 let thickness = sh.height.max(0.75);
-                                let color = sh.fill.clone()
-                                    .filter(|c| c.chars().all(|ch| ch.is_ascii_hexdigit()) && c.len() == 6)
+                                let color = sh
+                                    .fill
+                                    .clone()
+                                    .filter(|c| {
+                                        c.chars().all(|ch| ch.is_ascii_hexdigit()) && c.len() == 6
+                                    })
                                     .unwrap_or_else(|| "A6A6A6".to_string());
                                 // S879 (2026-07-16, the investigation's Word box
                                 // histogram over ALL 12 solo o:hr paragraphs in
@@ -4132,9 +4481,11 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             let s851_ole_less = std::env::var("OXI_S851_DISABLE").is_err()
                                 && allow_inline_flow
                                 && (!saw_ole || s974)
-                                && ole.shape.is_none() && ole.text_box.is_none()
-                                && ole.image.as_ref().map_or(false, |i|
-                                    i.position.is_none() && i.width > 0.0 && i.height > 0.0);
+                                && ole.shape.is_none()
+                                && ole.text_box.is_none()
+                                && ole.image.as_ref().map_or(false, |i| {
+                                    i.position.is_none() && i.width > 0.0 && i.height > 0.0
+                                });
                             // Task P step 3 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a REAL OLE
                             // (`Equation.DSMT4`) inside a TABLE CELL flows inline in Word
                             // like the body S974 case, but cells kept the block path
@@ -4149,9 +4500,11 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             let cell_dsmt4 = s982
                                 && in_cell
                                 && prog_id.as_deref() == Some("Equation.DSMT4")
-                                && ole.shape.is_none() && ole.text_box.is_none()
-                                && ole.image.as_ref().map_or(false, |i|
-                                    i.position.is_none() && i.width > 0.0 && i.height > 0.0);
+                                && ole.shape.is_none()
+                                && ole.text_box.is_none()
+                                && ole.image.as_ref().map_or(false, |i| {
+                                    i.position.is_none() && i.width > 0.0 && i.height > 0.0
+                                });
                             if s851_ole_less || cell_dsmt4 {
                                 let img = ole.image.unwrap();
                                 if cell_dsmt4 {
@@ -4253,7 +4606,7 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                         match br_type.as_deref() {
                             Some("page") => text.push('\x0C'),   // form feed = page break
                             Some("column") => text.push('\x0B'), // vertical tab = column break
-                            _ => text.push('\n'),                 // text wrap break
+                            _ => text.push('\n'),                // text wrap break
                         }
                     }
                     "tab" => text.push('\t'),
@@ -4290,7 +4643,8 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
                             if key == "id" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 if let Ok(id) = val.parse::<u32>() {
-                                    if id > 0 { // Skip separator/continuation notes (id=0)
+                                    if id > 0 {
+                                        // Skip separator/continuation notes (id=0)
                                         footnote_ref = Some(id);
                                         // Word renders just the number (e.g. "1"),
                                         // not "[1]". renumber_note_refs in parse_body
@@ -4346,7 +4700,9 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         } else if field.contains("NUMPAGES") || field.contains("SECTIONPAGES") {
             text = "#".to_string();
             field_type = Some(FieldType::NumPages);
-        } else if field.split_whitespace().next()
+        } else if field
+            .split_whitespace()
+            .next()
             .map_or(false, |name| name.eq_ignore_ascii_case("SEQ"))
             && std::env::var("OXI_S1051_DISABLE").is_err()
         {
@@ -4387,11 +4743,17 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
             } else if text.is_empty() {
                 text = "#".to_string();
             }
-        } else if field.contains("DATE") || field.contains("TIME")
-            || field.contains("AUTHOR") || field.contains("TITLE") || field.contains("SUBJECT")
-            || field.contains("FILENAME") || field.contains("DOCPROPERTY")
-            || field.contains("USERNAME") || field.contains("LASTSAVEDBY")
-            || field.contains("COMMENTS") || field.contains("KEYWORDS")
+        } else if field.contains("DATE")
+            || field.contains("TIME")
+            || field.contains("AUTHOR")
+            || field.contains("TITLE")
+            || field.contains("SUBJECT")
+            || field.contains("FILENAME")
+            || field.contains("DOCPROPERTY")
+            || field.contains("USERNAME")
+            || field.contains("LASTSAVEDBY")
+            || field.contains("COMMENTS")
+            || field.contains("KEYWORDS")
             || field.contains("STYLEREF")
         {
             // S708 (2026-06-30, default ON, opt-out OXI_FIELDCACHE_DISABLE): fields whose
@@ -4417,23 +4779,37 @@ fn parse_run(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet
         }
     }
 
-    Ok((Run {
-        text, style, url, footnote_ref, endnote_ref,
-        comment_range_start: Vec::new(),
-        comment_range_end: Vec::new(),
-        comment_references,
-        tracked_change: None,
-        rpr_change,
-        ruby,
-        bookmark_name: None,
-        is_math: false,
-        field_type,
-        has_last_rendered_page_break,
-    }, drawing_result))
+    Ok((
+        Run {
+            text,
+            style,
+            url,
+            footnote_ref,
+            endnote_ref,
+            comment_range_start: Vec::new(),
+            comment_range_end: Vec::new(),
+            comment_references,
+            tracked_change: None,
+            rpr_change,
+            ruby,
+            bookmark_name: None,
+            is_math: false,
+            field_type,
+            has_last_rendered_page_break,
+        },
+        drawing_result,
+    ))
 }
 
 /// Parse runs inside a w:hyperlink element
-fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet, url: Option<String>, allow_inline_flow: bool, in_cell: bool) -> Result<Vec<Run>, ParseError> {
+fn parse_hyperlink_runs(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+    url: Option<String>,
+    allow_inline_flow: bool,
+    in_cell: bool,
+) -> Result<Vec<Run>, ParseError> {
     let mut runs = Vec::new();
     let mut depth = 0;
 
@@ -4442,7 +4818,8 @@ fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (run, _dr) = parse_run(reader, ctx, styles, url.clone(), allow_inline_flow, in_cell)?;
+                    let (run, _dr) =
+                        parse_run(reader, ctx, styles, url.clone(), allow_inline_flow, in_cell)?;
                     runs.push(run);
                 } else {
                     depth += 1;
@@ -4466,7 +4843,10 @@ fn parse_hyperlink_runs(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: 
 }
 
 /// Parse word/footnotes.xml or word/endnotes.xml into a map of id -> blocks
-fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec<Block>>, ParseError> {
+fn parse_notes_xml(
+    xml: &str,
+    styles: &StyleSheet,
+) -> Result<HashMap<String, Vec<Block>>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut notes: HashMap<String, Vec<Block>> = HashMap::new();
     let mut current_id: Option<String> = None;
@@ -4510,12 +4890,14 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                             // separator / continuationNotice paragraphs are
                             // available for the styled-height reservation.
                             if key == "type" {
-                                current_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                current_type =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
                     "p" if in_note && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, &note_ctx, styles, false, false, None)?;
+                        let pr =
+                            parse_paragraph(&mut reader, &note_ctx, styles, false, false, None)?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
@@ -4536,12 +4918,20 @@ fn parse_notes_xml(xml: &str, styles: &StyleSheet) -> Result<HashMap<String, Vec
                             // separator reservation model.
                             match typ.as_deref() {
                                 Some("separator") => {
-                                    notes.insert("__sep__".to_string(), std::mem::take(&mut current_blocks));
+                                    notes.insert(
+                                        "__sep__".to_string(),
+                                        std::mem::take(&mut current_blocks),
+                                    );
                                 }
                                 Some("continuationNotice") => {
-                                    notes.insert("__notice__".to_string(), std::mem::take(&mut current_blocks));
+                                    notes.insert(
+                                        "__notice__".to_string(),
+                                        std::mem::take(&mut current_blocks),
+                                    );
                                 }
-                                Some("continuationSeparator") => { current_blocks.clear(); }
+                                Some("continuationSeparator") => {
+                                    current_blocks.clear();
+                                }
                                 _ => {
                                     // Skip separator notes (id 0 and -1)
                                     if id != "0" && id != "-1" {
@@ -4656,9 +5046,15 @@ fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &s
         }
         if d.abs() < 1e-6 {
             // Achromatic — satMod has no effect
-            r = l; g = l; b = l;
+            r = l;
+            g = l;
+            b = l;
         } else {
-            let s_orig = if l_orig > 0.5 { d / (2.0 - max_c - min_c).max(1e-6) } else { d / (max_c + min_c).max(1e-6) };
+            let s_orig = if l_orig > 0.5 {
+                d / (2.0 - max_c - min_c).max(1e-6)
+            } else {
+                d / (max_c + min_c).max(1e-6)
+            };
             let h = if (max_c - r).abs() < 1e-6 {
                 (g - b) / d + if g < b { 6.0 } else { 0.0 }
             } else if (max_c - g).abs() < 1e-6 {
@@ -4674,22 +5070,37 @@ fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &s
             };
             // HSL -> RGB with modified L and S, original H
             let hue_to_rgb = |p: f32, q: f32, mut t: f32| -> f32 {
-                if t < 0.0 { t += 1.0; }
-                if t > 1.0 { t -= 1.0; }
-                if t < 1.0/6.0 { return p + (q - p) * 6.0 * t; }
-                if t < 1.0/2.0 { return q; }
-                if t < 2.0/3.0 { return p + (q - p) * (2.0/3.0 - t) * 6.0; }
+                if t < 0.0 {
+                    t += 1.0;
+                }
+                if t > 1.0 {
+                    t -= 1.0;
+                }
+                if t < 1.0 / 6.0 {
+                    return p + (q - p) * 6.0 * t;
+                }
+                if t < 1.0 / 2.0 {
+                    return q;
+                }
+                if t < 2.0 / 3.0 {
+                    return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+                }
                 p
             };
-            let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+            let q = if l < 0.5 {
+                l * (1.0 + s)
+            } else {
+                l + s - l * s
+            };
             let p = 2.0 * l - q;
-            r = hue_to_rgb(p, q, h + 1.0/3.0);
+            r = hue_to_rgb(p, q, h + 1.0 / 3.0);
             g = hue_to_rgb(p, q, h);
-            b = hue_to_rgb(p, q, h - 1.0/3.0);
+            b = hue_to_rgb(p, q, h - 1.0 / 3.0);
         }
     }
 
-    format!("{:02X}{:02X}{:02X}",
+    format!(
+        "{:02X}{:02X}{:02X}",
         (r * 255.0).round() as u8,
         (g * 255.0).round() as u8,
         (b * 255.0).round() as u8,
@@ -4697,7 +5108,11 @@ fn parse_color_modifiers(reader: &mut Reader<&[u8]>, base_hex: &str, end_tag: &s
 }
 
 /// Parse a w:drawing element to extract image, shape, or text box info
-fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<DrawingResult, ParseError> {
+fn parse_drawing(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<DrawingResult, ParseError> {
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     let mut alt_text = None;
@@ -4811,15 +5226,28 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     // These arms only toggle piggyback state (the events fell
                     // to the default `_ => {}` before) — every existing global
                     // extraction arm still runs unchanged.
-                    "wgp" => { s839_in_wgp = true; }
-                    "grpSpPr" if s839_in_wgp => { s839_in_grpsppr = true; }
+                    "wgp" => {
+                        s839_in_wgp = true;
+                    }
+                    "grpSpPr" if s839_in_wgp => {
+                        s839_in_grpsppr = true;
+                    }
                     "wsp" if s839_in_wgp => {
                         s839_wsp = Some(S839Wsp {
-                            off: (0.0, 0.0), ext: (0.0, 0.0), prst: None,
-                            pts: Vec::new(), path_wh: None, n_paths: 0,
-                            has_curve: false, ln_w: None, ln_color: None,
-                            ln_nofill: false, fill: None, no_fill: false,
-                            lnref: (-1, None), fillref: (-1, None),
+                            off: (0.0, 0.0),
+                            ext: (0.0, 0.0),
+                            prst: None,
+                            pts: Vec::new(),
+                            path_wh: None,
+                            n_paths: 0,
+                            has_curve: false,
+                            ln_w: None,
+                            ln_color: None,
+                            ln_nofill: false,
+                            fill: None,
+                            no_fill: false,
+                            lnref: (-1, None),
+                            fillref: (-1, None),
                         });
                     }
                     "path" if s839_wsp.is_some() => {
@@ -4829,10 +5257,15 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
-                            if key == "w" { pw = val.parse().unwrap_or(0.0); }
-                            else if key == "h" { ph = val.parse().unwrap_or(0.0); }
+                            if key == "w" {
+                                pw = val.parse().unwrap_or(0.0);
+                            } else if key == "h" {
+                                ph = val.parse().unwrap_or(0.0);
+                            }
                         }
-                        if w.path_wh.is_none() { w.path_wh = Some((pw, ph)); }
+                        if w.path_wh.is_none() {
+                            w.path_wh = Some((pw, ph));
+                        }
                     }
                     "cubicBezTo" | "quadBezTo" | "arcTo" if s839_wsp.is_some() => {
                         s839_wsp.as_mut().unwrap().has_curve = true;
@@ -4843,10 +5276,18 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                "relativeHeight" => { relative_height = val.parse::<u32>().unwrap_or(0); }
-                                "behindDoc" => { behind_doc = val == "1" || val == "true"; }
-                                "distL" => { dist_l = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "distR" => { dist_r = val.parse::<f32>().ok().map(|v| v / 12700.0); }
+                                "relativeHeight" => {
+                                    relative_height = val.parse::<u32>().unwrap_or(0);
+                                }
+                                "behindDoc" => {
+                                    behind_doc = val == "1" || val == "true";
+                                }
+                                "distL" => {
+                                    dist_l = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "distR" => {
+                                    dist_r = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
                                 _ => {}
                             }
                         }
@@ -4870,7 +5311,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
-                                if let Some(wsp) = s839_wsp.as_mut() { wsp.ln_w = stroke_width; }
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    wsp.ln_w = stroke_width;
+                                }
                             }
                         }
                         // Parse children for stroke color
@@ -4884,12 +5327,17 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             let mut base_hex: Option<String> = None;
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "val" {
-                                                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                                                    let val = String::from_utf8_lossy(&attr.value)
+                                                        .to_string();
                                                     base_hex = ctx.theme.resolve(&val).cloned();
                                                 }
                                             }
                                             if let Some(hex) = base_hex {
-                                                stroke_color = Some(parse_color_modifiers(reader, &hex, "schemeClr"));
+                                                stroke_color = Some(parse_color_modifiers(
+                                                    reader,
+                                                    &hex,
+                                                    "schemeClr",
+                                                ));
                                             }
                                             // parse_color_modifiers consumed End tag, no depth change
                                         }
@@ -4897,11 +5345,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             let mut hex = String::new();
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "val" {
-                                                    hex = String::from_utf8_lossy(&attr.value).to_string();
+                                                    hex = String::from_utf8_lossy(&attr.value)
+                                                        .to_string();
                                                 }
                                             }
                                             if !hex.is_empty() {
-                                                let c = parse_color_modifiers(reader, &hex, "srgbClr");
+                                                let c =
+                                                    parse_color_modifiers(reader, &hex, "srgbClr");
                                                 s839_ln_color = Some(c.clone());
                                                 stroke_color = Some(c);
                                             }
@@ -4910,11 +5360,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             let mut hex = String::new();
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "lastClr" {
-                                                    hex = String::from_utf8_lossy(&attr.value).to_string();
+                                                    hex = String::from_utf8_lossy(&attr.value)
+                                                        .to_string();
                                                 }
                                             }
                                             if !hex.is_empty() {
-                                                let c = parse_color_modifiers(reader, &hex, "sysClr");
+                                                let c =
+                                                    parse_color_modifiers(reader, &hex, "sysClr");
                                                 s839_ln_color = Some(c.clone());
                                                 stroke_color = Some(c);
                                             }
@@ -4927,7 +5379,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                     if sl == "srgbClr" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "val" {
-                                                let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                let c = String::from_utf8_lossy(&attr.value)
+                                                    .to_string();
                                                 s839_ln_color = Some(c.clone());
                                                 stroke_color = Some(c);
                                             }
@@ -4935,7 +5388,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                     } else if sl == "sysClr" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "lastClr" {
-                                                let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                let c = String::from_utf8_lossy(&attr.value)
+                                                    .to_string();
                                                 s839_ln_color = Some(c.clone());
                                                 stroke_color = Some(c);
                                             }
@@ -4943,7 +5397,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                     } else if sl == "schemeClr" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "val" {
-                                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                                let val = String::from_utf8_lossy(&attr.value)
+                                                    .to_string();
                                                 if let Some(resolved) = ctx.theme.resolve(&val) {
                                                     s839_ln_color = Some(resolved.clone());
                                                     stroke_color = Some(resolved.clone());
@@ -4962,7 +5417,11 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                                 has = !v.is_empty() && v != "none";
                                             }
                                         }
-                                        if sl == "headEnd" { arrow_head = has; } else { arrow_tail = has; }
+                                        if sl == "headEnd" {
+                                            arrow_head = has;
+                                        } else {
+                                            arrow_tail = has;
+                                        }
                                     }
                                 }
                                 Ok(Event::End(_se)) => {
@@ -4976,7 +5435,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             }
                         }
                         if let Some(wsp) = s839_wsp.as_mut() {
-                            if s839_ln_color.is_some() { wsp.ln_color = s839_ln_color; }
+                            if s839_ln_color.is_some() {
+                                wsp.ln_color = s839_ln_color;
+                            }
                             wsp.ln_nofill |= s839_ln_nofill;
                         }
                         // We consumed ln's End, decrement outer depth
@@ -4995,14 +5456,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "pos" {
                                                 let val = String::from_utf8_lossy(&attr.value);
-                                                current_gs_pos = val.parse::<f32>().ok().map(|v| v / 1000.0);
+                                                current_gs_pos =
+                                                    val.parse::<f32>().ok().map(|v| v / 1000.0);
                                             }
                                         }
                                     } else if sl == "lin" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "ang" {
                                                 let val = String::from_utf8_lossy(&attr.value);
-                                                gradient_angle = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                                                gradient_angle =
+                                                    val.parse::<f32>().ok().map(|v| v / 60000.0);
                                             }
                                         }
                                     }
@@ -5015,7 +5478,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                                 if local_name(attr.key.as_ref()) == "val" {
                                                     gradient_stops.push(GradientStop {
                                                         position: pos,
-                                                        color: String::from_utf8_lossy(&attr.value).to_string(),
+                                                        color: String::from_utf8_lossy(&attr.value)
+                                                            .to_string(),
                                                     });
                                                 }
                                             }
@@ -5024,7 +5488,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "ang" {
                                                 let val = String::from_utf8_lossy(&attr.value);
-                                                gradient_angle = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                                                gradient_angle =
+                                                    val.parse::<f32>().ok().map(|v| v / 60000.0);
                                             }
                                         }
                                     } else if sl == "gs" {
@@ -5037,7 +5502,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         current_gs_pos = None;
                                     }
                                     gf_depth -= 1;
-                                    if gf_depth == 0 { break; }
+                                    if gf_depth == 0 {
+                                        break;
+                                    }
                                 }
                                 Ok(Event::Eof) => break,
                                 _ => {}
@@ -5073,7 +5540,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         if !hex.is_empty() {
                             let final_color = parse_color_modifiers(reader, &hex, "srgbClr");
                             if let Some(wsp) = s839_wsp.as_mut() {
-                                if wsp.fill.is_none() && !wsp.no_fill { wsp.fill = Some(final_color.clone()); }
+                                if wsp.fill.is_none() && !wsp.no_fill {
+                                    wsp.fill = Some(final_color.clone());
+                                }
                             }
                             if shape_fill.is_none() && !has_no_fill {
                                 shape_fill = Some(final_color);
@@ -5103,10 +5572,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                "rot" => { rotation = val.parse::<f32>().ok().map(|v| v / 60000.0); }
+                                "rot" => {
+                                    rotation = val.parse::<f32>().ok().map(|v| v / 60000.0);
+                                }
                                 // flipH/flipV: connector diagonal direction (S493h).
-                                "flipH" => { flip_h = val == "1" || val == "true"; }
-                                "flipV" => { flip_v = val == "1" || val == "true"; }
+                                "flipH" => {
+                                    flip_h = val == "1" || val == "true";
+                                }
+                                "flipV" => {
+                                    flip_v = val == "1" || val == "true";
+                                }
                                 _ => {}
                             }
                         }
@@ -5141,13 +5616,28 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                "lIns" => { text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "rIns" => { text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "tIns" => { text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "anchor" => { text_body_anchor = Some(val.to_string()); }
-                                "vertOverflow" => { text_vert_overflow = Some(val.to_string()); }
-                                "compatLnSpc" => { text_compat_ln_spc = val == "1" || val == "true"; }
+                                "lIns" => {
+                                    text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "rIns" => {
+                                    text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "tIns" => {
+                                    text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "bIns" => {
+                                    text_inset_bottom =
+                                        val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "anchor" => {
+                                    text_body_anchor = Some(val.to_string());
+                                }
+                                "vertOverflow" => {
+                                    text_vert_overflow = Some(val.to_string());
+                                }
+                                "compatLnSpc" => {
+                                    text_compat_ln_spc = val == "1" || val == "true";
+                                }
                                 _ => {}
                             }
                         }
@@ -5160,7 +5650,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 Ok(Event::Start(se)) => {
                                     let sl = local_name(se.name().as_ref());
                                     if sl == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false, None) {
+                                        if let Ok(pr) =
+                                            parse_paragraph(reader, ctx, styles, false, false, None)
+                                        {
                                             shape_text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -5178,7 +5670,8 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                     if local_name(se.name().as_ref()) == "p"
                                         && std::env::var("OXI_S1043_DISABLE").is_err() =>
                                 {
-                                    shape_text_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
+                                    shape_text_blocks
+                                        .push(Block::Paragraph(empty_para_with_defaults(styles)));
                                 }
                                 Ok(Event::End(se)) => {
                                     if local_name(se.name().as_ref()) == "txbxContent" {
@@ -5207,7 +5700,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             if key == "prst" {
                                 let v = String::from_utf8_lossy(&attr.value).to_string();
-                                if let Some(wsp) = s839_wsp.as_mut() { wsp.prst = Some(v.clone()); }
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    wsp.prst = Some(v.clone());
+                                }
                                 shape_type = Some(v);
                             }
                         }
@@ -5232,8 +5727,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             in_fill_ref = true;
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "idx" {
-                                                    fill_ref_idx = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
-                                                    if let Some(wsp) = s839_wsp.as_mut() { wsp.fillref.0 = fill_ref_idx; }
+                                                    fill_ref_idx =
+                                                        String::from_utf8_lossy(&attr.value)
+                                                            .parse()
+                                                            .unwrap_or(0);
+                                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                                        wsp.fillref.0 = fill_ref_idx;
+                                                    }
                                                 }
                                             }
                                         }
@@ -5241,8 +5741,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                             in_ln_ref = true;
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "idx" {
-                                                    ln_ref_idx = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
-                                                    if let Some(wsp) = s839_wsp.as_mut() { wsp.lnref.0 = ln_ref_idx; }
+                                                    ln_ref_idx =
+                                                        String::from_utf8_lossy(&attr.value)
+                                                            .parse()
+                                                            .unwrap_or(0);
+                                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                                        wsp.lnref.0 = ln_ref_idx;
+                                                    }
                                                 }
                                             }
                                         }
@@ -5251,10 +5756,15 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         "srgbClr" => {
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "val" {
-                                                    let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                    let c = String::from_utf8_lossy(&attr.value)
+                                                        .to_string();
                                                     if let Some(wsp) = s839_wsp.as_mut() {
-                                                        if in_fill_ref { wsp.fillref.1 = Some(c.clone()); }
-                                                        if in_ln_ref { wsp.lnref.1 = Some(c.clone()); }
+                                                        if in_fill_ref {
+                                                            wsp.fillref.1 = Some(c.clone());
+                                                        }
+                                                        if in_ln_ref {
+                                                            wsp.lnref.1 = Some(c.clone());
+                                                        }
                                                     }
                                                 }
                                             }
@@ -5262,17 +5772,33 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         "schemeClr" => {
                                             for attr in se.attributes().flatten() {
                                                 if local_name(attr.key.as_ref()) == "val" {
-                                                    let val = String::from_utf8_lossy(&attr.value).to_string();
-                                                    if let Some(resolved) = ctx.theme.resolve(&val) {
-                                                        let color = parse_color_modifiers(reader, resolved, "schemeClr");
+                                                    let val = String::from_utf8_lossy(&attr.value)
+                                                        .to_string();
+                                                    if let Some(resolved) = ctx.theme.resolve(&val)
+                                                    {
+                                                        let color = parse_color_modifiers(
+                                                            reader,
+                                                            resolved,
+                                                            "schemeClr",
+                                                        );
                                                         if let Some(wsp) = s839_wsp.as_mut() {
-                                                            if in_fill_ref { wsp.fillref.1 = Some(color.clone()); }
-                                                            if in_ln_ref { wsp.lnref.1 = Some(color.clone()); }
+                                                            if in_fill_ref {
+                                                                wsp.fillref.1 = Some(color.clone());
+                                                            }
+                                                            if in_ln_ref {
+                                                                wsp.lnref.1 = Some(color.clone());
+                                                            }
                                                         }
-                                                        if in_fill_ref && fill_ref_idx > 0 && shape_fill.is_none() {
+                                                        if in_fill_ref
+                                                            && fill_ref_idx > 0
+                                                            && shape_fill.is_none()
+                                                        {
                                                             shape_fill = Some(color.clone());
                                                         }
-                                                        if in_ln_ref && ln_ref_idx > 0 && stroke_color.is_none() {
+                                                        if in_ln_ref
+                                                            && ln_ref_idx > 0
+                                                            && stroke_color.is_none()
+                                                        {
                                                             stroke_color = Some(color);
                                                         }
                                                     }
@@ -5288,16 +5814,27 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                     if sl == "schemeClr" {
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "val" {
-                                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                                let val = String::from_utf8_lossy(&attr.value)
+                                                    .to_string();
                                                 if let Some(resolved) = ctx.theme.resolve(&val) {
                                                     if let Some(wsp) = s839_wsp.as_mut() {
-                                                        if in_fill_ref { wsp.fillref.1 = Some(resolved.clone()); }
-                                                        if in_ln_ref { wsp.lnref.1 = Some(resolved.clone()); }
+                                                        if in_fill_ref {
+                                                            wsp.fillref.1 = Some(resolved.clone());
+                                                        }
+                                                        if in_ln_ref {
+                                                            wsp.lnref.1 = Some(resolved.clone());
+                                                        }
                                                     }
-                                                    if in_fill_ref && fill_ref_idx > 0 && shape_fill.is_none() {
+                                                    if in_fill_ref
+                                                        && fill_ref_idx > 0
+                                                        && shape_fill.is_none()
+                                                    {
                                                         shape_fill = Some(resolved.clone());
                                                     }
-                                                    if in_ln_ref && ln_ref_idx > 0 && stroke_color.is_none() {
+                                                    if in_ln_ref
+                                                        && ln_ref_idx > 0
+                                                        && stroke_color.is_none()
+                                                    {
                                                         stroke_color = Some(resolved.clone());
                                                     }
                                                 }
@@ -5307,10 +5844,15 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         // S839: per-shape only (legacy globals unchanged).
                                         for attr in se.attributes().flatten() {
                                             if local_name(attr.key.as_ref()) == "val" {
-                                                let c = String::from_utf8_lossy(&attr.value).to_string();
+                                                let c = String::from_utf8_lossy(&attr.value)
+                                                    .to_string();
                                                 if let Some(wsp) = s839_wsp.as_mut() {
-                                                    if in_fill_ref { wsp.fillref.1 = Some(c.clone()); }
-                                                    if in_ln_ref { wsp.lnref.1 = Some(c.clone()); }
+                                                    if in_fill_ref {
+                                                        wsp.fillref.1 = Some(c.clone());
+                                                    }
+                                                    if in_ln_ref {
+                                                        wsp.lnref.1 = Some(c.clone());
+                                                    }
                                                 }
                                             }
                                         }
@@ -5322,7 +5864,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                         in_fill_ref = false;
                                         in_ln_ref = false;
                                     }
-                                    if style_depth == 0 { break; }
+                                    if style_depth == 0 {
+                                        break;
+                                    }
                                 }
                                 Ok(Event::Eof) => break,
                                 _ => {}
@@ -5338,13 +5882,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     let content = e.unescape().unwrap_or_default();
                     if let Ok(v) = content.parse::<f32>() {
                         let pt = v / 12700.0; // EMU to points
-                        if in_pos_h { pos_x = pt; }
-                        else if in_pos_v { pos_y = pt; }
+                        if in_pos_h {
+                            pos_x = pt;
+                        } else if in_pos_v {
+                            pos_y = pt;
+                        }
                     }
                 } else if in_align {
                     let content = e.unescape().unwrap_or_default().to_string();
-                    if in_pos_h { h_align = Some(content); }
-                    else if in_pos_v { v_align = Some(content); }
+                    if in_pos_h {
+                        h_align = Some(content);
+                    } else if in_pos_v {
+                        v_align = Some(content);
+                    }
                 }
             }
             Event::Empty(e) => {
@@ -5361,12 +5911,24 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 has = !v.is_empty() && v != "none";
                             }
                         }
-                        if local == "headEnd" { arrow_head = has; } else { arrow_tail = has; }
+                        if local == "headEnd" {
+                            arrow_head = has;
+                        } else {
+                            arrow_tail = has;
+                        }
                     }
-                    "wrapNone" => { wrap_type = Some(WrapType::None); }
-                    "wrapSquare" => { wrap_type = Some(WrapType::Square); }
-                    "wrapTight" => { wrap_type = Some(WrapType::Tight); }
-                    "wrapTopAndBottom" => { wrap_type = Some(WrapType::TopAndBottom); }
+                    "wrapNone" => {
+                        wrap_type = Some(WrapType::None);
+                    }
+                    "wrapSquare" => {
+                        wrap_type = Some(WrapType::Square);
+                    }
+                    "wrapTight" => {
+                        wrap_type = Some(WrapType::Tight);
+                    }
+                    "wrapTopAndBottom" => {
+                        wrap_type = Some(WrapType::TopAndBottom);
+                    }
                     "extent" => {
                         // wp:extent cx/cy are in EMUs (English Metric Units)
                         // 1 inch = 914400 EMUs, 1 point = 12700 EMUs
@@ -5399,7 +5961,12 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                     }
                     "srcRect" => {
                         // a:srcRect — image crop percentages (in 1/1000th percent)
-                        let mut c = ImageCrop { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+                        let mut c = ImageCrop {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 0.0,
+                            left: 0.0,
+                        };
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             let val = String::from_utf8_lossy(&attr.value);
@@ -5428,13 +5995,17 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 "cx" => {
                                     if let Ok(v) = val.parse::<f32>() {
                                         s839_cx = v;
-                                        if width == 0.0 { width = v / 12700.0; }
+                                        if width == 0.0 {
+                                            width = v / 12700.0;
+                                        }
                                     }
                                 }
                                 "cy" => {
                                     if let Ok(v) = val.parse::<f32>() {
                                         s839_cy = v;
-                                        if height == 0.0 { height = v / 12700.0; }
+                                        if height == 0.0 {
+                                            height = v / 12700.0;
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -5442,8 +6013,11 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         }
                         // S839: per-shape / group extent capture (EMU).
                         if s839_in_wgp {
-                            if s839_in_grpsppr { s839_grp.1 = (s839_cx, s839_cy); }
-                            else if let Some(wsp) = s839_wsp.as_mut() { wsp.ext = (s839_cx, s839_cy); }
+                            if s839_in_grpsppr {
+                                s839_grp.1 = (s839_cx, s839_cy);
+                            } else if let Some(wsp) = s839_wsp.as_mut() {
+                                wsp.ext = (s839_cx, s839_cy);
+                            }
                         }
                     }
                     "docPr" => {
@@ -5460,7 +6034,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             if key == "prst" {
                                 let v = String::from_utf8_lossy(&attr.value).to_string();
-                                if let Some(wsp) = s839_wsp.as_mut() { wsp.prst = Some(v.clone()); }
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    wsp.prst = Some(v.clone());
+                                }
                                 shape_type = Some(v);
                             }
                         }
@@ -5494,7 +6070,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             if key == "val" {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if let Some(wsp) = s839_wsp.as_mut() {
-                                    if wsp.fill.is_none() && !wsp.no_fill { wsp.fill = Some(val.clone()); }
+                                    if wsp.fill.is_none() && !wsp.no_fill {
+                                        wsp.fill = Some(val.clone());
+                                    }
                                 }
                                 if shape_fill.is_none() && !has_no_fill {
                                     shape_fill = Some(val);
@@ -5534,22 +6112,41 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                "lIns" => { text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "rIns" => { text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "tIns" => { text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "bIns" => { text_inset_bottom = val.parse::<f32>().ok().map(|v| v / 12700.0); }
-                                "anchor" => { text_body_anchor = Some(val.to_string()); }
-                                "vertOverflow" => { text_vert_overflow = Some(val.to_string()); }
-                                "compatLnSpc" => { text_compat_ln_spc = val == "1" || val == "true"; }
+                                "lIns" => {
+                                    text_inset_left = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "rIns" => {
+                                    text_inset_right = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "tIns" => {
+                                    text_inset_top = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "bIns" => {
+                                    text_inset_bottom =
+                                        val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                }
+                                "anchor" => {
+                                    text_body_anchor = Some(val.to_string());
+                                }
+                                "vertOverflow" => {
+                                    text_vert_overflow = Some(val.to_string());
+                                }
+                                "compatLnSpc" => {
+                                    text_compat_ln_spc = val == "1" || val == "true";
+                                }
                                 _ => {}
                             }
                         }
                     }
                     "noFill" => {
-                        if let Some(wsp) = s839_wsp.as_mut() { wsp.no_fill = true; }
+                        if let Some(wsp) = s839_wsp.as_mut() {
+                            wsp.no_fill = true;
+                        }
                         has_no_fill = true;
                     }
-                    "noLn" => { has_no_stroke = true; }
+                    "noLn" => {
+                        has_no_stroke = true;
+                    }
                     // S839: wpg group / member-shape geometry (Empty events;
                     // gated on the group state so non-group drawings are
                     // untouched — a:off/a:ext were unhandled here before).
@@ -5558,13 +6155,22 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
-                            if key == "x" { x = val.parse().unwrap_or(0.0); }
-                            else if key == "y" { y = val.parse().unwrap_or(0.0); }
+                            if key == "x" {
+                                x = val.parse().unwrap_or(0.0);
+                            } else if key == "y" {
+                                y = val.parse().unwrap_or(0.0);
+                            }
                         }
                         if s839_in_grpsppr {
-                            if local == "off" { s839_grp.0 = (x, y); } else { s839_grp.2 = (x, y); }
+                            if local == "off" {
+                                s839_grp.0 = (x, y);
+                            } else {
+                                s839_grp.2 = (x, y);
+                            }
                         } else if local == "off" {
-                            if let Some(wsp) = s839_wsp.as_mut() { wsp.off = (x, y); }
+                            if let Some(wsp) = s839_wsp.as_mut() {
+                                wsp.off = (x, y);
+                            }
                         }
                     }
                     "chExt" if s839_in_wgp => {
@@ -5572,18 +6178,27 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
-                            if key == "cx" { cx = val.parse().unwrap_or(0.0); }
-                            else if key == "cy" { cy = val.parse().unwrap_or(0.0); }
+                            if key == "cx" {
+                                cx = val.parse().unwrap_or(0.0);
+                            } else if key == "cy" {
+                                cy = val.parse().unwrap_or(0.0);
+                            }
                         }
-                        if s839_in_grpsppr { s839_grp.3 = (cx, cy); s839_grp_seen = true; }
+                        if s839_in_grpsppr {
+                            s839_grp.3 = (cx, cy);
+                            s839_grp_seen = true;
+                        }
                     }
                     "pt" if s839_wsp.is_some() => {
                         let (mut x, mut y) = (0.0f32, 0.0f32);
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
-                            if key == "x" { x = val.parse().unwrap_or(0.0); }
-                            else if key == "y" { y = val.parse().unwrap_or(0.0); }
+                            if key == "x" {
+                                x = val.parse().unwrap_or(0.0);
+                            } else if key == "y" {
+                                y = val.parse().unwrap_or(0.0);
+                            }
                         }
                         s839_wsp.as_mut().unwrap().pts.push((x, y));
                     }
@@ -5603,34 +6218,62 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
-                    "positionH" => { in_pos_h = false; }
-                    "positionV" => { in_pos_v = false; }
-                    "posOffset" => { in_pos_offset = false; }
-                    "align" => { in_align = false; }
+                    "positionH" => {
+                        in_pos_h = false;
+                    }
+                    "positionV" => {
+                        in_pos_v = false;
+                    }
+                    "posOffset" => {
+                        in_pos_offset = false;
+                    }
+                    "align" => {
+                        in_align = false;
+                    }
                     // S839: classify + record the finished group member shape.
                     "wsp" if s839_in_wgp => {
                         if let Some(w) = s839_wsp.take() {
-                            let stroke = if w.ln_nofill { None } else {
-                                w.ln_color.clone().or_else(|| if w.lnref.0 > 0 { w.lnref.1.clone() } else { None })
+                            let stroke = if w.ln_nofill {
+                                None
+                            } else {
+                                w.ln_color.clone().or_else(|| {
+                                    if w.lnref.0 > 0 {
+                                        w.lnref.1.clone()
+                                    } else {
+                                        None
+                                    }
+                                })
                             };
-                            let fill = if w.no_fill { None } else {
-                                w.fill.clone().or_else(|| if w.fillref.0 > 0 { w.fillref.1.clone() } else { None })
+                            let fill = if w.no_fill {
+                                None
+                            } else {
+                                w.fill.clone().or_else(|| {
+                                    if w.fillref.0 > 0 {
+                                        w.fillref.1.clone()
+                                    } else {
+                                        None
+                                    }
+                                })
                             };
                             // line: degenerate extent or prst="line".
                             let is_line = w.prst.as_deref() == Some("line")
-                                || w.ext.0 == 0.0 || w.ext.1 == 0.0;
+                                || w.ext.0 == 0.0
+                                || w.ext.1 == 0.0;
                             // rect: preset rect, or a curve-free single closed
                             // path whose points all sit on the extent corners.
-                            let is_rect = !is_line && (w.prst.as_deref() == Some("rect")
-                                || (w.prst.is_none() && !w.has_curve && w.n_paths <= 1 && {
-                                    let (pw, ph) = w.path_wh.unwrap_or(w.ext);
-                                    let tx = (pw * 0.02).max(1.0);
-                                    let ty = (ph * 0.02).max(1.0);
-                                    !w.pts.is_empty() && w.pts.len() <= 6
-                                        && w.pts.iter().all(|&(px, py)|
-                                            (px.abs() < tx || (px - pw).abs() < tx)
-                                            && (py.abs() < ty || (py - ph).abs() < ty))
-                                }));
+                            let is_rect = !is_line
+                                && (w.prst.as_deref() == Some("rect")
+                                    || (w.prst.is_none() && !w.has_curve && w.n_paths <= 1 && {
+                                        let (pw, ph) = w.path_wh.unwrap_or(w.ext);
+                                        let tx = (pw * 0.02).max(1.0);
+                                        let ty = (ph * 0.02).max(1.0);
+                                        !w.pts.is_empty()
+                                            && w.pts.len() <= 6
+                                            && w.pts.iter().all(|&(px, py)| {
+                                                (px.abs() < tx || (px - pw).abs() < tx)
+                                                    && (py.abs() < ty || (py - ph).abs() < ty)
+                                            })
+                                    }));
                             if std::env::var("OXI_DBG839").is_ok() {
                                 eprintln!("[S839wsp] off={:?} ext={:?} prst={:?} pts={} curve={} paths={} ln_w={:?} ln_c={:?} lnref={:?} fillref={:?} nofill={} -> stroke={:?} fill={:?} line={} rect={}",
                                     w.off, w.ext, w.prst, w.pts.len(), w.has_curve, w.n_paths,
@@ -5641,7 +6284,9 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                                 let ((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)) = s839_grp;
                                 let (sx, sy) = if s839_grp_seen && cex > 0.0 && cey > 0.0 {
                                     (gex / cex, gey / cey)
-                                } else { (1.0, 1.0) };
+                                } else {
+                                    (1.0, 1.0)
+                                };
                                 let e2p = 1.0 / 12700.0;
                                 s839_vector_shapes.push(crate::ir::VectorShape {
                                     x: (gx + (w.off.0 - cx0) * sx) * e2p,
@@ -5656,8 +6301,13 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
                             }
                         }
                     }
-                    "wgp" => { s839_in_wgp = false; s839_wsp = None; }
-                    "grpSpPr" => { s839_in_grpsppr = false; }
+                    "wgp" => {
+                        s839_in_wgp = false;
+                        s839_wsp = None;
+                    }
+                    "grpSpPr" => {
+                        s839_in_grpsppr = false;
+                    }
                     _ => {}
                 }
                 if local == "drawing" && depth == 0 {
@@ -5673,7 +6323,16 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     }
 
     let position = if is_anchor {
-        Some(FloatingPosition { x: pos_x, y: pos_y, h_relative, v_relative, h_align, v_align, dist_l, dist_r })
+        Some(FloatingPosition {
+            x: pos_x,
+            y: pos_y,
+            h_relative,
+            v_relative,
+            h_align,
+            v_align,
+            dist_l,
+            dist_r,
+        })
     } else {
         None
     };
@@ -5685,7 +6344,7 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
-                    host_paragraph: None,
+            host_paragraph: None,
             page_break_before: false,
             data,
             width,
@@ -5714,7 +6373,11 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             width,
             height,
             position: position.clone(),
-            fill: if has_no_fill { None } else { shape_fill.clone() },
+            fill: if has_no_fill {
+                None
+            } else {
+                shape_fill.clone()
+            },
             stroke_color: if has_no_stroke { None } else { stroke_color },
             stroke_width: if has_no_stroke { None } else { stroke_width },
             text_blocks: Vec::new(), // text goes to text_box
@@ -5771,22 +6434,29 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     // (line/bracket decorations — S535b's revert case: reserving those
     // regressed 3a4f by 282 paras).
     let s741_has_txbx_text = !shape_text_blocks.is_empty();
-    let tb_position = position.clone().or_else(|| if inline_tb {
-        Some(FloatingPosition {
-            x: 0.0,
-            y: 0.0,
-            h_relative: Some("column".to_string()),
-            v_relative: Some("paragraph".to_string()),
-            h_align: None,
-            v_align: None,
-            dist_l: None, dist_r: None })
-    } else { None });
+    let tb_position = position.clone().or_else(|| {
+        if inline_tb {
+            Some(FloatingPosition {
+                x: 0.0,
+                y: 0.0,
+                h_relative: Some("column".to_string()),
+                v_relative: Some("paragraph".to_string()),
+                h_align: None,
+                v_align: None,
+                dist_l: None,
+                dist_r: None,
+            })
+        } else {
+            None
+        }
+    });
     // S839: a VISUAL-ONLY wpg group (no txbxContent — hmrc's checkbox strips /
     // writing boxes / heavy rules) carries its drawable primitives on the
     // textbox and suppresses the legacy whole-extent outline (border came from
     // the group members' a:ln via the generic last-win extraction). Text-
     // bearing groups (framework cover pages) attach nothing → byte-identical.
-    let s839_attach = !s839_vector_shapes.is_empty() && shape_text_blocks.is_empty()
+    let s839_attach = !s839_vector_shapes.is_empty()
+        && shape_text_blocks.is_empty()
         && std::env::var("OXI_S839_DISABLE").is_err();
     let text_box = if !is_outline_shape && (!shape_text_blocks.is_empty() || has_visual) {
         Some(TextBox {
@@ -5795,9 +6465,23 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             height,
             position: tb_position,
             border: !has_no_stroke && !s839_attach,
-            stroke_color: if has_no_stroke || s839_attach { None } else { stroke_color_saved.clone() },
-            stroke_width: if has_no_stroke || s839_attach { None } else { stroke_width_saved },
-            fill: if has_no_fill || s839_attach { None } else { shape_fill.clone().or_else(|| shape_type.as_ref().map(|_| "FFFFFF".to_string())) },
+            stroke_color: if has_no_stroke || s839_attach {
+                None
+            } else {
+                stroke_color_saved.clone()
+            },
+            stroke_width: if has_no_stroke || s839_attach {
+                None
+            } else {
+                stroke_width_saved
+            },
+            fill: if has_no_fill || s839_attach {
+                None
+            } else {
+                shape_fill
+                    .clone()
+                    .or_else(|| shape_type.as_ref().map(|_| "FFFFFF".to_string()))
+            },
             anchor_block_index: 0, // set by caller in parse_body
             corner_radius,
             inset_left: text_inset_left,
@@ -5819,7 +6503,11 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
             behind_doc,
             vert_overflow: text_vert_overflow,
             compat_line_spacing: text_compat_ln_spc,
-            vector_shapes: if s839_attach { std::mem::take(&mut s839_vector_shapes) } else { Vec::new() },
+            vector_shapes: if s839_attach {
+                std::mem::take(&mut s839_vector_shapes)
+            } else {
+                Vec::new()
+            },
         })
     } else {
         None
@@ -5843,15 +6531,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
     // consumes 108.3 = text 54 + object 54); Oxi rendered the box overlay-
     // only -> packed ~1 para more per page (-1x6). The S535b danger (visual
     // shapes) is excluded by requiring shape_text_blocks non-empty.
-    let s741_reserve = s741_has_txbx_text && !is_canvas
-        && std::env::var("OXI_S741_DISABLE").is_err();
-    let image = if image.is_none() && inline_tb && (is_canvas || s741_reserve) && text_box.is_some()
-        && width > 0.0 && height > 0.0
+    let s741_reserve =
+        s741_has_txbx_text && !is_canvas && std::env::var("OXI_S741_DISABLE").is_err();
+    let image = if image.is_none()
+        && inline_tb
+        && (is_canvas || s741_reserve)
+        && text_box.is_some()
+        && width > 0.0
+        && height > 0.0
     {
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
-                    host_paragraph: None,
+            host_paragraph: None,
             page_break_before: false,
             data: Vec::new(),
             width,
@@ -5869,11 +6561,19 @@ fn parse_drawing(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleS
         image
     };
 
-    Ok(DrawingResult { image, shape, text_box })
+    Ok(DrawingResult {
+        image,
+        shape,
+        text_box,
+    })
 }
 
 /// Parse VML w:pict element (legacy shapes/images)
-fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<DrawingResult, ParseError> {
+fn parse_vml_pict(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<DrawingResult, ParseError> {
     let mut shape_type = None;
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
@@ -5900,13 +6600,13 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     let mut vml_v_relative: Option<String> = None;
     let mut vml_negative_z = false;
     let mut escapes_cell = false; // o:allowincell="f" (S711b)
-    // VML drawing canvas (<v:group editas="canvas">). Word reserves the
-    // group's DECLARED height (style height:Npt) in the inline text flow; the
-    // inner position:absolute shapes are canvas-internal (relative to the
-    // canvas coordinate system), NOT page-absolute. parse_vml_pict previously
-    // had no "group" arm, so the canvas dims were lost and the inner shapes
-    // overwrote width/height (with canvas-unit coords) -> the figure reserved
-    // ZERO flow height (tokyoshugyo 図２ 代替休暇 flowchart, 136.7pt, dropped).
+                                  // VML drawing canvas (<v:group editas="canvas">). Word reserves the
+                                  // group's DECLARED height (style height:Npt) in the inline text flow; the
+                                  // inner position:absolute shapes are canvas-internal (relative to the
+                                  // canvas coordinate system), NOT page-absolute. parse_vml_pict previously
+                                  // had no "group" arm, so the canvas dims were lost and the inner shapes
+                                  // overwrote width/height (with canvas-unit coords) -> the figure reserved
+                                  // ZERO flow height (tokyoshugyo 図２ 代替休暇 flowchart, 136.7pt, dropped).
     let mut group_width: f32 = 0.0;
     let mut group_height: f32 = 0.0;
     let mut is_canvas_group = false;
@@ -5944,7 +6644,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             match reader.read_event() {
                                 Ok(Event::Start(se)) => {
                                     if local_name(se.name().as_ref()) == "p" {
-                                        if let Ok(pr) = parse_paragraph(reader, ctx, styles, false, false, None) {
+                                        if let Ok(pr) =
+                                            parse_paragraph(reader, ctx, styles, false, false, None)
+                                        {
                                             text_blocks.push(Block::Paragraph(pr.paragraph));
                                         }
                                     }
@@ -5954,7 +6656,8 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                     if local_name(se.name().as_ref()) == "p"
                                         && std::env::var("OXI_S1043_DISABLE").is_err() =>
                                 {
-                                    text_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
+                                    text_blocks
+                                        .push(Block::Paragraph(empty_para_with_defaults(styles)));
                                 }
                                 Ok(Event::End(se)) => {
                                     if local_name(se.name().as_ref()) == "txbxContent" {
@@ -6009,30 +6712,43 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                 // Take the group's declared pt dims + margin
                                 // position so the inner canvas-unit shapes can be
                                 // ignored below.
-                                if group_width > 0.0 { width = group_width; }
-                                if group_height > 0.0 { height = group_height; }
-                                if g_ml != 0.0 { margin_left = g_ml; }
-                                if g_mt != 0.0 { margin_top = g_mt; }
+                                if group_width > 0.0 {
+                                    width = group_width;
+                                }
+                                if group_height > 0.0 {
+                                    height = group_height;
+                                }
+                                if g_ml != 0.0 {
+                                    margin_left = g_ml;
+                                }
+                                if g_mt != 0.0 {
+                                    margin_top = g_mt;
+                                }
                             }
                         }
                     }
                     // VML shape types
                     "shape" | "rect" | "oval" | "roundrect" | "line" => {
                         // Check VML type attribute for preset shape identification
-                        let vml_type_attr = e.attributes().flatten()
+                        let vml_type_attr = e
+                            .attributes()
+                            .flatten()
                             .find(|a| local_name(a.key.as_ref()) == "type")
                             .map(|a| String::from_utf8_lossy(&a.value).to_string());
-                        shape_type = Some(match local.as_str() {
-                            "shape" => {
-                                // Map VML shapetype IDs to OOXML preset names
-                                match vml_type_attr.as_deref() {
-                                    Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
-                                    _ => "rect",
+                        shape_type = Some(
+                            match local.as_str() {
+                                "shape" => {
+                                    // Map VML shapetype IDs to OOXML preset names
+                                    match vml_type_attr.as_deref() {
+                                        Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
+                                        _ => "rect",
+                                    }
                                 }
+                                "roundrect" => "roundRect",
+                                other => other,
                             }
-                            "roundrect" => "roundRect",
-                            other => other,
-                        }.to_string());
+                            .to_string(),
+                        );
                         // Parse style attribute for width/height
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -6043,38 +6759,89 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                     for part in val.split(';') {
                                         let part = part.trim();
                                         if let Some(w) = part.strip_prefix("width:") {
-                                            if !in_grp { width = parse_css_length(w.trim()); }
+                                            if !in_grp {
+                                                width = parse_css_length(w.trim());
+                                            }
                                         } else if let Some(h) = part.strip_prefix("height:") {
-                                            if !in_grp { height = parse_css_length(h.trim()); }
-                                        } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
+                                            if !in_grp {
+                                                height = parse_css_length(h.trim());
+                                            }
+                                        } else if let Some(anchor) =
+                                            part.strip_prefix("v-text-anchor:")
+                                        {
                                             v_text_anchor = Some(anchor.trim().to_string());
                                         } else if let Some(ml) = part.strip_prefix("margin-left:") {
-                                            if !in_grp { margin_left = parse_css_length(ml.trim()); }
+                                            if !in_grp {
+                                                margin_left = parse_css_length(ml.trim());
+                                            }
                                         } else if let Some(mt) = part.strip_prefix("margin-top:") {
-                                            if !in_grp { margin_top = parse_css_length(mt.trim()); }
+                                            if !in_grp {
+                                                margin_top = parse_css_length(mt.trim());
+                                            }
                                         } else if part.starts_with("position:absolute") {
-                                            if !in_grp { is_absolute = true; }
-                                        } else if let Some(r) = part.strip_prefix("mso-position-horizontal-relative:") {
-                                            if !in_grp { vml_h_relative = Some(r.trim().to_string()); }
-                                        } else if let Some(a) = part.strip_prefix("mso-position-horizontal:") {
-                                            if !in_grp { vml_h_align = Some(a.trim().to_string()); }
-                                        } else if let Some(r) = part.strip_prefix("mso-position-vertical-relative:") {
-                                            if !in_grp { vml_v_relative = Some(r.trim().to_string()); }
-                                        } else if let Some(a) = part.strip_prefix("mso-position-vertical:") {
-                                            if !in_grp { vml_v_align = Some(a.trim().to_string()); }
+                                            if !in_grp {
+                                                is_absolute = true;
+                                            }
+                                        } else if let Some(r) =
+                                            part.strip_prefix("mso-position-horizontal-relative:")
+                                        {
+                                            if !in_grp {
+                                                vml_h_relative = Some(r.trim().to_string());
+                                            }
+                                        } else if let Some(a) =
+                                            part.strip_prefix("mso-position-horizontal:")
+                                        {
+                                            if !in_grp {
+                                                vml_h_align = Some(a.trim().to_string());
+                                            }
+                                        } else if let Some(r) =
+                                            part.strip_prefix("mso-position-vertical-relative:")
+                                        {
+                                            if !in_grp {
+                                                vml_v_relative = Some(r.trim().to_string());
+                                            }
+                                        } else if let Some(a) =
+                                            part.strip_prefix("mso-position-vertical:")
+                                        {
+                                            if !in_grp {
+                                                vml_v_align = Some(a.trim().to_string());
+                                            }
                                         } else if let Some(z) = part.strip_prefix("z-index:") {
-                                            if !in_grp { vml_negative_z = z.trim().parse::<i64>().is_ok_and(|z| z < 0); }
+                                            if !in_grp {
+                                                vml_negative_z =
+                                                    z.trim().parse::<i64>().is_ok_and(|z| z < 0);
+                                            }
                                         }
                                     }
                                 }
-                                "filled" => { if val == "f" || val == "false" { no_fill = true; } }
-                                "fillcolor" => fill_color = Some(val.trim_start_matches('#').to_string()),
-                                "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
+                                "filled" => {
+                                    if val == "f" || val == "false" {
+                                        no_fill = true;
+                                    }
+                                }
+                                "fillcolor" => {
+                                    fill_color = Some(val.trim_start_matches('#').to_string())
+                                }
+                                "strokecolor" => {
+                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                }
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
-                                "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
-                                "allowincell" => { if val == "f" || val == "false" { escapes_cell = true; } }
+                                "stroked" => {
+                                    if val == "f" || val == "false" {
+                                        no_stroke = true;
+                                    }
+                                }
+                                "allowincell" => {
+                                    if val == "f" || val == "false" {
+                                        escapes_cell = true;
+                                    }
+                                }
                                 // S852: o:hr="t" marks this rect as a horizontal rule.
-                                "hr" => { if val == "t" || val == "true" { is_hr = true; } }
+                                "hr" => {
+                                    if val == "t" || val == "true" {
+                                        is_hr = true;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -6099,7 +6866,11 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                     "fill" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "color" {
-                                fill_color = Some(String::from_utf8_lossy(&attr.value).trim_start_matches('#').to_string());
+                                fill_color = Some(
+                                    String::from_utf8_lossy(&attr.value)
+                                        .trim_start_matches('#')
+                                        .to_string(),
+                                );
                             }
                         }
                     }
@@ -6108,9 +6879,15 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
-                                "color" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
+                                "color" => {
+                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                }
                                 "weight" => stroke_width_val = parse_css_length_opt(&val),
-                                "on" => { if val == "f" || val == "false" { no_stroke = true; } }
+                                "on" => {
+                                    if val == "f" || val == "false" {
+                                        no_stroke = true;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -6126,17 +6903,22 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                     "shape" | "rect" | "oval" | "roundrect" | "line"
                         if std::env::var("OXI_VMLRECT_DISABLE").is_err() =>
                     {
-                        let vml_type_attr = e.attributes().flatten()
+                        let vml_type_attr = e
+                            .attributes()
+                            .flatten()
                             .find(|a| local_name(a.key.as_ref()) == "type")
                             .map(|a| String::from_utf8_lossy(&a.value).to_string());
-                        shape_type = Some(match local.as_str() {
-                            "shape" => match vml_type_attr.as_deref() {
-                                Some(t) if t.contains("t185") => "bracketPair",
-                                _ => "rect",
-                            },
-                            "roundrect" => "roundRect",
-                            other => other,
-                        }.to_string());
+                        shape_type = Some(
+                            match local.as_str() {
+                                "shape" => match vml_type_attr.as_deref() {
+                                    Some(t) if t.contains("t185") => "bracketPair",
+                                    _ => "rect",
+                                },
+                                "roundrect" => "roundRect",
+                                other => other,
+                            }
+                            .to_string(),
+                        );
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value).to_string();
@@ -6148,38 +6930,89 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                                     for part in val.split(';') {
                                         let part = part.trim();
                                         if let Some(w) = part.strip_prefix("width:") {
-                                            if !in_grp { width = parse_css_length(w.trim()); }
+                                            if !in_grp {
+                                                width = parse_css_length(w.trim());
+                                            }
                                         } else if let Some(h) = part.strip_prefix("height:") {
-                                            if !in_grp { height = parse_css_length(h.trim()); }
-                                        } else if let Some(anchor) = part.strip_prefix("v-text-anchor:") {
+                                            if !in_grp {
+                                                height = parse_css_length(h.trim());
+                                            }
+                                        } else if let Some(anchor) =
+                                            part.strip_prefix("v-text-anchor:")
+                                        {
                                             v_text_anchor = Some(anchor.trim().to_string());
                                         } else if let Some(ml) = part.strip_prefix("margin-left:") {
-                                            if !in_grp { margin_left = parse_css_length(ml.trim()); }
+                                            if !in_grp {
+                                                margin_left = parse_css_length(ml.trim());
+                                            }
                                         } else if let Some(mt) = part.strip_prefix("margin-top:") {
-                                            if !in_grp { margin_top = parse_css_length(mt.trim()); }
+                                            if !in_grp {
+                                                margin_top = parse_css_length(mt.trim());
+                                            }
                                         } else if part.starts_with("position:absolute") {
-                                            if !in_grp { is_absolute = true; }
-                                        } else if let Some(r) = part.strip_prefix("mso-position-horizontal-relative:") {
-                                            if !in_grp { vml_h_relative = Some(r.trim().to_string()); }
-                                        } else if let Some(a) = part.strip_prefix("mso-position-horizontal:") {
-                                            if !in_grp { vml_h_align = Some(a.trim().to_string()); }
-                                        } else if let Some(r) = part.strip_prefix("mso-position-vertical-relative:") {
-                                            if !in_grp { vml_v_relative = Some(r.trim().to_string()); }
-                                        } else if let Some(a) = part.strip_prefix("mso-position-vertical:") {
-                                            if !in_grp { vml_v_align = Some(a.trim().to_string()); }
+                                            if !in_grp {
+                                                is_absolute = true;
+                                            }
+                                        } else if let Some(r) =
+                                            part.strip_prefix("mso-position-horizontal-relative:")
+                                        {
+                                            if !in_grp {
+                                                vml_h_relative = Some(r.trim().to_string());
+                                            }
+                                        } else if let Some(a) =
+                                            part.strip_prefix("mso-position-horizontal:")
+                                        {
+                                            if !in_grp {
+                                                vml_h_align = Some(a.trim().to_string());
+                                            }
+                                        } else if let Some(r) =
+                                            part.strip_prefix("mso-position-vertical-relative:")
+                                        {
+                                            if !in_grp {
+                                                vml_v_relative = Some(r.trim().to_string());
+                                            }
+                                        } else if let Some(a) =
+                                            part.strip_prefix("mso-position-vertical:")
+                                        {
+                                            if !in_grp {
+                                                vml_v_align = Some(a.trim().to_string());
+                                            }
                                         } else if let Some(z) = part.strip_prefix("z-index:") {
-                                            if !in_grp { vml_negative_z = z.trim().parse::<i64>().is_ok_and(|z| z < 0); }
+                                            if !in_grp {
+                                                vml_negative_z =
+                                                    z.trim().parse::<i64>().is_ok_and(|z| z < 0);
+                                            }
                                         }
                                     }
                                 }
-                                "filled" => { if val == "f" || val == "false" { no_fill = true; } }
-                                "fillcolor" => fill_color = Some(val.trim_start_matches('#').to_string()),
-                                "strokecolor" => stroke_color_val = Some(val.trim_start_matches('#').to_string()),
+                                "filled" => {
+                                    if val == "f" || val == "false" {
+                                        no_fill = true;
+                                    }
+                                }
+                                "fillcolor" => {
+                                    fill_color = Some(val.trim_start_matches('#').to_string())
+                                }
+                                "strokecolor" => {
+                                    stroke_color_val = Some(val.trim_start_matches('#').to_string())
+                                }
                                 "strokeweight" => stroke_width_val = parse_css_length_opt(&val),
-                                "stroked" => { if val == "f" || val == "false" { no_stroke = true; } }
-                                "allowincell" => { if val == "f" || val == "false" { escapes_cell = true; } }
+                                "stroked" => {
+                                    if val == "f" || val == "false" {
+                                        no_stroke = true;
+                                    }
+                                }
+                                "allowincell" => {
+                                    if val == "f" || val == "false" {
+                                        escapes_cell = true;
+                                    }
+                                }
                                 // S852: o:hr="t" marks this rect as a horizontal rule.
-                                "hr" => { if val == "t" || val == "true" { is_hr = true; } }
+                                "hr" => {
+                                    if val == "t" || val == "true" {
+                                        is_hr = true;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -6216,16 +7049,13 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     // canvas figures reserve their declared height. 3a4f/model are
     // template-twins but render their canvases via the DrawingML (w:drawing)
     // path, so this VML-only fix leaves them byte-identical (canary-verified).
-    if is_canvas_group
-        && group_height > 0.0
-        && std::env::var("OXI_VMLCANVAS_DISABLE").is_err()
-    {
+    if is_canvas_group && group_height > 0.0 && std::env::var("OXI_VMLCANVAS_DISABLE").is_err() {
         return Ok(DrawingResult {
             image: Some(Image {
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
-                    host_paragraph: None,
-            page_break_before: false,
+                host_paragraph: None,
+                page_break_before: false,
                 data: Vec::new(),
                 width: group_width,
                 height: group_height,
@@ -6253,8 +7083,10 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     // census (0 golden / 0 ja / 0 real_en, 1 docx_corpus/en = the target) →
     // byte-identical everywhere else by construction. Opt-out OXI_S1006_DISABLE.
     let s1006_zero_abs = is_absolute
-        && margin_left == 0.0 && margin_top == 0.0
-        && vml_h_align.is_some() && vml_v_align.is_some()
+        && margin_left == 0.0
+        && margin_top == 0.0
+        && vml_h_align.is_some()
+        && vml_v_align.is_some()
         && std::env::var("OXI_S1006_DISABLE").is_err();
     let vml_position = if is_absolute && (margin_left != 0.0 || margin_top != 0.0) {
         Some(FloatingPosition {
@@ -6264,7 +7096,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             v_relative: Some("text".to_string()),
             h_align: None,
             v_align: None,
-            dist_l: None, dist_r: None })
+            dist_l: None,
+            dist_r: None,
+        })
     } else if s1006_zero_abs {
         Some(FloatingPosition {
             x: margin_left,
@@ -6273,7 +7107,9 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             v_relative: vml_v_relative.clone(),
             h_align: vml_h_align.clone(),
             v_align: vml_v_align.clone(),
-            dist_l: None, dist_r: None })
+            dist_l: None,
+            dist_r: None,
+        })
     } else {
         None
     };
@@ -6292,11 +7128,15 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         // Opt-out OXI_S566_DISABLE restores the old inline (position:None) path.
         let s566 = std::env::var("OXI_S566_DISABLE").is_err();
         let img_position = if s566 { vml_position.clone() } else { None };
-        let img_wrap = if s566 && vml_position.is_some() { Some(WrapType::None) } else { None };
+        let img_wrap = if s566 && vml_position.is_some() {
+            Some(WrapType::None)
+        } else {
+            None
+        };
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
-                    host_paragraph: None,
+            host_paragraph: None,
             page_break_before: false,
             data,
             width,
@@ -6327,8 +7167,11 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
     // branch never fires on the corpus (byte-identical by construction);
     // absolute VML textboxes keep the existing (dropped) behavior = the
     // separate S746b render task.
-    let s746_inline_txbx = !is_absolute && !text_blocks.is_empty()
-        && width > 0.0 && height > 0.0 && image.is_none()
+    let s746_inline_txbx = !is_absolute
+        && !text_blocks.is_empty()
+        && width > 0.0
+        && height > 0.0
+        && image.is_none()
         && std::env::var("OXI_S746_DISABLE").is_err();
     if s746_inline_txbx {
         let text_box = Some(TextBox {
@@ -6342,13 +7185,27 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
                 v_relative: Some("paragraph".to_string()),
                 h_align: None,
                 v_align: None,
-            dist_l: None, dist_r: None }),
+                dist_l: None,
+                dist_r: None,
+            }),
             border: !no_stroke,
             stroke_color: if no_stroke { None } else { stroke_color_val },
-            stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
-            fill: if no_fill { None } else { fill_color.or(Some("FFFFFF".to_string())) },
+            stroke_width: if no_stroke {
+                None
+            } else {
+                stroke_width_val.or(Some(0.75))
+            },
+            fill: if no_fill {
+                None
+            } else {
+                fill_color.or(Some("FFFFFF".to_string()))
+            },
             anchor_block_index: 0,
-            corner_radius: if shape_type.as_deref() == Some("roundRect") { Some(3.0) } else { None },
+            corner_radius: if shape_type.as_deref() == Some("roundRect") {
+                Some(3.0)
+            } else {
+                None
+            },
             inset_left: None,
             inset_right: None,
             inset_top: None,
@@ -6364,7 +7221,7 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         let placeholder = Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
-                    host_paragraph: None,
+            host_paragraph: None,
             page_break_before: false,
             data: Vec::new(),
             width,
@@ -6378,7 +7235,11 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
             relative_height: 0,
             behind_doc: false,
         });
-        return Ok(DrawingResult { image: placeholder, shape: None, text_box });
+        return Ok(DrawingResult {
+            image: placeholder,
+            shape: None,
+            text_box,
+        });
     }
     let shape = shape_type.as_ref().map(|st| Shape {
         shape_type: st.clone(),
@@ -6387,7 +7248,11 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         position: vml_position,
         fill: if no_fill { None } else { fill_color.clone() },
         stroke_color: if no_stroke { None } else { stroke_color_val },
-        stroke_width: if no_stroke { None } else { stroke_width_val.or(Some(0.75)) },
+        stroke_width: if no_stroke {
+            None
+        } else {
+            stroke_width_val.or(Some(0.75))
+        },
         text_blocks,
         rotation: None,
         gradient_stops: Vec::new(),
@@ -6402,7 +7267,11 @@ fn parse_vml_pict(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Style
         escapes_cell,
     });
 
-    Ok(DrawingResult { image, shape, text_box: None })
+    Ok(DrawingResult {
+        image,
+        shape,
+        text_box: None,
+    })
 }
 
 /// Parse CSS-like length value (e.g. "200pt", "2in", "100.5px")
@@ -6425,11 +7294,18 @@ fn parse_css_length(s: &str) -> f32 {
 
 fn parse_css_length_opt(s: &str) -> Option<f32> {
     let v = parse_css_length(s);
-    if v > 0.0 { Some(v) } else { None }
+    if v > 0.0 {
+        Some(v)
+    } else {
+        None
+    }
 }
 
 /// Parse w:object (OLE embedded object) — extract preview image from VML shape inside
-fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(DrawingResult, bool, Option<String>), ParseError> {
+fn parse_ole_object(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+) -> Result<(DrawingResult, bool, Option<String>), ParseError> {
     let mut rel_id: Option<String> = None;
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
@@ -6524,7 +7400,7 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
         Some(Image {
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
-                    host_paragraph: None,
+            host_paragraph: None,
             page_break_before: false,
             data,
             width,
@@ -6542,11 +7418,23 @@ fn parse_ole_object(reader: &mut Reader<&[u8]>, ctx: &ParseContext) -> Result<(D
         None
     };
 
-    Ok((DrawingResult { image, shape: None, text_box: None }, saw_ole_object, prog_id))
+    Ok((
+        DrawingResult {
+            image,
+            shape: None,
+            text_box: None,
+        },
+        saw_ole_object,
+        prog_id,
+    ))
 }
 
 /// Parse mc:AlternateContent — prefer mc:Choice (DrawingML), fall back to mc:Fallback (VML)
-fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<Option<DrawingResult>, ParseError> {
+fn parse_alternate_content(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<Option<DrawingResult>, ParseError> {
     let mut result: Option<DrawingResult> = None;
     let mut depth = 0;
     let mut in_choice = false;
@@ -6568,14 +7456,40 @@ fn parse_alternate_content(reader: &mut Reader<&[u8]>, ctx: &ParseContext, style
                     "drawing" if in_choice && depth == 1 => {
                         let dr = parse_drawing(reader, ctx, styles)?;
                         if std::env::var("OXI_DEBUG_AC").is_ok() {
-                            let alltxt: String = dr.text_box.as_ref().map(|t| t.blocks.iter()
-                                .filter_map(|b| if let crate::ir::Block::Paragraph(p)=b { Some(p.runs.iter().flat_map(|r| r.text.chars()).collect::<String>()) } else { None })
-                                .collect::<Vec<_>>().join("|")).unwrap_or_default();
-                            let pos = dr.text_box.as_ref().map(|t| t.position.is_some()).unwrap_or(false);
-                            eprintln!("[AC] Choice drawing: tb={} tb_paras={} tb_pos={} alltxt={:?}",
+                            let alltxt: String = dr
+                                .text_box
+                                .as_ref()
+                                .map(|t| {
+                                    t.blocks
+                                        .iter()
+                                        .filter_map(|b| {
+                                            if let crate::ir::Block::Paragraph(p) = b {
+                                                Some(
+                                                    p.runs
+                                                        .iter()
+                                                        .flat_map(|r| r.text.chars())
+                                                        .collect::<String>(),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("|")
+                                })
+                                .unwrap_or_default();
+                            let pos = dr
+                                .text_box
+                                .as_ref()
+                                .map(|t| t.position.is_some())
+                                .unwrap_or(false);
+                            eprintln!(
+                                "[AC] Choice drawing: tb={} tb_paras={} tb_pos={} alltxt={:?}",
                                 dr.text_box.is_some(),
                                 dr.text_box.as_ref().map(|t| t.blocks.len()).unwrap_or(0),
-                                pos, alltxt.chars().take(40).collect::<String>());
+                                pos,
+                                alltxt.chars().take(40).collect::<String>()
+                            );
                         }
                         // Only keep if it produced something useful (image, shape, or text box)
                         if result.is_none() && dr.has_content() {
@@ -6918,7 +7832,8 @@ fn parse_run_properties(
                             } else if key == "asciiTheme" || key == "hAnsiTheme" {
                                 if style.font_family.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    let font = super::styles::resolve_theme_font_pub(&val, &ctx.theme);
+                                    let font =
+                                        super::styles::resolve_theme_font_pub(&val, &ctx.theme);
                                     if let Some(f) = font {
                                         style.font_family = Some(f);
                                     }
@@ -6926,7 +7841,8 @@ fn parse_run_properties(
                             } else if key == "eastAsiaTheme" {
                                 if style.font_family_east_asia.is_none() {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    let font = super::styles::resolve_theme_font_pub(&val, &ctx.theme);
+                                    let font =
+                                        super::styles::resolve_theme_font_pub(&val, &ctx.theme);
                                     if let Some(f) = font {
                                         style.font_family_east_asia = Some(f);
                                     }
@@ -6983,8 +7899,7 @@ fn parse_run_properties(
                             if local_name(attr.key.as_ref()) == "val" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 // w:spacing w:val is in twips (1/20 pt)
-                                style.character_spacing =
-                                    val.parse::<f32>().ok().map(|v| v / 20.0);
+                                style.character_spacing = val.parse::<f32>().ok().map(|v| v / 20.0);
                             }
                         }
                     }
@@ -7025,8 +7940,12 @@ fn parse_run_properties(
                         for attr in e.attributes().flatten() {
                             match local_name(attr.key.as_ref()).as_str() {
                                 "val" => shd_val = String::from_utf8_lossy(&attr.value).to_string(),
-                                "fill" => shd_fill = String::from_utf8_lossy(&attr.value).to_string(),
-                                "color" => shd_color = String::from_utf8_lossy(&attr.value).to_string(),
+                                "fill" => {
+                                    shd_fill = String::from_utf8_lossy(&attr.value).to_string()
+                                }
+                                "color" => {
+                                    shd_color = String::from_utf8_lossy(&attr.value).to_string()
+                                }
                                 _ => {}
                             }
                         }
@@ -7050,13 +7969,20 @@ fn parse_run_properties(
                                 "val" => b_style = v,
                                 "sz" => b_width = v.parse::<f32>().unwrap_or(4.0) / 8.0,
                                 "space" => b_space = v.parse::<f32>().unwrap_or(0.0),
-                                "color" => if v != "auto" { b_color = Some(v) },
+                                "color" => {
+                                    if v != "auto" {
+                                        b_color = Some(v)
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                         if b_style != "none" && b_style != "nil" {
                             style.run_border = Some(BorderDef {
-                                style: b_style, width: b_width, color: b_color, space: b_space,
+                                style: b_style,
+                                width: b_width,
+                                color: b_color,
+                                space: b_space,
                             });
                         }
                     }
@@ -7138,7 +8064,8 @@ fn parse_run_properties(
                                 }
                                 "vert" => {
                                     let val = String::from_utf8_lossy(&attr.value);
-                                    style.vert_in_horz = val.as_ref() != "0" && val.as_ref() != "false";
+                                    style.vert_in_horz =
+                                        val.as_ref() != "0" && val.as_ref() != "false";
                                 }
                                 _ => {}
                             }
@@ -7195,7 +8122,11 @@ fn parse_run_properties(
 }
 
 /// Parse a w:tbl element (table)
-fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<Table, ParseError> {
+fn parse_table(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<Table, ParseError> {
     let mut rows = Vec::new();
     let mut style = TableStyle::default();
     let mut grid_columns = Vec::new();
@@ -7249,9 +8180,7 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
     // 13.0+19.0 with NO border terms; with the phantom inheritance Oxi
     // computed 67.4. Partial direct borders (some sides set) already skip the
     // merge via border=true — only the all-none case changes.
-    if !style.border
-        && !(style.explicit_borders && std::env::var("OXI_S930_DISABLE").is_err())
-    {
+    if !style.border && !(style.explicit_borders && std::env::var("OXI_S930_DISABLE").is_err()) {
         if let Some(ref style_id) = style.style_id {
             if let Some(tbl_style) = styles.table_styles.get(style_id) {
                 if tbl_style.border {
@@ -7407,9 +8336,8 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
                 let num_cols = row.cells.len();
                 for (col_idx, cell) in row.cells.iter_mut().enumerate() {
                     // Determine which conditional format applies (priority: corner > row/col > band)
-                    let cond_key = resolve_conditional_type(
-                        row_idx, col_idx, num_rows, num_cols, &look,
-                    );
+                    let cond_key =
+                        resolve_conditional_type(row_idx, col_idx, num_rows, num_cols, &look);
                     if let Some(key) = cond_key {
                         if let Some(fmt) = cond_fmts.get(key) {
                             // Apply shading if cell doesn't have explicit shading
@@ -7426,7 +8354,9 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
                                     if let Block::Paragraph(para) = block {
                                         for run in &mut para.runs {
                                             if let Some(b) = fmt.bold {
-                                                if !run.style.bold { run.style.bold = b; }
+                                                if !run.style.bold {
+                                                    run.style.bold = b;
+                                                }
                                             }
                                             if let Some(ref c) = fmt.color {
                                                 if run.style.color.is_none() {
@@ -7444,14 +8374,20 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleShe
         }
     }
 
-    Ok(Table { rows, style, grid_columns })
+    Ok(Table {
+        rows,
+        style,
+        grid_columns,
+    })
 }
 
 /// Determine which tblStylePr condition type applies to a cell.
 /// Returns the highest-priority condition key (corners > first/last row/col > bands).
 fn resolve_conditional_type(
-    row_idx: usize, col_idx: usize,
-    num_rows: usize, num_cols: usize,
+    row_idx: usize,
+    col_idx: usize,
+    num_rows: usize,
+    num_cols: usize,
     look: &crate::ir::TableLook,
 ) -> Option<&'static str> {
     let is_first_row = row_idx == 0 && look.first_row;
@@ -7460,24 +8396,44 @@ fn resolve_conditional_type(
     let is_last_col = col_idx == num_cols - 1 && look.last_column;
 
     // Corner cells (highest priority)
-    if is_first_row && is_last_col { return Some("neCell"); }
-    if is_first_row && is_first_col { return Some("nwCell"); }
-    if is_last_row && is_last_col { return Some("seCell"); }
-    if is_last_row && is_first_col { return Some("swCell"); }
+    if is_first_row && is_last_col {
+        return Some("neCell");
+    }
+    if is_first_row && is_first_col {
+        return Some("nwCell");
+    }
+    if is_last_row && is_last_col {
+        return Some("seCell");
+    }
+    if is_last_row && is_first_col {
+        return Some("swCell");
+    }
 
     // First/last row (higher than column)
-    if is_first_row { return Some("firstRow"); }
-    if is_last_row { return Some("lastRow"); }
+    if is_first_row {
+        return Some("firstRow");
+    }
+    if is_last_row {
+        return Some("lastRow");
+    }
 
     // First/last column
-    if is_first_col { return Some("firstCol"); }
-    if is_last_col { return Some("lastCol"); }
+    if is_first_col {
+        return Some("firstCol");
+    }
+    if is_last_col {
+        return Some("lastCol");
+    }
 
     // Banded rows/columns
     if look.banded_rows {
         let band_size = look.row_band_size.max(1) as usize;
         // Adjust row index: skip header row for banding count
-        let banding_row = if look.first_row { row_idx.saturating_sub(1) } else { row_idx };
+        let banding_row = if look.first_row {
+            row_idx.saturating_sub(1)
+        } else {
+            row_idx
+        };
         let band_index = banding_row / band_size;
         if band_index % 2 == 0 {
             return Some("band1Horz");
@@ -7487,7 +8443,11 @@ fn resolve_conditional_type(
     }
     if look.banded_columns {
         let band_size = look.col_band_size.max(1) as usize;
-        let banding_col = if look.first_column { col_idx.saturating_sub(1) } else { col_idx };
+        let banding_col = if look.first_column {
+            col_idx.saturating_sub(1)
+        } else {
+            col_idx
+        };
         let band_index = banding_col / band_size;
         if band_index % 2 == 0 {
             return Some("band1Vert");
@@ -7574,7 +8534,12 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                     style.explicit_borders = true;
                 } else if local == "tblCellMar" {
                     // Parse default cell margins
-                    let mut margins = CellMargins { top: None, bottom: None, left: None, right: None };
+                    let mut margins = CellMargins {
+                        top: None,
+                        bottom: None,
+                        left: None,
+                        right: None,
+                    };
                     loop {
                         match reader.read_event() {
                             Ok(Event::Empty(me)) => {
@@ -7582,7 +8547,10 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 let mut w_val: Option<f32> = None;
                                 for attr in me.attributes().flatten() {
                                     if local_name(attr.key.as_ref()) == "w" {
-                                        w_val = String::from_utf8_lossy(&attr.value).parse::<f32>().ok().map(|v| v / 20.0);
+                                        w_val = String::from_utf8_lossy(&attr.value)
+                                            .parse::<f32>()
+                                            .ok()
+                                            .map(|v| v / 20.0);
                                     }
                                 }
                                 match ml.as_str() {
@@ -7594,7 +8562,9 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 }
                             }
                             Ok(Event::End(ee)) => {
-                                if local_name(ee.name().as_ref()) == "tblCellMar" { break; }
+                                if local_name(ee.name().as_ref()) == "tblCellMar" {
+                                    break;
+                                }
                             }
                             Ok(Event::Eof) => break,
                             _ => {}
@@ -7626,7 +8596,8 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
-                    "top" | "left" | "bottom" | "right" | "insideH" | "insideV" | "start" | "end"
+                    "top" | "left" | "bottom" | "right" | "insideH" | "insideV" | "start"
+                    | "end"
                         if in_borders || depth == 0 =>
                     {
                         // Check if border val is "none" or "nil" — if so, don't set border=true
@@ -7676,7 +8647,9 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                             // Prefer a non-"single" decorative style if any edge
                             // declares one (uniform-border tables — the common
                             // case + a1d6e4 dashDotStroked); else keep "single".
-                            let v = border_style_val.clone().unwrap_or_else(|| "single".to_string());
+                            let v = border_style_val
+                                .clone()
+                                .unwrap_or_else(|| "single".to_string());
                             if style.border_style.is_none()
                                 || style.border_style.as_deref() == Some("single")
                             {
@@ -7688,7 +8661,9 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 style: if is_none {
                                     "none".to_string()
                                 } else {
-                                    border_style_val.clone().unwrap_or_else(|| "single".to_string())
+                                    border_style_val
+                                        .clone()
+                                        .unwrap_or_else(|| "single".to_string())
                                 },
                                 width: border_sz_val.unwrap_or(0.5),
                                 color: border_color_val.clone(),
@@ -7730,14 +8705,16 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                     "jc" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                style.alignment = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                style.alignment =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
                     "tblStyle" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                style.style_id = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                style.style_id =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -7745,7 +8722,8 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 if let Some(ref mut look) = style.tbl_look {
-                                    look.row_band_size = String::from_utf8_lossy(&attr.value).parse().unwrap_or(1);
+                                    look.row_band_size =
+                                        String::from_utf8_lossy(&attr.value).parse().unwrap_or(1);
                                 }
                             }
                         }
@@ -7754,7 +8732,8 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 if let Some(ref mut look) = style.tbl_look {
-                                    look.col_band_size = String::from_utf8_lossy(&attr.value).parse().unwrap_or(1);
+                                    look.col_band_size =
+                                        String::from_utf8_lossy(&attr.value).parse().unwrap_or(1);
                                 }
                             }
                         }
@@ -7808,17 +8787,23 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                     "tblLayout" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "type" {
-                                style.layout = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                style.layout =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
                     "tblpPr" => {
                         let mut tp = TablePosition {
-                            x: 0.0, y: 0.0,
-                            h_anchor: None, v_anchor: None, h_align: None,
+                            x: 0.0,
+                            y: 0.0,
+                            h_anchor: None,
+                            v_anchor: None,
+                            h_align: None,
                             y_spec: None,
-                            left_from_text: 0.0, right_from_text: 0.0,
-                            top_from_text: 0.0, bottom_from_text: 0.0,
+                            left_from_text: 0.0,
+                            right_from_text: 0.0,
+                            top_from_text: 0.0,
+                            bottom_from_text: 0.0,
                         };
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
@@ -7830,18 +8815,24 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 "tblpYSpec" => tp.y_spec = Some(val.to_string()),
                                 "horzAnchor" => tp.h_anchor = Some(val.to_string()),
                                 "vertAnchor" => tp.v_anchor = Some(val.to_string()),
-                                "leftFromText" => tp.left_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "rightFromText" => tp.right_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "topFromText" => tp.top_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
-                                "bottomFromText" => tp.bottom_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0,
+                                "leftFromText" => {
+                                    tp.left_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0
+                                }
+                                "rightFromText" => {
+                                    tp.right_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0
+                                }
+                                "topFromText" => {
+                                    tp.top_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0
+                                }
+                                "bottomFromText" => {
+                                    tp.bottom_from_text = val.parse::<f32>().unwrap_or(0.0) / 20.0
+                                }
                                 _ => {}
                             }
                         }
                         style.position = Some(tp);
                     }
-                    "top" | "bottom" | "left" | "right" | "start" | "end"
-                        if !in_borders =>
-                    {
+                    "top" | "bottom" | "left" | "right" | "start" | "end" if !in_borders => {
                         // tblCellMar children (when not inside tblBorders)
                         // These appear inside <w:tblCellMar> which is a Start element
                         // but we handle them as Empty within depth tracking
@@ -7858,7 +8849,11 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
 }
 
 /// Parse a w:tr element (table row)
-fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<TableRow, ParseError> {
+fn parse_table_row(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<TableRow, ParseError> {
     let mut cells = Vec::new();
     let mut height: Option<f32> = None;
     let mut height_rule: Option<String> = None;
@@ -7889,7 +8884,12 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 Event::Start(se) => {
                                     let sl = local_name(se.name().as_ref());
                                     if sl == "tblCellMar" && ex_depth == 0 {
-                                        let mut margins = CellMargins { top: None, bottom: None, left: None, right: None };
+                                        let mut margins = CellMargins {
+                                            top: None,
+                                            bottom: None,
+                                            left: None,
+                                            right: None,
+                                        };
                                         loop {
                                             match reader.read_event() {
                                                 Ok(Event::Empty(me)) => {
@@ -7897,7 +8897,12 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                                     let mut w_val: Option<f32> = None;
                                                     for attr in me.attributes().flatten() {
                                                         if local_name(attr.key.as_ref()) == "w" {
-                                                            w_val = String::from_utf8_lossy(&attr.value).parse::<f32>().ok().map(|v| v / 20.0);
+                                                            w_val = String::from_utf8_lossy(
+                                                                &attr.value,
+                                                            )
+                                                            .parse::<f32>()
+                                                            .ok()
+                                                            .map(|v| v / 20.0);
                                                         }
                                                     }
                                                     match ml.as_str() {
@@ -7909,7 +8914,11 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                                     }
                                                 }
                                                 Ok(Event::End(ee)) => {
-                                                    if local_name(ee.name().as_ref()) == "tblCellMar" { break; }
+                                                    if local_name(ee.name().as_ref())
+                                                        == "tblCellMar"
+                                                    {
+                                                        break;
+                                                    }
                                                 }
                                                 Ok(Event::Eof) => break,
                                                 _ => {}
@@ -7921,8 +8930,13 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                     ex_depth += 1;
                                 }
                                 Event::End(se) => {
-                                    if local_name(se.name().as_ref()) == "tblPrEx" && ex_depth == 0 { break; }
-                                    if ex_depth > 0 { ex_depth -= 1; }
+                                    if local_name(se.name().as_ref()) == "tblPrEx" && ex_depth == 0
+                                    {
+                                        break;
+                                    }
+                                    if ex_depth > 0 {
+                                        ex_depth -= 1;
+                                    }
                                 }
                                 Event::Eof => break,
                                 _ => {}
@@ -7945,16 +8959,22 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                                 height = val.parse::<f32>().ok().map(|v| v / 20.0);
                             }
                             if key == "hRule" {
-                                height_rule = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                height_rule =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
-                    "tblHeader" => { header = true; }
-                    "cantSplit" => { cant_split = true; }
+                    "tblHeader" => {
+                        header = true;
+                    }
+                    "cantSplit" => {
+                        cant_split = true;
+                    }
                     "gridBefore" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                grid_before = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
+                                grid_before =
+                                    String::from_utf8_lossy(&attr.value).parse().unwrap_or(0);
                             }
                         }
                     }
@@ -7975,11 +8995,23 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
         }
     }
 
-    Ok(TableRow { cells, height, height_rule, header, cant_split, grid_before, cell_margins_override })
+    Ok(TableRow {
+        cells,
+        height,
+        height_rule,
+        header,
+        cant_split,
+        grid_before,
+        cell_margins_override,
+    })
 }
 
 /// Parse a w:tc element (table cell)
-fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &StyleSheet) -> Result<TableCell, ParseError> {
+fn parse_table_cell(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<TableCell, ParseError> {
     let mut blocks = Vec::new();
     let mut cell_props = CellProperties::default();
     // S486: collect floating text boxes/shapes anchored inside the cell (was
@@ -7995,7 +9027,8 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "p" if depth == 0 => {
-                        let mut pr = parse_paragraph(reader, ctx, styles, false, true, cell_props.width)?;
+                        let mut pr =
+                            parse_paragraph(reader, ctx, styles, false, true, cell_props.width)?;
                         // S486: preserve in-cell floating text boxes/shapes
                         // (previously discarded). S488: stamp each preserved
                         // text box with its anchor paragraph's index within THIS
@@ -8022,9 +9055,12 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                         for mut tb in pr.text_boxes {
                             if tb.blocks.is_empty()
                                 && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
-                                && tb.position.as_ref().map_or(false, |p| p.x == 0.0 && p.y == 0.0
-                                    && p.h_relative.as_deref() == Some("column")
-                                    && p.v_relative.as_deref() == Some("paragraph"))
+                                && tb.position.as_ref().map_or(false, |p| {
+                                    p.x == 0.0
+                                        && p.y == 0.0
+                                        && p.h_relative.as_deref() == Some("column")
+                                        && p.v_relative.as_deref() == Some("paragraph")
+                                })
                                 && tb.height > s838_cy
                             {
                                 s838_cy = tb.height;
@@ -8061,8 +9097,8 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
                             blocks.push(Block::Image(crate::ir::Image {
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,
-                    host_paragraph: None,
-            page_break_before: false,
+                                host_paragraph: None,
+                                page_break_before: false,
                                 data: Vec::new(),
                                 width: s838_cx,
                                 height: s838_cy,
@@ -8143,9 +9179,10 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
             // a table cell. The Start/End path above handles `<w:p>...</w:p>`,
             // but quick-xml reports `<w:p/>` as Event::Empty. Dropping it makes
             // row height depend on the producer's equivalent XML spelling.
-            Event::Empty(e) if depth == 0
-                && local_name(e.name().as_ref()) == "p"
-                && crate::layout::s864_part("D") =>
+            Event::Empty(e)
+                if depth == 0
+                    && local_name(e.name().as_ref()) == "p"
+                    && crate::layout::s864_part("D") =>
             {
                 blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
             }
@@ -8161,8 +9198,10 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
     // The >=10 w:br signature keeps this correction isolated from generic Web
     // style tables, which have deliberately different S675 behaviour.
     if crate::layout::s864_part("E") {
-        let has_long_manual_breaks = blocks.iter().any(|b| matches!(b, Block::Paragraph(p)
-            if p.runs.iter().map(|r| r.text.matches('\n').count()).sum::<usize>() >= 10));
+        let has_long_manual_breaks = blocks.iter().any(|b| {
+            matches!(b, Block::Paragraph(p)
+            if p.runs.iter().map(|r| r.text.matches('\n').count()).sum::<usize>() >= 10)
+        });
         if has_long_manual_breaks {
             for block in &mut blocks {
                 if let Block::Paragraph(p) = block {
@@ -8231,13 +9270,16 @@ struct CellProperties {
     borders: Option<CellBorders>,
     margins: Option<CellMargins>,
     text_direction: Option<String>,
-    hide_mark: bool, // S751: w:hideMark
+    hide_mark: bool,        // S751: w:hideMark
     width_pct: Option<f32>, // S1071: w:tcW w:type="pct" (percent of table width)
 }
 
 /// Parse w:tcPr (table cell properties)
 fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, ParseError> {
-    let mut props = CellProperties { grid_span: 1, ..Default::default() };
+    let mut props = CellProperties {
+        grid_span: 1,
+        ..Default::default()
+    };
     let mut depth = 0;
 
     loop {
@@ -8287,13 +9329,18 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
                         let mut w_type: Option<String> = None;
                         for attr in e.attributes().flatten() {
                             match local_name(attr.key.as_ref()).as_str() {
-                                "w" => w_val = Some(String::from_utf8_lossy(&attr.value).to_string()),
-                                "type" => w_type = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                                "w" => {
+                                    w_val = Some(String::from_utf8_lossy(&attr.value).to_string())
+                                }
+                                "type" => {
+                                    w_type = Some(String::from_utf8_lossy(&attr.value).to_string())
+                                }
                                 _ => {}
                             }
                         }
                         if std::env::var("OXI_S1071_DISABLE").is_ok() {
-                            props.width = w_val.and_then(|v| v.parse::<f32>().ok()).map(|v| v / 20.0);
+                            props.width =
+                                w_val.and_then(|v| v.parse::<f32>().ok()).map(|v| v / 20.0);
                         } else if let Some(v) = w_val.and_then(|v| v.parse::<f32>().ok()) {
                             match w_type.as_deref() {
                                 // Percentage in 50ths of a percent, like w:tblW.
@@ -8301,7 +9348,7 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
                                     props.width = None;
                                     props.width_pct = Some(v / 50.0);
                                 }
-                                // No explicit width - the column resolver falls
+                                // No explicit width — the column resolver falls
                                 // through to the grid / equal-split branches.
                                 Some("auto") | Some("nil") => {
                                     props.width = None;
@@ -8343,17 +9390,21 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
                     "vAlign" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                props.v_align = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                props.v_align =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
                     // S751: w:hideMark — the end-of-cell mark is excluded from
                     // row-height (an empty hideMark cell = zero content height).
-                    "hideMark" => { props.hide_mark = true; }
+                    "hideMark" => {
+                        props.hide_mark = true;
+                    }
                     "textDirection" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                props.text_direction = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                props.text_direction =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -8380,7 +9431,10 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
 /// Parse w:tcBorders
 fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseError> {
     let mut borders = CellBorders {
-        top: None, bottom: None, left: None, right: None,
+        top: None,
+        bottom: None,
+        left: None,
+        right: None,
     };
     loop {
         match reader.read_event()? {
@@ -8403,9 +9457,18 @@ fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseEr
                         }
                     });
                     if explicit_none {
-                        Some(BorderDef { style: "none".to_string(), width: 0.0, color: None, space: 0.0 })
-                    } else { None }
-                } else { bdr };
+                        Some(BorderDef {
+                            style: "none".to_string(),
+                            width: 0.0,
+                            color: None,
+                            space: 0.0,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    bdr
+                };
                 match local.as_str() {
                     "top" => borders.top = bdr,
                     "bottom" => borders.bottom = bdr,
@@ -8415,7 +9478,9 @@ fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseEr
                 }
             }
             Event::End(e) => {
-                if local_name(e.name().as_ref()) == "tcBorders" { break; }
+                if local_name(e.name().as_ref()) == "tcBorders" {
+                    break;
+                }
             }
             Event::Eof => break,
             _ => {}
@@ -8427,16 +9492,24 @@ fn parse_cell_borders(reader: &mut Reader<&[u8]>) -> Result<CellBorders, ParseEr
 /// Parse w:tcMar
 fn parse_cell_margins(reader: &mut Reader<&[u8]>) -> Result<CellMargins, ParseError> {
     let mut margins = CellMargins {
-        top: None, bottom: None, left: None, right: None,
+        top: None,
+        bottom: None,
+        left: None,
+        right: None,
     };
     loop {
         match reader.read_event()? {
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
-                let val = e.attributes().flatten()
+                let val = e
+                    .attributes()
+                    .flatten()
                     .find(|a| local_name(a.key.as_ref()) == "w")
                     .and_then(|a| {
-                        String::from_utf8_lossy(&a.value).parse::<f32>().ok().map(|v| v / 20.0)
+                        String::from_utf8_lossy(&a.value)
+                            .parse::<f32>()
+                            .ok()
+                            .map(|v| v / 20.0)
                     });
                 match local.as_str() {
                     "top" => margins.top = val,
@@ -8447,7 +9520,9 @@ fn parse_cell_margins(reader: &mut Reader<&[u8]>) -> Result<CellMargins, ParseEr
                 }
             }
             Event::End(e) => {
-                if local_name(e.name().as_ref()) == "tcMar" { break; }
+                if local_name(e.name().as_ref()) == "tcMar" {
+                    break;
+                }
             }
             Event::Eof => break,
             _ => {}
@@ -8507,9 +9582,7 @@ struct SectionProperties {
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
-fn parse_section_properties(
-    reader: &mut Reader<&[u8]>,
-) -> Result<SectionProperties, ParseError> {
+fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionProperties, ParseError> {
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
     let mut grid_line_pitch: Option<f32> = None;
@@ -8541,7 +9614,12 @@ fn parse_section_properties(
                 }
                 if local == "pgBorders" && depth == 0 {
                     // Parse page borders - child elements: top, bottom, left, right
-                    let mut pb = PageBorders { top: None, bottom: None, left: None, right: None };
+                    let mut pb = PageBorders {
+                        top: None,
+                        bottom: None,
+                        left: None,
+                        right: None,
+                    };
                     loop {
                         match reader.read_event() {
                             Ok(Event::Empty(be)) => {
@@ -8555,17 +9633,28 @@ fn parse_section_properties(
                                     let val = String::from_utf8_lossy(&attr.value);
                                     match key.as_str() {
                                         "val" => bdr_style = val.to_string(),
-                                        "sz" => { bdr_width = val.parse::<f32>().unwrap_or(0.0) / 8.0; }
+                                        "sz" => {
+                                            bdr_width = val.parse::<f32>().unwrap_or(0.0) / 8.0;
+                                        }
                                         "color" => {
                                             let c = val.to_string();
-                                            if c != "auto" { bdr_color = Some(c); }
+                                            if c != "auto" {
+                                                bdr_color = Some(c);
+                                            }
                                         }
-                                        "space" => { bdr_space = val.parse::<f32>().unwrap_or(0.0); }
+                                        "space" => {
+                                            bdr_space = val.parse::<f32>().unwrap_or(0.0);
+                                        }
                                         _ => {}
                                     }
                                 }
                                 if bdr_style != "none" && bdr_style != "nil" && bdr_width > 0.0 {
-                                    let def = BorderDef { style: bdr_style, width: bdr_width, color: bdr_color, space: bdr_space };
+                                    let def = BorderDef {
+                                        style: bdr_style,
+                                        width: bdr_width,
+                                        color: bdr_color,
+                                        space: bdr_space,
+                                    };
                                     match bl.as_str() {
                                         "top" => pb.top = Some(def),
                                         "bottom" => pb.bottom = Some(def),
@@ -8576,13 +9665,19 @@ fn parse_section_properties(
                                 }
                             }
                             Ok(Event::End(ee)) => {
-                                if local_name(ee.name().as_ref()) == "pgBorders" { break; }
+                                if local_name(ee.name().as_ref()) == "pgBorders" {
+                                    break;
+                                }
                             }
                             Ok(Event::Eof) => break,
                             _ => {}
                         }
                     }
-                    if pb.top.is_some() || pb.bottom.is_some() || pb.left.is_some() || pb.right.is_some() {
+                    if pb.top.is_some()
+                        || pb.bottom.is_some()
+                        || pb.left.is_some()
+                        || pb.right.is_some()
+                    {
                         page_borders = Some(pb);
                     }
                 } else if local == "cols" && depth == 0 {
@@ -8595,10 +9690,18 @@ fn parse_section_properties(
                         let key = local_name(attr.key.as_ref());
                         let val = String::from_utf8_lossy(&attr.value);
                         match key.as_str() {
-                            "num" => { num = val.parse().unwrap_or(1); }
-                            "space" => { space = val.parse::<f32>().ok().map(|v| v / 20.0); }
-                            "equalWidth" => { equal_width = val.as_ref() != "0" && val.as_ref() != "false"; }
-                            "sep" => { separator = val.as_ref() != "0" && val.as_ref() != "false"; }
+                            "num" => {
+                                num = val.parse().unwrap_or(1);
+                            }
+                            "space" => {
+                                space = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            }
+                            "equalWidth" => {
+                                equal_width = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
+                            "sep" => {
+                                separator = val.as_ref() != "0" && val.as_ref() != "false";
+                            }
                             _ => {}
                         }
                     }
@@ -8615,12 +9718,20 @@ fn parse_section_properties(
                                         let key = local_name(attr.key.as_ref());
                                         let val = String::from_utf8_lossy(&attr.value);
                                         match key.as_str() {
-                                            "w" => { col_w = val.parse::<f32>().unwrap_or(0.0) / 20.0; }
-                                            "space" => { col_space = val.parse::<f32>().ok().map(|v| v / 20.0); }
+                                            "w" => {
+                                                col_w = val.parse::<f32>().unwrap_or(0.0) / 20.0;
+                                            }
+                                            "space" => {
+                                                col_space =
+                                                    val.parse::<f32>().ok().map(|v| v / 20.0);
+                                            }
                                             _ => {}
                                         }
                                     }
-                                    col_defs.push(ColumnDef { width: col_w, space: col_space });
+                                    col_defs.push(ColumnDef {
+                                        width: col_w,
+                                        space: col_space,
+                                    });
                                 }
                             }
                             Ok(Event::End(ee)) => {
@@ -8633,7 +9744,13 @@ fn parse_section_properties(
                         }
                     }
                     if num > 1 {
-                        columns = Some(ColumnLayout { num, space, equal_width, separator, columns: col_defs });
+                        columns = Some(ColumnLayout {
+                            num,
+                            space,
+                            equal_width,
+                            separator,
+                            columns: col_defs,
+                        });
                     }
                 } else {
                     depth += 1;
@@ -8663,7 +9780,9 @@ fn parse_section_properties(
                             }
                         }
                         // Landscape: ensure width > height
-                        if orient.as_deref() == Some("landscape") && page_size.width < page_size.height {
+                        if orient.as_deref() == Some("landscape")
+                            && page_size.width < page_size.height
+                        {
                             std::mem::swap(&mut page_size.width, &mut page_size.height);
                         }
                     }
@@ -8749,8 +9868,7 @@ fn parse_section_properties(
                             }
                         }
                         // Only apply grid for "lines" or "linesAndChars" types
-                        if (grid_type == "lines" || grid_type == "linesAndChars")
-                            && line_pitch > 0
+                        if (grid_type == "lines" || grid_type == "linesAndChars") && line_pitch > 0
                         {
                             grid_line_pitch = Some(line_pitch as f32 / 20.0);
                         } else if grid_type.is_empty() && line_pitch > 0 {
@@ -8797,7 +9915,8 @@ fn parse_section_properties(
                             // This comes from Normal style's sz, or rPrDefault sz, or 10.5pt fallback.
                             // Stored in SectionProperties and resolved by the caller post-parse.
                             let default_font_size = 10.5_f32; // placeholder; overridden by caller
-                            let char_space_pt = char_space.map(|cs| cs as f32 / 4096.0).unwrap_or(0.0);
+                            let char_space_pt =
+                                char_space.map(|cs| cs as f32 / 4096.0).unwrap_or(0.0);
                             let raw_pitch = default_font_size + char_space_pt;
                             let content_w = page_size.width - margin.left - margin.right;
                             if raw_pitch > 0.0 && content_w > 0.0 {
@@ -8862,7 +9981,8 @@ fn parse_section_properties(
                         // top-to-bottom, right-to-left = tategaki/縦書き).
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                text_direction = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                text_direction =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -8880,7 +10000,8 @@ fn parse_section_properties(
                     "type" => {
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
-                                section_type = Some(String::from_utf8_lossy(&attr.value).to_string());
+                                section_type =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -8908,15 +10029,29 @@ fn parse_section_properties(
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
                             match key.as_str() {
-                                "num" => { num = val.parse().unwrap_or(1); }
-                                "space" => { space = val.parse::<f32>().ok().map(|v| v / 20.0); }
-                                "equalWidth" => { equal_width = val.as_ref() != "0" && val.as_ref() != "false"; }
-                                "sep" => { separator = val.as_ref() != "0" && val.as_ref() != "false"; }
+                                "num" => {
+                                    num = val.parse().unwrap_or(1);
+                                }
+                                "space" => {
+                                    space = val.parse::<f32>().ok().map(|v| v / 20.0);
+                                }
+                                "equalWidth" => {
+                                    equal_width = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                                "sep" => {
+                                    separator = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
                                 _ => {}
                             }
                         }
                         if num > 1 {
-                            columns = Some(ColumnLayout { num, space, equal_width, separator, columns: Vec::new() });
+                            columns = Some(ColumnLayout {
+                                num,
+                                space,
+                                equal_width,
+                                separator,
+                                columns: Vec::new(),
+                            });
                         }
                     }
                     _ => {}
@@ -9012,7 +10147,11 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
         .unwrap_or(0.0);
     // fillcolor: "#RRGGBB" | "name" | "name [themeidx]"
     let color = attr(shape_tag, "fillcolor").map(|c| {
-        let base = c.split_whitespace().next().unwrap_or("").trim_start_matches('#');
+        let base = c
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('#');
         match base.to_ascii_lowercase().as_str() {
             "gray" | "grey" => "808080".to_string(),
             "silver" => "C0C0C0".to_string(),
@@ -9029,14 +10168,25 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
         for part in s.split(';') {
             let mut kv = part.splitn(2, ':');
             if kv.next().map(|k| k.trim()) == Some("font-family") {
-                let v = kv.next().unwrap_or("").trim()
-                    .replace("&quot;", "").replace('"', "");
+                let v = kv
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .replace("&quot;", "")
+                    .replace('"', "");
                 return Some(v);
             }
         }
         None
     });
-    Some(crate::ir::Watermark { text, width, height, rotation, color, font_family })
+    Some(crate::ir::Watermark {
+        text,
+        width,
+        height,
+        rotation,
+        color,
+        font_family,
+    })
 }
 
 // Parse a header or footer XML part (w:hdr or w:ftr element)
@@ -9055,12 +10205,18 @@ fn dbg_bodywalk() -> bool {
 fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
     let mut style = ParagraphStyle::default();
     // Apply Normal style (common IDs: "a" for Japanese, "Normal" for English)
-    if let Some(defined) = styles.styles.get("a")
+    if let Some(defined) = styles
+        .styles
+        .get("a")
         .or_else(|| styles.styles.get("Normal"))
     {
         let ds = &defined.paragraph;
-        if style.space_before.is_none() { style.space_before = ds.space_before; }
-        if style.space_after.is_none() { style.space_after = ds.space_after; }
+        if style.space_before.is_none() {
+            style.space_before = ds.space_before;
+        }
+        if style.space_after.is_none() {
+            style.space_after = ds.space_after;
+        }
         if style.line_spacing.is_none() {
             style.line_spacing = ds.line_spacing;
             style.line_spacing_rule = ds.line_spacing_rule.clone();
@@ -9076,8 +10232,12 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
                     style.keep_next = true;
                 }
             }
-        } else if ds.keep_next { style.keep_next = true; }
-        if ds.keep_lines { style.keep_lines = true; }
+        } else if ds.keep_next {
+            style.keep_next = true;
+        }
+        if ds.keep_lines {
+            style.keep_lines = true;
+        }
     }
     // Apply docDefaults fallback
     if style.default_run_style.is_none() {
@@ -9124,7 +10284,11 @@ fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
     }
 }
 
-fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<Block>, ParseError> {
+fn parse_header_footer_xml(
+    xml: &str,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<Vec<Block>, ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut blocks = Vec::new();
     let mut depth = 0;
@@ -9187,7 +10351,14 @@ fn parse_header_footer_xml(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -
                                     if sl == "sdtContent" && sdt_depth == 1 {
                                         in_sdt_content = true;
                                     } else if in_sdt_content && sl == "p" {
-                                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false, None)?;
+                                        let pr = parse_paragraph(
+                                            &mut reader,
+                                            ctx,
+                                            styles,
+                                            false,
+                                            false,
+                                            None,
+                                        )?;
                                         blocks.push(Block::Paragraph(pr.paragraph));
                                     } else if in_sdt_content && sl == "tbl" {
                                         let table = parse_table(&mut reader, ctx, styles)?;
@@ -9287,7 +10458,12 @@ fn renumber_note_refs(
 }
 
 /// Recursively collect footnote/endnote references from blocks
-fn collect_note_refs(blocks: &[Block], ctx: &ParseContext, footnotes: &mut Vec<Footnote>, endnotes: &mut Vec<Footnote>) {
+fn collect_note_refs(
+    blocks: &[Block],
+    ctx: &ParseContext,
+    footnotes: &mut Vec<Footnote>,
+    endnotes: &mut Vec<Footnote>,
+) {
     for block in blocks {
         match block {
             Block::Paragraph(para) => {
@@ -9346,7 +10522,8 @@ fn parse_tracked_change_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (mut run, _dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                    let (mut run, _dr) =
+                        parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
                     // R62 (2026-04-29): parser stores tracked_change ONLY.
                     // Visual styling (underline/strikethrough + author-palette
                     // color) is applied at layout time by R-01
@@ -9409,10 +10586,18 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
-                    "rt" if depth == 0 => { in_rt = true; }
-                    "rubyBase" if depth == 0 => { in_ruby_base = true; }
-                    "rubyPr" if depth == 0 => { in_ruby_pr = true; }
-                    "t" => { in_t = true; }
+                    "rt" if depth == 0 => {
+                        in_rt = true;
+                    }
+                    "rubyBase" if depth == 0 => {
+                        in_ruby_base = true;
+                    }
+                    "rubyPr" if depth == 0 => {
+                        in_ruby_pr = true;
+                    }
+                    "t" => {
+                        in_t = true;
+                    }
                     _ => {}
                 }
                 depth += 1;
@@ -9486,13 +10671,23 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
                     "ruby" if depth == 0 => {
                         break;
                     }
-                    "rt" => { in_rt = false; }
-                    "rubyBase" => { in_ruby_base = false; }
-                    "rubyPr" => { in_ruby_pr = false; }
-                    "t" => { in_t = false; }
+                    "rt" => {
+                        in_rt = false;
+                    }
+                    "rubyBase" => {
+                        in_ruby_base = false;
+                    }
+                    "rubyPr" => {
+                        in_ruby_pr = false;
+                    }
+                    "t" => {
+                        in_t = false;
+                    }
                     _ => {}
                 }
-                if depth > 0 { depth -= 1; }
+                if depth > 0 {
+                    depth -= 1;
+                }
             }
             Event::Eof => break,
             _ => {}
@@ -9581,7 +10776,14 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                                 }
                             }
                         }
-                        let pr = parse_paragraph(&mut reader, &note_ctx, &empty_styles, false, false, None)?;
+                        let pr = parse_paragraph(
+                            &mut reader,
+                            &note_ctx,
+                            &empty_styles,
+                            false,
+                            false,
+                            None,
+                        )?;
                         let para = pr.paragraph;
                         current_blocks.push(Block::Paragraph(para));
                     }
@@ -9595,17 +10797,20 @@ fn parse_comments_xml(xml: &str) -> Result<HashMap<String, Comment>, ParseError>
                 let local = local_name(e.name().as_ref());
                 if local == "comment" && in_comment && depth == 0 {
                     if !current_id.is_empty() {
-                        comments.insert(current_id.clone(), Comment {
-                            id: current_id.clone(),
-                            author: current_author.take(),
-                            date: current_date.take(),
-                            initials: current_initials.take(),
-                            para_id: current_para_id.take(),
-                            parent_para_id: None,
-                            resolved: false,
-                            durable_id: None,
-                            blocks: std::mem::take(&mut current_blocks),
-                        });
+                        comments.insert(
+                            current_id.clone(),
+                            Comment {
+                                id: current_id.clone(),
+                                author: current_author.take(),
+                                date: current_date.take(),
+                                initials: current_initials.take(),
+                                para_id: current_para_id.take(),
+                                parent_para_id: None,
+                                resolved: false,
+                                durable_id: None,
+                                blocks: std::mem::take(&mut current_blocks),
+                            },
+                        );
                     }
                     in_comment = false;
                 } else if in_comment && depth > 0 {
@@ -9687,7 +10892,10 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     }
 }
 
-fn resolve_alias_blocks(blocks: &mut [crate::ir::Block], alias: &std::collections::HashMap<String, String>) {
+fn resolve_alias_blocks(
+    blocks: &mut [crate::ir::Block],
+    alias: &std::collections::HashMap<String, String>,
+) {
     use crate::ir::Block;
     for block in blocks {
         match block {
@@ -9717,7 +10925,10 @@ fn resolve_alias_blocks(blocks: &mut [crate::ir::Block], alias: &std::collection
     }
 }
 
-fn resolve_alias_run_style(rs: &mut crate::ir::RunStyle, alias: &std::collections::HashMap<String, String>) {
+fn resolve_alias_run_style(
+    rs: &mut crate::ir::RunStyle,
+    alias: &std::collections::HashMap<String, String>,
+) {
     if let Some(ff) = rs.font_family.as_ref() {
         if let Some(a) = alias.get(ff) {
             rs.font_family = Some(a.clone());
@@ -9733,11 +10944,7 @@ fn resolve_alias_run_style(rs: &mut crate::ir::RunStyle, alias: &std::collection
 /// Authors that already appear earlier in the list are skipped, so a single
 /// reviewer always gets the same `color_index` regardless of how many times
 /// they appear.
-fn build_author_palette(
-    people: &[Person],
-    comments: &[Comment],
-    pages: &[Page],
-) -> Vec<Author> {
+fn build_author_palette(people: &[Person], comments: &[Comment], pages: &[Page]) -> Vec<Author> {
     fn push_unique(seen: &mut Vec<String>, name: &str) {
         if !name.is_empty() && !seen.iter().any(|s| s == name) {
             seen.push(name.to_string());
@@ -9759,7 +10966,10 @@ fn build_author_palette(
     }
     seen.into_iter()
         .enumerate()
-        .map(|(color_index, display)| Author { display, color_index })
+        .map(|(color_index, display)| Author {
+            display,
+            color_index,
+        })
         .collect()
 }
 
@@ -9821,7 +11031,11 @@ fn parse_people_xml(xml: &str) -> Result<Vec<Person>, ParseError> {
                             author = String::from_utf8_lossy(&attr.value).to_string();
                         }
                     }
-                    current = Some(Person { author, provider_id: None, user_id: None });
+                    current = Some(Person {
+                        author,
+                        provider_id: None,
+                        user_id: None,
+                    });
                 }
             }
             Event::Empty(e) => {
@@ -9836,7 +11050,11 @@ fn parse_people_xml(xml: &str) -> Result<Vec<Person>, ParseError> {
                             }
                         }
                         if !author.is_empty() {
-                            people.push(Person { author, provider_id: None, user_id: None });
+                            people.push(Person {
+                                author,
+                                provider_id: None,
+                                user_id: None,
+                            });
                         }
                     }
                     "presenceInfo" => {
@@ -10001,7 +11219,10 @@ mod tests {
     #[test]
     fn unbased_style_application_default_tracks_only_the_modern_baseline() {
         assert_eq!(application_default_font_size_override(Some(11.0)), None);
-        assert_eq!(application_default_font_size_override(Some(12.0)), Some(10.0));
+        assert_eq!(
+            application_default_font_size_override(Some(12.0)),
+            Some(10.0)
+        );
         assert_eq!(application_default_font_size_override(None), Some(10.0));
     }
 
@@ -10069,7 +11290,10 @@ mod tests {
         let pc = ppr_change.expect("ppr_change populated");
         assert_eq!(pc.id.as_deref(), Some("42"));
         assert_eq!(pc.author.as_deref(), Some("A"));
-        assert!(pc.prior_paragraph_style.is_some(), "prior style must be captured");
+        assert!(
+            pc.prior_paragraph_style.is_some(),
+            "prior style must be captured"
+        );
     }
 
     #[test]
@@ -10077,10 +11301,22 @@ mod tests {
         use crate::ir::ShowRevisions;
         // I-04: default = All; serde uses snake_case rename.
         assert_eq!(ShowRevisions::default(), ShowRevisions::All);
-        assert_eq!(serde_json::to_string(&ShowRevisions::All).unwrap(), "\"all\"");
-        assert_eq!(serde_json::to_string(&ShowRevisions::Simple).unwrap(), "\"simple\"");
-        assert_eq!(serde_json::to_string(&ShowRevisions::Original).unwrap(), "\"original\"");
-        assert_eq!(serde_json::to_string(&ShowRevisions::Final).unwrap(), "\"final\"");
+        assert_eq!(
+            serde_json::to_string(&ShowRevisions::All).unwrap(),
+            "\"all\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ShowRevisions::Simple).unwrap(),
+            "\"simple\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ShowRevisions::Original).unwrap(),
+            "\"original\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ShowRevisions::Final).unwrap(),
+            "\"final\""
+        );
         let parsed: ShowRevisions = serde_json::from_str("\"original\"").unwrap();
         assert_eq!(parsed, ShowRevisions::Original);
     }
@@ -10294,7 +11530,8 @@ mod tests {
             }
         };
         let _ = start;
-        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
+        let (run, _dr) =
+            parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
         assert_eq!(run.comment_references, vec!["0".to_string()]);
     }
 
@@ -10324,7 +11561,8 @@ mod tests {
                 _ => continue,
             }
         }
-        let (run, _dr) = parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
+        let (run, _dr) =
+            parse_run(&mut reader, &ctx, &styles, None, true, false).expect("parse_run");
         assert_eq!(run.text, "Status\n");
     }
 
@@ -10340,7 +11578,10 @@ mod tests {
   </w:comment>
 </w:comments>"#;
         let comments = parse_comments_xml(xml).expect("parse");
-        assert_eq!(comments.get("0").and_then(|c| c.para_id.as_deref()), Some("00000010"));
+        assert_eq!(
+            comments.get("0").and_then(|c| c.para_id.as_deref()),
+            Some("00000010")
+        );
     }
 
     #[test]
@@ -10445,7 +11686,8 @@ mod tests {
 </w15:commentsEx>"#;
         let ext = parse_comments_extended_xml(xml).expect("parse");
         assert_eq!(
-            ext.get("00000002").and_then(|i| i.parent_para_id.as_deref()),
+            ext.get("00000002")
+                .and_then(|i| i.parent_para_id.as_deref()),
             Some("00000001")
         );
     }

@@ -666,7 +666,7 @@ pub struct TableCell {
     /// (the thin-spacer-row idiom; S751).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_mark: bool,
-    /// S1071: `w:tcW w:type="pct"` - the cell's width as a PERCENTAGE of the
+    /// S1071: `w:tcW w:type="pct"` — the cell's width as a PERCENTAGE of the
     /// table width (0-100). ECMA-376 17.4.72: `w:tcW` carries the same `w:type`
     /// as `w:tblW`, and only `dxa` means twips; the parser used to divide every
     /// value by 20 regardless. Resolved against the available width at layout
@@ -701,7 +701,9 @@ pub struct CellMargins {
     pub right: Option<f32>,
 }
 
-fn default_one() -> u32 { 1 }
+fn default_one() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Image {
@@ -1518,7 +1520,9 @@ pub struct BorderDef {
     pub space: f32,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for ParagraphStyle {
     fn default() -> Self {
