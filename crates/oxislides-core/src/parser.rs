@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::HashMap;
+
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use thiserror::Error;
@@ -103,6 +105,24 @@ fn parse_slide(
         Default::default()
     };
 
+    // Spec #3: build a (ph_type, ph_idx) -> (x,y,w,h) geometry map from the
+    // referenced slideLayout's placeholders. A slide placeholder with NO explicit
+    // xfrm in its spPr inherits the layout placeholder's geometry.
+    let layout_ph_geoms: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> = {
+        let mut map = HashMap::new();
+        for rel in rels.values() {
+            if rel.rel_type.ends_with("/slideLayout") {
+                let layout_path =
+                    resolve_slide_relative_path(slide_rels_path, &rel.target);
+                if let Ok(Some(layout_xml)) = archive.try_read_part(&layout_path) {
+                    map = parse_layout_ph_geoms(&layout_xml).unwrap_or_default();
+                }
+                break;
+            }
+        }
+        map
+    };
+
     let mut reader = Reader::from_str(xml);
     let mut shapes = Vec::new();
     let mut _depth = 0u32;
@@ -127,6 +147,12 @@ fn parse_slide(
     let mut shape_fill_color: Option<String> = None;
     let mut shape_border_color: Option<String> = None;
     let mut shape_border_width: Option<f32> = None;
+    // Placeholder identity (p:ph type/idx from nvPr) and whether spPr had an
+    // explicit xfrm. Spec #3: a placeholder without an explicit xfrm inherits
+    // its geometry from the referenced slideLayout's matching placeholder.
+    let mut shape_ph_type: Option<String> = None;
+    let mut shape_ph_idx: Option<String> = None;
+    let mut shape_has_xfrm = false;
 
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
@@ -189,6 +215,9 @@ fn parse_slide(
                         shape_fill_color = None;
                         shape_border_color = None;
                         shape_border_width = None;
+                        shape_ph_type = None;
+                        shape_ph_idx = None;
+                        shape_has_xfrm = false;
                     }
                     "graphicFrame" if in_sp_tree => {
                         // A graphicFrame (table/chart/SmartArt). Reuse the shape
@@ -216,6 +245,9 @@ fn parse_slide(
                         tbl_cur_row.clear();
                         in_tbl_cell = false;
                         tbl_cur_cell_paragraphs.clear();
+                        shape_ph_type = None;
+                        shape_ph_idx = None;
+                        shape_has_xfrm = false;
                     }
                     "tbl" if in_graphic_frame => {
                         in_table = true;
@@ -250,6 +282,7 @@ fn parse_slide(
                     }
                     "xfrm" if in_shape => {
                         // a:xfrm/@rot is in 60000ths of a degree; 60000 = 1 degree.
+                        shape_has_xfrm = true;
                         if let Some(rot) = get_attr(&e, "rot") {
                             if let Ok(v) = rot.parse::<f32>() {
                                 shape_rotation = v / 60000.0;
@@ -262,6 +295,15 @@ fn parse_slide(
                         if let Some(prst) = get_attr(&e, "prst") {
                             shape_prst = Some(prst);
                         }
+                    }
+                    "ph" if in_shape => {
+                        // p:ph in nvPr — placeholder identity. Missing type defaults
+                        // to "obj" (body placeholder) per the schema.
+                        shape_ph_type = match get_attr(&e, "type") {
+                            Some(t) if !t.is_empty() => Some(t),
+                            _ => Some("obj".to_string()),
+                        };
+                        shape_ph_idx = get_attr(&e, "idx");
                     }
                     "spPr" if in_shape => {
                         in_sp_pr = true;
@@ -417,6 +459,7 @@ fn parse_slide(
                         }
                     }
                     "xfrm" if in_shape => {
+                        shape_has_xfrm = true;
                         if let Some(rot) = get_attr(&e, "rot") {
                             if let Ok(v) = rot.parse::<f32>() {
                                 shape_rotation = v / 60000.0;
@@ -427,6 +470,13 @@ fn parse_slide(
                         if let Some(prst) = get_attr(&e, "prst") {
                             shape_prst = Some(prst);
                         }
+                    }
+                    "ph" if in_shape => {
+                        shape_ph_type = match get_attr(&e, "type") {
+                            Some(t) if !t.is_empty() => Some(t),
+                            _ => Some("obj".to_string()),
+                        };
+                        shape_ph_idx = get_attr(&e, "idx");
                     }
                     "off" if in_shape => {
                         if let Some(x) = get_attr(&e, "x") {
@@ -567,11 +617,30 @@ fn parse_slide(
                             ShapeContent::Placeholder
                         };
 
+                        // Spec #3: a placeholder without an explicit xfrm inherits
+                        // the geometry of the matching slideLayout placeholder.
+                        let (use_x, use_y, use_w, use_h) = if !shape_has_xfrm {
+                            if let Some(ph_type) = shape_ph_type.as_ref() {
+                                if let Some(&(lx, ly, lw, lh)) = layout_ph_geoms.get(&(
+                                    Some(ph_type.clone()),
+                                    shape_ph_idx.clone(),
+                                )) {
+                                    (lx, ly, lw, lh)
+                                } else {
+                                    (shape_x, shape_y, shape_w, shape_h)
+                                }
+                            } else {
+                                (shape_x, shape_y, shape_w, shape_h)
+                            }
+                        } else {
+                            (shape_x, shape_y, shape_w, shape_h)
+                        };
+
                         shapes.push(Shape {
-                            x: shape_x,
-                            y: shape_y,
-                            width: shape_w,
-                            height: shape_h,
+                            x: use_x,
+                            y: use_y,
+                            width: use_w,
+                            height: use_h,
                             rotation: shape_rotation,
                             shape_type: shape_prst.take(),
                             content,
@@ -670,6 +739,151 @@ fn parse_slide(
         shapes,
         background_color: slide_background_color,
     })
+}
+
+/// Build a (ph_type, ph_idx) -> (x,y,w,h) geometry map from a slideLayout XML.
+/// Spec #3: slide placeholders with no explicit xfrm inherit these geometries.
+/// Walk each `<p:sp>` in the layout: capture the `p:ph` (type/idx, inside nvPr)
+/// and the `a:xfrm/a:off` + `a:ext`; on `sp` end, if a ph was seen AND an xfrm
+/// was seen, insert into the map. Values are converted to points.
+fn parse_layout_ph_geoms(
+    xml: &str,
+) -> Result<HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>, PptxError> {
+    let mut map: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> = HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    let mut in_sp_tree = false;
+    let mut in_sp = false;
+    let mut in_xfrm = false;
+    let mut ph_type: Option<String> = None;
+    let mut ph_idx: Option<String> = None;
+    let mut xfrm_seen = false;
+    let mut x: f32 = 0.0;
+    let mut y: f32 = 0.0;
+    let mut w: f32 = 0.0;
+    let mut h: f32 = 0.0;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "spTree" => {
+                        in_sp_tree = true;
+                    }
+                    "sp" if in_sp_tree => {
+                        in_sp = true;
+                        ph_type = None;
+                        ph_idx = None;
+                        xfrm_seen = false;
+                        x = 0.0;
+                        y = 0.0;
+                        w = 0.0;
+                        h = 0.0;
+                    }
+                    "ph" if in_sp => {
+                        ph_type = match get_attr(&e, "type") {
+                            Some(t) if !t.is_empty() => Some(t),
+                            _ => Some("obj".to_string()),
+                        };
+                        ph_idx = get_attr(&e, "idx");
+                    }
+                    "xfrm" if in_sp => {
+                        in_xfrm = true;
+                        xfrm_seen = true;
+                    }
+                    "off" if in_xfrm => {
+                        if let Some(v) = get_attr(&e, "x") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                x = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "y") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                y = emu_to_pt(v);
+                            }
+                        }
+                    }
+                    "ext" if in_xfrm => {
+                        if let Some(v) = get_attr(&e, "cx") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                w = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "cy") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                h = emu_to_pt(v);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "ph" if in_sp => {
+                        ph_type = match get_attr(&e, "type") {
+                            Some(t) if !t.is_empty() => Some(t),
+                            _ => Some("obj".to_string()),
+                        };
+                        ph_idx = get_attr(&e, "idx");
+                    }
+                    "off" if in_xfrm => {
+                        if let Some(v) = get_attr(&e, "x") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                x = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "y") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                y = emu_to_pt(v);
+                            }
+                        }
+                    }
+                    "ext" if in_xfrm => {
+                        if let Some(v) = get_attr(&e, "cx") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                w = emu_to_pt(v);
+                            }
+                        }
+                        if let Some(v) = get_attr(&e, "cy") {
+                            if let Ok(v) = v.parse::<f32>() {
+                                h = emu_to_pt(v);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "xfrm" if in_xfrm => {
+                        in_xfrm = false;
+                    }
+                    "sp" if in_sp => {
+                        if let Some(pt) = ph_type.as_ref() {
+                            if xfrm_seen {
+                                map.insert(
+                                    (Some(pt.clone()), ph_idx.clone()),
+                                    (x, y, w, h),
+                                );
+                            }
+                        }
+                        in_sp = false;
+                    }
+                    "spTree" if in_sp_tree => {
+                        in_sp_tree = false;
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(map)
 }
 
 /// Resolve a target path relative to the slide location.
