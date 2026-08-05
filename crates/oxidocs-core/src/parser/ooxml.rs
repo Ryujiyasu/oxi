@@ -1123,6 +1123,10 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     }
                     "p" if in_body && depth == 0 => {
                         let mut pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
+                        if dbg_bodywalk() {
+                            let t: String = pr.paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+                            eprintln!("[BODYWALK] p blocks={} {:?}", current_blocks.len(), &t.chars().take(28).collect::<String>());
+                        }
                         // S525 (coverage): a paragraph whose ONLY content is display
                         // math (oMathPara, no runs/images/shapes) must NOT emit an
                         // empty paragraph line before the math — the Math block IS
@@ -1419,14 +1423,107 @@ fn parse_body(xml: &str, ctx: &ParseContext, styles: &StyleSheet) -> Result<Vec<
                     }
                     "tbl" if in_body && depth == 0 => {
                         let table = parse_table(&mut reader, ctx, styles)?;
+                        if dbg_bodywalk() {
+                            eprintln!("[BODYWALK] tbl rows={} blocks={}", table.rows.len(), current_blocks.len());
+                        }
                         current_blocks.push(Block::Table(table));
                     }
                     "sdt" if in_body && depth == 0 => {
-                        // Structured Document Tag — skip sdtPr, process sdtContent
+                        // Structured Document Tag — skip sdtPr, process sdtContent.
+                        //
+                        // S1069 (2026-08-05, opt-out OXI_S1069_DISABLE): the old
+                        // walk tracked a BOOLEAN `in_sdt_content` and broke on the
+                        // FIRST `</w:sdt>`, so a NESTED body-level content control
+                        // (Word writes these routinely in form templates) truncated
+                        // the document twice over: the inner `</w:sdtContent>`
+                        // cleared the flag, after which every remaining sibling
+                        // paragraph of the OUTER sdt was counted as skip-depth and
+                        // silently dropped, and the inner `</w:sdt>` then exited the
+                        // whole walk. forms__002fbe2c parsed 11 blocks out of a
+                        // 342-paragraph / 14-table document (1 page vs Word's 9).
+                        // Same content-loss class as S744 (smartTag). The paragraph-
+                        // level (ooxml.rs:1993) and run-level (8974) sdt walks
+                        // already guard with `sdt_depth == 1`; only this one did not.
+                        //
+                        // `w:sdt` / `w:sdtContent` are TRANSPARENT wrappers, so the
+                        // walk counts open `w:sdt`s and skips any other subtree
+                        // (sdtPr and friends) by depth. Content at every nesting
+                        // level is parsed, which is what Word renders.
+                        let s1069 = std::env::var("OXI_S1069_DISABLE").is_err();
                         let mut sdt_depth = 1u32;
                         let mut in_sdt_content = false;
+                        let mut sdt_open = 1u32;
+                        let mut skip_depth = 0u32;
                         loop {
                             match reader.read_event()? {
+                                Event::Start(se) if s1069 => {
+                                    let sl = local_name(se.name().as_ref());
+                                    if skip_depth > 0 {
+                                        skip_depth += 1;
+                                        continue;
+                                    }
+                                    match sl.as_str() {
+                                        "sdt" => { sdt_open += 1; }
+                                        "sdtContent" => {}
+                                        "p" => {
+                                            let pr = parse_paragraph(&mut reader, ctx, styles, true, false, None)?;
+                                            current_blocks.push(Block::Paragraph(pr.paragraph));
+                                            for mb in pr.math_blocks {
+                                                current_blocks.push(Block::Math(mb));
+                                            }
+                                            current_blocks.extend(pr.inline_images);
+                                            let anchor_idx2 = current_blocks.len().saturating_sub(1);
+                                            for mut img in pr.floating_images {
+                                                img.anchor_block_index = anchor_idx2;
+                                                current_floating_images.push(img);
+                                            }
+                                            current_shapes.extend(pr.shapes);
+                                            for mut tb in pr.text_boxes {
+                                                tb.anchor_block_index = anchor_idx2;
+                                                current_text_boxes.push(tb);
+                                            }
+                                            if let Some(sp) = pr.sect_pr {
+                                                if let Some(crate::ir::Block::Paragraph(bp)) = current_blocks.last_mut() {
+                                                    bp.style.page_section_break = true;
+                                                }
+                                                sections.push(ParsedSection {
+                                                    blocks: std::mem::take(&mut current_blocks),
+                                                    properties: sp,
+                                                    floating_images: std::mem::take(&mut current_floating_images),
+                                                    text_boxes: std::mem::take(&mut current_text_boxes),
+                                                    shapes: std::mem::take(&mut current_shapes),
+                                                });
+                                            }
+                                        }
+                                        "tbl" => {
+                                            let table = parse_table(&mut reader, ctx, styles)?;
+                                            current_blocks.push(Block::Table(table));
+                                        }
+                                        _ => { skip_depth = 1; }
+                                    }
+                                }
+                                Event::End(ee) if s1069 => {
+                                    let sl = local_name(ee.name().as_ref());
+                                    if skip_depth > 0 {
+                                        skip_depth -= 1;
+                                        continue;
+                                    }
+                                    if sl == "sdt" {
+                                        sdt_open -= 1;
+                                        if sdt_open == 0 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                Event::Empty(ee) if s1069 => {
+                                    if skip_depth == 0
+                                        && local_name(ee.name().as_ref()) == "p"
+                                    {
+                                        // Self-closing <w:p/> inside sdtContent — an
+                                        // empty paragraph, same as the body loop's arm.
+                                        current_blocks.push(Block::Paragraph(empty_para_with_defaults(styles)));
+                                    }
+                                }
                                 Event::Start(se) => {
                                     let sl = local_name(se.name().as_ref());
                                     if sl == "sdtContent" {
@@ -1991,6 +2088,72 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Styl
                     // Inline Structured Document Tag (w:sdt inside w:p)
                     // ECMA-376: sdtContent contains runs that are part of the paragraph
                     "sdt" if depth == 0 => {
+                        // S1069 (2026-08-05, opt-out OXI_S1069_DISABLE): a NESTED
+                        // inline content control ran this walk away and swallowed the
+                        // REST OF THE DOCUMENT. The old walk incremented `sdt_depth`
+                        // for a nested `<w:sdtContent>` (its Start fell to the `else`
+                        // because the guard is `sdt_depth == 1`) but its End was
+                        // caught by the UNGUARDED `sl == "sdtContent"` branch, which
+                        // does not decrement — so `sdt_depth` never returned to 1 and
+                        // the outer `</w:sdt>` failed to break. The loop then ate
+                        // `</w:p>`, `</w:tc>`, `</w:tr>`, `</w:tbl>` and everything
+                        // after it. forms__002fbe2c: parse_table returned 1 of 6 rows
+                        // and the body walk ended at 11 blocks for a 166-child body
+                        // (1 page vs Word's 9). Same content-loss class as S744.
+                        //
+                        // `w:sdt` / `w:sdtContent` are TRANSPARENT wrappers: count the
+                        // open `w:sdt`s, skip any other subtree (sdtPr) by depth, and
+                        // take runs at every nesting level — which is what Word renders.
+                        if std::env::var("OXI_S1069_DISABLE").is_err() {
+                            let mut sdt_open = 1u32;
+                            let mut skip_depth = 0u32;
+                            loop {
+                                match reader.read_event()? {
+                                    Event::Start(se) => {
+                                        let sl = local_name(se.name().as_ref());
+                                        if skip_depth > 0 {
+                                            skip_depth += 1;
+                                            continue;
+                                        }
+                                        match sl.as_str() {
+                                            "sdt" => { sdt_open += 1; }
+                                            "sdtContent" => {}
+                                            "r" => {
+                                                let (run, dr) = parse_run(reader, ctx, styles, None, allow_inline_flow, in_cell)?;
+                                                runs.push(run);
+                                                if let Some(drawing) = dr {
+                                                    if let Some(image) = drawing.image {
+                                                        images.push(image);
+                                                    }
+                                                    if let Some(shape) = drawing.shape {
+                                                        found_shapes.push(shape);
+                                                    }
+                                                    if let Some(tb) = drawing.text_box {
+                                                        found_text_boxes.push(tb);
+                                                    }
+                                                }
+                                            }
+                                            _ => { skip_depth = 1; }
+                                        }
+                                    }
+                                    Event::End(ee) => {
+                                        if skip_depth > 0 {
+                                            skip_depth -= 1;
+                                            continue;
+                                        }
+                                        if local_name(ee.name().as_ref()) == "sdt" {
+                                            sdt_open -= 1;
+                                            if sdt_open == 0 {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Event::Eof => break,
+                                    _ => {}
+                                }
+                            }
+                            continue;
+                        }
                         let mut sdt_depth = 1u32;
                         let mut in_sdt_content = false;
                         loop {
@@ -8847,6 +9010,14 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
 /// default Normal style + docDefaults, matching parse_paragraph(). Shared by
 /// the body parser and parse_header_footer_xml (S806p: the header/footer
 /// parser previously DROPPED Event::Empty paragraphs).
+/// Debug: `OXI_DBG_BODYWALK=1` traces every top-level body block the walk
+/// pushes (paragraph text prefix / table row count). Cached — the body walk is
+/// a hot path and `std::env::var` is not free.
+fn dbg_bodywalk() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_DBG_BODYWALK").is_ok())
+}
+
 fn empty_para_with_defaults(styles: &StyleSheet) -> Paragraph {
     let mut style = ParagraphStyle::default();
     // Apply Normal style (common IDs: "a" for Japanese, "Normal" for English)
