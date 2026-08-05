@@ -6,13 +6,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod math_constants;
-pub mod math_substitute;
 pub mod math_glyphs;
+pub mod math_substitute;
 pub use math_constants::{MathConstants, MathTable};
+pub use math_glyphs::{GlyphVariant, MathGlyphTables};
 pub use math_substitute::{math_substitute, math_substitute_str};
-pub use math_glyphs::{MathGlyphTables, GlyphVariant};
 
-fn default_upm() -> u16 { 2048 }
+fn default_upm() -> u16 {
+    2048
+}
 
 /// S546 (2026-06-11): UPM=256 halfwidth chars (ASCII digits/letters AND
 /// halfwidth katakana) advance exactly fontSize/2 in Word's layout space —
@@ -358,7 +360,7 @@ impl FontMetrics {
     pub fn word_line_height_table_cell(&self, font_size: f32) -> f32 {
         let ppem = (font_size * 96.0 / 72.0).round();
         let font_ascent = pixel_round(self.win_ascent, ppem);
-        let font_descent = (self.win_descent * ppem).floor();    // floor for table cells
+        let font_descent = (self.win_descent * ppem).floor(); // floor for table cells
         let base = (font_ascent + font_descent) * 72.0 / 96.0;
         if self.is_cjk_83_64_font() {
             let raw = base * 83.0 / 64.0;
@@ -421,15 +423,19 @@ impl FontMetrics {
         if exclude_yu {
             matches!(
                 self.family.as_str(),
-                "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
-                    | "Meiryo"
+                "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho" | "Meiryo"
             )
         } else {
             matches!(
                 self.family.as_str(),
-                "MS Gothic" | "MS PGothic" | "MS Mincho" | "MS PMincho"
-                    | "Yu Gothic Regular" | "Yu Gothic Bold"
-                    | "Yu Mincho Regular" | "Yu Mincho Demibold"
+                "MS Gothic"
+                    | "MS PGothic"
+                    | "MS Mincho"
+                    | "MS PMincho"
+                    | "Yu Gothic Regular"
+                    | "Yu Gothic Bold"
+                    | "Yu Mincho Regular"
+                    | "Yu Mincho Demibold"
                     | "Meiryo"
             )
         }
@@ -618,7 +624,9 @@ impl FontMetricsRegistry {
                 serde_json::from_str(lh_json).unwrap_or_default()
             }
             #[cfg(not(has_local_font_metrics))]
-            { HashMap::new() }
+            {
+                HashMap::new()
+            }
         };
 
         // Load GDI-measured character width overrides
@@ -772,7 +780,9 @@ impl FontMetricsRegistry {
 
     pub fn lm0_lineauto_base(&self, family: &str, font_size: f32) -> Option<f32> {
         let normalized = normalize_family_name(family);
-        let font_data = self.lm0_lineauto_base.get(family)
+        let font_data = self
+            .lm0_lineauto_base
+            .get(family)
             .or_else(|| self.lm0_lineauto_base.get(&normalized))?;
         let key = format!("{:.1}", font_size);
         font_data.get(&key).copied()
@@ -780,9 +790,16 @@ impl FontMetricsRegistry {
 
     /// Look up COM-measured line height for a font, size, and grid pitch.
     /// Returns None if not in the table (falls back to calculation).
-    pub fn com_line_height(&self, family: &str, font_size: f32, grid_pitch: Option<f32>) -> Option<f32> {
+    pub fn com_line_height(
+        &self,
+        family: &str,
+        font_size: f32,
+        grid_pitch: Option<f32>,
+    ) -> Option<f32> {
         let normalized = normalize_family_name(family);
-        let font_data = self.com_line_heights.get(family)
+        let font_data = self
+            .com_line_heights
+            .get(family)
             .or_else(|| self.com_line_heights.get(&normalized))?;
 
         // Find exact or nearest size
@@ -811,11 +828,15 @@ impl FontMetricsRegistry {
     /// Look up COM-measured line height for table cell (grid snap disabled).
     pub fn com_line_height_table_cell(&self, family: &str, font_size: f32) -> Option<f32> {
         let normalized = normalize_family_name(family);
-        let font_data = self.com_line_heights.get(family)
+        let font_data = self
+            .com_line_heights
+            .get(family)
             .or_else(|| self.com_line_heights.get(&normalized))?;
         let size_key = format_size_key(font_size);
         let size_data = font_data.get(&size_key)?;
-        size_data.get("table_cell").copied()
+        size_data
+            .get("table_cell")
+            .copied()
             .or_else(|| size_data.get("no_grid").copied())
     }
 
@@ -894,9 +915,32 @@ impl FontMetricsRegistry {
         if let Some(m) = self.fonts.get(&base) {
             return m;
         }
+        // S1070 (2026-08-05, opt-out OXI_S1070_DISABLE): an OOXML font name is
+        // matched CASE-INSENSITIVELY by Word. technical__007b1621 writes
+        // `<w:rFonts w:ascii="arial"/>` (lowercase) on every body run — its own
+        // style declares "Arial", but the direct run property wins — so every
+        // lookup above missed and the run silently took the Calibri fallback:
+        // line pitch 12.207 + before 4.30 = 16.51 where Word renders Arial's
+        // 11.499 + 4.30 = 15.80, ~0.7pt per line. Reached ONLY after the exact /
+        // normalized / base lookups have all missed, i.e. when the alternative is
+        // the default fallback, so a correctly-cased name never takes this path.
+        if s1070_case_insensitive_font_lookup() {
+            for cand in [family, normalized.as_str(), base.as_str()] {
+                if let Some((_, m)) = self
+                    .fonts
+                    .iter()
+                    .find(|(k, _)| k.as_str().eq_ignore_ascii_case(cand))
+                {
+                    return m;
+                }
+            }
+        }
         // Fallback to default
         self.fonts.get(&self.default_family).unwrap_or_else(|| {
-            self.fonts.values().next().expect("FontMetricsRegistry has no fonts loaded")
+            self.fonts
+                .values()
+                .next()
+                .expect("FontMetricsRegistry has no fonts loaded")
         })
     }
 
@@ -905,9 +949,27 @@ impl FontMetricsRegistry {
     /// decide whether a fontTable `w:altName` substitution should fire (source
     /// unsupported → alternate supported).
     pub(crate) fn supports_family(&self, family: &str) -> bool {
-        self.fonts.contains_key(family)
+        if self.fonts.contains_key(family)
             || self.fonts.contains_key(&normalize_family_name(family))
             || self.fonts.contains_key(&base_family_name(family))
+        {
+            return true;
+        }
+        // S1070: mirror the case-insensitive fallback in `get` so a lowercase
+        // name that DOES resolve is not reported as unsupported (S1008 uses this
+        // to decide whether a fontTable altName substitution should fire).
+        s1070_case_insensitive_font_lookup()
+            && [
+                family,
+                &normalize_family_name(family),
+                &base_family_name(family),
+            ]
+            .iter()
+            .any(|cand| {
+                self.fonts
+                    .keys()
+                    .any(|k| k.as_str().eq_ignore_ascii_case(cand))
+            })
     }
 
     /// Get the default font metrics (Calibri).
@@ -919,7 +981,8 @@ impl FontMetricsRegistry {
     /// Returns (height_px, ascent_px, descent_px) or None if not in table.
     pub fn gdi_height(&self, family: &str, ppem: u32) -> Option<(u32, u32, u32)> {
         let normalized = normalize_family_name(family);
-        self.gdi_heights.get(family)
+        self.gdi_heights
+            .get(family)
             .or_else(|| self.gdi_heights.get(&normalized))
             .and_then(|ppem_map| ppem_map.get(&ppem).copied())
     }
@@ -928,7 +991,8 @@ impl FontMetricsRegistry {
     /// GDI height, rather than only a generated-table entry.
     pub fn has_gdi_height_supplement(&self, family: &str, ppem: u32) -> bool {
         let normalized = normalize_family_name(family);
-        self.gdi_height_supplements.contains(&(family.to_string(), ppem))
+        self.gdi_height_supplements
+            .contains(&(family.to_string(), ppem))
             || self.gdi_height_supplements.contains(&(normalized, ppem))
     }
 
@@ -936,14 +1000,21 @@ impl FontMetricsRegistry {
     /// When a CJK character is rendered with a Latin font (e.g. Calibri),
     /// GDI substitutes MS UI Gothic. This method mimics that behavior.
     /// For Latin fonts, GDI hinting overrides are applied when available.
-    pub fn char_width_pt_with_fallback(&self, c: char, font_size: f32, metrics: &FontMetrics) -> f32 {
+    pub fn char_width_pt_with_fallback(
+        &self,
+        c: char,
+        font_size: f32,
+        metrics: &FontMetrics,
+    ) -> f32 {
         // S888/S892: see char_width_pt_with_gdi_map — U+2011 = the hyphen
         // glyph, U+00A0 = the space advance.
-        let c = if c == '\u{2011}' && !metrics.char_widths.contains_key(&c)
+        let c = if c == '\u{2011}'
+            && !metrics.char_widths.contains_key(&c)
             && metrics.char_widths.contains_key(&'-')
         {
             '-'
-        } else if c == '\u{00A0}' && s892_nbsp_as_space()
+        } else if c == '\u{00A0}'
+            && s892_nbsp_as_space()
             && !metrics.char_widths.contains_key(&c)
             && metrics.char_widths.contains_key(&' ')
         {
@@ -953,8 +1024,9 @@ impl FontMetricsRegistry {
         };
         // UPM=256 CJK monospace fonts: fullwidth/halfwidth use fontSize directly.
         // EXCEPTION: MS PGothic / MS PMincho are proportional (see char_width_pt_with_gdi_map).
-        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho"
-            || metrics.family == "HGPGothicM";  // S579: proportional CJK, GDI-table widths
+        let is_pgothic_family = metrics.family == "MS PGothic"
+            || metrics.family == "MS PMincho"
+            || metrics.family == "HGPGothicM"; // S579: proportional CJK, GDI-table widths
 
         // PGothic-specific override: COM-measured v4 widths (same-char
         // repetition, no autoSpaceDE contamination) take priority over
@@ -965,7 +1037,8 @@ impl FontMetricsRegistry {
         // COM-confirmed via measure_mspgothic_widths4.py (2026-04-24).
         if is_pgothic_family {
             let size_key = format_size_key(font_size);
-            if let Some(size_map) = self.com_twips_widths
+            if let Some(size_map) = self
+                .com_twips_widths
                 .get(&metrics.family)
                 .and_then(|fm| fm.get(&size_key))
             {
@@ -976,11 +1049,15 @@ impl FontMetricsRegistry {
         }
 
         if metrics.units_per_em == 256 && !is_pgothic_family {
-            if is_fullwidth(c) { return font_size; }
+            if is_fullwidth(c) {
+                return font_size;
+            }
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
                 // S546 (2026-06-11): exactly fontSize/2 (see s546_exact_halfwidth).
-                if s546_exact_halfwidth() { return font_size / 2.0; }
+                if s546_exact_halfwidth() {
+                    return font_size / 2.0;
+                }
                 // Pre-S546 floor-to-10tw model (OXI_S546_DISABLE):
                 let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
                 return half_tw / 20.0;
@@ -1011,7 +1088,9 @@ impl FontMetricsRegistry {
 
         // CJK character + Latin font → GDI fallback to MS UI Gothic
         if is_cjk_or_symbol(c) && !is_cjk_font_family(&metrics.family) {
-            if let Some(fallback) = self.fonts.get("MS UI Gothic")
+            if let Some(fallback) = self
+                .fonts
+                .get("MS UI Gothic")
                 .or_else(|| self.fonts.get("MS Gothic"))
             {
                 return fallback.char_width_pt(c, font_size);
@@ -1047,11 +1126,13 @@ impl FontMetricsRegistry {
         // fallback (6.0pt @TNR12 vs the real '-' 4.0) — legal__0001482d's
         // noBreakHyphen ISBN/Gazette lines wrapped one line early each.
         // S892: U+00A0 NO-BREAK SPACE likewise = the space advance.
-        let c = if c == '\u{2011}' && !metrics.char_widths.contains_key(&c)
+        let c = if c == '\u{2011}'
+            && !metrics.char_widths.contains_key(&c)
             && metrics.char_widths.contains_key(&'-')
         {
             '-'
-        } else if c == '\u{00A0}' && s892_nbsp_as_space()
+        } else if c == '\u{00A0}'
+            && s892_nbsp_as_space()
             && !metrics.char_widths.contains_key(&c)
             && metrics.char_widths.contains_key(&' ')
         {
@@ -1064,8 +1145,9 @@ impl FontMetricsRegistry {
         // EXCEPTION: MS PGothic / MS PMincho are proportional CJK fonts —
         // they share UPM=256 with MS Gothic/Mincho but use per-char GDI widths.
         // COM-confirmed (c7b9 P9 MS PGothic 10.5pt): 48-49 ch/line, not 43.
-        let is_pgothic_family = metrics.family == "MS PGothic" || metrics.family == "MS PMincho"
-            || metrics.family == "HGPGothicM";  // S579: proportional CJK, GDI-table widths
+        let is_pgothic_family = metrics.family == "MS PGothic"
+            || metrics.family == "MS PMincho"
+            || metrics.family == "HGPGothicM"; // S579: proportional CJK, GDI-table widths
         if metrics.units_per_em == 256 && !is_pgothic_family {
             if is_fullwidth(c) {
                 return font_size;
@@ -1073,7 +1155,9 @@ impl FontMetricsRegistry {
             let advance_em = metrics.char_width_em(c);
             if is_halfwidth_katakana(c) || advance_em <= 0.51 {
                 // S546 (2026-06-11): exactly fontSize/2 (see s546_exact_halfwidth).
-                if s546_exact_halfwidth() { return font_size / 2.0; }
+                if s546_exact_halfwidth() {
+                    return font_size / 2.0;
+                }
                 let half_tw = (font_size * 20.0 / 2.0 / 10.0).floor() * 10.0;
                 return half_tw / 20.0;
             }
@@ -1082,7 +1166,8 @@ impl FontMetricsRegistry {
         // COM-measured twips override: highest precision for line break accuracy.
         {
             let size_key = format_size_key(font_size);
-            if let Some(size_map) = self.com_twips_widths
+            if let Some(size_map) = self
+                .com_twips_widths
                 .get(&metrics.family)
                 .and_then(|fm| fm.get(&size_key))
             {
@@ -1096,7 +1181,8 @@ impl FontMetricsRegistry {
         // Used where the standard twips formula doesn't match Word's actual placement.
         {
             let size_key = format_size_key(font_size);
-            if let Some(size_map) = self.com_twips_widths
+            if let Some(size_map) = self
+                .com_twips_widths
                 .get(&metrics.family)
                 .and_then(|fm| fm.get(&size_key))
             {
@@ -1125,7 +1211,9 @@ impl FontMetricsRegistry {
 
         // CJK character + Latin font → GDI fallback to MS UI Gothic
         if is_cjk_or_symbol(c) && !is_cjk_font_family(&metrics.family) {
-            if let Some(fallback) = self.fonts.get("MS UI Gothic")
+            if let Some(fallback) = self
+                .fonts
+                .get("MS UI Gothic")
                 .or_else(|| self.fonts.get("MS Gothic"))
             {
                 return fallback.char_width_pt(c, font_size);
@@ -1166,14 +1254,32 @@ fn is_cjk_or_symbol(c: char) -> bool {
 
 /// Check if a font family is a CJK font (has native CJK glyphs).
 fn is_cjk_font_family(family: &str) -> bool {
-    matches!(family,
-        "MS Gothic" | "MS Mincho" | "MS PGothic" | "MS PMincho" |
-        "MS UI Gothic" | "Yu Gothic" | "Yu Mincho" | "Meiryo" |
-        "Noto Sans JP" | "Noto Serif JP" | "Noto Sans CJK JP" | "Noto Serif CJK JP" |
-        "HGPGothicE" | "HGPMinchoE" | "HGGothicE" | "HGMinchoE" |
-        "HGSGothicE" | "HGSMinchoE" | "HGPGothicM" | "HGPMinchoB" |
-        "HGPSoeiKakugothicUB" | "HGSoeiKakugothicUB" |
-        "HGMaruGothicMPRO" | "HGSMaruGothicMPRO"
+    matches!(
+        family,
+        "MS Gothic"
+            | "MS Mincho"
+            | "MS PGothic"
+            | "MS PMincho"
+            | "MS UI Gothic"
+            | "Yu Gothic"
+            | "Yu Mincho"
+            | "Meiryo"
+            | "Noto Sans JP"
+            | "Noto Serif JP"
+            | "Noto Sans CJK JP"
+            | "Noto Serif CJK JP"
+            | "HGPGothicE"
+            | "HGPMinchoE"
+            | "HGGothicE"
+            | "HGMinchoE"
+            | "HGSGothicE"
+            | "HGSMinchoE"
+            | "HGPGothicM"
+            | "HGPMinchoB"
+            | "HGPSoeiKakugothicUB"
+            | "HGSoeiKakugothicUB"
+            | "HGMaruGothicMPRO"
+            | "HGSMaruGothicMPRO"
     )
 }
 
@@ -1186,20 +1292,45 @@ fn is_cjk_font_family(family: &str) -> bool {
 /// ailitguide eastAsia=Cambria CJK body line = 16.5pt (MS Mincho 11pt no-grid),
 /// where Oxi used Cambria's Latin 15.0pt.
 pub(crate) fn is_latin_only_font(family: &str) -> bool {
-    matches!(family,
-        "Cambria" | "Cambria Math" | "Calibri" | "Calibri Light" |
-        "Times New Roman" | "Arial" | "Georgia" | "Verdana" | "Tahoma" |
-        "Century" | "Garamond" | "Book Antiqua" | "Courier New" |
-        "Trebuchet MS" | "Palatino Linotype" | "Constantia" | "Candara" |
-        "Corbel" | "Segoe UI" | "Century Gothic" | "Consolas"
+    matches!(
+        family,
+        "Cambria"
+            | "Cambria Math"
+            | "Calibri"
+            | "Calibri Light"
+            | "Times New Roman"
+            | "Arial"
+            | "Georgia"
+            | "Verdana"
+            | "Tahoma"
+            | "Century"
+            | "Garamond"
+            | "Book Antiqua"
+            | "Courier New"
+            | "Trebuchet MS"
+            | "Palatino Linotype"
+            | "Constantia"
+            | "Candara"
+            | "Corbel"
+            | "Segoe UI"
+            | "Century Gothic"
+            | "Consolas"
     )
 }
 
 /// Strip weight/style suffixes to get the base family name.
 fn base_family_name(name: &str) -> String {
     let suffixes = [
-        " Bold", " Regular", " Demibold", " Light", " Medium",
-        " Italic", " Oblique", " Thin", " Black", " Heavy",
+        " Bold",
+        " Regular",
+        " Demibold",
+        " Light",
+        " Medium",
+        " Italic",
+        " Oblique",
+        " Thin",
+        " Black",
+        " Heavy",
     ];
     let mut result = name.to_string();
     for suffix in &suffixes {
@@ -1213,9 +1344,9 @@ fn base_family_name(name: &str) -> String {
 /// Format font size as JSON key (e.g. 10.5 → "10.5", 12.0 → "12.0")
 fn format_size_key(size: f32) -> String {
     if size.fract() == 0.0 {
-        format!("{:.0}", size)  // "12" not "12.0"
+        format!("{:.0}", size) // "12" not "12.0"
     } else {
-        format!("{}", size)     // "10.5"
+        format!("{}", size) // "10.5"
     }
 }
 
@@ -1256,8 +1387,10 @@ pub fn render_family_name(name: &str) -> &str {
         // Mincho, but the Chinese Han glyphs should render in SimSun. Latin
         // glyphs are identical width, so pagination is unaffected.
         "SimSun"
-    } else if name == "Helvetica" || name.starts_with("Helvetica Neue")
-        || name == "Helvetica LT Std" {
+    } else if name == "Helvetica"
+        || name.starts_with("Helvetica Neue")
+        || name == "Helvetica LT Std"
+    {
         // S846 (2026-07-14): Helvetica / Helvetica Neue are uninstalled on
         // Windows; Word substitutes them with Arial (the canonical
         // metric-compatible clone). The renderer was drawing them via a
@@ -1268,6 +1401,14 @@ pub fn render_family_name(name: &str) -> &str {
     } else {
         name
     }
+}
+
+/// S1070: OOXML font-family names are case-insensitive (Word resolves
+/// `w:ascii="arial"` to Arial). Opt-out `OXI_S1070_DISABLE` restores the
+/// case-sensitive lookup. Cached — the lookup sits on a hot path.
+fn s1070_case_insensitive_font_lookup() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_S1070_DISABLE").is_err())
 }
 
 fn normalize_family_name(name: &str) -> String {
@@ -1304,8 +1445,12 @@ fn normalize_family_name(name: &str) -> String {
         // Helvetica rendered word-jammed. render_family_name maps the same
         // names for the DirectWrite draw.
         "Helvetica" | "Helvetica Neue" | "Helvetica LT Std" => "Arial".to_string(),
-        "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => "MS Gothic".to_string(),
-        "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => "MS PGothic".to_string(),
+        "ＭＳ ゴシック" | "MS ゴシック" | "ＭＳ Gothic" | "MSゴシック" => {
+            "MS Gothic".to_string()
+        }
+        "ＭＳ Ｐゴシック" | "MS Ｐゴシック" | "ＭＳ PGothic" | "MSＰゴシック" => {
+            "MS PGothic".to_string()
+        }
         // "MS Pゴシック" (half-width variant) → GDI resolves via system font.
         // Word uses 游ゴシック-equivalent metrics. Map to Yu Gothic Regular for
         // correct line height and proportional Latin widths.
@@ -1315,7 +1460,9 @@ fn normalize_family_name(name: &str) -> String {
         // GDI resolves it to MS PGothic (proportional), and Word uses 游明朝-equivalent
         // line heights. Yu Mincho gives correct CJK 83/64 height and proportional Latin widths.
         "MS明朝" => "Yu Mincho Regular".to_string(),
-        "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" | "MSＰ明朝" => "MS PMincho".to_string(),
+        "ＭＳ Ｐ明朝" | "MS Ｐ明朝" | "ＭＳ PMincho" | "MSＰ明朝" => {
+            "MS PMincho".to_string()
+        }
         // S567 (2026-06-14): HG Gothic family, katakana-encoded names (e.g.
         // "HGSｺﾞｼｯｸM" = HGS Gothic M). The English forms (HGSGothicE etc.) are
         // already recognized in is_cjk_font_family, but the halfwidth-katakana
@@ -1326,7 +1473,10 @@ fn normalize_family_name(name: &str) -> String {
         // at 12pt), grid-independent (NOGRID identical). Map to MS Gothic so the
         // UPM=256 fullwidth path returns font_size. Opt-out OXI_S567_DISABLE.
         "HGSｺﾞｼｯｸM" | "HGSｺﾞｼｯｸE" | "HGｺﾞｼｯｸM" | "HGｺﾞｼｯｸE"
-            if std::env::var("OXI_S567_DISABLE").is_err() => "MS Gothic".to_string(),
+            if std::env::var("OXI_S567_DISABLE").is_err() =>
+        {
+            "MS Gothic".to_string()
+        }
         // S579 (2026-06-15): HGPｺﾞｼｯｸM (HG *Proportional* Gothic M) gets its OWN
         // GDI width table (gen_hgp_gothic_widths.py, stored under "HGPGothicM" in
         // gdi_width_overrides.json). It is genuinely proportional — kana ~9.0pt,
@@ -1338,8 +1488,12 @@ fn normalize_family_name(name: &str) -> String {
         // on kojin (kana/kanji/punct all match; Word adds ~0.2pt justify on top).
         // Mapped to the canonical "HGPGothicM" (is_cjk_font_family / is_pgothic_family).
         // Opt-out OXI_S579_DISABLE → falls back to MS UI Gothic.
-        "HGPｺﾞｼｯｸM" if std::env::var("OXI_S579_DISABLE").is_err() => "HGPGothicM".to_string(),
-        "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => "Yu Gothic Regular".to_string(),
+        "HGPｺﾞｼｯｸM" if std::env::var("OXI_S579_DISABLE").is_err() => {
+            "HGPGothicM".to_string()
+        }
+        "游ゴシック" | "Yu Gothic UI" | "游ゴシック Light" => {
+            "Yu Gothic Regular".to_string()
+        }
         "游ゴシック Medium" | "游ゴシック Bold" => "Yu Gothic Bold".to_string(),
         "游明朝" | "游明朝 Light" => "Yu Mincho Regular".to_string(),
         "游明朝 Demibold" | "游明朝 Bold" => "Yu Mincho Demibold".to_string(),
@@ -1389,7 +1543,10 @@ fn normalize_family_name(name: &str) -> String {
         // them all with Calibri (PDF span font = Calibri, letter advances
         // match Calibri exactly).
         "Humnst777 Lt BT" | "Humnst777 BT" | "Humnst777 Cn BT" | "Humnst777-lt-bt-light"
-            if std::env::var("OXI_S796_DISABLE").is_err() => "Calibri".to_string(),
+            if std::env::var("OXI_S796_DISABLE").is_err() =>
+        {
+            "Calibri".to_string()
+        }
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),
@@ -1569,7 +1726,11 @@ mod tests {
             assert!(
                 err < 1.5,
                 "{} {}pt: predicted={:.2}, COM={:.2}, err={:.2}",
-                family, size, predicted, com_gap, err
+                family,
+                size,
+                predicted,
+                com_gap,
+                err
             );
         }
 
@@ -1585,40 +1746,142 @@ mod tests {
 #[allow(dead_code)]
 fn gdi_kana_width_px_ppem14(c: char) -> Option<f32> {
     match c {
-        'ぁ' => Some(10.0), 'あ' => Some(13.0), 'ぃ' => Some(11.0), 'い' => Some(13.0),
-        'ぅ' => Some(8.0),  'う' => Some(10.0), 'ぇ' => Some(11.0), 'え' => Some(13.0),
-        'ぉ' => Some(11.0), 'お' => Some(13.0), 'き' => Some(12.0), 'ぎ' => Some(13.0),
-        'く' => Some(8.0),  'ぐ' => Some(11.0), 'け' => Some(13.0), 'こ' => Some(11.0),
-        'ご' => Some(13.0), 'さ' => Some(11.0), 'ざ' => Some(12.0), 'し' => Some(11.0),
-        'じ' => Some(11.0), 'す' => Some(13.0), 'そ' => Some(13.0), 'ぞ' => Some(13.0),
-        'た' => Some(13.0), 'だ' => Some(13.0), 'ち' => Some(12.0), 'ぢ' => Some(13.0),
-        'っ' => Some(11.0), 'つ' => Some(13.0), 'づ' => Some(13.0), 'て' => Some(13.0),
-        'で' => Some(13.0), 'と' => Some(11.0), 'ど' => Some(12.0), 'な' => Some(13.0),
-        'に' => Some(13.0), 'ひ' => Some(13.0), 'び' => Some(13.0), 'ぴ' => Some(13.0),
-        'ま' => Some(12.0), 'も' => Some(11.0), 'ゃ' => Some(12.0), 'ゅ' => Some(12.0),
-        'ょ' => Some(10.0), 'よ' => Some(12.0), 'ら' => Some(11.0), 'り' => Some(10.0),
-        'る' => Some(12.0), 'ろ' => Some(12.0), 'ゎ' => Some(12.0), 'を' => Some(12.0),
-        'ん' => Some(13.0), 'ゔ' => Some(12.0), 'ゝ' => Some(10.0), 'ゞ' => Some(10.0),
-        'ァ' => Some(11.0), 'ア' => Some(13.0), 'ィ' => Some(9.0),  'イ' => Some(12.0),
-        'ゥ' => Some(11.0), 'ウ' => Some(13.0), 'ェ' => Some(10.0), 'エ' => Some(13.0),
-        'ォ' => Some(11.0), 'オ' => Some(13.0), 'カ' => Some(12.0), 'ガ' => Some(13.0),
-        'キ' => Some(13.0), 'ク' => Some(11.0), 'グ' => Some(13.0), 'ケ' => Some(13.0),
-        'ゲ' => Some(13.0), 'コ' => Some(11.0), 'ゴ' => Some(12.0), 'シ' => Some(13.0),
-        'ジ' => Some(13.0), 'ス' => Some(13.0), 'セ' => Some(13.0), 'ソ' => Some(11.0),
-        'ゾ' => Some(12.0), 'タ' => Some(11.0), 'ダ' => Some(13.0), 'チ' => Some(13.0),
-        'ヂ' => Some(13.0), 'ッ' => Some(10.0), 'ツ' => Some(12.0), 'ヅ' => Some(13.0),
-        'テ' => Some(12.0), 'デ' => Some(13.0), 'ト' => Some(9.0),  'ド' => Some(10.0),
-        'ナ' => Some(13.0), 'ニ' => Some(13.0), 'ヌ' => Some(12.0), 'ネ' => Some(13.0),
-        'ノ' => Some(10.0), 'ヒ' => Some(11.0), 'ビ' => Some(12.0), 'ピ' => Some(12.0),
-        'フ' => Some(11.0), 'ブ' => Some(12.0), 'プ' => Some(12.0), 'ヘ' => Some(13.0),
-        'ベ' => Some(13.0), 'ペ' => Some(13.0), 'ホ' => Some(13.0), 'ボ' => Some(13.0),
-        'ポ' => Some(13.0), 'マ' => Some(13.0), 'ミ' => Some(9.0),  'メ' => Some(10.0),
-        'モ' => Some(13.0), 'ャ' => Some(11.0), 'ュ' => Some(11.0), 'ユ' => Some(13.0),
-        'ョ' => Some(9.0),  'ヨ' => Some(10.0), 'ラ' => Some(11.0), 'リ' => Some(10.0),
-        'レ' => Some(12.0), 'ロ' => Some(12.0), 'ヮ' => Some(11.0), 'ワ' => Some(13.0),
-        'ヲ' => Some(11.0), 'ン' => Some(12.0), 'ヴ' => Some(13.0), 'ヵ' => Some(10.0),
-        'ヶ' => Some(11.0), 'ヷ' => Some(13.0), 'ヸ' => Some(13.0), 'ヺ' => Some(13.0),
-        '・' => Some(7.0),  'ー' => Some(13.0), 'ヽ' => Some(10.0), 'ヾ' => Some(10.0),
+        'ぁ' => Some(10.0),
+        'あ' => Some(13.0),
+        'ぃ' => Some(11.0),
+        'い' => Some(13.0),
+        'ぅ' => Some(8.0),
+        'う' => Some(10.0),
+        'ぇ' => Some(11.0),
+        'え' => Some(13.0),
+        'ぉ' => Some(11.0),
+        'お' => Some(13.0),
+        'き' => Some(12.0),
+        'ぎ' => Some(13.0),
+        'く' => Some(8.0),
+        'ぐ' => Some(11.0),
+        'け' => Some(13.0),
+        'こ' => Some(11.0),
+        'ご' => Some(13.0),
+        'さ' => Some(11.0),
+        'ざ' => Some(12.0),
+        'し' => Some(11.0),
+        'じ' => Some(11.0),
+        'す' => Some(13.0),
+        'そ' => Some(13.0),
+        'ぞ' => Some(13.0),
+        'た' => Some(13.0),
+        'だ' => Some(13.0),
+        'ち' => Some(12.0),
+        'ぢ' => Some(13.0),
+        'っ' => Some(11.0),
+        'つ' => Some(13.0),
+        'づ' => Some(13.0),
+        'て' => Some(13.0),
+        'で' => Some(13.0),
+        'と' => Some(11.0),
+        'ど' => Some(12.0),
+        'な' => Some(13.0),
+        'に' => Some(13.0),
+        'ひ' => Some(13.0),
+        'び' => Some(13.0),
+        'ぴ' => Some(13.0),
+        'ま' => Some(12.0),
+        'も' => Some(11.0),
+        'ゃ' => Some(12.0),
+        'ゅ' => Some(12.0),
+        'ょ' => Some(10.0),
+        'よ' => Some(12.0),
+        'ら' => Some(11.0),
+        'り' => Some(10.0),
+        'る' => Some(12.0),
+        'ろ' => Some(12.0),
+        'ゎ' => Some(12.0),
+        'を' => Some(12.0),
+        'ん' => Some(13.0),
+        'ゔ' => Some(12.0),
+        'ゝ' => Some(10.0),
+        'ゞ' => Some(10.0),
+        'ァ' => Some(11.0),
+        'ア' => Some(13.0),
+        'ィ' => Some(9.0),
+        'イ' => Some(12.0),
+        'ゥ' => Some(11.0),
+        'ウ' => Some(13.0),
+        'ェ' => Some(10.0),
+        'エ' => Some(13.0),
+        'ォ' => Some(11.0),
+        'オ' => Some(13.0),
+        'カ' => Some(12.0),
+        'ガ' => Some(13.0),
+        'キ' => Some(13.0),
+        'ク' => Some(11.0),
+        'グ' => Some(13.0),
+        'ケ' => Some(13.0),
+        'ゲ' => Some(13.0),
+        'コ' => Some(11.0),
+        'ゴ' => Some(12.0),
+        'シ' => Some(13.0),
+        'ジ' => Some(13.0),
+        'ス' => Some(13.0),
+        'セ' => Some(13.0),
+        'ソ' => Some(11.0),
+        'ゾ' => Some(12.0),
+        'タ' => Some(11.0),
+        'ダ' => Some(13.0),
+        'チ' => Some(13.0),
+        'ヂ' => Some(13.0),
+        'ッ' => Some(10.0),
+        'ツ' => Some(12.0),
+        'ヅ' => Some(13.0),
+        'テ' => Some(12.0),
+        'デ' => Some(13.0),
+        'ト' => Some(9.0),
+        'ド' => Some(10.0),
+        'ナ' => Some(13.0),
+        'ニ' => Some(13.0),
+        'ヌ' => Some(12.0),
+        'ネ' => Some(13.0),
+        'ノ' => Some(10.0),
+        'ヒ' => Some(11.0),
+        'ビ' => Some(12.0),
+        'ピ' => Some(12.0),
+        'フ' => Some(11.0),
+        'ブ' => Some(12.0),
+        'プ' => Some(12.0),
+        'ヘ' => Some(13.0),
+        'ベ' => Some(13.0),
+        'ペ' => Some(13.0),
+        'ホ' => Some(13.0),
+        'ボ' => Some(13.0),
+        'ポ' => Some(13.0),
+        'マ' => Some(13.0),
+        'ミ' => Some(9.0),
+        'メ' => Some(10.0),
+        'モ' => Some(13.0),
+        'ャ' => Some(11.0),
+        'ュ' => Some(11.0),
+        'ユ' => Some(13.0),
+        'ョ' => Some(9.0),
+        'ヨ' => Some(10.0),
+        'ラ' => Some(11.0),
+        'リ' => Some(10.0),
+        'レ' => Some(12.0),
+        'ロ' => Some(12.0),
+        'ヮ' => Some(11.0),
+        'ワ' => Some(13.0),
+        'ヲ' => Some(11.0),
+        'ン' => Some(12.0),
+        'ヴ' => Some(13.0),
+        'ヵ' => Some(10.0),
+        'ヶ' => Some(11.0),
+        'ヷ' => Some(13.0),
+        'ヸ' => Some(13.0),
+        'ヺ' => Some(13.0),
+        '・' => Some(7.0),
+        'ー' => Some(13.0),
+        'ヽ' => Some(10.0),
+        'ヾ' => Some(10.0),
         '゛' | '゜' => Some(7.0),
         _ => None,
     }
