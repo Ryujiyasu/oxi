@@ -13501,6 +13501,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // page-bottom fit height for it (S608), full box otherwise.
                     let next_h = if lines.len() == 2 {
                         last_line_fit_h(1)
+                    } else if std::env::var("OXI_S1074").is_ok()
+                        && is_multiple_spacing
+                        && !self.doc_body_has_real_cjk
+                    {
+                        // S1074: an INTERIOR next line is measured with the same
+                        // page-bottom threshold the per-line break test uses
+                        // (max(ink, the S779/S827 hhea floor), capped at the box)
+                        // rather than the full multiplied box.
+                        let full = line_heights.get(1).copied().unwrap_or(0.0);
+                        let floor = s779_win_heights.get(1).copied().unwrap_or(0.0);
+                        ink_line_heights
+                            .get(1)
+                            .copied()
+                            .unwrap_or(full)
+                            .max(floor)
+                            .min(full)
                     } else {
                         line_heights.get(1).copied().unwrap_or(0.0)
                     };
