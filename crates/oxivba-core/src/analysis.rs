@@ -476,8 +476,10 @@ struct Walker {
     has_option_explicit: bool,
     external_declares: Vec<String>,
     defined_procedures: Vec<(String, Visibility, ProcKind)>,
+    module_names: BTreeSet<String>,
 
     // Per-procedure scratch.
+    current_locals: BTreeSet<String>,
     current_calls: BTreeSet<String>,
     current_statements: usize,
     current_depth: usize,
@@ -486,6 +488,16 @@ struct Walker {
 
 impl Walker {
     fn walk_module(&mut self, module: &Module) {
+        self.module_names = module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ModuleItem::Variables(decl) => Some(decl),
+                _ => None,
+            })
+            .flat_map(|decl| decl.items.iter())
+            .map(|item| item.name.to_ascii_lowercase())
+            .collect();
         for item in &module.items {
             match item {
                 ModuleItem::Option(ModuleOption::Explicit, _) => self.has_option_explicit = true,
@@ -534,6 +546,13 @@ impl Walker {
     }
 
     fn walk_procedure(&mut self, proc: &Procedure) {
+        self.current_locals = self.module_names.clone();
+        self.current_locals.extend(
+            proc.params
+                .iter()
+                .map(|param| param.name.to_ascii_lowercase()),
+        );
+        collect_declared_names(&proc.body, &mut self.current_locals);
         self.current_calls = BTreeSet::new();
         self.current_statements = 0;
         self.current_depth = 0;
@@ -887,6 +906,9 @@ impl Walker {
         if name.is_empty() {
             return;
         }
+        if !name.contains('.') && self.current_locals.contains(&name.to_ascii_lowercase()) {
+            return;
+        }
         *self.api_names.entry(name.to_string()).or_default() += 1;
 
         if let Some(root) = name.split('.').next() {
@@ -957,6 +979,53 @@ impl Walker {
             blanket_error_handlers: self.blanket_error_handlers,
             has_option_explicit: self.has_option_explicit,
             external_declares: self.external_declares,
+        }
+    }
+}
+
+fn collect_declared_names(body: &[Statement], names: &mut BTreeSet<String>) {
+    for statement in body {
+        match statement {
+            Statement::Dim(decl) => {
+                names.extend(decl.items.iter().map(|item| item.name.to_ascii_lowercase()))
+            }
+            Statement::ReDim { items, .. } => {
+                names.extend(items.iter().map(|item| item.name.to_ascii_lowercase()));
+            }
+            Statement::If(if_statement) => {
+                collect_declared_names(&if_statement.then_body, names);
+                for (_, branch) in &if_statement.else_ifs {
+                    collect_declared_names(branch, names);
+                }
+                if let Some(branch) = &if_statement.else_body {
+                    collect_declared_names(branch, names);
+                }
+            }
+            Statement::SelectCase(select) => {
+                for case in &select.cases {
+                    collect_declared_names(&case.body, names);
+                }
+                if let Some(branch) = &select.case_else {
+                    collect_declared_names(branch, names);
+                }
+            }
+            Statement::For(for_statement) => {
+                if let Expr::Ident(name, _) = &for_statement.counter {
+                    names.insert(name.to_ascii_lowercase());
+                }
+                collect_declared_names(&for_statement.body, names);
+            }
+            Statement::ForEach(for_each) => {
+                if let Expr::Ident(name, _) = &for_each.item {
+                    names.insert(name.to_ascii_lowercase());
+                }
+                collect_declared_names(&for_each.body, names);
+            }
+            Statement::Do(do_statement) => collect_declared_names(&do_statement.body, names),
+            Statement::While { body, .. } | Statement::With { body, .. } => {
+                collect_declared_names(body, names);
+            }
+            _ => {}
         }
     }
 }
@@ -1174,6 +1243,36 @@ mod tests {
         );
         // The arguments inside the chain are still seen.
         assert!(a.api_names.contains_key("Range"));
+    }
+
+    #[test]
+    fn declared_names_do_not_impersonate_excel_api_members() {
+        let a = analyse_src(
+            "Private Value As Long\n\
+             Sub T(ByVal Font As Long)\n\
+               Dim Range As Long\n\
+               Value = Font + Range\n\
+             End Sub",
+        );
+        assert_eq!(a.class, None);
+        assert!(!a.api_names.contains_key("Value"));
+        assert!(!a.api_names.contains_key("Font"));
+        assert!(!a.api_names.contains_key("Range"));
+    }
+
+    #[test]
+    fn declared_object_roots_keep_their_member_api_chain() {
+        let a = analyse_src(
+            "Sub T()\n\
+               Dim ws As Worksheet\n\
+               ws.Range(\"A1\").Value = 1\n\
+             End Sub",
+        );
+        assert_eq!(a.class, Some(Class::B));
+        assert!(a
+            .api_names
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("ws.Range.Value")));
     }
 
     #[test]

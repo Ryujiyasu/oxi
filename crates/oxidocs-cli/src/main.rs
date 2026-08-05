@@ -8,8 +8,10 @@
 
 use std::collections::HashMap;
 use std::fs;
+use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_core::ir::{Block, Paragraph, Table, Alignment, TextBox, FloatingPosition};
 use oxidocs_core::font::FontMetricsRegistry;
+use oxivba_core::{analyse, parse_module};
 use oxipdf_core::ir::*;
 
 fn main() {
@@ -21,14 +23,95 @@ fn main() {
             let output = args.get(3).expect("Usage: oxi docx-to-pdf <input.docx> <output.pdf>");
             docx_to_pdf(input, output);
         }
+        Some("vba-analyze") => {
+            let input = args.get(2).expect("Usage: oxi vba-analyze <input.xlsm>");
+            if let Err(error) = vba_analyze(input) {
+                eprintln!("VBA analysis failed: {error}");
+                std::process::exit(2);
+            }
+        }
         _ => {
             eprintln!("Oxi CLI - Document processing toolkit");
             eprintln!();
             eprintln!("Usage:");
             eprintln!("  oxi docx-to-pdf <input.docx> <output.pdf>");
+            eprintln!("  oxi vba-analyze <input.xlsm>");
             std::process::exit(1);
         }
     }
+}
+
+fn vba_analyze(input: &str) -> Result<(), String> {
+    let data = fs::read(input).map_err(|error| format!("cannot read {input}: {error}"))?;
+    let mut archive = OoxmlArchive::new(&data)
+        .map_err(|error| format!("cannot open the OOXML package: {error}"))?;
+    let project_part = archive
+        .file_names()
+        .into_iter()
+        .find(|name| {
+            name.rsplit('/')
+                .next()
+                .is_some_and(|leaf| leaf.eq_ignore_ascii_case("vbaProject.bin"))
+        })
+        .ok_or_else(|| "the package does not contain vbaProject.bin".to_string())?;
+    let project_data = archive
+        .read_binary_part(&project_part)
+        .map_err(|error| format!("cannot read {project_part}: {error}"))?;
+    let project = ovba::open_project(project_data)
+        .map_err(|error| format!("cannot parse {project_part}: {error}"))?;
+
+    println!("VBA project: {input}");
+    println!("Container part: {project_part}");
+    println!("Modules: {}", project.modules.len());
+    println!();
+
+    let mut total_procedures = 0usize;
+    let mut total_statements = 0usize;
+    let mut total_unparsed = 0usize;
+
+    for module_info in &project.modules {
+        let source = project
+            .module_source(&module_info.name)
+            .map_err(|error| format!("cannot extract module {}: {error}", module_info.name))?;
+        let module = parse_module(&source)
+            .map_err(|error| format!("cannot tokenize module {}: {error}", module_info.name))?;
+        let analysis = analyse(&module);
+
+        total_procedures += analysis.metrics.procedures;
+        total_statements += analysis.metrics.statements;
+        total_unparsed += analysis.metrics.unparsed;
+
+        println!("[{}]", module_info.name);
+        println!("  verdict: {}", analysis.verdict());
+        println!(
+            "  procedures: {}, statements: {}, max nesting: {}, unparsed: {}",
+            analysis.metrics.procedures,
+            analysis.metrics.statements,
+            analysis.metrics.max_nesting,
+            analysis.metrics.unparsed
+        );
+        println!(
+            "  formula engine: {}",
+            if analysis.needs_formula_engine { "required" } else { "not detected" }
+        );
+        if !analysis.external_declares.is_empty() {
+            println!("  external declares: {}", analysis.external_declares.join(", "));
+        }
+        for finding in &analysis.findings {
+            let class = finding.class.map_or("-", |class| class.as_str());
+            println!(
+                "  finding line {} [{}] {}: {}",
+                finding.line, class, finding.what, finding.reason
+            );
+        }
+        println!();
+    }
+
+    println!(
+        "Summary: {} module(s), {} procedure(s), {} statement(s), {} unparsed line(s)",
+        project.modules.len(), total_procedures, total_statements, total_unparsed
+    );
+    Ok(())
 }
 
 fn docx_to_pdf(input: &str, output: &str) {

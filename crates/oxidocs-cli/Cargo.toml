@@ -9,7 +9,10 @@ name = "oxidocs"
 path = "src/main.rs"
 
 [dependencies]
+oxidocs-common = { path = "../oxidocs-common" }
 oxidocs-core = { path = "../oxidocs-core" }
+oxivba-core = { path = "../oxivba-core" }
 oxipdf-core = { path = "../oxipdf-core" }
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+ovba = "0.7.1"
