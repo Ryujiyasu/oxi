@@ -28243,6 +28243,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             if cell_widths.len() == first_row.cells.len() && !cell_widths.is_empty() {
                 return cell_widths;
             }
+            // S1071: `w:tcW w:type="pct"` cells - resolve the percentages against
+            // the table's own width (its `w:tblW` when that is an explicit dxa,
+            // else the available content width). The percentages of a pct table
+            // sum to ~100, so this reproduces Word's equal thirds for the
+            // technical__007b1621 footer (1650/50 = 33% of 468 = 154.4pt each).
+            let pcts: Vec<f32> = first_row.cells.iter()
+                .filter_map(|c| c.width_pct)
+                .collect();
+            if pcts.len() == first_row.cells.len() && !pcts.is_empty() {
+                let base = match table.style.width_type.as_deref() {
+                    Some("dxa") => table.style.width.unwrap_or(content_width),
+                    _ => content_width,
+                };
+                let base = (base - table.style.indent.unwrap_or(0.0)).max(0.0);
+                return pcts.iter().map(|p| base * p / 100.0).collect();
+            }
         }
 
         // 3. Use table style width

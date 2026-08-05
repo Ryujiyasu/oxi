@@ -666,6 +666,13 @@ pub struct TableCell {
     /// (the thin-spacer-row idiom; S751).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_mark: bool,
+    /// S1071: `w:tcW w:type="pct"` - the cell's width as a PERCENTAGE of the
+    /// table width (0-100). ECMA-376 17.4.72: `w:tcW` carries the same `w:type`
+    /// as `w:tblW`, and only `dxa` means twips; the parser used to divide every
+    /// value by 20 regardless. Resolved against the available width at layout
+    /// time, since the table's own width is not known while parsing the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_pct: Option<f32>,
 }
 
 /// Cell border definitions

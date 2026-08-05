@@ -8217,6 +8217,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &ParseContext, styles: &Sty
         cell_text_boxes,
         cell_shapes,
         hide_mark: cell_props.hide_mark,
+        width_pct: cell_props.width_pct,
     })
 }
 
@@ -8231,6 +8232,7 @@ struct CellProperties {
     margins: Option<CellMargins>,
     text_direction: Option<String>,
     hide_mark: bool, // S751: w:hideMark
+    width_pct: Option<f32>, // S1071: w:tcW w:type="pct" (percent of table width)
 }
 
 /// Parse w:tcPr (table cell properties)
@@ -8272,10 +8274,42 @@ fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<CellProperties, P
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
                     "tcW" => {
+                        // S1071 (2026-08-05, opt-out OXI_S1071_DISABLE): honour
+                        // `w:type`. ECMA-376 17.4.72 gives `w:tcW` the same type
+                        // set as `w:tblW` (dxa / pct / auto / nil); only `dxa` is
+                        // twips. The old code divided EVERY value by 20, so
+                        // technical__007b1621's footer `<w:tcW w:w="1650"
+                        // w:type="pct"/>` (= 33% of the table) became 82.5pt
+                        // instead of 156pt and its title wrapped to ~4 lines,
+                        // inflating the footer reserve to 52.9pt (Word ~21) and
+                        // pulling the body bottom from 720 to 703.
+                        let mut w_val: Option<String> = None;
+                        let mut w_type: Option<String> = None;
                         for attr in e.attributes().flatten() {
-                            if local_name(attr.key.as_ref()) == "w" {
-                                let val = String::from_utf8_lossy(&attr.value);
-                                props.width = val.parse::<f32>().ok().map(|v| v / 20.0);
+                            match local_name(attr.key.as_ref()).as_str() {
+                                "w" => w_val = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                                "type" => w_type = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                                _ => {}
+                            }
+                        }
+                        if std::env::var("OXI_S1071_DISABLE").is_ok() {
+                            props.width = w_val.and_then(|v| v.parse::<f32>().ok()).map(|v| v / 20.0);
+                        } else if let Some(v) = w_val.and_then(|v| v.parse::<f32>().ok()) {
+                            match w_type.as_deref() {
+                                // Percentage in 50ths of a percent, like w:tblW.
+                                Some("pct") => {
+                                    props.width = None;
+                                    props.width_pct = Some(v / 50.0);
+                                }
+                                // No explicit width - the column resolver falls
+                                // through to the grid / equal-split branches.
+                                Some("auto") | Some("nil") => {
+                                    props.width = None;
+                                }
+                                // dxa (and the ECMA default when absent) = twips.
+                                _ => {
+                                    props.width = Some(v / 20.0);
+                                }
                             }
                         }
                     }

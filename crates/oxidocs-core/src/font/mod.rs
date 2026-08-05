@@ -894,6 +894,26 @@ impl FontMetricsRegistry {
         if let Some(m) = self.fonts.get(&base) {
             return m;
         }
+        // S1070 (2026-08-05, opt-out OXI_S1070_DISABLE): an OOXML font name is
+        // matched CASE-INSENSITIVELY by Word. technical__007b1621 writes
+        // `<w:rFonts w:ascii="arial"/>` (lowercase) on every body run - its own
+        // style declares "Arial", but the direct run property wins - so every
+        // lookup above missed and the run silently took the Calibri fallback:
+        // line pitch 12.207 + before 4.30 = 16.51 where Word renders Arial's
+        // 11.499 + 4.30 = 15.80, ~0.7pt per line. Reached ONLY after the exact /
+        // normalized / base lookups have all missed, i.e. when the alternative is
+        // the default fallback, so a correctly-cased name never takes this path.
+        if s1070_case_insensitive_font_lookup() {
+            for cand in [family, normalized.as_str(), base.as_str()] {
+                if let Some((_, m)) = self
+                    .fonts
+                    .iter()
+                    .find(|(k, _)| k.as_str().eq_ignore_ascii_case(cand))
+                {
+                    return m;
+                }
+            }
+        }
         // Fallback to default
         self.fonts.get(&self.default_family).unwrap_or_else(|| {
             self.fonts.values().next().expect("FontMetricsRegistry has no fonts loaded")
@@ -905,9 +925,23 @@ impl FontMetricsRegistry {
     /// decide whether a fontTable `w:altName` substitution should fire (source
     /// unsupported → alternate supported).
     pub(crate) fn supports_family(&self, family: &str) -> bool {
-        self.fonts.contains_key(family)
+        if self.fonts.contains_key(family)
             || self.fonts.contains_key(&normalize_family_name(family))
             || self.fonts.contains_key(&base_family_name(family))
+        {
+            return true;
+        }
+        // S1070: mirror the case-insensitive fallback in `get` so a lowercase
+        // name that DOES resolve is not reported as unsupported (S1008 uses this
+        // to decide whether a fontTable altName substitution should fire).
+        s1070_case_insensitive_font_lookup()
+            && [family, &normalize_family_name(family), &base_family_name(family)]
+                .iter()
+                .any(|cand| {
+                    self.fonts
+                        .keys()
+                        .any(|k| k.as_str().eq_ignore_ascii_case(cand))
+                })
     }
 
     /// Get the default font metrics (Calibri).
@@ -1268,6 +1302,14 @@ pub fn render_family_name(name: &str) -> &str {
     } else {
         name
     }
+}
+
+/// S1070: OOXML font-family names are case-insensitive (Word resolves
+/// `w:ascii="arial"` to Arial). Opt-out `OXI_S1070_DISABLE` restores the
+/// case-sensitive lookup. Cached - the lookup sits on a hot path.
+fn s1070_case_insensitive_font_lookup() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_S1070_DISABLE").is_err())
 }
 
 fn normalize_family_name(name: &str) -> String {
