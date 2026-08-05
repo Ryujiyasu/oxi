@@ -54,6 +54,7 @@ tools/**/*_deep*.py
 tools/acrobat_analysis.py
 tools/oxi-gdi-renderer/target/
 tools/oxi-dwrite-renderer/target/
+tools/oxi-pptx-renderer/target/
 tools/emf-to-png/target/
 tools/metrics/_repros/
 

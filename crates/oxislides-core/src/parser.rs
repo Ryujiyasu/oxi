@@ -11,7 +11,8 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    Presentation, Shape, ShapeContent, Slide, SlideAlignment, SlideParagraph, SlideRun,
+    Presentation, Shape, ShapeContent, Slide, SlideAlignment, SlideParagraph, SlideRun, Table,
+    TableCell,
 };
 
 #[derive(Error, Debug)]
@@ -118,6 +119,8 @@ fn parse_slide(
     let mut shape_y: f32 = 0.0;
     let mut shape_w: f32 = 0.0;
     let mut shape_h: f32 = 0.0;
+    let mut shape_rotation: f32 = 0.0;
+    let mut shape_prst: Option<String> = None;
     let mut shape_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut shape_is_image = false;
     let mut shape_image_r_id: Option<String> = None;
@@ -145,6 +148,17 @@ fn parse_slide(
 
     let mut in_text = false;
 
+    // Table state (a:graphicFrame -> a:tbl)
+    let mut in_graphic_frame = false;
+    let mut in_table = false;
+    let mut tbl_col_widths: Vec<f32> = Vec::new();
+    let mut tbl_row_heights: Vec<f32> = Vec::new();
+    let mut tbl_rows: Vec<Vec<TableCell>> = Vec::new();
+    let mut in_tbl_row = false;
+    let mut tbl_cur_row: Vec<TableCell> = Vec::new();
+    let mut in_tbl_cell = false;
+    let mut tbl_cur_cell_paragraphs: Vec<SlideParagraph> = Vec::new();
+
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
@@ -167,12 +181,87 @@ fn parse_slide(
                         shape_y = 0.0;
                         shape_w = 0.0;
                         shape_h = 0.0;
+                        shape_rotation = 0.0;
+                        shape_prst = None;
                         shape_paragraphs.clear();
                         shape_is_image = name == "pic";
                         shape_image_r_id = None;
                         shape_fill_color = None;
                         shape_border_color = None;
                         shape_border_width = None;
+                    }
+                    "graphicFrame" if in_sp_tree => {
+                        // A graphicFrame (table/chart/SmartArt). Reuse the shape
+                        // geometry state (a:xfrm off/ext feed shape_x/y/w/h).
+                        in_shape = true;
+                        in_graphic_frame = true;
+                        shape_x = 0.0;
+                        shape_y = 0.0;
+                        shape_w = 0.0;
+                        shape_h = 0.0;
+                        shape_rotation = 0.0;
+                        shape_prst = None;
+                        shape_paragraphs.clear();
+                        shape_is_image = false;
+                        shape_image_r_id = None;
+                        shape_fill_color = None;
+                        shape_border_color = None;
+                        shape_border_width = None;
+                        // Table state reset
+                        in_table = false;
+                        tbl_col_widths.clear();
+                        tbl_row_heights.clear();
+                        tbl_rows.clear();
+                        in_tbl_row = false;
+                        tbl_cur_row.clear();
+                        in_tbl_cell = false;
+                        tbl_cur_cell_paragraphs.clear();
+                    }
+                    "tbl" if in_graphic_frame => {
+                        in_table = true;
+                        tbl_col_widths.clear();
+                        tbl_row_heights.clear();
+                        tbl_rows.clear();
+                    }
+                    "gridCol" if in_table => {
+                        // a:tblGrid/a:gridCol/@w in EMU; 12700 EMU = 1pt
+                        if let Some(w) = get_attr(&e, "w") {
+                            if let Ok(v) = w.parse::<f32>() {
+                                tbl_col_widths.push(v / 12700.0);
+                            }
+                        }
+                    }
+                    "tr" if in_table => {
+                        in_tbl_row = true;
+                        tbl_cur_row.clear();
+                        // a:tr/@h in EMU; 12700 EMU = 1pt
+                        if let Some(h) = get_attr(&e, "h") {
+                            if let Ok(v) = h.parse::<f32>() {
+                                tbl_row_heights.push(v / 12700.0);
+                            }
+                        }
+                    }
+                    "tc" if in_tbl_row => {
+                        in_tbl_cell = true;
+                        tbl_cur_cell_paragraphs.clear();
+                    }
+                    "tcPr" if in_tbl_cell => {
+                        // Cell properties (fill, borders, spans) — parsed later.
+                    }
+                    "xfrm" if in_shape => {
+                        // a:xfrm/@rot is in 60000ths of a degree; 60000 = 1 degree.
+                        if let Some(rot) = get_attr(&e, "rot") {
+                            if let Ok(v) = rot.parse::<f32>() {
+                                shape_rotation = v / 60000.0;
+                            }
+                        }
+                    }
+                    "prstGeom" if in_shape => {
+                        // a:prstGeom/@prst = preset shape type, e.g. "rect", "ellipse",
+                        // "roundRect", "chevron".
+                        if let Some(prst) = get_attr(&e, "prst") {
+                            shape_prst = Some(prst);
+                        }
                     }
                     "spPr" if in_shape => {
                         in_sp_pr = true;
@@ -297,12 +386,46 @@ fn parse_slide(
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "gridCol" if in_table => {
+                        // a:gridCol is typically self-closing.
+                        if let Some(w) = get_attr(&e, "w") {
+                            if let Ok(v) = w.parse::<f32>() {
+                                tbl_col_widths.push(v / 12700.0);
+                            }
+                        }
+                    }
+                    "tr" if in_table => {
+                        // Self-closing row (rare) — records height only.
+                        if let Some(h) = get_attr(&e, "h") {
+                            if let Ok(v) = h.parse::<f32>() {
+                                tbl_row_heights.push(v / 12700.0);
+                            }
+                        }
+                    }
+                    "tc" if in_tbl_row => {
+                        // Self-closing cell — an empty cell.
+                        tbl_cur_row.push(TableCell {
+                            paragraphs: Vec::new(),
+                        });
+                    }
                     "ln" if in_sp_pr => {
                         // Empty <a:ln/> — no border content, just attributes
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
                                 shape_border_width = Some(v / 12700.0);
                             }
+                        }
+                    }
+                    "xfrm" if in_shape => {
+                        if let Some(rot) = get_attr(&e, "rot") {
+                            if let Ok(v) = rot.parse::<f32>() {
+                                shape_rotation = v / 60000.0;
+                            }
+                        }
+                    }
+                    "prstGeom" if in_shape => {
+                        if let Some(prst) = get_attr(&e, "prst") {
+                            shape_prst = Some(prst);
                         }
                     }
                     "off" if in_shape => {
@@ -431,6 +554,11 @@ fn parse_slide(
                             } else {
                                 ShapeContent::Placeholder
                             }
+                        } else if shape_prst.is_some() {
+                            // Preset-geometry AutoShape; may or may not carry text.
+                            ShapeContent::AutoShape {
+                                paragraphs: std::mem::take(&mut shape_paragraphs),
+                            }
                         } else if !shape_paragraphs.is_empty() {
                             ShapeContent::TextBox {
                                 paragraphs: std::mem::take(&mut shape_paragraphs),
@@ -444,6 +572,8 @@ fn parse_slide(
                             y: shape_y,
                             width: shape_w,
                             height: shape_h,
+                            rotation: shape_rotation,
+                            shape_type: shape_prst.take(),
                             content,
                             fill_color: shape_fill_color.take(),
                             border_color: shape_border_color.take(),
@@ -453,9 +583,56 @@ fn parse_slide(
                     }
                     "p" if in_paragraph => {
                         in_paragraph = false;
-                        shape_paragraphs.push(SlideParagraph {
+                        let para = SlideParagraph {
                             runs: std::mem::take(&mut para_runs),
                             alignment: para_alignment,
+                        };
+                        if in_tbl_cell {
+                            tbl_cur_cell_paragraphs.push(para);
+                        } else {
+                            shape_paragraphs.push(para);
+                        }
+                    }
+                    "tc" if in_tbl_cell => {
+                        in_tbl_cell = false;
+                        tbl_cur_row.push(TableCell {
+                            paragraphs: std::mem::take(&mut tbl_cur_cell_paragraphs),
+                        });
+                    }
+                    "tr" if in_tbl_row => {
+                        in_tbl_row = false;
+                        tbl_rows.push(std::mem::take(&mut tbl_cur_row));
+                    }
+                    "tbl" if in_table => {
+                        in_table = false;
+                    }
+                    "graphicFrame" if in_graphic_frame => {
+                        in_graphic_frame = false;
+                        in_shape = false;
+                        let content = if !tbl_rows.is_empty() {
+                            ShapeContent::Table {
+                                table: Table {
+                                    col_widths: std::mem::take(&mut tbl_col_widths),
+                                    row_heights: std::mem::take(&mut tbl_row_heights),
+                                    rows: std::mem::take(&mut tbl_rows),
+                                },
+                            }
+                        } else {
+                            ShapeContent::Unsupported {
+                                element_type: "graphicFrame".to_string(),
+                            }
+                        };
+                        shapes.push(Shape {
+                            x: shape_x,
+                            y: shape_y,
+                            width: shape_w,
+                            height: shape_h,
+                            rotation: shape_rotation,
+                            shape_type: shape_prst.take(),
+                            content,
+                            fill_color: shape_fill_color.take(),
+                            border_color: shape_border_color.take(),
+                            border_width: shape_border_width.take(),
                         });
                     }
                     "r" if in_run => {

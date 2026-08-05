@@ -24,6 +24,10 @@ pub struct Shape {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub rotation: f32, // rotation in degrees (0 = none), from a:xfrm/@rot (60000 = 1 deg)
+    /// PresentationML shape type (a:prstGeom/@prst e.g. "rect", "ellipse", "roundRect", "chevron").
+    /// None for picture / graphicFrame / plain textbox without a preset geometry.
+    pub shape_type: Option<String>,
     pub content: ShapeContent,
     pub fill_color: Option<String>,   // hex color for solid fill
     pub border_color: Option<String>, // hex color for outline
@@ -32,8 +36,16 @@ pub struct Shape {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShapeContent {
+    /// A preset-geometry AutoShape (a:prstGeom). May carry text (a:txBody).
+    AutoShape {
+        paragraphs: Vec<SlideParagraph>,
+    },
     TextBox {
         paragraphs: Vec<SlideParagraph>,
+    },
+    /// A DrawingML table (a:graphicFrame -> a:graphicData uri=.../table -> a:tbl).
+    Table {
+        table: Table,
     },
     Image {
         data: Vec<u8>,
@@ -44,6 +56,23 @@ pub enum ShapeContent {
         element_type: String,
     },
     Placeholder, // shapes we can't parse yet
+}
+
+/// A DrawingML table (a:tbl). Cell text is stored as paragraphs per cell so
+/// the run/paragraph machinery is shared with shapes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Table {
+    /// Column widths in points (a:tblGrid/a:gridCol/@w).
+    pub col_widths: Vec<f32>,
+    /// Row heights in points (a:tr/@h).
+    pub row_heights: Vec<f32>,
+    /// Cells in row-major order: rows[r][c].
+    pub rows: Vec<Vec<TableCell>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableCell {
+    pub paragraphs: Vec<SlideParagraph>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
