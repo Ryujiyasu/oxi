@@ -91,7 +91,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '25.0% (shared 1; only 1/2; diverged: HiddenHelper)',
+        '25.0% (shared 1; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {
@@ -121,6 +121,9 @@ End Function
     $divergedNames = @($jsonReport.related_modules | ForEach-Object { $_.diverged })
     if ($divergedNames -notcontains 'HiddenHelper') {
         throw "JSON related pairs did not report HiddenHelper divergence"
+    }
+    if (@($jsonReport.related_modules | Where-Object { $_.declarations_differ }).Count -ne 2) {
+        throw "JSON related pairs did not report the changed Declare context"
     }
     $variantProject = @($jsonReport.projects | Where-Object { $_.path -like '*probe-variant.xlsm' })[0]
     $variantModule = @($variantProject.modules | Where-Object { $_.name -eq 'AnalysisProbe' })[0]

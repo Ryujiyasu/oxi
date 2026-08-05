@@ -115,6 +115,9 @@ pub struct ModuleFingerprint {
     /// Order-independent hash of the whole module, so that moving a procedure
     /// does not change it.
     pub combined: u128,
+    /// Hash of declarations that affect exact module identity without changing
+    /// every procedure body (Declare, module variables, Type, Enum, events).
+    pub declarations: u128,
     pub strength: Strength,
 }
 
@@ -127,7 +130,8 @@ impl ModuleFingerprint {
 pub fn fingerprint_module(module: &Module, strength: Strength) -> ModuleFingerprint {
     let norm = strength.normalization();
     let mut procedures = Vec::new();
-    let module_context = canonical_module_context(module);
+    let module_context = canonical_procedure_context(module);
+    let declarations = canonical_module_declarations(module, norm);
 
     for item in &module.items {
         if let ModuleItem::Procedure(proc) = item {
@@ -156,10 +160,17 @@ pub fn fingerprint_module(module: &Module, strength: Strength) -> ModuleFingerpr
     if !module_context.is_empty() {
         combined ^= hash128(&module_context);
     }
+    let declarations = if declarations.is_empty() {
+        0
+    } else {
+        hash128(&declarations)
+    };
+    combined ^= declarations;
 
     ModuleFingerprint {
         procedures,
         combined,
+        declarations,
         strength,
     }
 }
@@ -180,20 +191,41 @@ pub fn canonical_procedure(proc: &Procedure, norm: Normalization) -> String {
     } else {
         proc.name.to_ascii_lowercase()
     };
-    let _ = write!(out, "{:?} {} (", proc.kind, name);
+    let _ = write!(
+        out,
+        "{:?}{} {:?} {} (",
+        proc.visibility,
+        if proc.is_static { " static" } else { "" },
+        proc.kind,
+        name
+    );
     for param in &proc.params {
-        let _ = write!(
-            out,
-            "{:?}{}{} {};",
-            param.mode,
-            if param.optional { "?" } else { "" },
-            if param.is_array { "[]" } else { "" },
-            locals.render(&param.name)
-        );
+        render_param(param, &mut locals, &mut out);
+        out.push(';');
     }
-    out.push_str(")\n");
+    out.push(')');
+    if let Some(return_type) = &proc.return_type {
+        let _ = write!(out, " as {}", return_type.name.to_ascii_lowercase());
+    }
+    out.push('\n');
     render_body(&proc.body, &mut locals, 1, &mut out);
     out
+}
+
+fn render_param(param: &Param, locals: &mut LocalNames, out: &mut String) {
+    let _ = write!(
+        out,
+        "{:?}{}{} {}:{}",
+        param.mode,
+        if param.optional { "?" } else { "" },
+        if param.is_array { "[]" } else { "" },
+        locals.render(&param.name),
+        param.type_name.name.to_ascii_lowercase()
+    );
+    if let Some(default) = &param.default {
+        out.push('=');
+        render_expr(default, locals, out);
+    }
 }
 
 fn count_statements(body: &[Statement]) -> usize {
@@ -828,6 +860,8 @@ pub struct Similarity {
     /// interchangeable but are not, which is exactly how a copy quietly
     /// diverges from its original.
     pub diverged: Vec<String>,
+    /// Module-level declarations differ even if individual procedures match.
+    pub declarations_differ: bool,
 }
 
 pub fn compare(a: &ModuleFingerprint, b: &ModuleFingerprint) -> Similarity {
@@ -859,6 +893,7 @@ pub fn compare(a: &ModuleFingerprint, b: &ModuleFingerprint) -> Similarity {
             shared as f64 / union as f64
         },
         diverged,
+        declarations_differ: a.declarations != b.declarations,
     }
 }
 
@@ -879,7 +914,7 @@ fn hash128(text: &str) -> u128 {
     ((hi as u128) << 64) | lo as u128
 }
 
-fn canonical_module_context(module: &Module) -> String {
+fn canonical_procedure_context(module: &Module) -> String {
     let mut entries = Vec::new();
     for item in &module.items {
         match item {
@@ -915,6 +950,142 @@ fn canonical_module_context(module: &Module) -> String {
         let _ = writeln!(out, "{entry}");
     }
     out
+}
+
+fn canonical_module_declarations(module: &Module, norm: Normalization) -> String {
+    let mut entries = Vec::new();
+    let module_norm = Normalization {
+        rename_locals: false,
+        ..norm
+    };
+    for item in &module.items {
+        match item {
+            ModuleItem::Option(..) | ModuleItem::DefType(_) => {}
+            ModuleItem::Variables(decl) => {
+                let mut text = format!(
+                    "modulevar {:?}{}{}",
+                    decl.visibility,
+                    if decl.is_static { " static" } else { "" },
+                    if decl.is_const { " const" } else { "" }
+                );
+                let mut locals = LocalNames::new(module_norm);
+                for item in &decl.items {
+                    text.push(' ');
+                    render_module_var_item(item, &mut locals, &mut text);
+                }
+                entries.push(text);
+            }
+            ModuleItem::Type(def) => {
+                let mut text = format!(
+                    "type {:?} {}",
+                    def.visibility,
+                    def.name.to_ascii_lowercase()
+                );
+                let mut locals = LocalNames::new(module_norm);
+                for field in &def.fields {
+                    text.push(' ');
+                    render_module_var_item(field, &mut locals, &mut text);
+                }
+                entries.push(text);
+            }
+            ModuleItem::Enum(def) => {
+                let mut text = format!(
+                    "enum {:?} {}",
+                    def.visibility,
+                    def.name.to_ascii_lowercase()
+                );
+                let mut locals = LocalNames::new(module_norm);
+                for (name, value) in &def.members {
+                    let _ = write!(text, " {}", name.to_ascii_lowercase());
+                    if let Some(value) = value {
+                        text.push('=');
+                        render_expr(value, &mut locals, &mut text);
+                    }
+                }
+                entries.push(text);
+            }
+            ModuleItem::ExternalProc(proc) => {
+                let mut text = format!(
+                    "declare {:?}{} {} {} lib ",
+                    proc.visibility,
+                    if proc.ptr_safe { " ptrsafe" } else { "" },
+                    if proc.is_function { "function" } else { "sub" },
+                    proc.name.to_ascii_lowercase()
+                );
+                render_literal(&Literal::Str(proc.lib.clone()), module_norm, &mut text);
+                if let Some(alias) = &proc.alias {
+                    text.push_str(" alias ");
+                    render_literal(&Literal::Str(alias.clone()), module_norm, &mut text);
+                }
+                text.push('(');
+                let mut locals = LocalNames::new(module_norm);
+                for param in &proc.params {
+                    render_param(param, &mut locals, &mut text);
+                    text.push(';');
+                }
+                text.push(')');
+                if let Some(return_type) = &proc.return_type {
+                    let _ = write!(text, " as {}", return_type.name.to_ascii_lowercase());
+                }
+                entries.push(text);
+            }
+            ModuleItem::Implements { interface, .. } => {
+                entries.push(format!("implements {}", interface.to_ascii_lowercase()));
+            }
+            ModuleItem::Event { name, params, .. } => {
+                let mut text = format!("event {}(", name.to_ascii_lowercase());
+                let mut locals = LocalNames::new(module_norm);
+                for param in params {
+                    render_param(param, &mut locals, &mut text);
+                    text.push(';');
+                }
+                text.push(')');
+                entries.push(text);
+            }
+            ModuleItem::Unknown { text, .. } if !text.trim_start().starts_with('\'') => {
+                entries.push(format!("unparsed module {}", text.to_ascii_lowercase()));
+            }
+            ModuleItem::Attribute { .. }
+            | ModuleItem::Procedure(_)
+            | ModuleItem::Unknown { .. } => {}
+        }
+    }
+    entries.sort_unstable();
+    entries.dedup();
+
+    let mut out = String::new();
+    for entry in entries {
+        let _ = writeln!(out, "{entry}");
+    }
+    out
+}
+
+fn render_module_var_item(item: &VarItem, locals: &mut LocalNames, out: &mut String) {
+    if item.with_events {
+        out.push_str("withevents ");
+    }
+    let _ = write!(
+        out,
+        "{}:{}",
+        item.name.to_ascii_lowercase(),
+        item.type_name.name.to_ascii_lowercase()
+    );
+    if let Some(bounds) = &item.array_bounds {
+        out.push('[');
+        for bound in bounds {
+            if let Some(lower) = &bound.lower {
+                render_expr(lower, locals, out);
+                out.push_str(" to ");
+            }
+            render_expr(&bound.upper, locals, out);
+            out.push(';');
+        }
+        out.push(']');
+    }
+    if let Some(value) = &item.value {
+        out.push('=');
+        render_expr(value, locals, out);
+    }
 }
 
 #[cfg(test)]
@@ -1244,6 +1415,84 @@ Sub D()\nx = 4\nEnd Sub";
             assert_ne!(left.combined, right.combined);
             assert_ne!(left.procedures[0].hash, right.procedures[0].hash);
         }
+    }
+
+    #[test]
+    fn procedure_signatures_are_fingerprinted() {
+        let base =
+            "Private Function Convert(Optional ByVal value As Long = 1) As Long\nEnd Function";
+        for different in [
+            "Private Function Convert(Optional ByVal value As String = 1) As Long\nEnd Function",
+            "Private Function Convert(Optional ByVal value As Long = 1) As String\nEnd Function",
+            "Public Function Convert(Optional ByVal value As Long = 1) As Long\nEnd Function",
+            "Private Static Function Convert(Optional ByVal value As Long = 1) As Long\nEnd Function",
+        ] {
+            assert_ne!(
+                fp(base, Strength::Standard).combined,
+                fp(different, Strength::Standard).combined
+            );
+        }
+
+        let changed_default =
+            "Private Function Convert(Optional ByVal value As Long = 2) As Long\nEnd Function";
+        assert_ne!(
+            fp(base, Strength::Standard).combined,
+            fp(changed_default, Strength::Standard).combined
+        );
+        assert_eq!(
+            fp(base, Strength::Loose).combined,
+            fp(changed_default, Strength::Loose).combined
+        );
+    }
+
+    #[test]
+    fn module_declarations_are_fingerprinted() {
+        let procedure = "\nSub T()\nEnd Sub";
+        for (left, right) in [
+            (
+                "Private Const Limit As Long = 1",
+                "Private Const Limit As Long = 2",
+            ),
+            (
+                "Private Declare PtrSafe Sub Sleep Lib \"kernel32\" (ByVal ms As Long)",
+                "Private Declare PtrSafe Sub Sleep Lib \"user32\" (ByVal ms As Long)",
+            ),
+            (
+                "Private Type Pair\nLeft As Long\nEnd Type",
+                "Private Type Pair\nLeft As String\nEnd Type",
+            ),
+            (
+                "Private Enum State\nReady = 1\nEnd Enum",
+                "Private Enum State\nReady = 2\nEnd Enum",
+            ),
+            ("Implements First.Contract", "Implements Second.Contract"),
+            (
+                "Public Event Ready(ByVal value As Long)",
+                "Public Event Ready(ByVal value As String)",
+            ),
+        ] {
+            let left = fp(&format!("{left}{procedure}"), Strength::Standard);
+            let right = fp(&format!("{right}{procedure}"), Strength::Standard);
+            assert_ne!(
+                left.combined, right.combined,
+                "declaration difference was erased"
+            );
+            assert_eq!(
+                left.procedures[0].hash, right.procedures[0].hash,
+                "module declarations should not erase procedure overlap"
+            );
+            assert!(compare(&left, &right).declarations_differ);
+        }
+    }
+
+    #[test]
+    fn module_comments_do_not_change_fingerprints() {
+        let plain = "Option Explicit\nSub T()\nEnd Sub";
+        let commented = "' module documentation\nOption Explicit\nSub T()\nEnd Sub";
+        assert_eq!(
+            fp(plain, Strength::Strict).combined,
+            fp(commented, Strength::Strict).combined
+        );
     }
 
     #[test]

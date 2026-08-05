@@ -224,6 +224,7 @@ pub(crate) fn inventory_json(input: &str) -> Result<(), String> {
                 "only_right": pair.similarity.only_b,
                 "jaccard": pair.similarity.jaccard,
                 "diverged": pair.similarity.diverged,
+                "declarations_differ": pair.similarity.declarations_differ,
             })
         })
         .collect();
@@ -328,7 +329,7 @@ fn duplicate_module_groups(reports: &[ProjectReport]) -> Vec<Vec<String>> {
     let mut groups: BTreeMap<u128, Vec<String>> = BTreeMap::new();
     for report in reports {
         for module in &report.modules {
-            if module.fingerprint.procedures.is_empty() {
+            if module.fingerprint.procedures.is_empty() && module.fingerprint.declarations == 0 {
                 continue;
             }
             groups
@@ -358,8 +359,13 @@ fn print_related_modules(reports: &[ProjectReport]) {
         } else {
             format!("; diverged: {}", pair.similarity.diverged.join(", "))
         };
+        let declarations = if pair.similarity.declarations_differ {
+            "; declarations differ"
+        } else {
+            ""
+        };
         println!(
-            "  {} <> {}: {:.1}% (shared {}; only {}/{}{diverged})",
+            "  {} <> {}: {:.1}% (shared {}; only {}/{}{diverged}{declarations})",
             pair.left,
             pair.right,
             pair.similarity.jaccard * 100.0,
