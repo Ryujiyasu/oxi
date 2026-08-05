@@ -5,6 +5,7 @@
 $ErrorActionPreference = 'Stop'
 $probeRoot = Join-Path ([IO.Path]::GetTempPath()) ("oxivba-xlsm-analysis-" + [guid]::NewGuid().ToString('N'))
 $workbookPath = Join-Path $probeRoot 'probe.xlsm'
+$workbookCopyPath = Join-Path $probeRoot 'probe-copy.xlsm'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $cliPath = Join-Path $repoRoot 'target\debug\oxidocs.exe'
 $excel = $null
@@ -63,6 +64,23 @@ End Function
     }
 
     $output.TrimEnd()
+    Copy-Item -LiteralPath $workbookPath -Destination $workbookCopyPath
+    $inventory = (& $cliPath vba-inventory $probeRoot | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "vba-inventory failed with exit code $LASTEXITCODE"
+    }
+    $inventoryExpectations = @(
+        'Structurally identical modules (standard fingerprint):',
+        'probe.xlsm::AnalysisProbe',
+        'probe-copy.xlsm::AnalysisProbe',
+        'Inventory: 2 succeeded, 0 failed'
+    )
+    foreach ($expected in $inventoryExpectations) {
+        if (-not $inventory.Contains($expected)) {
+            throw "Expected inventory fragment not found: $expected`n$inventory"
+        }
+    }
+    $inventory.TrimEnd()
     Write-Output 'COM XLSM extraction and analysis probe: PASS'
 }
 finally {
