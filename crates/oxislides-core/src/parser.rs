@@ -158,6 +158,18 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         in_spc_bef = false;
                     }
                     "spcBef" if in_level => in_spc_bef = true,
+                    // a:defRPr/@sz (hundredths of a point) — the placeholder
+                    // default font size for this outline level (Spec #5). The
+                    // level's own paragraph run properties override it at
+                    // render time; a layout-level txStyles is NOT inherited
+                    // (Word render-truth, phfs probe).
+                    "defRPr" if in_level => {
+                        if let Some(sz) = get_attr(&e, "sz") {
+                            if let Ok(v) = sz.parse::<f32>() {
+                                cur_level.font_size = Some(v / 100.0);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

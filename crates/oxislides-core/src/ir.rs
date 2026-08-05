@@ -52,6 +52,14 @@ pub struct MasterStyleLevel {
     /// advance (e.g. 0.2 = 20000). None = no spcBef on this level.
     #[serde(default)]
     pub spc_bef_pct: Option<f32>,
+    /// a:defRPr/@sz in points — the placeholder default font size for this
+    /// outline level. None = no explicit size (engine default 18pt applies).
+    /// Word render-truth (phfs probe, 2026-08): a body placeholder inherits
+    /// the MASTER txStyles bodyStyle level size (layout txStyles is ignored);
+    /// a title placeholder inherits master titleStyle. A run's explicit sz
+    /// always wins.
+    #[serde(default)]
+    pub font_size: Option<f32>,
 }
 
 pub fn default_l_ins() -> f32 {

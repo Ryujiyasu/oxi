@@ -146,7 +146,9 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                     let mut cursor_pt = sh.y + sh.t_ins;
                                     let master_ctx: &Vec<MasterStyleLevel> =
                                         match sh.ph_type.as_deref() {
-                                            Some("title") => &pres.master_styles.title,
+                                            Some("title") | Some("ctrTitle") => {
+                                                &pres.master_styles.title
+                                            }
                                             Some(_) => &pres.master_styles.body,
                                             None => &pres.master_styles.other,
                                         };
@@ -435,16 +437,30 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             + ((sh.width - sh.r_ins) as f64 * scale).round() as i32;
                         let mut cursor_pt = sh.y + sh.t_ins;
                         let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
-                            Some("title") => &pres.master_styles.title,
+                            Some("title") | Some("ctrTitle") => &pres.master_styles.title,
                             Some(_) => &pres.master_styles.body,
                             None => &pres.master_styles.other,
                         };
                         for (pi, p) in paragraphs.iter().enumerate() {
+                            // Effective font size: a run's explicit sz wins (the
+                            // max over runs); else the master txStyles level
+                            // default (Spec #5, phfs probe: V2 layout sz is
+                            // ignored, V3 run 14pt overrides master 32pt); else
+                            // the engine default 18pt.
+                            let m_fs = if master_ctx.is_empty() {
+                                None
+                            } else {
+                                master_ctx[(p.lvl as usize).min(master_ctx.len() - 1)]
+                                    .font_size
+                            };
                             let fs = p
                                 .runs
                                 .iter()
                                 .filter_map(|r| r.font_size)
-                                .fold(18.0, f32::max);
+                                .fold(None, |acc: Option<f32>, x| {
+                                    Some(acc.map_or(x, |a| a.max(x)))
+                                })
+                                .unwrap_or(m_fs.unwrap_or(18.0));
                             let family = p
                                 .runs
                                 .iter()
@@ -867,19 +883,6 @@ fn layout_paragraph_baselines(
     master: &[MasterStyleLevel],
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
-    let fs = para
-        .runs
-        .iter()
-        .filter_map(|r| r.font_size)
-        .fold(18.0, f32::max);
-    let n = para.line_spacing.unwrap_or(1.0);
-    let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
-    let family = para
-        .runs
-        .iter()
-        .find_map(|r| r.font_family.clone())
-        .unwrap_or_else(|| default_family.to_string());
-
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = if master.is_empty() {
         MasterStyleLevel::default()
@@ -887,6 +890,22 @@ fn layout_paragraph_baselines(
         let idx = (para.lvl as usize).min(master.len() - 1);
         master[idx].clone()
     };
+    // Effective font size: a run's explicit sz wins (the max over runs);
+    // otherwise the master txStyles level default (Spec #5, phfs probe: V3
+    // run 14pt overrides master 32pt); else the engine default.
+    let fs = para
+        .runs
+        .iter()
+        .filter_map(|r| r.font_size)
+        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))))
+        .unwrap_or(m.font_size.unwrap_or(18.0));
+    let n = para.line_spacing.unwrap_or(1.0);
+    let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+    let family = para
+        .runs
+        .iter()
+        .find_map(|r| r.font_family.clone())
+        .unwrap_or_else(|| default_family.to_string());
     let mar_l = para.mar_l.unwrap_or(m.mar_l);
     let indent = para.indent.unwrap_or(m.indent);
     let bullet = if matches!(para.bullet, SlideBullet::Inherit) {
