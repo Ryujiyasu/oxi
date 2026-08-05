@@ -144,6 +144,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                             if let Some(paragraphs) = p.get_mut("paragraphs") {
                                 if let Some(arr) = paragraphs.as_array_mut() {
                                     let mut cursor_pt = sh.y + sh.t_ins;
+                                    let anchor_off = compute_shape_anchor_off(dc, pres, sh);
                                     let master_ctx: &Vec<MasterStyleLevel> =
                                         match sh.ph_type.as_deref() {
                                             Some("title") | Some("ctrTitle") => {
@@ -166,6 +167,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 sh.l_ins,
                                                 sh.r_ins,
                                                 &master_ctx[..],
+                                                anchor_off,
                                             );
                                             para_json["line_baselines"] = json!(
                                                 bases
@@ -221,6 +223,103 @@ fn sh_para(content: &ShapeContent, i: usize) -> Option<&oxislides_core::ir::Slid
     }
 }
 
+/// All paragraphs of a text shape, or None (non-text shapes).
+fn sh_paragraphs(content: &ShapeContent) -> Option<&Vec<oxislides_core::ir::SlideParagraph>> {
+    match content {
+        ShapeContent::TextBox { paragraphs } | ShapeContent::AutoShape { paragraphs } => {
+            Some(paragraphs)
+        }
+        _ => None,
+    }
+}
+
+/// Spec #6: the vertical-anchor offset for a text shape.
+///
+/// `a:bodyPr/@anchor` (resolved through the placeholder chain by the parser,
+/// stored on `Shape.anchor`) shifts the whole text block within the inner area
+/// (shape minus t_ins/b_ins):
+///   * "ctr" -> offset = (inner_h - block_h) / 2  (vertically centred)
+///   * "b"   -> offset = (inner_h - block_h)      (pushed to the bottom)
+///   * "t" / None -> 0.0 (top-aligned; the default)
+///
+/// `block_h` is the measured height of the text block = the cursor advance
+/// across all paragraphs with anchor_off = 0, MINUS the first paragraph's
+/// `first_off` (the ascent-based first-line placement is not part of the block
+/// height — the centring law is `baseline = inner_top + (inner_h - block_h)/2
+/// + first_line_ascent`, anchor_probe / anchor_trigger render-truth).
+///
+/// When the block is taller than the inner area the offset clamps to 0
+/// (top-aligned; conservative — overflow behaviour not yet measured).
+#[cfg(windows)]
+fn compute_shape_anchor_off(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    pres: &Presentation,
+    sh: &Shape,
+) -> f32 {
+    let anchor = sh.anchor.as_deref();
+    if anchor != Some("ctr") && anchor != Some("b") {
+        return 0.0;
+    }
+    let Some(paragraphs) = sh_paragraphs(&sh.content) else {
+        return 0.0;
+    };
+    if paragraphs.is_empty() {
+        return 0.0;
+    }
+    let inner_h = (sh.height - sh.t_ins - sh.b_ins).max(0.0);
+    let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
+        Some("title") | Some("ctrTitle") => &pres.master_styles.title,
+        Some(_) => &pres.master_styles.body,
+        None => &pres.master_styles.other,
+    };
+    let def_family = resolve_font(pres, sh);
+    let mut cursor_pt = 0.0_f32;
+    let scale = 1.0_f64;
+    for (i, para) in paragraphs.iter().enumerate() {
+        let _ = layout_paragraph_baselines(
+            dc,
+            para,
+            &mut cursor_pt,
+            sh.width,
+            scale,
+            i == 0,
+            &def_family,
+            sh.l_ins,
+            sh.r_ins,
+            &master_ctx[..],
+            0.0,
+        );
+    }
+    // block_h = the block's advance minus the first paragraph's first_off.
+    let para = &paragraphs[0];
+    let fs = para
+        .runs
+        .iter()
+        .filter_map(|r| r.font_size)
+        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))))
+        .unwrap_or(master_ctx.first().and_then(|m| m.font_size).unwrap_or(18.0));
+    let first_off = {
+        let n = para.line_spacing.unwrap_or(1.0);
+        let family = para
+            .runs
+            .iter()
+            .find_map(|r| r.font_family.clone())
+            .unwrap_or_else(|| def_family.clone());
+        if (n - 1.0).abs() > 1e-4 {
+            0.75 * fs * 1.2 * n
+        } else {
+            font_baseline_offset_em(&family) * fs
+        }
+    };
+    let block_h = (cursor_pt - first_off).max(0.0);
+    let extra = (inner_h - block_h).max(0.0);
+    if anchor == Some("ctr") {
+        extra / 2.0
+    } else {
+        extra
+    }
+}
+
 /// Theme-default font resolution (Ra loop, theme_default probes, PPTX COM/PDF
 /// render-truth): a run with NO explicit `font.name` is rendered in the theme
 /// font for its context —
@@ -232,17 +331,24 @@ fn sh_para(content: &ShapeContent, i: usize) -> Option<&oxislides_core::ir::Slid
 /// over the theme; this function is only the fallback for unset runs.
 fn resolve_font(pres: &Presentation, sh: &Shape) -> String {
     match sh.ph_type.as_deref() {
-        Some("title") => pres.major_font.clone(),
+        // A centered title placeholder is still a TITLE: it uses the theme
+        // MAJOR font like a plain "title" (Word render-truth, anchor_trigger
+        // V4: ctrTitle renders in Georgia = the theme major face).
+        Some("title") | Some("ctrTitle") => pres.major_font.clone(),
         _ => pres.minor_font.clone(),
     }
 }
 
-fn alignment_str(a: SlideAlignment) -> &'static str {
+fn alignment_str(a: Option<SlideAlignment>) -> &'static str {
     match a {
-        SlideAlignment::Left => "left",
-        SlideAlignment::Center => "center",
-        SlideAlignment::Right => "right",
-        SlideAlignment::Justify => "justify",
+        Some(SlideAlignment::Left) => "left",
+        Some(SlideAlignment::Center) => "center",
+        Some(SlideAlignment::Right) => "right",
+        Some(SlideAlignment::Justify) => "justify",
+        // Spec #6: a paragraph with no alignment anywhere in the resolution
+        // chain (run -> paragraph -> master txStyles level) is "inherit" in
+        // the dump — the renderer resolves it per the chain.
+        None => "inherit",
     }
 }
 
@@ -327,6 +433,11 @@ fn shape_json(sh: &Shape) -> Value {
         "fill_color": sh.fill_color,
         "border_color": sh.border_color,
         "border_width": sh.border_width,
+        "anchor": sh.anchor,
+        "l_ins": sh.l_ins,
+        "r_ins": sh.r_ins,
+        "t_ins": sh.t_ins,
+        "b_ins": sh.b_ins,
         "content": extra,
     })
 }
@@ -436,6 +547,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let right_x = x
                             + ((sh.width - sh.r_ins) as f64 * scale).round() as i32;
                         let mut cursor_pt = sh.y + sh.t_ins;
+                        let anchor_off = compute_shape_anchor_off(mem_dc, pres, sh);
                         let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
                             Some("title") | Some("ctrTitle") => &pres.master_styles.title,
                             Some(_) => &pres.master_styles.body,
@@ -447,12 +559,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // default (Spec #5, phfs probe: V2 layout sz is
                             // ignored, V3 run 14pt overrides master 32pt); else
                             // the engine default 18pt.
-                            let m_fs = if master_ctx.is_empty() {
+                            let m = if master_ctx.is_empty() {
                                 None
                             } else {
-                                master_ctx[(p.lvl as usize).min(master_ctx.len() - 1)]
-                                    .font_size
+                                Some(&master_ctx[(p.lvl as usize).min(master_ctx.len() - 1)])
                             };
+                            let m_fs = m.and_then(|mm| mm.font_size);
                             let fs = p
                                 .runs
                                 .iter()
@@ -478,6 +590,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 sh.l_ins,
                                 sh.r_ins,
                                 &master_ctx[..],
+                                anchor_off,
                             );
                             if let Some(m) = &marker {
                                 let marker_x =
@@ -493,10 +606,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     scale,
                                 );
                             }
-                            let is_justify = matches!(
-                                p.alignment,
-                                oxislides_core::ir::SlideAlignment::Justify
-                            );
+                            // Spec #6: horizontal alignment resolution — a
+                            // paragraph with no explicit alignment inherits
+                            // the master txStyles level's algn (then Left).
+                            let align = p
+                                .alignment
+                                .unwrap_or(m.and_then(|mm| mm.algn).unwrap_or(SlideAlignment::Left));
+                            let is_justify = matches!(align, SlideAlignment::Justify);
                             let n_lines = lines.len();
                             for (i, (line_text, baseline, x_off)) in
                                 lines.into_iter().enumerate()
@@ -881,6 +997,7 @@ fn layout_paragraph_baselines(
     l_ins: f32,
     r_ins: f32,
     master: &[MasterStyleLevel],
+    anchor_off: f32,
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
@@ -923,7 +1040,14 @@ fn layout_paragraph_baselines(
             *cursor_pt += pct * fs * 1.2 * n;
         }
     }
-    let text_area_top = *cursor_pt;
+    // Spec #6: vertical anchoring (a:bodyPr/@anchor resolved through the
+    // placeholder chain). `anchor_off` shifts the first baseline of the whole
+    // text block: anchor="ctr" centres the block in the inner area (offset
+    // (inner_h - block_h)/2), anchor="b" pushes it to the bottom (inner_h -
+    // block_h). It applies only to the FIRST paragraph's first line — the
+    // cursor advance after the block must NOT re-apply it (it is baked into
+    // `text_area_top`).
+    let text_area_top = *cursor_pt + if is_first { anchor_off } else { 0.0 };
     let effective_width = (shape_width - l_ins - r_ins).max(0.0);
     // gdi_measure_text_px requires the target font to be selected into the DC;
     // otherwise the wrap measures with the DC default font and packs far too
@@ -988,13 +1112,18 @@ fn layout_paragraph_baselines(
         // to the GDI measurement only for unsupported fonts/characters.
         let line_w = font_adv::line_hmtx_width_pt(line, fs, &family)
             .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32);
-        let is_justify_last =
-            matches!(para.alignment, oxislides_core::ir::SlideAlignment::Justify)
-                && i + 1 == n_lines;
-        let align_off = match para.alignment {
-            oxislides_core::ir::SlideAlignment::Center => (area_w - line_w).max(0.0) / 2.0,
-            oxislides_core::ir::SlideAlignment::Right => (area_w - line_w).max(0.0),
-            oxislides_core::ir::SlideAlignment::Justify if is_justify_last => 0.0,
+        // Spec #6: horizontal alignment resolution — a paragraph with no
+        // explicit alignment inherits the master txStyles level's algn (then
+        // the default Left). The run level carries no alignment; the chain is
+        // paragraph -> master txStyles level.
+        let align = para
+            .alignment
+            .unwrap_or(m.algn.unwrap_or(SlideAlignment::Left));
+        let is_justify_last = matches!(align, SlideAlignment::Justify) && i + 1 == n_lines;
+        let align_off = match align {
+            SlideAlignment::Center => (area_w - line_w).max(0.0) / 2.0,
+            SlideAlignment::Right => (area_w - line_w).max(0.0),
+            SlideAlignment::Justify if is_justify_last => 0.0,
             _ => 0.0,
         };
         if i == 0 {

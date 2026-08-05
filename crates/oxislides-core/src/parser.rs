@@ -154,6 +154,12 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                                 cur_level.indent = emu_to_pt(v);
                             }
                         }
+                        // Spec #6: a:lvlNpPr/@algn — inherited horizontal
+                        // alignment (titleStyle lvl1pPr algn="ctr" centres
+                        // title placeholders).
+                        if let Some(algn) = get_attr(&e, "algn") {
+                            cur_level.algn = Some(parse_alignment_attr(&algn));
+                        }
                         in_level = true;
                         in_spc_bef = false;
                     }
@@ -188,6 +194,10 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                             if let Ok(v) = ix.parse::<f32>() {
                                 lvl.indent = emu_to_pt(v);
                             }
+                        }
+                        // Spec #6: a:lvlNpPr/@algn on a self-closing level.
+                        if let Some(algn) = get_attr(&e, "algn") {
+                            lvl.algn = Some(parse_alignment_attr(&algn));
                         }
                         if in_body_style {
                             body.push(lvl);
@@ -319,6 +329,17 @@ fn parse_presentation_slides(xml: &str) -> Result<(Vec<SlideInfo>, f32, f32), Pp
     Ok((slides, emu_to_pt(width_emu), emu_to_pt(height_emu)))
 }
 
+/// Spec #6: parse a:a:pPr/@algn (or a:defRPr/paragraph alignment) attribute.
+/// "l" (default) / "ctr" / "r" / "just"; any unknown value is treated as Left.
+fn parse_alignment_attr(a: &str) -> SlideAlignment {
+    match a {
+        "ctr" => SlideAlignment::Center,
+        "r" => SlideAlignment::Right,
+        "just" => SlideAlignment::Justify,
+        _ => SlideAlignment::Left,
+    }
+}
+
 /// Parse a single slide XML into shapes.
 fn parse_slide(
     xml: &str,
@@ -326,6 +347,7 @@ fn parse_slide(
     archive: &mut OoxmlArchive,
     slide_rels_path: &str,
     master_ph_geoms: &HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
+    master_ph_anchors: &HashMap<(Option<String>, Option<String>), String>,
 ) -> Result<Slide, PptxError> {
     // Parse slide relationships for image resolution
     let rels = if let Ok(Some(rels_xml)) = archive.try_read_part(slide_rels_path) {
@@ -340,19 +362,25 @@ fn parse_slide(
     // follow-up: when the layout placeholder also lacks an explicit xfrm, fall
     // back to the slideMaster's placeholder geometry (the master ph carries the
     // authoritative xfrm for layout-less placeholder slots).
-    let layout_ph_geoms: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> = {
-        let mut map = HashMap::new();
+    let (layout_ph_geoms, layout_ph_anchors): (
+        HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
+        HashMap<(Option<String>, Option<String>), String>,
+    ) = {
+        let mut geoms = HashMap::new();
+        let mut anchors = HashMap::new();
         for rel in rels.values() {
             if rel.rel_type.ends_with("/slideLayout") {
                 let layout_path =
                     resolve_slide_relative_path(slide_rels_path, &rel.target);
                 if let Ok(Some(layout_xml)) = archive.try_read_part(&layout_path) {
-                    map = parse_layout_ph_geoms(&layout_xml).unwrap_or_default();
+                    let (g, a) = parse_layout_ph_info(&layout_xml).unwrap_or_default();
+                    geoms = g;
+                    anchors = a;
                 }
                 break;
             }
         }
-        map
+        (geoms, anchors)
     };
 
     let mut reader = Reader::from_str(xml);
@@ -385,6 +413,9 @@ fn parse_slide(
     let mut shape_ph_type: Option<String> = None;
     let mut shape_ph_idx: Option<String> = None;
     let mut shape_has_xfrm = false;
+    // Spec #6: vertical text-anchor from the shape's own a:bodyPr/@anchor
+    // (resolved through the placeholder chain at shape end).
+    let mut shape_anchor: Option<String> = None;
 
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
@@ -401,7 +432,9 @@ fn parse_slide(
     // Paragraph state
     let mut in_paragraph = false;
     let mut para_runs: Vec<SlideRun> = Vec::new();
-    let mut para_alignment = SlideAlignment::default();
+    // Spec #6: paragraph alignment is Option — None = not specified on the
+    // paragraph (the master txStyles level alignment applies at render time).
+    let mut para_alignment: Option<SlideAlignment> = None;
     // Spec #4: paragraph spacing (a:pPr/a:lnSpc, a:spcBef, a:spcAft)
     let mut para_line_spacing: Option<f32> = None;
     let mut para_space_before: Option<f32> = None;
@@ -476,6 +509,7 @@ fn parse_slide(
                         shape_r_ins = 7.2;
                         shape_t_ins = 3.6;
                         shape_b_ins = 3.6;
+                        shape_anchor = None;
                     }
                     "graphicFrame" if in_sp_tree => {
                         // A graphicFrame (table/chart/SmartArt). Reuse the shape
@@ -511,6 +545,7 @@ fn parse_slide(
                         shape_r_ins = 7.2;
                         shape_t_ins = 3.6;
                         shape_b_ins = 3.6;
+                        shape_anchor = None;
                     }
                     "tbl" if in_graphic_frame => {
                         in_table = true;
@@ -612,7 +647,7 @@ fn parse_slide(
                     "p" if in_shape => {
                         in_paragraph = true;
                         para_runs.clear();
-                        para_alignment = SlideAlignment::default();
+                        para_alignment = None;
                         para_line_spacing = None;
                         para_space_before = None;
                         para_space_after = None;
@@ -647,15 +682,18 @@ fn parse_slide(
                                 shape_b_ins = emu_to_pt(v);
                             }
                         }
+                        // Spec #6: a:bodyPr/@anchor — vertical text anchoring.
+                        // "t" (top) is the default; a value here wins over the
+                        // placeholder chain.
+                        if let Some(a) = get_attr(&e, "anchor") {
+                            shape_anchor = Some(a);
+                        }
                     }
                     "pPr" if in_paragraph => {
+                        // Spec #6: a:pPr/@algn — the paragraph's own alignment
+                        // (wins over the master txStyles level at render time).
                         if let Some(algn) = get_attr(&e, "algn") {
-                            para_alignment = match algn.as_str() {
-                                "ctr" => SlideAlignment::Center,
-                                "r" => SlideAlignment::Right,
-                                "just" => SlideAlignment::Justify,
-                                _ => SlideAlignment::Left,
-                            };
+                            para_alignment = Some(parse_alignment_attr(&algn));
                         }
                         // Spec #8: outline level + indents (a:pPr/@lvl/@marL/@indent)
                         if let Some(lvl) = get_attr(&e, "lvl") {
@@ -886,15 +924,14 @@ fn parse_slide(
                                 shape_b_ins = emu_to_pt(v);
                             }
                         }
+                        // Spec #6: a:bodyPr/@anchor — vertical text anchoring.
+                        if let Some(a) = get_attr(&e, "anchor") {
+                            shape_anchor = Some(a);
+                        }
                     }
                     "pPr" if in_paragraph => {
                         if let Some(algn) = get_attr(&e, "algn") {
-                            para_alignment = match algn.as_str() {
-                                "ctr" => SlideAlignment::Center,
-                                "r" => SlideAlignment::Right,
-                                "just" => SlideAlignment::Justify,
-                                _ => SlideAlignment::Left,
-                            };
+                            para_alignment = Some(parse_alignment_attr(&algn));
                         }
                         if let Some(lvl) = get_attr(&e, "lvl") {
                             if let Ok(v) = lvl.parse::<u32>() {
@@ -1072,6 +1109,27 @@ fn parse_slide(
                             (shape_x, shape_y, shape_w, shape_h)
                         };
 
+                        // Spec #6: a:bodyPr/@anchor resolved through the placeholder
+                        // chain (slide -> layout -> master). A direct anchor on the
+                        // shape wins; otherwise a placeholder inherits the anchor
+                        // of the matching layout/master placeholder (empty bodyPr
+                        // in the chain = inherit).
+                        let resolved_anchor = match shape_anchor.take() {
+                            Some(a) => Some(a),
+                            None => {
+                                if shape_ph_type.is_some() {
+                                    lookup_ph_anchor(
+                                        &layout_ph_anchors,
+                                        master_ph_anchors,
+                                        shape_ph_type.as_ref(),
+                                        shape_ph_idx.as_ref(),
+                                    )
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+
                         shapes.push(Shape {
                             x: use_x,
                             y: use_y,
@@ -1088,6 +1146,7 @@ fn parse_slide(
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
                             b_ins: shape_b_ins,
+                            anchor: resolved_anchor,
                         });
                         in_shape = false;
                     }
@@ -1167,6 +1226,7 @@ fn parse_slide(
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
                             b_ins: shape_b_ins,
+                            anchor: None,
                         });
                     }
                     "r" if in_run => {
@@ -1211,16 +1271,29 @@ fn parse_slide(
 /// Walk each `<p:sp>` in the layout: capture the `p:ph` (type/idx, inside nvPr)
 /// and the `a:xfrm/a:off` + `a:ext`; on `sp` end, if a ph was seen AND an xfrm
 /// was seen, insert into the map. Values are converted to points.
-fn parse_layout_ph_geoms(
+/// Parse a slideLayout / slideMaster XML into its placeholder geometry map
+/// AND its placeholder bodyPr anchor map (Spec #6). An empty/absent `<a:bodyPr>`
+/// contributes no anchor (inheritance); a bodyPr with `anchor` contributes it.
+/// Returns (geoms, anchors), both keyed by (ph_type, ph_idx).
+fn parse_layout_ph_info(
     xml: &str,
-) -> Result<HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>, PptxError> {
-    let mut map: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> = HashMap::new();
+) -> Result<
+    (
+        HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
+        HashMap<(Option<String>, Option<String>), String>,
+    ),
+    PptxError,
+> {
+    let mut geoms: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> = HashMap::new();
+    let mut anchors: HashMap<(Option<String>, Option<String>), String> = HashMap::new();
     let mut reader = Reader::from_str(xml);
     let mut in_sp_tree = false;
     let mut in_sp = false;
     let mut in_xfrm = false;
+    let mut in_body_pr = false;
     let mut ph_type: Option<String> = None;
     let mut ph_idx: Option<String> = None;
+    let mut shape_anchor: Option<String> = None;
     let mut xfrm_seen = false;
     let mut x: f32 = 0.0;
     let mut y: f32 = 0.0;
@@ -1239,7 +1312,9 @@ fn parse_layout_ph_geoms(
                         in_sp = true;
                         ph_type = None;
                         ph_idx = None;
+                        shape_anchor = None;
                         xfrm_seen = false;
+                        in_body_pr = false;
                         x = 0.0;
                         y = 0.0;
                         w = 0.0;
@@ -1251,6 +1326,12 @@ fn parse_layout_ph_geoms(
                             _ => Some("obj".to_string()),
                         };
                         ph_idx = get_attr(&e, "idx");
+                    }
+                    "bodyPr" if in_sp => {
+                        in_body_pr = true;
+                        if let Some(a) = get_attr(&e, "anchor") {
+                            shape_anchor = Some(a);
+                        }
                     }
                     "xfrm" if in_sp => {
                         in_xfrm = true;
@@ -1293,6 +1374,12 @@ fn parse_layout_ph_geoms(
                         };
                         ph_idx = get_attr(&e, "idx");
                     }
+                    "bodyPr" if in_sp => {
+                        // Self-closing <a:bodyPr .../> with an anchor attribute.
+                        if let Some(a) = get_attr(&e, "anchor") {
+                            shape_anchor = Some(a);
+                        }
+                    }
                     "off" if in_xfrm => {
                         if let Some(v) = get_attr(&e, "x") {
                             if let Ok(v) = v.parse::<f32>() {
@@ -1323,16 +1410,22 @@ fn parse_layout_ph_geoms(
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "bodyPr" if in_body_pr => {
+                        in_body_pr = false;
+                    }
                     "xfrm" if in_xfrm => {
                         in_xfrm = false;
                     }
                     "sp" if in_sp => {
                         if let Some(pt) = ph_type.as_ref() {
                             if xfrm_seen {
-                                map.insert(
+                                geoms.insert(
                                     (Some(pt.clone()), ph_idx.clone()),
                                     (x, y, w, h),
                                 );
+                            }
+                            if let Some(a) = shape_anchor.take() {
+                                anchors.insert((Some(pt.clone()), ph_idx.clone()), a);
                             }
                         }
                         in_sp = false;
@@ -1348,7 +1441,7 @@ fn parse_layout_ph_geoms(
         }
     }
 
-    Ok(map)
+    Ok((geoms, anchors))
 }
 
 /// Look up a placeholder geometry with ph-key normalization, checking the
@@ -1385,6 +1478,44 @@ fn lookup_ph_geom(
         }
         if let Some(&g) = master.get(k) {
             return Some(g);
+        }
+    }
+    None
+}
+
+/// Spec #6: look up a placeholder's bodyPr anchor through the same
+/// (ph_type, ph_idx) key chain as `lookup_ph_geom` — exact key first, then
+/// the ctrTitle -> title alias, then obj/body-equivalence, then idx-only.
+/// The layout map wins over the master map. Returns None when no placeholder
+/// in the chain declares an anchor (= the bodyPr default, "t").
+fn lookup_ph_anchor(
+    layout: &HashMap<(Option<String>, Option<String>), String>,
+    master: &HashMap<(Option<String>, Option<String>), String>,
+    ph_type: Option<&String>,
+    ph_idx: Option<&String>,
+) -> Option<String> {
+    let mut keys: Vec<(Option<String>, Option<String>)> = Vec::new();
+    keys.push((ph_type.cloned(), ph_idx.cloned()));
+    // "ctrTitle" (slide) and "title" (layout/master) are the same slot.
+    if let Some(ty) = ph_type {
+        if ty == "ctrTitle" {
+            keys.push((Some("title".to_string()), ph_idx.cloned()));
+        }
+    }
+    if let Some(idx) = ph_idx {
+        let idx = idx.clone();
+        keys.push((Some("body".to_string()), Some(idx.clone())));
+        keys.push((Some("obj".to_string()), Some(idx.clone())));
+        keys.push((None, Some(idx)));
+    } else if let Some(ty) = ph_type {
+        keys.push((Some(ty.clone()), None));
+    }
+    for k in &keys {
+        if let Some(a) = layout.get(k) {
+            return Some(a.clone());
+        }
+        if let Some(a) = master.get(k) {
+            return Some(a.clone());
         }
     }
     None
@@ -1509,16 +1640,18 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         None => MasterTxStyles::default(),
     };
 
-    // 2.8. Parse the slide master placeholder geometries (Spec #8 follow-up).
-    // A layout placeholder without an explicit xfrm inherits the master's ph
-    // geometry (the master ph carries the authoritative xfrm for placeholder
-    // slots the layout leaves bare). Same (ph_type, ph_idx) map shape as the
-    // layout map; the slide->layout->master chain resolves in parse_slide.
-    let master_ph_geoms: HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)> =
-        match archive.try_read_part("ppt/slideMasters/slideMaster1.xml")? {
-            Some(master_xml) => parse_layout_ph_geoms(&master_xml).unwrap_or_default(),
-            None => Default::default(),
-        };
+    // 2.8. Parse the slide master placeholder geometries AND bodyPr anchors
+    // (Spec #8 follow-up + Spec #6). A layout placeholder without an explicit
+    // xfrm inherits the master's ph geometry; the slide->layout->master chain
+    // resolves in parse_slide. Same (ph_type, ph_idx) map shape as the layout
+    // map; the master anchors feed the anchor resolution chain the same way.
+    let (master_ph_geoms, master_ph_anchors): (
+        HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
+        HashMap<(Option<String>, Option<String>), String>,
+    ) = match archive.try_read_part("ppt/slideMasters/slideMaster1.xml")? {
+        Some(master_xml) => parse_layout_ph_info(&master_xml).unwrap_or_default(),
+        None => Default::default(),
+    };
 
     // 3. Parse each slide
     let mut slides = Vec::new();
@@ -1556,6 +1689,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
                     &mut archive,
                     &slide_rels_path,
                     &master_ph_geoms,
+                    &master_ph_anchors,
                 )?;
                 slides.push(slide);
             }

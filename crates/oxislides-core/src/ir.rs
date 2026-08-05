@@ -60,6 +60,12 @@ pub struct MasterStyleLevel {
     /// always wins.
     #[serde(default)]
     pub font_size: Option<f32>,
+    /// a:lvlNpPr/@algn — the horizontal paragraph alignment inherited from the
+    /// master txStyles level (Spec #6). None = not specified (paragraph-level
+    /// Left applies). The master titleStyle lvl1pPr carries algn="ctr", which
+    /// is what horizontally centres title placeholders (V4/P2 render-truth).
+    #[serde(default)]
+    pub algn: Option<SlideAlignment>,
 }
 
 pub fn default_l_ins() -> f32 {
@@ -117,6 +123,13 @@ pub struct Shape {
     pub t_ins: f32,
     #[serde(default = "default_b_ins")]
     pub b_ins: f32,
+    /// Vertical text-anchor (a:bodyPr/@anchor), resolved through the
+    /// placeholder chain (slide shape's own bodyPr -> layout placeholder ->
+    /// master placeholder). None = "t" (top). Spec #6 render-truth: the master
+    /// TITLE placeholder carries anchor="ctr", which vertically centres title
+    /// placeholders; layout3 title uses "t", layout8/9 "b".
+    #[serde(default)]
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,7 +176,11 @@ pub struct TableCell {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlideParagraph {
     pub runs: Vec<SlideRun>,
-    pub alignment: SlideAlignment,
+    /// Horizontal alignment (a:pPr/@algn). None = not specified on the
+    /// paragraph — the master txStyles level alignment (MasterStyleLevel.algn)
+    /// applies at render time (Spec #6).
+    #[serde(default)]
+    pub alignment: Option<SlideAlignment>,
     /// Multiple line-spacing factor `n` from `a:lnSpc/a:spcPct` (val/100000).
     /// None = no explicit lnSpc -> PowerPoint uses its default single line
     /// (measured line advance = fs*1.2).  When Some(n), the measured line
