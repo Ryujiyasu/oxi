@@ -8632,7 +8632,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         }
 
         // S1073: hand this section's trailing space-after to the next one.
-        S1073_PREV_SECTION_AFTER.with(|c| c.set(prev_space_after));
+        // Taken from the IR, not from the running `prev_space_after`: that value
+        // is zeroed by the table / image / push arms, whereas Word collapses the
+        // next section's first paragraph against this section's LAST PARAGRAPH
+        // (uk_local_spending's Annex II boundary ends in an empty Heading2 with
+        // after=120tw and Word's excess there is 12 - 6 = 6pt).
+        let s1073_tail = page
+            .blocks
+            .iter()
+            .rev()
+            .find_map(|b| match b {
+                Block::Paragraph(p) => Some(p.style.space_after.unwrap_or(0.0)),
+                _ => None,
+            })
+            .unwrap_or(prev_space_after);
+        if std::env::var("OXI_DBG1073").is_ok() {
+            eprintln!(
+                "[S1073-STORE] running={:.3} ir_tail={:.3}",
+                prev_space_after, s1073_tail
+            );
+        }
+        S1073_PREV_SECTION_AFTER.with(|c| c.set(s1073_tail));
 
         pages
     }
@@ -10565,7 +10585,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             && para.style.continuous_section_break
             && para.runs.iter().all(|r| r.text.is_empty())
         {
-            return (Vec::new(), prev_space_after, start_column);
+            // S1073: as in the S945 arm below — the box is skipped but the
+            // paragraph's own space-after is what the next paragraph (or the
+            // next section's first paragraph) collapses against.
+            if std::env::var("OXI_DBG1073").is_ok() {
+                eprintln!("[S1073-SKIP730] sa={:?} prev={:.3}", para.style.space_after, prev_space_after);
+            }
+            let sa_out = if !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1073_DISABLE").is_err()
+                && std::env::var("OXI_S816_DISABLE").is_err()
+            {
+                para.style.space_after.unwrap_or(prev_space_after)
+            } else {
+                prev_space_after
+            };
+            return (Vec::new(), sa_out, start_column);
         }
         // S945 (2026-07-19, opt-out OXI_S945_DISABLE): an EMPTY paragraph that
         // ENDS a section (in-body sectPr, any type) renders at zero height —
@@ -10578,7 +10612,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             && para.style.page_section_break
             && para.runs.iter().all(|r| r.text.is_empty())
         {
-            return (Vec::new(), prev_space_after, start_column);
+            // S1073: the box is skipped, but the paragraph's own space-after is
+            // still what the NEXT section's first paragraph collapses against.
+            // uk_local_spending's Annex II boundary is exactly this shape — an
+            // empty Heading2 carrying the sectPr with after=120tw — and Word's
+            // excess there is 12 - 6 = 6pt, which only works if the skipped
+            // paragraph's 6pt is carried.
+            if std::env::var("OXI_DBG1073").is_ok() {
+                eprintln!("[S1073-SKIP] sa={:?} prev={:.3}", para.style.space_after, prev_space_after);
+            }
+            let sa_out = if !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1073_DISABLE").is_err()
+                && std::env::var("OXI_S816_DISABLE").is_err()
+            {
+                para.style.space_after.unwrap_or(prev_space_after)
+            } else {
+                prev_space_after
+            };
+            return (Vec::new(), sa_out, start_column);
         }
         if let Some(v) = line_fn_refs_out.as_deref_mut() {
             if v.is_empty() { v.push(Vec::new()); }
@@ -10812,11 +10863,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // section top takes the full +14 because nothing in its style chain
         // declares an `after` at all.
         // Latin scope, like the pbb exception below.
-        // HELD OPT-IN `OXI_S1073=1` (default byte-identical): the model is
-        // Word-derived, but uk_local_spending still keeps one paragraph of
-        // space Word drops (PASS 1.0000 -> 0.9990), so it does not ship yet.
         let s1073 = !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S1073").is_ok()
+            && std::env::var("OXI_S1073_DISABLE").is_err()
             && std::env::var("OXI_S816_DISABLE").is_err();
         let s816_section_2_plus = body_para_index.is_some()
             && std::env::var("OXI_S816_DISABLE").is_err()
@@ -10861,6 +10909,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // At a section top the local `prev_space_after` is 0 (a fresh
                 // `layout_page`); the previous section's trailing after is
                 // still sitting in the thread-local at this point.
+                if std::env::var("OXI_DBG1073").is_ok() {
+                    eprintln!("[S1073] sect_top={} pbb={} eff={:.3} prev_sa={:.3} tls={:.3} txt={:?}",
+                        s1073_section_first_page, pbb_top, effective_spacing, prev_space_after,
+                        S1073_PREV_SECTION_AFTER.with(|c| c.get()),
+                        para.runs.iter().map(|r| r.text.as_str()).collect::<String>().chars().take(24).collect::<String>());
+                }
                 let consumed = if s1073_section_first_page {
                     prev_space_after.max(S1073_PREV_SECTION_AFTER.with(|c| c.get()))
                 } else {
