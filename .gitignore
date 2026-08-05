@@ -76,6 +76,7 @@ AGENTS_STATE.json
 # Local analysis-unit handoff (kept at repository root by workflow contract)
 /INSTRUCTIONS_FOR_*.md
 /REPORT_*.md
+/REQUEST_*.md
 /scratchpad/
 
 # Local probe/measurement working area (per-report artifact sets; regenerable
