@@ -490,6 +490,7 @@ impl Walker {
             match item {
                 ModuleItem::Option(ModuleOption::Explicit, _) => self.has_option_explicit = true,
                 ModuleItem::Option(..) => {}
+                ModuleItem::DefType(_) => {}
                 ModuleItem::Attribute { .. } | ModuleItem::Implements { .. } => {}
                 ModuleItem::Unknown { .. } => self.metrics.unparsed += 1,
                 ModuleItem::ExternalProc(d) => {
@@ -584,6 +585,18 @@ impl Walker {
             | Statement::SetAssign { target, value, .. } => {
                 self.walk_expr(target);
                 self.walk_expr(value);
+            }
+            Statement::MidAssign(mid) => {
+                self.walk_expr(&mid.target);
+                self.walk_expr(&mid.start);
+                if let Some(length) = &mid.length {
+                    self.walk_expr(length);
+                }
+                self.walk_expr(&mid.value);
+            }
+            Statement::AlignedAssign(aligned) => {
+                self.walk_expr(&aligned.target);
+                self.walk_expr(&aligned.value);
             }
             Statement::Call { target, .. } => self.walk_expr(target),
             Statement::Dim(v) => self.walk_var_decl(v),
@@ -800,6 +813,19 @@ impl Walker {
                     class: None,
                     line: span.line,
                 });
+            }
+            Statement::OnBranch(branch) => {
+                self.walk_expr(&branch.selector);
+                for label in &branch.labels {
+                    self.current_calls.insert(label.clone());
+                }
+            }
+            Statement::RaiseEvent(event) => {
+                for arg in &event.args {
+                    if let Some(value) = &arg.value {
+                        self.walk_expr(value);
+                    }
+                }
             }
             Statement::Unknown { text, span } => {
                 self.metrics.unparsed += 1;
@@ -1286,9 +1312,63 @@ mod tests {
     }
 
     #[test]
+    fn computed_on_branch_is_parsed_and_walks_its_selector() {
+        let a = analyse_src(
+            "Sub T()\n\
+             On Range(\"A1\").Value GoTo First, Second\n\
+             First:\n\
+             Second:\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert!(a.api_names.contains_key("Range.Value"));
+    }
+
+    #[test]
+    fn special_string_assignments_walk_all_expressions() {
+        let a = analyse_src(
+            "Sub T()\n\
+             Mid$(Range(\"A1\").Value, startAt, fieldLength) = replacement\n\
+             LSet target = Range(\"B1\").Value\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("Range.Value"), Some(&2));
+    }
+
+    #[test]
+    fn raiseevent_walks_argument_expressions() {
+        let a = analyse_src(
+            "Sub Fire()\n\
+             RaiseEvent Fired(42, Range(\"A1\").Value)\n\
+             RaiseEvent Ping\n\
+             End Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("Range.Value"), Some(&1));
+    }
+
+    #[test]
     fn option_explicit_is_noticed() {
         assert!(analyse_src("Option Explicit\nSub T()\nEnd Sub").has_option_explicit);
         assert!(!analyse_src("Sub T()\nEnd Sub").has_option_explicit);
+    }
+
+    #[test]
+    fn deftype_is_understood_module_context() {
+        let a = analyse_src("DefInt A-C\nDefStr S\nSub T()\nDim apple, sample\nEnd Sub");
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.metrics.procedures, 1);
+    }
+
+    #[test]
+    fn module_options_are_understood_without_becoming_api_calls() {
+        let a = analyse_src(
+            "Option Explicit\nOption Base 1\nOption Compare Text\nOption Private Module\nSub T()\nEnd Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert!(a.has_option_explicit);
+        assert!(a.api_names.is_empty());
     }
 
     #[test]

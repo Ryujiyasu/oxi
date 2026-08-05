@@ -247,6 +247,11 @@ impl<'a> Parser<'a> {
         if self.at_kw("option") {
             return self.parse_option(span);
         }
+        if let Some(type_name) = self.word_at(0).and_then(|word| def_type_name(&word)) {
+            return self
+                .parse_def_type(type_name, span)
+                .map(ModuleItem::DefType);
+        }
         if self.at_kw("implements") {
             self.pos += 1;
             let interface = self.parse_qualified_name()?;
@@ -838,13 +843,17 @@ impl<'a> Parser<'a> {
                 self.end_statement();
                 return Statement::FileReset { span };
             }
+            Some("mid") => return self.parse_mid_assign(span),
+            Some("lset") => return self.parse_aligned_assign(span, AlignmentKind::Left),
+            Some("rset") => return self.parse_aligned_assign(span, AlignmentKind::Right),
+            Some("raiseevent") => return self.parse_raise_event(span),
             Some("if") => return self.parse_if(span),
             Some("select") => return self.parse_select_case(span),
             Some("for") => return self.parse_for(span),
             Some("do") => return self.parse_do(span),
             Some("while") => return self.parse_while(span),
             Some("with") => return self.parse_with(span),
-            Some("on") => return self.parse_on_error(span),
+            Some("on") => return self.parse_on_statement(span),
             Some("resume") => {
                 self.pos += 1;
                 let target = if self.eat_kw("next") {
@@ -1082,6 +1091,37 @@ impl<'a> Parser<'a> {
     fn parse_required_file_number(&mut self) -> Option<Expr> {
         self.eat_punct(Punct::Hash).then_some(())?;
         self.parse_expr()
+    }
+
+    fn parse_def_type(&mut self, type_name: &'static str, span: Span) -> Option<DefTypeDecl> {
+        self.pos += 1;
+        let mut ranges = Vec::new();
+        loop {
+            let start = self.parse_def_type_letter()?;
+            let end = if self.eat_punct(Punct::Minus) {
+                self.parse_def_type_letter()?
+            } else {
+                start
+            };
+            ranges.push(LetterRange { start, end });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.end_statement();
+        Some(DefTypeDecl {
+            type_name: type_name.to_string(),
+            ranges,
+            span,
+        })
+    }
+
+    fn parse_def_type_letter(&mut self) -> Option<char> {
+        let name = self.parse_ident()?;
+        let mut chars = name.chars();
+        let letter = chars.next()?;
+        (chars.next().is_none() && letter.is_ascii_alphabetic())
+            .then_some(letter.to_ascii_uppercase())
     }
 
     fn parse_optional_file_number(&mut self) -> Option<Expr> {
@@ -1436,6 +1476,84 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_mid_assign(&mut self, span: Span) -> Statement {
+        self.pos += 1; // Mid
+        if matches!(self.kind(), TokenKind::TypeSuffix('$')) {
+            self.pos += 1;
+        }
+        if !self.eat_punct(Punct::LParen) {
+            return self.invalid_statement(span);
+        }
+        let Some(target) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Comma) {
+            return self.invalid_statement(span);
+        }
+        let Some(start) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        let length = if self.eat_punct(Punct::Comma) {
+            match self.parse_expr() {
+                Some(length) => Some(length),
+                None => return self.invalid_statement(span),
+            }
+        } else {
+            None
+        };
+        if !self.eat_punct(Punct::RParen) || !self.eat_punct(Punct::Eq) {
+            return self.invalid_statement(span);
+        }
+        let Some(value) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::MidAssign(MidAssignStmt {
+            target,
+            start,
+            length,
+            value,
+            span,
+        })
+    }
+
+    fn parse_aligned_assign(&mut self, span: Span, kind: AlignmentKind) -> Statement {
+        self.pos += 1; // LSet / RSet
+        let Some(target) = self.parse_postfix() else {
+            return self.invalid_statement(span);
+        };
+        if !self.eat_punct(Punct::Eq) {
+            return self.invalid_statement(span);
+        }
+        let Some(value) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        self.end_statement();
+        Statement::AlignedAssign(AlignedAssignStmt {
+            kind,
+            target,
+            value,
+            span,
+        })
+    }
+
+    fn parse_raise_event(&mut self, span: Span) -> Statement {
+        self.pos += 1; // RaiseEvent
+        let Some(name) = self.parse_ident() else {
+            return self.invalid_statement(span);
+        };
+        let args = if self.eat_punct(Punct::LParen) {
+            self.parse_arguments()
+        } else {
+            Vec::new()
+        };
+        if !self.at_eol() && !self.at_punct(Punct::Colon) {
+            return self.invalid_statement(span);
+        }
+        self.end_statement();
+        Statement::RaiseEvent(RaiseEventStmt { name, args, span })
+    }
+
     fn parse_if(&mut self, span: Span) -> Statement {
         self.pos += 1;
         let condition = self
@@ -1709,28 +1827,54 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_on_error(&mut self, span: Span) -> Statement {
+    fn parse_on_statement(&mut self, span: Span) -> Statement {
         self.pos += 1; // On
-        if !self.eat_kw("error") {
-            let (text, span) = self.consume_line();
-            return Statement::Unknown { text, span };
-        }
-        if self.eat_kw("resume") {
-            self.eat_kw("next");
+        if self.eat_kw("error") {
+            if self.eat_kw("resume") {
+                self.eat_kw("next");
+                self.end_statement();
+                return Statement::OnError(OnError::ResumeNext { span });
+            }
+            self.eat_kw("goto");
+            let target = self.parse_label_ref().unwrap_or_default();
             self.end_statement();
-            return Statement::OnError(OnError::ResumeNext { span });
+            return if target == "0" {
+                Statement::OnError(OnError::Disable { span })
+            } else {
+                Statement::OnError(OnError::Goto {
+                    label: target,
+                    span,
+                })
+            };
         }
-        self.eat_kw("goto");
-        let target = self.parse_label_ref().unwrap_or_default();
-        self.end_statement();
-        if target == "0" {
-            Statement::OnError(OnError::Disable { span })
+
+        let Some(selector) = self.parse_expr() else {
+            return self.invalid_statement(span);
+        };
+        let kind = if self.eat_kw("goto") {
+            OnBranchKind::GoTo
+        } else if self.eat_kw("gosub") {
+            OnBranchKind::GoSub
         } else {
-            Statement::OnError(OnError::Goto {
-                label: target,
-                span,
-            })
+            return self.invalid_statement(span);
+        };
+        let mut labels = Vec::new();
+        loop {
+            let Some(label) = self.parse_label_ref() else {
+                return self.invalid_statement(span);
+            };
+            labels.push(label);
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
         }
+        self.end_statement();
+        Statement::OnBranch(OnBranchStmt {
+            selector,
+            kind,
+            labels,
+            span,
+        })
     }
 
     // -- expressions -------------------------------------------------------
@@ -2100,6 +2244,26 @@ fn binary(op: BinaryOp, lhs: Expr, rhs: Expr) -> Expr {
     }
 }
 
+fn def_type_name(keyword: &str) -> Option<&'static str> {
+    match keyword {
+        "defbool" => Some("Boolean"),
+        "defbyte" => Some("Byte"),
+        "defcur" => Some("Currency"),
+        "defdate" => Some("Date"),
+        "defdbl" => Some("Double"),
+        "defdec" => Some("Decimal"),
+        "defint" => Some("Integer"),
+        "deflng" => Some("Long"),
+        "deflnglng" => Some("LongLong"),
+        "deflngptr" => Some("LongPtr"),
+        "defobj" => Some("Object"),
+        "defsng" => Some("Single"),
+        "defstr" => Some("String"),
+        "defvar" => Some("Variant"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2335,6 +2499,97 @@ mod tests {
     }
 
     #[test]
+    fn computed_on_branches_keep_kind_and_label_order() {
+        let p = only_proc(
+            "Sub T()\n\
+             On choice GoTo First, Second, 300\n\
+             On index + 1 GoSub Alpha, Beta\n\
+             End Sub",
+        );
+        match &p.body[0] {
+            Statement::OnBranch(branch) => {
+                assert_eq!(branch.kind, OnBranchKind::GoTo);
+                assert_eq!(branch.labels, ["First", "Second", "300"]);
+            }
+            other => panic!("expected computed GoTo, got {other:?}"),
+        }
+        match &p.body[1] {
+            Statement::OnBranch(branch) => {
+                assert_eq!(branch.kind, OnBranchKind::GoSub);
+                assert_eq!(branch.labels, ["Alpha", "Beta"]);
+                assert!(matches!(branch.selector, Expr::Binary { .. }));
+            }
+            other => panic!("expected computed GoSub, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn special_string_assignments_are_structured() {
+        let p = only_proc(
+            "Sub T()\n\
+             Mid$(value, 2, 3) = replacement\n\
+             Mid(value, startAt) = replacement\n\
+             LSet leftValue = sourceValue\n\
+             RSet rightValue = sourceValue\n\
+             End Sub",
+        );
+        assert_eq!(p.body.len(), 4);
+        assert!(matches!(
+            &p.body[0],
+            Statement::MidAssign(MidAssignStmt {
+                length: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            &p.body[1],
+            Statement::MidAssign(MidAssignStmt { length: None, .. })
+        ));
+        assert!(matches!(
+            &p.body[2],
+            Statement::AlignedAssign(AlignedAssignStmt {
+                kind: AlignmentKind::Left,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &p.body[3],
+            Statement::AlignedAssign(AlignedAssignStmt {
+                kind: AlignmentKind::Right,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn event_declarations_withevents_and_raiseevent_are_structured() {
+        let m = module(
+            "Public Event Fired(ByVal number As Long, ByRef text As String)\n\
+             Private WithEvents source As Publisher\n\
+             Sub Fire()\n\
+             RaiseEvent Fired(42, text)\n\
+             RaiseEvent Ping\n\
+             End Sub",
+        );
+        assert!(matches!(&m.items[0], ModuleItem::Event { name, params, .. }
+            if name == "Fired" && params.len() == 2));
+        assert!(matches!(&m.items[1], ModuleItem::Variables(decl)
+            if decl.items.len() == 1 && decl.items[0].with_events));
+        let procedure = m
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Procedure(procedure) => Some(procedure),
+                _ => None,
+            })
+            .expect("procedure");
+        assert!(matches!(&procedure.body[0], Statement::RaiseEvent(event)
+            if event.name == "Fired" && event.args.len() == 2));
+        assert!(matches!(&procedure.body[1], Statement::RaiseEvent(event)
+            if event.name == "Ping" && event.args.is_empty()));
+    }
+
+    #[test]
     fn set_assignment_is_not_ordinary_assignment() {
         let p = only_proc("Sub T()\nSet ws = Worksheets(1)\nx = 1\nEnd Sub");
         assert!(matches!(&p.body[0], Statement::SetAssign { .. }));
@@ -2535,6 +2790,67 @@ mod tests {
             assert!(matches!(&p.body[0], Statement::Open(open)
                 if open.mode == expected && open.lock == Some(FileLock::Shared)));
         }
+    }
+
+    #[test]
+    fn deftype_directives_keep_types_and_letter_ranges() {
+        let m = module(
+            "DefInt A-C, I\n\
+             DefDbl D, X-Y\n\
+             DefStr S\n\
+             DefObj O\n\
+             DefVar V-W, Z\n",
+        );
+        assert_eq!(m.items.len(), 5);
+        match &m.items[0] {
+            ModuleItem::DefType(def) => {
+                assert_eq!(def.type_name, "Integer");
+                assert_eq!(
+                    def.ranges,
+                    [
+                        LetterRange {
+                            start: 'A',
+                            end: 'C'
+                        },
+                        LetterRange {
+                            start: 'I',
+                            end: 'I'
+                        }
+                    ]
+                );
+            }
+            other => panic!("expected DefInt, got {other:?}"),
+        }
+        assert!(matches!(&m.items[1], ModuleItem::DefType(def)
+            if def.type_name == "Double" && def.ranges.len() == 2));
+        assert!(matches!(&m.items[2], ModuleItem::DefType(def) if def.type_name == "String"));
+        assert!(matches!(&m.items[3], ModuleItem::DefType(def) if def.type_name == "Object"));
+        assert!(matches!(&m.items[4], ModuleItem::DefType(def) if def.type_name == "Variant"));
+    }
+
+    #[test]
+    fn all_module_options_are_structured() {
+        let m = module(
+            "Option Explicit\n\
+             Option Base 1\n\
+             Option Compare Text\n\
+             Option Private Module\n",
+        );
+        assert!(matches!(
+            &m.items[0],
+            ModuleItem::Option(ModuleOption::Explicit, _)
+        ));
+        assert!(matches!(
+            &m.items[1],
+            ModuleItem::Option(ModuleOption::Base(1), _)
+        ));
+        assert!(
+            matches!(&m.items[2], ModuleItem::Option(ModuleOption::Compare(mode), _) if mode == "Text")
+        );
+        assert!(matches!(
+            &m.items[3],
+            ModuleItem::Option(ModuleOption::PrivateModule, _)
+        ));
     }
 
     #[test]

@@ -127,10 +127,16 @@ impl ModuleFingerprint {
 pub fn fingerprint_module(module: &Module, strength: Strength) -> ModuleFingerprint {
     let norm = strength.normalization();
     let mut procedures = Vec::new();
+    let module_context = canonical_module_context(module);
 
     for item in &module.items {
         if let ModuleItem::Procedure(proc) = item {
-            let canonical = canonical_procedure(proc, norm);
+            let procedure = canonical_procedure(proc, norm);
+            let canonical = if module_context.is_empty() {
+                procedure
+            } else {
+                format!("{module_context}{procedure}")
+            };
             procedures.push(ProcedureFingerprint {
                 name: proc.name.clone(),
                 hash: hash128(&canonical),
@@ -147,6 +153,9 @@ pub fn fingerprint_module(module: &Module, strength: Strength) -> ModuleFingerpr
         combined ^= p.hash;
     }
     combined ^= hash128(&format!("#{}", procedures.len()));
+    if !module_context.is_empty() {
+        combined ^= hash128(&module_context);
+    }
 
     ModuleFingerprint {
         procedures,
@@ -331,6 +340,27 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             render_expr(target, locals, out);
             out.push('=');
             render_expr(value, locals, out);
+        }
+        Statement::MidAssign(mid) => {
+            out.push_str("mid ");
+            render_expr(&mid.target, locals, out);
+            out.push(',');
+            render_expr(&mid.start, locals, out);
+            if let Some(length) = &mid.length {
+                out.push(',');
+                render_expr(length, locals, out);
+            }
+            out.push('=');
+            render_expr(&mid.value, locals, out);
+        }
+        Statement::AlignedAssign(aligned) => {
+            out.push_str(match aligned.kind {
+                AlignmentKind::Left => "lset ",
+                AlignmentKind::Right => "rset ",
+            });
+            render_expr(&aligned.target, locals, out);
+            out.push('=');
+            render_expr(&aligned.value, locals, out);
         }
         Statement::Call { target, .. } => {
             // `Call Foo(x)` and `Foo x` are the same call; the spelling is not
@@ -626,6 +656,36 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             };
             out.push_str(&text);
         }
+        Statement::OnBranch(branch) => {
+            out.push_str("on ");
+            render_expr(&branch.selector, locals, out);
+            out.push_str(match branch.kind {
+                OnBranchKind::GoTo => " goto",
+                OnBranchKind::GoSub => " gosub",
+            });
+            for label in &branch.labels {
+                out.push(' ');
+                out.push_str(&label.to_ascii_lowercase());
+            }
+        }
+        Statement::RaiseEvent(event) => {
+            out.push_str("raiseevent ");
+            out.push_str(&event.name.to_ascii_lowercase());
+            out.push('(');
+            for (index, arg) in event.args.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                if let Some(name) = &arg.name {
+                    out.push_str(&name.to_ascii_lowercase());
+                    out.push_str(":=");
+                }
+                if let Some(value) = &arg.value {
+                    render_expr(value, locals, out);
+                }
+            }
+            out.push(')');
+        }
         Statement::Resume { target, .. } => {
             let _ = write!(out, "resume {target:?}");
         }
@@ -814,6 +874,44 @@ fn hash128(text: &str) -> u128 {
         hi = (hi ^ (*byte as u64).rotate_left(17)).wrapping_mul(PRIME);
     }
     ((hi as u128) << 64) | lo as u128
+}
+
+fn canonical_module_context(module: &Module) -> String {
+    let mut entries = Vec::new();
+    for item in &module.items {
+        match item {
+            ModuleItem::Option(option, _) => {
+                let text = match option {
+                    ModuleOption::Explicit => "option explicit".to_string(),
+                    ModuleOption::Base(base) => format!("option base {base}"),
+                    ModuleOption::Compare(mode) => {
+                        format!("option compare {}", mode.to_ascii_lowercase())
+                    }
+                    ModuleOption::PrivateModule => "option private module".to_string(),
+                };
+                entries.push(text);
+            }
+            ModuleItem::DefType(def) => {
+                for range in &def.ranges {
+                    entries.push(format!(
+                        "deftype {} {}-{}",
+                        def.type_name.to_ascii_lowercase(),
+                        range.start,
+                        range.end
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    entries.sort_unstable();
+    entries.dedup();
+
+    let mut out = String::new();
+    for entry in entries {
+        let _ = writeln!(out, "{entry}");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1050,5 +1148,95 @@ Sub D()\nx = 4\nEnd Sub";
                 fp(different, Strength::Loosest).combined
             );
         }
+    }
+
+    #[test]
+    fn computed_branch_kind_and_label_order_are_fingerprinted() {
+        let goto = "Sub T()\nOn choice GoTo First, Second\nEnd Sub";
+        let gosub = "Sub T()\nOn choice GoSub First, Second\nEnd Sub";
+        let reordered = "Sub T()\nOn choice GoTo Second, First\nEnd Sub";
+        assert_ne!(
+            fp(goto, Strength::Loosest).combined,
+            fp(gosub, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(goto, Strength::Loosest).combined,
+            fp(reordered, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn string_assignment_kind_and_mid_length_are_fingerprinted() {
+        let mid_short = "Sub T()\nMid$(value, 2) = replacement\nEnd Sub";
+        let mid_bounded = "Sub T()\nMid$(value, 2, 3) = replacement\nEnd Sub";
+        let lset = "Sub T()\nLSet value = replacement\nEnd Sub";
+        let rset = "Sub T()\nRSet value = replacement\nEnd Sub";
+        assert_ne!(
+            fp(mid_short, Strength::Loosest).combined,
+            fp(mid_bounded, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(lset, Strength::Loosest).combined,
+            fp(rset, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn raised_event_name_and_arguments_are_fingerprinted() {
+        let fired = "Sub T()\nRaiseEvent Fired(value)\nEnd Sub";
+        let ping = "Sub T()\nRaiseEvent Ping(value)\nEnd Sub";
+        let no_args = "Sub T()\nRaiseEvent Fired\nEnd Sub";
+        assert_ne!(
+            fp(fired, Strength::Loosest).combined,
+            fp(ping, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(fired, Strength::Loosest).combined,
+            fp(no_args, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn deftype_module_context_changes_procedure_and_combined_hashes() {
+        let integer = "DefInt A-C\nSub T()\nDim apple\nEnd Sub";
+        let string = "DefStr A-C\nSub T()\nDim apple\nEnd Sub";
+        let integer_fp = fp(integer, Strength::Loosest);
+        let string_fp = fp(string, Strength::Loosest);
+        assert_ne!(integer_fp.combined, string_fp.combined);
+        assert_ne!(integer_fp.procedures[0].hash, string_fp.procedures[0].hash);
+    }
+
+    #[test]
+    fn equivalent_deftype_range_order_has_the_same_fingerprint() {
+        let first = "DefInt A-C, X-Z\nSub T()\nEnd Sub";
+        let second = "DefInt X-Z, A-C\nSub T()\nEnd Sub";
+        assert_eq!(
+            fp(first, Strength::Loosest).combined,
+            fp(second, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn module_options_change_procedure_and_combined_hashes() {
+        let base_zero = "Option Base 0\nSub T()\nDim values(3)\nEnd Sub";
+        let base_one = "Option Base 1\nSub T()\nDim values(3)\nEnd Sub";
+        let binary = "Option Compare Binary\nSub T()\nx = \"a\" = \"A\"\nEnd Sub";
+        let text = "Option Compare Text\nSub T()\nx = \"a\" = \"A\"\nEnd Sub";
+        for (left, right) in [(base_zero, base_one), (binary, text)] {
+            let left = fp(left, Strength::Loosest);
+            let right = fp(right, Strength::Loosest);
+            assert_ne!(left.combined, right.combined);
+            assert_ne!(left.procedures[0].hash, right.procedures[0].hash);
+        }
+    }
+
+    #[test]
+    fn equivalent_module_option_order_has_the_same_fingerprint() {
+        let first = "Option Explicit\nOption Base 1\nOption Compare Text\nSub T()\nEnd Sub";
+        let second = "Option Compare Text\nOption Explicit\nOption Base 1\nSub T()\nEnd Sub";
+        assert_eq!(
+            fp(first, Strength::Loosest).combined,
+            fp(second, Strength::Loosest).combined
+        );
     }
 }

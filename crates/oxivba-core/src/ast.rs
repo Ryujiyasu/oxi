@@ -56,6 +56,8 @@ pub enum ModuleItem {
         span: Span,
     },
     Option(ModuleOption, Span),
+    /// `DefInt A-C, I` and the other module-level implicit-type directives.
+    DefType(DefTypeDecl),
     /// `Dim` / `Private` / `Public` / `Const` at module level.
     Variables(VarDecl),
     Type(TypeDef),
@@ -241,6 +243,10 @@ pub enum Statement {
         width: Expr,
         span: Span,
     },
+    /// `Mid$(target, start[, length]) = replacement`.
+    MidAssign(MidAssignStmt),
+    /// `LSet target = value` or `RSet target = value`.
+    AlignedAssign(AlignedAssignStmt),
     /// `Reset`, which closes every open disk file.
     FileReset {
         span: Span,
@@ -262,6 +268,10 @@ pub enum Statement {
         span: Span,
     },
     OnError(OnError),
+    /// Computed `On expr GoTo/GoSub label, ...` dispatch.
+    OnBranch(OnBranchStmt),
+    /// `RaiseEvent Name(args)` in a class module.
+    RaiseEvent(RaiseEventStmt),
     Resume {
         target: ResumeTarget,
         span: Span,
@@ -385,6 +395,20 @@ pub struct FileInputStmt {
     pub file_number: Expr,
     pub targets: Vec<Expr>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefTypeDecl {
+    /// Canonical VBA type name (`Integer`, `String`, `Object`, ...).
+    pub type_name: String,
+    pub ranges: Vec<LetterRange>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LetterRange {
+    pub start: char,
+    pub end: char,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -534,6 +558,51 @@ pub enum OnError {
     Disable { span: Span },
     /// `On Error Resume Next`: swallow everything. Worth finding.
     ResumeNext { span: Span },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnBranchKind {
+    GoTo,
+    GoSub,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnBranchStmt {
+    pub selector: Expr,
+    pub kind: OnBranchKind,
+    /// Choice 1 selects index 0; choice 0 or greater than the list falls through.
+    pub labels: Vec<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidAssignStmt {
+    pub target: Expr,
+    pub start: Expr,
+    pub length: Option<Expr>,
+    pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignmentKind {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlignedAssignStmt {
+    pub kind: AlignmentKind,
+    pub target: Expr,
+    pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RaiseEventStmt {
+    pub name: String,
+    pub args: Vec<Argument>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
