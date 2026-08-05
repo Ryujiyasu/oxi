@@ -21,6 +21,8 @@
 //! first-line baseline from the measured models (multi: +0.75 x advance /
 //! single: +A_font x fs), space_before / space_after added per paragraph.
 
+mod font_adv;
+
 use oxislides_core::ir::{Presentation, Shape, ShapeContent, SlideAlignment};
 use serde_json::{json, Value};
 
@@ -148,11 +150,18 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 &mut cursor_pt,
                                                 sh.width,
                                                 scale,
+                                                i == 0,
                                             );
                                             para_json["line_baselines"] = json!(
                                                 bases
                                                     .iter()
-                                                    .map(|(_, b)| (b * 100.0).round() / 100.0)
+                                                    .map(|(_, b, _)| (b * 100.0).round() / 100.0)
+                                                    .collect::<Vec<_>>()
+                                            );
+                                            para_json["line_x_offsets"] = json!(
+                                                bases
+                                                    .iter()
+                                                    .map(|(_, _, x)| (x * 100.0).round() / 100.0)
                                                     .collect::<Vec<_>>()
                                             );
                                         }
@@ -393,8 +402,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                     ShapeContent::TextBox { paragraphs }
                     | ShapeContent::AutoShape { paragraphs } => {
                         let left_x = x + (MARGIN_LEFT as f64 * scale).round() as i32;
+                        let right_x = x
+                            + ((sh.width - MARGIN_RIGHT) as f64 * scale).round() as i32;
                         let mut cursor_pt = sh.y + MARGIN_TOP;
-                        for p in paragraphs {
+                        for (pi, p) in paragraphs.iter().enumerate() {
                             let fs = p
                                 .runs
                                 .iter()
@@ -412,21 +423,46 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 &mut cursor_pt,
                                 sh.width,
                                 scale,
+                                pi == 0,
                             );
-                            for (line_text, baseline) in lines {
+                            let is_justify = matches!(
+                                p.alignment,
+                                oxislides_core::ir::SlideAlignment::Justify
+                            );
+                            let n_lines = lines.len();
+                            for (i, (line_text, baseline, x_off)) in lines.into_iter().enumerate()
+                            {
                                 if line_text.trim().is_empty() {
                                     continue;
                                 }
-                                draw_text_baseline(
-                                    mem_dc,
-                                    left_x,
-                                    baseline,
-                                    &line_text,
-                                    fs,
-                                    &family,
-                                    color.as_deref(),
-                                    scale,
-                                );
+                                if is_justify && i + 1 < n_lines {
+                                    // Non-final justified line: spread the
+                                    // stretch over the inter-word gaps.
+                                    draw_text_justify(
+                                        mem_dc,
+                                        left_x,
+                                        right_x,
+                                        baseline,
+                                        &line_text,
+                                        fs,
+                                        &family,
+                                        color.as_deref(),
+                                        scale,
+                                    );
+                                } else {
+                                    let line_x = left_x
+                                        + (x_off as f64 * scale).round() as i32;
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        line_x,
+                                        baseline,
+                                        &line_text,
+                                        fs,
+                                        &family,
+                                        color.as_deref(),
+                                        scale,
+                                    );
+                                }
                             }
                         }
                     }
@@ -726,7 +762,20 @@ fn font_baseline_offset_em(family: &str) -> f32 {
 
 /// Lay out one paragraph: advance `cursor_pt` (text-area top) by space_before,
 /// wrap the run text, and return each line's (text, slide-absolute baseline in
-/// pt). Advances `cursor_pt` past the paragraph (incl. space_after).
+/// pt, x-offset from the left inset in pt). Advances `cursor_pt` past the
+/// paragraph (incl. space_after).
+///
+/// Alignment model (Ra loop, spec5a/spec5b, PowerPoint PDF render-truth):
+///   * Left      : every line starts at the left inset (x-offset 0).
+///   * Center    : each line is centred on the text area: offset = (W - w)/2.
+///   * Right     : each line ends at the right inset: offset = W - w.
+///   * Justify   : non-final lines are stretched so the last word's right edge
+///                 reaches the right inset (inter-word gaps are spread evenly,
+///                 done at draw time); the FINAL line (and a 1-line paragraph)
+///                 is left-aligned like Left.
+/// `w` is the LOGICAL line width (GetTextExtentPoint32W advance sum, spaces
+/// included); the ink bbox centre/right edge is offset by side bearings, so the
+/// rule is anchored to the logical width (wave-1 finding).
 #[cfg(windows)]
 fn layout_paragraph_baselines(
     dc: windows::Win32::Graphics::Gdi::HDC,
@@ -734,7 +783,8 @@ fn layout_paragraph_baselines(
     cursor_pt: &mut f32,
     shape_width: f32,
     scale: f64,
-) -> Vec<(String, f32)> {
+    is_first: bool,
+) -> Vec<(String, f32, f32)> {
     use windows::Win32::Graphics::Gdi::*;
     let fs = para
         .runs
@@ -760,19 +810,46 @@ fn layout_paragraph_baselines(
     let font = create_font_for(&family, fs, scale);
     let old_font = unsafe { SelectObject(dc, font) };
     let lines = gdi_wrap_lines(dc, &text, effective_width, scale);
-    let _ = unsafe { SelectObject(dc, old_font) };
+    let area_w = effective_width;
+    let n_lines = lines.len();
     let adv = fs * 1.2 * n;
     let first_off = if (n - 1.0).abs() > 1e-4 {
         0.75 * adv
     } else {
         font_baseline_offset_em(&family) * fs
     };
-    let mut out = Vec::with_capacity(lines.len());
-    for (i, line) in lines.iter().enumerate() {
-        let baseline = text_area_top + first_off + i as f32 * adv;
-        out.push((line.clone(), baseline));
+    // The baseline offset (ascent-based first-line placement) applies ONLY to
+    // the text area's FIRST line. Between paragraphs the line grid continues
+    // at the plain `adv` pitch (Word render-truth: paragraph gap == one line
+    // height when space_after == 0). So for paragraphs after the first,
+    // `cursor_pt` already sits at the first-line baseline and we must NOT add
+    // `first_off` again (that double-count was a +16.89pt gap per paragraph).
+    if is_first {
+        *cursor_pt += first_off;
     }
-    *cursor_pt = text_area_top + first_off + lines.len() as f32 * adv;
+    let mut out = Vec::with_capacity(n_lines);
+    for (i, line) in lines.iter().enumerate() {
+        let baseline = text_area_top + if is_first { first_off } else { 0.0 } + i as f32 * adv;
+        // Logical line width in pt = hmtx design-advance sum of the VISIBLE
+        // characters (trailing spaces excluded; final visible char included).
+        // GDI's measured width (hinted / pixel-snapped) over-measures a line by
+        // ~1.5-3.75pt vs PowerPoint, so we prefer the hmtx table and fall back
+        // to the GDI measurement only for unsupported fonts/characters.
+        let line_w = font_adv::line_hmtx_width_pt(line, fs, &family)
+            .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32);
+        let is_justify_last =
+            matches!(para.alignment, oxislides_core::ir::SlideAlignment::Justify)
+                && i + 1 == n_lines;
+        let x_off = match para.alignment {
+            oxislides_core::ir::SlideAlignment::Center => (area_w - line_w).max(0.0) / 2.0,
+            oxislides_core::ir::SlideAlignment::Right => (area_w - line_w).max(0.0),
+            oxislides_core::ir::SlideAlignment::Justify if is_justify_last => 0.0,
+            _ => 0.0,
+        };
+        out.push((line.clone(), baseline, x_off));
+    }
+    let _ = unsafe { SelectObject(dc, old_font) };
+    *cursor_pt = text_area_top + if is_first { first_off } else { 0.0 } + n_lines as f32 * adv;
     if let Some(sa) = para.space_after {
         *cursor_pt += sa;
     }
@@ -793,6 +870,7 @@ fn draw_text_baseline(
 ) {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
     let font = create_font_for(family, font_size, scale);
     if font.is_invalid() {
         return;
@@ -807,9 +885,141 @@ fn draw_text_baseline(
     let ascent_px = tm.tmAscent as i32;
     let y = (baseline_pt as f64 * scale).round() as i32 - ascent_px;
     let wtext: Vec<u16> = text.encode_utf16().collect();
-    unsafe {
-        let _ = TextOutW(dc, x, y, &wtext);
+    // When the family has an hmtx table, draw each char at its design
+    // advance (Dx) so glyphs land exactly where PowerPoint's PDF export
+    // places them. Otherwise fall back to the hinted GDI text.
+    if let Some(dx) = font_adv::line_hmtx_dx_px(text, font_size, family, scale) {
+        unsafe {
+            let _ = ExtTextOutW(
+                dc,
+                x,
+                y,
+                ETO_OPTIONS(0),
+                None,
+                PCWSTR(wtext.as_ptr()),
+                wtext.len() as u32,
+                Some(dx.as_ptr()),
+            );
+        }
+    } else {
+        unsafe {
+            let _ = TextOutW(dc, x, y, &wtext);
+        }
     }
+    unsafe {
+        SelectObject(dc, old_font);
+        SetTextColor(dc, old_color);
+        let _ = DeleteObject(font);
+    }
+}
+
+/// Draw a justified (non-final) line: split into words, then spread the
+/// stretch evenly over the inter-word gaps so the last word's right edge
+/// reaches `right_x` (the right text inset). The measured model: PowerPoint
+/// justify stretches the gaps between words; the final line of a paragraph is
+/// left-aligned (handled by the caller via the last-line flag).
+#[cfg(windows)]
+fn draw_text_justify(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    left_x: i32,
+    right_x: i32,
+    baseline_pt: f32,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    color: Option<&str>,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
+    let font = create_font_for(family, font_size, scale);
+    if font.is_invalid() {
+        return;
+    }
+    let rgb = color.and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
+    let old_color = unsafe { SetTextColor(dc, COLORREF(colorref(rgb.0, rgb.1, rgb.2))) };
+    let old_font = unsafe { SelectObject(dc, font) };
+    let mut tm = TEXTMETRICW::default();
+    unsafe {
+        let _ = GetTextMetricsW(dc, &mut tm);
+    }
+    let ascent_px = tm.tmAscent as i32;
+    let y = (baseline_pt as f64 * scale).round() as i32 - ascent_px;
+
+    // Split into words (ignore leading/trailing spaces).
+    let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
+    if words.len() <= 1 {
+        let wtext: Vec<u16> = text.encode_utf16().collect();
+        unsafe {
+            let _ = TextOutW(dc, left_x, y, &wtext);
+        }
+        unsafe {
+            SelectObject(dc, old_font);
+            SetTextColor(dc, old_color);
+            let _ = DeleteObject(font);
+        }
+        return;
+    }
+
+    // When the family has an hmtx table, both the natural width (from which
+    // the justify stretch is computed) and the word/gap placement use the
+    // design advance, matching PowerPoint's PDF export. Otherwise fall back
+    // to the hinted GDI metrics.
+    let hmtx = font_adv::line_hmtx_dx_px(text, font_size, family, scale).is_some();
+    let (space_w, word_ws): (i32, Vec<i32>) = if hmtx {
+        let sw = font_adv::space_hmtx_px(font_size, family, scale).unwrap_or(0);
+        let ww = words
+            .iter()
+            .map(|w| font_adv::text_hmtx_px(w, font_size, family, scale).unwrap_or(0))
+            .collect();
+        (sw, ww)
+    } else {
+        let sw = gdi_measure_text_px(dc, " ");
+        let ww = words.iter().map(|w| gdi_measure_text_px(dc, w)).collect();
+        (sw, ww)
+    };
+    let natural: i32 = word_ws.iter().sum::<i32>() + space_w * (words.len() - 1) as i32;
+    let stretch = (right_x - left_x - natural).max(0);
+    let n_gaps = (words.len() - 1) as i32;
+    let per_gap = if n_gaps > 0 { stretch / n_gaps } else { 0 };
+    let rem = if n_gaps > 0 { stretch % n_gaps } else { 0 };
+
+    let mut x = left_x;
+    for (i, word) in words.iter().enumerate() {
+        let wtext: Vec<u16> = word.encode_utf16().collect();
+        if hmtx {
+            if let Some(dx) = font_adv::line_hmtx_dx_px(word, font_size, family, scale) {
+                unsafe {
+                    let _ = ExtTextOutW(
+                        dc,
+                        x,
+                        y,
+                        ETO_OPTIONS(0),
+                        None,
+                        PCWSTR(wtext.as_ptr()),
+                        wtext.len() as u32,
+                        Some(dx.as_ptr()),
+                    );
+                }
+            } else {
+                unsafe {
+                    let _ = TextOutW(dc, x, y, &wtext);
+                }
+            }
+        } else {
+            unsafe {
+                let _ = TextOutW(dc, x, y, &wtext);
+            }
+        }
+        x += word_ws[i];
+        if i + 1 < words.len() {
+            // Spread the integer remainder over the first `rem` gaps.
+            let extra = per_gap + if (i as i32) < rem { 1 } else { 0 };
+            x += space_w + extra;
+        }
+    }
+
     unsafe {
         SelectObject(dc, old_font);
         SetTextColor(dc, old_color);
