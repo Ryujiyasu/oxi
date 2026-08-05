@@ -748,15 +748,28 @@ fn gdi_wrap_lines(
     lines
 }
 
-/// A_font = hhea_asc + hhea_lineGap (fontTools-measured), the first-line
-/// baseline offset factor for a single-spaced (n == 1) paragraph.
+/// First-line baseline offset factor (em) measured from PowerPoint render-truth
+/// (Ra loop, spec6). The first line of a single-spaced (n == 1) paragraph sits at
+/// text-area-top + em*fs.
+///
+/// Derived via two independent probes (spec6_baseline/):
+///   * multitop   — fs=192, shape top swept 12pt, 12 points/font  -> em = (X-3.6)/192
+///   * fssweep    — fs {8..192} regression, box top = 0            -> tIns = 3.6pt (margin_top
+///                  0.05in) and em (slope) confirmed independent of fs
+/// em is font-specific and constant across font size. The closed-form model
+/// `1.2 * (win_asc + 0.5) / win_total` (model1b) reproduces all six measured
+/// fonts to ~±0.0003 em, but the measured table is exact for these fonts, so it
+/// is used directly; unknown fonts fall back to the model1b-style average.
 #[cfg(windows)]
 fn font_baseline_offset_em(family: &str) -> f32 {
     match family.to_ascii_lowercase().as_str() {
-        "calibri" => 0.9707,
-        "arial" => 0.9380,
-        "times new roman" => 0.9336,
-        _ => 0.9380, // Arial-like default
+        "arial" => 0.97274,
+        "times new roman" => 0.96587,
+        "calibri" => 0.93648,
+        "segoe ui" => 0.97399,
+        "georgia" => 0.96899,
+        "verdana" => 0.99275,
+        _ => 0.9685, // avg of the six measured fonts (model1b: 1.2*(win_asc+0.5)/win_total)
     }
 }
 
