@@ -25863,6 +25863,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // S939: prev paragraph's (contextual_spacing, style_id) for the
                 // in-cell layered collapse.
                 let mut s939_prev: Option<(bool, Option<&str>)> = None;
+                // S1075: (previous cell paragraph's after_autospacing, its numId)
+                let mut s1075_prev: Option<(bool, Option<&str>)> = None;
                 // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
                 // container-edge suppression. See cell_autospace_effective.
                 let first_para_pos = cell
@@ -26021,16 +26023,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 );
                                 cell_content_h -= s939;
                                 cell_content_h_visual -= s939;
+                                let s1075 = self.s1075_cell_list_credit(
+                                    prev_sa,
+                                    s1075_prev.map_or(false, |p| p.0),
+                                    s1075_prev.and_then(|p| p.1),
+                                    &para.style,
+                                    cur_sb,
+                                );
+                                cell_content_h -= s1075;
+                                cell_content_h_visual -= s1075;
                                 prev_sa = Some(cur_sa);
                                 s939_prev = Some((
                                     para.style.contextual_spacing,
                                     para.style.style_id.as_deref(),
+                                ));
+                                s1075_prev = Some((
+                                    para.style.after_autospacing,
+                                    para.style.num_id.as_deref(),
                                 ));
                             }
                         }
                         Block::Table(nested) => {
                             prev_sa = None;
                             s939_prev = None;
+                            s1075_prev = None;
                             // Estimate nested table height from rows
                             // COM-confirmed: nested table width = cell width - 2 × padding
                             let nested_w = (inner_w).max(0.0);
@@ -27284,6 +27300,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let mut prev_cell_sa: Option<f32> = None;
                 // S939: prev paragraph's (contextual_spacing, style_id).
                 let mut s939_prev_r: Option<(bool, Option<&str>)> = None;
+                // S1075: (previous cell paragraph's after_autospacing, its numId)
+                let mut s1075_prev_r: Option<(bool, Option<&str>)> = None;
                 if !is_vmerge_continue {
                     // S428 (2026-05-29): index of the last cell block that carries
                     // real content (a non-empty paragraph or a nested table). Used to
@@ -27409,6 +27427,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 };
                                 prev_cell_sa = None; // S427: nested table breaks paragraph adjacency
                                 s939_prev_r = None;
+                                s1075_prev_r = None;
                             }
                             Block::Paragraph(para) => {
                                 let para = para;
@@ -27814,9 +27833,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     &para.style,
                                     effective_space_before,
                                 );
+                                // S1075: same-list adjacency inside the cell.
+                                content_h -= self.s1075_cell_list_credit(
+                                    prev_cell_sa,
+                                    s1075_prev_r.map_or(false, |p| p.0),
+                                    s1075_prev_r.and_then(|p| p.1),
+                                    &para.style,
+                                    effective_space_before,
+                                );
                                 s939_prev_r = Some((
                                     para.style.contextual_spacing,
                                     para.style.style_id.as_deref(),
+                                ));
+                                s1075_prev_r = Some((
+                                    para.style.after_autospacing,
+                                    para.style.num_id.as_deref(),
                                 ));
                                 content_h += effective_space_before;
                                 let para_content_start_h = content_h;
@@ -31480,6 +31511,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 }
                                 prev_cell_sa = None;
                                 s939_prev_r = None;
+                                s1075_prev_r = None;
                             }
                             _ => {}
                         } // match block
@@ -34651,6 +34683,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let mut prev_sa: Option<f32> = None;
             // S939: prev paragraph's (contextual_spacing, style_id).
             let mut s939_prev_e: Option<(bool, Option<&str>)> = None;
+            // S1075: (previous cell paragraph's after_autospacing, its numId)
+            let mut s1075_prev_e: Option<(bool, Option<&str>)> = None;
             // Cell-autospace (OXI_CELLAS): first/last Paragraph positions for
             // container-edge suppression. See cell_autospace_effective.
             let first_para_pos = cell
@@ -34753,15 +34787,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             &para.style,
                             cur_sb,
                         );
+                        cell_content_h -= self.s1075_cell_list_credit(
+                            prev_sa,
+                            s1075_prev_e.map_or(false, |p| p.0),
+                            s1075_prev_e.and_then(|p| p.1),
+                            &para.style,
+                            cur_sb,
+                        );
                         prev_sa = Some(cur_sa);
                         s939_prev_e = Some((
                             para.style.contextual_spacing,
                             para.style.style_id.as_deref(),
                         ));
+                        s1075_prev_e = Some((
+                            para.style.after_autospacing,
+                            para.style.num_id.as_deref(),
+                        ));
                     }
                     Block::Table(nested) => {
                         prev_sa = None;
                         s939_prev_e = None;
+                        s1075_prev_e = None;
                         let nested_w = inner_w.max(0.0);
                         for nr in &nested.rows {
                             let mut nr_h = 0.0_f32;
@@ -35481,6 +35527,38 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 (b - a).max(0.0)
             });
         (a.max(b) - gap_target).max(0.0)
+    }
+
+    /// S1075 (2026-08-06, default ON, opt-out OXI_S1075_DISABLE): the CELL
+    /// counterpart of S931 — HTML autospacing is suppressed between adjacent
+    /// list items of the SAME list, so the boundary gap is ZERO (line pitch
+    /// only). S931's producer (`prev_autospacing_numid`) lives in the BODY
+    /// block loop, so a bullet run inside a TABLE CELL kept the full AUTO
+    /// 14.0 per item. reference__00643563's fee table: Word renders the
+    /// provider-category bullets at 13.2pt pitch (bare 11pt line) while Oxi
+    /// gave 26.88 = line + 14.0, so its p4 lost 3 items to p5.
+    /// Same predicate as S931 (prev = same-numId item with afterAutospacing,
+    /// cur = beforeAutospacing); the credit removes the whole collapsed
+    /// boundary, mirroring `s939_cell_ctx_credit`'s shape.
+    fn s1075_cell_list_credit(
+        &self,
+        prev_sa: Option<f32>,
+        prev_after_auto: bool,
+        prev_numid: Option<&str>,
+        cur: &ParagraphStyle,
+        cur_sb: f32,
+    ) -> f32 {
+        if self.doc_body_has_real_cjk || std::env::var("OXI_S1075_DISABLE").is_ok() {
+            return 0.0;
+        }
+        let Some(a) = prev_sa else { return 0.0 };
+        if !prev_after_auto || !cur.before_autospacing {
+            return 0.0;
+        }
+        if cur.num_id.is_none() || cur.num_id.as_deref() != prev_numid {
+            return 0.0;
+        }
+        a.max(cur_sb)
     }
 
     /// S936 (2026-07-18, ★HELD OPT-IN OXI_S936=1 with S935, default OFF):
