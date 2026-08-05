@@ -22273,13 +22273,49 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // Estimate nested table height from rows
                             // COM-confirmed: nested table width = cell width - 2 × padding
                             let nested_w = (inner_w).max(0.0);
+                            // S1068 (2026-08-05, opt-out OXI_S1068_DISABLE): estimate each
+                            // nested cell paragraph at ITS OWN resolved column width instead
+                            // of the unconditional `nested_w / 2.0`, which assumes every
+                            // nested table has exactly two equal columns. A ONE-column
+                            // nested table was therefore wrapped at HALF its real width in
+                            // the pre-pass: educational__002a301d's Tech Tip box counted 5
+                            // lines where the render emits 2, and because the correction
+                            // pass only ever GROWS max_actual_cell_h the 48pt phantom stayed
+                            // as the outer row's floor. Mirrors the outer walk's own
+                            // grid_span / vMerge column arithmetic and the enclosing
+                            // `inner_w` cell-margin convention.
+                            let s1068_cols = if std::env::var("OXI_S1068_DISABLE").is_err() {
+                                Some(self.resolve_table_col_widths_n(nested, nested_w, true))
+                            } else {
+                                None
+                            };
+                            let n_def_pad = &nested.style.default_cell_margins;
+                            let n_def_l = n_def_pad.as_ref().and_then(|m| m.left).unwrap_or(4.95);
+                            let n_def_r = n_def_pad.as_ref().and_then(|m| m.right).unwrap_or(4.95);
+                            let n_sub_pad = self.cellpair_active() || s713_cellmar || s768_latin_wrap;
                             for nr in &nested.rows {
                                 let mut nr_h = 0.0_f32;
+                                let mut n_grid_idx = 0usize;
                                 for nc in &nr.cells {
+                                    let n_span = nc.grid_span.max(1) as usize;
+                                    let np_w = match &s1068_cols {
+                                        Some(cw) if n_grid_idx + n_span <= cw.len() => {
+                                            let w: f32 = cw[n_grid_idx..n_grid_idx + n_span].iter().sum();
+                                            if n_sub_pad {
+                                                let pl = nc.margins.as_ref().and_then(|m| m.left).unwrap_or(n_def_l);
+                                                let pr = nc.margins.as_ref().and_then(|m| m.right).unwrap_or(n_def_r);
+                                                (w - pl - pr).max(0.0)
+                                            } else {
+                                                w.max(0.0)
+                                            }
+                                        }
+                                        _ => nested_w / 2.0,
+                                    };
+                                    n_grid_idx += n_span;
                                     let mut nc_h = 0.0_f32;
                                     for nb in &nc.blocks {
                                         if let Block::Paragraph(np) = nb {
-                                            nc_h += self.estimate_para_height(np, nested_w / 2.0, table_grid_pitch, nested.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
+                                            nc_h += self.estimate_para_height(np, np_w, table_grid_pitch, nested.style.para_style.as_ref(), true, grid_char_pitch, grid_char_cw_ratio);
                                         }
                                     }
                                     nr_h = nr_h.max(nc_h);
