@@ -109,8 +109,23 @@ def measure_doc(word, docx_path: str) -> dict:
                 # usable as the 1-line test — it answers 3 for this visibly
                 # 1-line heading. Table paragraphs are excluded (narrow cell
                 # columns can wrap a short paragraph across a real page break).
+                # S1077 (2026-08-06): the S722 test above fires on TWO
+                # different situations and only one of them is the quirk.
+                # Measured with Word COM on both specimens:
+                #   tokyoshugyo i=374 (the S722 case, 17 chars)
+                #       start p17 / END-COLLAPSED p18 / active p18   -> take p18
+                #   legal__0012597 i=8 'Part 1 — Preliminary' (20 chars)
+                #       start p3  / END-COLLAPSED p3  / active p4    -> keep p3
+                # The PDF export puts the legal TOC entry at p3 y=265.10, i.e.
+                # the START is right there and only the ACTIVE-END query is
+                # off by one. So `active_end == start + 1` is not sufficient;
+                # the END-COLLAPSED page has to agree with the active end
+                # before we believe the paragraph really moved.
                 try:
                     end_page = rng.Information(3)  # active end
+                    _epos = max(rng.Start, rng.End - 1)
+                    _end_rng = doc.Range(_epos, _epos)
+                    end_col_page = _end_rng.Information(3)
                     vis_chars = sum(1 for c in raw_text
                                     if c not in ("\x0c", "\x0b", "\r", "\n", "\x07"))
                     # Table membership via the START-collapsed range's
@@ -121,12 +136,11 @@ def measure_doc(word, docx_path: str) -> dict:
                         doc.Range(rng.Start, rng.Start).Information(12))
                     if (end_page and page and end_page == page + 1
                             and vis_chars <= 20
-                            and not in_tbl_start):
-                        epos = max(rng.Start, rng.End - 1)
-                        end_rng = doc.Range(epos, epos)
+                            and not in_tbl_start
+                            and end_col_page == end_page):  # S1077
                         page = end_page
-                        y = end_rng.Information(6)
-                        x = end_rng.Information(5)
+                        y = _end_rng.Information(6)
+                        x = _end_rng.Information(5)
                 except Exception:
                     pass
             except Exception:
