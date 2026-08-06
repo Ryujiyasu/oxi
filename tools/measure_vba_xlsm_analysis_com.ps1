@@ -70,11 +70,20 @@ Private Function ParenthesesValue$()
     Mutate direct
     Mutate (wrapped)
     Call Mutate((explicitGrouped))
+    LabelBranch
     ParenthesesValue = "D" & CStr(direct) & "W" & CStr(wrapped) & "G" & CStr(explicitGrouped)
 End Function
 
 Private Sub Mutate(ByRef value As Long)
     value = 99
+End Sub
+
+Private Sub LabelBranch()
+    GoTo LabelCollision
+LabelCollision:
+End Sub
+
+Private Sub LabelCollision()
 End Sub
 '@)
     $sheet = $workbook.Worksheets.Item(1)
@@ -116,7 +125,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 6, statements: 29',
+        'procedures: 8, statements: 32',
         'unparsed: 0',
         '#If Win64 Then: conditional compilation; the source differs by build',
         '#End If: conditional compilation; the source differs by build',
@@ -139,7 +148,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '62.5% (shared 5; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '70.0% (shared 7; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {
@@ -186,6 +195,12 @@ End Function
     }
     if ($variantModule.api_names.Collection -ne 1) {
         throw "As New declaration type was not reported"
+    }
+    if (@($variantModule.uncalled_procedures) -notcontains 'LabelCollision') {
+        throw "GoTo label incorrectly counted as a call to LabelCollision"
+    }
+    if (@($variantModule.uncalled_procedures) -contains 'LabelBranch') {
+        throw "Called LabelBranch was incorrectly reported as uncalled"
     }
     if (@($jsonReport.errors).Count -ne 0) {
         throw "JSON inventory reported unexpected errors"

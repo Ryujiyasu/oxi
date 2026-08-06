@@ -856,9 +856,6 @@ impl Walker {
             }
             Statement::OnBranch(branch) => {
                 self.walk_expr(&branch.selector);
-                for label in &branch.labels {
-                    self.current_calls.insert(label.clone());
-                }
             }
             Statement::RaiseEvent(event) => {
                 for arg in &event.args {
@@ -884,9 +881,6 @@ impl Walker {
                     class: None,
                     line: span.line,
                 });
-            }
-            Statement::GoTo { label, .. } | Statement::GoSub { label, .. } => {
-                self.current_calls.insert(label.clone());
             }
             _ => {}
         }
@@ -998,14 +992,15 @@ impl Walker {
         let called: BTreeSet<String> = self
             .procedures
             .iter()
-            .flat_map(|p| p.calls.iter().cloned())
+            .flat_map(|p| p.calls.iter().map(|call| call.to_ascii_lowercase()))
             .collect();
 
         let uncalled = self
             .defined_procedures
             .iter()
             .filter(|(name, visibility, kind)| {
-                !called.contains(name) && !is_externally_reachable(name, *visibility, *kind)
+                !called.contains(&name.to_ascii_lowercase())
+                    && !is_externally_reachable(name, *visibility, *kind)
             })
             .map(|(name, _, _)| name.clone())
             .collect();
@@ -1395,6 +1390,32 @@ mod tests {
              Private Sub HelperUnused()\nEnd Sub\n",
         );
         assert_eq!(a.dead_procedures(), ["HelperUnused".to_string()]);
+    }
+
+    #[test]
+    fn local_labels_do_not_impersonate_procedure_calls() {
+        let a = analyse_src(
+            "Public Sub Entry()\n\
+             GoTo LabelCollision\n\
+             LabelCollision:\n\
+             On 1 GoSub LabelCollision\n\
+             End Sub\n\
+             Private Sub LabelCollision()\n\
+             End Sub\n",
+        );
+        assert_eq!(a.dead_procedures(), ["LabelCollision".to_string()]);
+    }
+
+    #[test]
+    fn procedure_call_matching_is_case_insensitive() {
+        let a = analyse_src(
+            "Public Sub Entry()\n\
+             helperused\n\
+             End Sub\n\
+             Private Sub HelperUsed()\n\
+             End Sub\n",
+        );
+        assert!(a.dead_procedures().is_empty());
     }
 
     #[test]
