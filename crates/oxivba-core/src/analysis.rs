@@ -398,6 +398,18 @@ pub const RULES: &[Rule] = &[
     },
     // -- B: data transformation --------------------------------------------
     Rule {
+        pattern: "Formula2",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "reads or writes dynamic-array formulas",
+    },
+    Rule {
+        pattern: "Formula2R1C1",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "reads or writes dynamic-array formulas in R1C1 notation",
+    },
+    Rule {
         pattern: "Range",
         how: Match::Segment,
         class: Class::B,
@@ -439,6 +451,8 @@ const FORMULA_ENGINE_MARKERS: &[&str] = &[
     "FormulaR1C1",
     "FormulaLocal",
     "FormulaArray",
+    "Formula2",
+    "Formula2R1C1",
     "WorksheetFunction",
     "Evaluate",
     "Calculate",
@@ -1493,6 +1507,17 @@ mod tests {
         assert!(!plain.needs_formula_engine);
         assert!(needs.needs_formula_engine);
         assert!(wsf.needs_formula_engine);
+    }
+
+    #[test]
+    fn formula2_variants_require_the_formula_engine() {
+        let a = analyse_src(
+            "Sub T()\n  Range(\"A1\").Formula2 = \"=SEQUENCE(2)\"\n  Range(\"C1\").Formula2R1C1 = \"=RC[-1]*2\"\nEnd Sub",
+        );
+        assert_eq!(a.class, Some(Class::B));
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Range.Formula2"), Some(&1));
+        assert_eq!(a.api_names.get("Range.Formula2R1C1"), Some(&1));
     }
 
     #[test]
