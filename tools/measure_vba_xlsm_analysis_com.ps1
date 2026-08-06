@@ -41,6 +41,7 @@ Public Sub BuildReport(ByVal target As Worksheet)
     ws.Range("E1").Value = ParenthesesValue()
     ws.Range("F1").Value = GetSetting("OxiVbaCoreMissingProbe", "Analysis", "Value", "missing")
     ws.Range("G1").Value = NestedNextValue()
+    ws.Range("H1").Value = RadixValue()
 End Sub
 
 Private Function HiddenHelper(ByVal value As Long) As Long
@@ -114,6 +115,10 @@ Private Function NestedNextValue() As Long
     Next inner, outer
     NestedNextValue = total
 End Function
+
+Private Function RadixValue() As String
+    RadixValue = CStr(&HFFFF) & ":" & CStr(&HFFFF&) & ":" & CStr(&HFFFFFFFF^) & ":" & CStr(&O37777777777)
+End Function
 '@)
     $sheet = $workbook.Worksheets.Item(1)
     $excel.Run("'$($workbook.Name)'!AnalysisProbe.BuildReport", $sheet)
@@ -124,12 +129,13 @@ End Function
     $parenthesesValue = [string]$sheet.Range('E1').Value2
     $settingValue = [string]$sheet.Range('F1').Value2
     $nestedNextValue = [long]$sheet.Range('G1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or $settingValue -ne 'missing' -or $nestedNextValue -ne 4 -or -not [bool]$sheet.Range('A1').Font.Bold) {
-        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], setting=[$settingValue], nested-next=$nestedNextValue, bold=$([bool]$sheet.Range('A1').Font.Bold)"
+    $radixValue = [string]$sheet.Range('H1').Value2
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or $settingValue -ne 'missing' -or $nestedNextValue -ne 4 -or $radixValue -ne '-1:65535:4294967295:-1' -or -not [bool]$sheet.Range('A1').Font.Bold) {
+        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], setting=[$settingValue], nested-next=$nestedNextValue, radix=[$radixValue], bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)
     $workbook.SaveCopyAs($workbookCopyPath)
-    $module.CodeModule.ReplaceLine(22, '    HiddenHelper = value + 2')
+    $module.CodeModule.ReplaceLine(23, '    HiddenHelper = value + 2')
     $module.CodeModule.InsertLines(2, 'Private Declare PtrSafe Function SetTimer Lib "user32" (ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr')
     $module.CodeModule.AddFromString(@'
 
@@ -156,7 +162,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: C (out of scope: reaches outside Excel)',
-        'procedures: 13, statements: 45',
+        'procedures: 14, statements: 47',
         'unparsed: 0',
         '#If Win64 Then: conditional compilation; the source differs by build',
         '#End If: conditional compilation; the source differs by build',
@@ -179,7 +185,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '80.0% (shared 12; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '81.2% (shared 13; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {

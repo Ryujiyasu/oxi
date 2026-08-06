@@ -3110,6 +3110,34 @@ mod tests {
     }
 
     #[test]
+    fn radix_literal_values_include_vba_sign_extension() {
+        assert!(matches!(
+            expr("&HFFFF"),
+            Expr::Literal(Literal::Number(-1.0), _)
+        ));
+        assert!(matches!(
+            expr("&HFFFF&"),
+            Expr::Literal(
+                Literal::TypedNumber {
+                    value: 65535.0,
+                    suffix: '&'
+                },
+                _
+            )
+        ));
+        assert!(matches!(
+            expr("&HFFFFFFFF^"),
+            Expr::Literal(
+                Literal::TypedNumber {
+                    value: 4294967295.0,
+                    suffix: '^'
+                },
+                _
+            )
+        ));
+    }
+
+    #[test]
     fn deftype_directives_keep_types_and_letter_ranges() {
         let m = module(
             "DefInt A-C, I\n\

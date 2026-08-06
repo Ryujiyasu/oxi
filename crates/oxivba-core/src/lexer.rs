@@ -430,13 +430,33 @@ impl<'a> Lexer<'a> {
         let value = u64::from_str_radix(&self.src[digits_start..i], radix).unwrap_or(0);
         let start = self.pos;
         self.pos = i;
-        self.push_here(TokenKind::Number(value as f64), start, i);
+        let suffix = self
+            .bytes
+            .get(self.pos)
+            .copied()
+            .filter(|b| is_type_suffix(*b) || *b == b'^')
+            .map(char::from);
+        // VBA sign-extends an unsuffixed radix literal from the narrowest
+        // Integer or Long bit pattern. Explicit `&` and `^` instead select
+        // 32- and 64-bit interpretation.
+        let number = match suffix {
+            Some('%') => (value as u16 as i16) as f64,
+            Some('&') => (value as u32 as i32) as f64,
+            Some('^') => (value as i64) as f64,
+            _ if value <= u16::MAX as u64 => (value as u16 as i16) as f64,
+            _ if value <= u32::MAX as u64 => (value as u32 as i32) as f64,
+            _ => value as f64,
+        };
+        self.push_here(TokenKind::Number(number), start, i);
 
-        if let Some(&b) = self.bytes.get(self.pos) {
-            if is_type_suffix(b) {
-                self.push_here(TokenKind::TypeSuffix(b as char), self.pos, self.pos + 1);
-                self.pos += 1;
-            }
+        if let Some(suffix) = suffix {
+            let kind = if suffix == '^' {
+                TokenKind::Punct(Punct::Caret)
+            } else {
+                TokenKind::TypeSuffix(suffix)
+            };
+            self.push_here(kind, self.pos, self.pos + 1);
+            self.pos += 1;
         }
         true
     }
@@ -735,6 +755,25 @@ mod tests {
                 ident("a"),
                 TokenKind::Punct(Punct::Amp),
                 TokenKind::Str("x".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn radix_literals_follow_vba_signed_widths() {
+        assert_eq!(kinds("&HFFFF"), vec![TokenKind::Number(-1.0)]);
+        assert_eq!(kinds("&H8000"), vec![TokenKind::Number(-32768.0)]);
+        assert_eq!(kinds("&HFFFFFFFF"), vec![TokenKind::Number(-1.0)]);
+        assert_eq!(kinds("&O37777777777"), vec![TokenKind::Number(-1.0)]);
+        assert_eq!(
+            kinds("&HFFFF&"),
+            vec![TokenKind::Number(65535.0), TokenKind::TypeSuffix('&')]
+        );
+        assert_eq!(
+            kinds("&HFFFFFFFF^"),
+            vec![
+                TokenKind::Number(4294967295.0),
+                TokenKind::Punct(Punct::Caret)
             ]
         );
     }
