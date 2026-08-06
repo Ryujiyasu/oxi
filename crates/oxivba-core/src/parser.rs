@@ -580,7 +580,16 @@ impl<'a> Parser<'a> {
         }
         self.eat_kw("new");
         let name = self.parse_qualified_name()?;
-        Some(TypeName { name, suffix: None })
+        let fixed_length = if name.eq_ignore_ascii_case("String") && self.eat_punct(Punct::Star) {
+            self.parse_expr()
+        } else {
+            None
+        };
+        Some(TypeName {
+            name,
+            suffix: None,
+            fixed_length,
+        })
     }
 
     fn parse_ident(&mut self) -> Option<String> {
@@ -2280,6 +2289,7 @@ fn type_name_from_suffix(suffix: char) -> TypeName {
     TypeName {
         name: name.to_string(),
         suffix: Some(suffix),
+        fixed_length: None,
     }
 }
 
@@ -2877,6 +2887,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Long", "Single", "Currency", "Integer", "Double"]
         );
+    }
+
+    #[test]
+    fn fixed_length_strings_keep_their_size_expression() {
+        let m = module(
+            "Private Type LegacyRecord\n\
+             Code As String * 8\n\
+             End Type\n\
+             Sub T()\n\
+             Dim padded As String * 4\n\
+             End Sub",
+        );
+        let ModuleItem::Type(type_def) = &m.items[0] else {
+            panic!("expected type declaration")
+        };
+        assert!(matches!(
+            type_def.fields[0].type_name.fixed_length.as_ref(),
+            Some(Expr::Literal(Literal::Number(8.0), _))
+        ));
+        let ModuleItem::Procedure(procedure) = &m.items[1] else {
+            panic!("expected procedure")
+        };
+        assert!(matches!(
+            &procedure.body[0],
+            Statement::Dim(decl)
+                if matches!(decl.items[0].type_name.fixed_length.as_ref(),
+                    Some(Expr::Literal(Literal::Number(4.0), _)))
+        ));
     }
 
     #[test]

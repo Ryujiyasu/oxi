@@ -205,7 +205,8 @@ pub fn canonical_procedure(proc: &Procedure, norm: Normalization) -> String {
     }
     out.push(')');
     if let Some(return_type) = &proc.return_type {
-        let _ = write!(out, " as {}", return_type.name.to_ascii_lowercase());
+        out.push_str(" as ");
+        render_type_name(return_type, &mut locals, &mut out);
     }
     out.push('\n');
     render_body(&proc.body, &mut locals, 1, &mut out);
@@ -215,16 +216,24 @@ pub fn canonical_procedure(proc: &Procedure, norm: Normalization) -> String {
 fn render_param(param: &Param, locals: &mut LocalNames, out: &mut String) {
     let _ = write!(
         out,
-        "{:?}{}{} {}:{}",
+        "{:?}{}{} {}:",
         param.mode,
         if param.optional { "?" } else { "" },
         if param.is_array { "[]" } else { "" },
-        locals.render(&param.name),
-        param.type_name.name.to_ascii_lowercase()
+        locals.render(&param.name)
     );
+    render_type_name(&param.type_name, locals, out);
     if let Some(default) = &param.default {
         out.push('=');
         render_expr(default, locals, out);
+    }
+}
+
+fn render_type_name(type_name: &TypeName, locals: &mut LocalNames, out: &mut String) {
+    out.push_str(&type_name.name.to_ascii_lowercase());
+    if let Some(length) = &type_name.fixed_length {
+        out.push('*');
+        render_expr(length, locals, out);
     }
 }
 
@@ -404,12 +413,8 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             let _ = write!(out, "dim{}", if decl.is_const { " const" } else { "" });
             for item in &decl.items {
                 let name = locals.render(&item.name);
-                let _ = write!(
-                    out,
-                    " {}:{}",
-                    name,
-                    item.type_name.name.to_ascii_lowercase()
-                );
+                let _ = write!(out, " {name}:");
+                render_type_name(&item.type_name, locals, out);
                 if let Some(value) = &item.value {
                     out.push('=');
                     render_expr(value, locals, out);
@@ -1025,7 +1030,8 @@ fn canonical_module_declarations(module: &Module, norm: Normalization) -> String
                 }
                 text.push(')');
                 if let Some(return_type) = &proc.return_type {
-                    let _ = write!(text, " as {}", return_type.name.to_ascii_lowercase());
+                    text.push_str(" as ");
+                    render_type_name(return_type, &mut locals, &mut text);
                 }
                 entries.push(text);
             }
@@ -1064,12 +1070,8 @@ fn render_module_var_item(item: &VarItem, locals: &mut LocalNames, out: &mut Str
     if item.with_events {
         out.push_str("withevents ");
     }
-    let _ = write!(
-        out,
-        "{}:{}",
-        item.name.to_ascii_lowercase(),
-        item.type_name.name.to_ascii_lowercase()
-    );
+    let _ = write!(out, "{}:", item.name.to_ascii_lowercase());
+    render_type_name(&item.type_name, locals, out);
     if let Some(bounds) = &item.array_bounds {
         out.push('[');
         for bound in bounds {
@@ -1459,6 +1461,20 @@ Sub D()\nx = 4\nEnd Sub";
         assert_ne!(
             fp(suffix, Strength::Standard).combined,
             fp(different, Strength::Standard).combined
+        );
+    }
+
+    #[test]
+    fn fixed_string_lengths_follow_literal_normalization() {
+        let four = "Sub T()\nDim value As String * 4\nEnd Sub";
+        let eight = "Sub T()\nDim value As String * 8\nEnd Sub";
+        assert_ne!(
+            fp(four, Strength::Standard).combined,
+            fp(eight, Strength::Standard).combined
+        );
+        assert_eq!(
+            fp(four, Strength::Loose).combined,
+            fp(eight, Strength::Loose).combined
         );
     }
 

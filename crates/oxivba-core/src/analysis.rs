@@ -518,13 +518,13 @@ impl Walker {
                         line: d.span.line,
                     });
                     for param in &d.params {
-                        self.record_type_name(&param.type_name.name, d.span.line);
+                        self.walk_type_name(&param.type_name, d.span.line);
                         if let Some(default) = &param.default {
                             self.walk_expr(default);
                         }
                     }
                     if let Some(return_type) = &d.return_type {
-                        self.record_type_name(&return_type.name, d.span.line);
+                        self.walk_type_name(return_type, d.span.line);
                     }
                 }
                 ModuleItem::Variables(v) => self.walk_var_decl(v),
@@ -542,7 +542,7 @@ impl Walker {
                 }
                 ModuleItem::Event { params, span, .. } => {
                     for param in params {
-                        self.record_type_name(&param.type_name.name, span.line);
+                        self.walk_type_name(&param.type_name, span.line);
                         if let Some(default) = &param.default {
                             self.walk_expr(default);
                         }
@@ -567,13 +567,13 @@ impl Walker {
         self.current_max_depth = 0;
 
         for param in &proc.params {
-            self.record_type_name(&param.type_name.name, proc.span.line);
+            self.walk_type_name(&param.type_name, proc.span.line);
             if let Some(default) = &param.default {
                 self.walk_expr(default);
             }
         }
         if let Some(return_type) = &proc.return_type {
-            self.record_type_name(&return_type.name, proc.span.line);
+            self.walk_type_name(return_type, proc.span.line);
         }
         self.walk_body(&proc.body);
 
@@ -903,7 +903,14 @@ impl Walker {
         }
         // `Dim x As Scripting.FileSystemObject` is just as much a dependency as
         // calling `CreateObject`, and early binding is the common spelling.
-        self.record_type_name(&item.type_name.name, 0);
+        self.walk_type_name(&item.type_name, 0);
+    }
+
+    fn walk_type_name(&mut self, type_name: &TypeName, line: u32) {
+        self.record_type_name(&type_name.name, line);
+        if let Some(length) = &type_name.fixed_length {
+            self.walk_expr(length);
+        }
     }
 
     fn record_type_name(&mut self, name: &str, line: u32) {
@@ -1271,9 +1278,11 @@ mod tests {
     #[test]
     fn intrinsic_declaration_types_are_not_api_dependencies() {
         let a = analyse_src(
-            "Private Function Convert(ByVal number As Long) As String\n\
+            "Private Const Width As Long = 4\n\
+             Private Function Convert(ByVal number As Long) As String\n\
                Dim ready As Boolean\n\
                Dim legacy&\n\
+               Dim padded As String * Width\n\
              End Function",
         );
         assert!(a.api_names.is_empty(), "unexpected APIs: {:?}", a.api_names);

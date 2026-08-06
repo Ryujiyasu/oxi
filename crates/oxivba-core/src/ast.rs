@@ -24,11 +24,13 @@ pub enum Visibility {
 }
 
 /// A declared type, kept as written. `Variant` when omitted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeName {
     pub name: String,
     /// A type suffix such as the `$` in `Dim s$`.
     pub suffix: Option<char>,
+    /// `String * 20`, used by fixed-width records and legacy file formats.
+    pub fixed_length: Option<Expr>,
 }
 
 impl TypeName {
@@ -36,6 +38,7 @@ impl TypeName {
         TypeName {
             name: "Variant".to_string(),
             suffix: None,
+            fixed_length: None,
         }
     }
 }
