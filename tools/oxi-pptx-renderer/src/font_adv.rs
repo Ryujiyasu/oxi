@@ -29,6 +29,21 @@ static ARIAL: [f32; 95] = [
     0.50000, 0.33398, 0.25977, 0.33398, 0.58398,
 ];
 
+/// Calibri (Regular) hmtx advance, in EM units. Measured via
+/// `tools/metrics/extract_calibri_adv.py` (calibri.ttf, upm 2048).
+static CALIBRI: [f32; 95] = [
+    0.22607, 0.32568, 0.40088, 0.49805, 0.50684, 0.71484, 0.68213, 0.22070, 0.30322, 0.30322,
+    0.49805, 0.49805, 0.24951, 0.30615, 0.25244, 0.38623, 0.50684, 0.50684, 0.50684, 0.50684,
+    0.50684, 0.50684, 0.50684, 0.50684, 0.50684, 0.50684, 0.26758, 0.26758, 0.49805, 0.49805,
+    0.49805, 0.46338, 0.89404, 0.57861, 0.54395, 0.53320, 0.61523, 0.48828, 0.45947, 0.63086,
+    0.62305, 0.25195, 0.31885, 0.51953, 0.42041, 0.85498, 0.64551, 0.66211, 0.51660, 0.67285,
+    0.54297, 0.45947, 0.48730, 0.64160, 0.56738, 0.88965, 0.51904, 0.48730, 0.46826, 0.30664,
+    0.38623, 0.30664, 0.49805, 0.49805, 0.29102, 0.47900, 0.52539, 0.42285, 0.52539, 0.49756,
+    0.30518, 0.47070, 0.52539, 0.22949, 0.23926, 0.45459, 0.22949, 0.79883, 0.52539, 0.52734,
+    0.52539, 0.52539, 0.34863, 0.39111, 0.33496, 0.52539, 0.45166, 0.71484, 0.43311, 0.45264,
+    0.39502, 0.31445, 0.46045, 0.31445, 0.49805,
+];
+
 /// Arial Bold hmtx advance, in EM units.
 static ARIALBD: [f32; 95] = [
     0.27783, 0.33301, 0.47412, 0.55615, 0.55615, 0.88916, 0.72217, 0.23779, 0.33301, 0.33301,
@@ -46,7 +61,9 @@ static ARIALBD: [f32; 95] = [
 /// Whether `family` has an hmtx width table (so line widths / glyph
 /// positions can be computed from the design advance instead of GDI).
 pub fn family_supported(family: &str) -> bool {
-    family.eq_ignore_ascii_case("arial") || family.eq_ignore_ascii_case("arialbd")
+    family.eq_ignore_ascii_case("arial")
+        || family.eq_ignore_ascii_case("arialbd")
+        || family.eq_ignore_ascii_case("calibri")
 }
 
 /// The hmtx design advance of `ch` for `family`, in EM units (None if the
@@ -56,6 +73,8 @@ pub fn hmtx_advance_em(family: &str, ch: char) -> Option<f32> {
         &ARIAL
     } else if family.eq_ignore_ascii_case("arialbd") {
         &ARIALBD
+    } else if family.eq_ignore_ascii_case("calibri") {
+        &CALIBRI
     } else {
         return None;
     };

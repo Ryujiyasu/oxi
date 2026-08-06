@@ -1694,6 +1694,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut categories: Vec<String> = Vec::new();
     let mut has_legend = false;
     let mut auto_title_deleted = false;
+    let mut marker = false;
 
     // Per-`c:ser` state
     let mut in_ser = false;
@@ -1713,10 +1714,17 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "pieChart" => {
                         chart_type = Some("pie".to_string());
                     }
+                    "lineChart" => {
+                        chart_type = Some("line".to_string());
+                    }
                     "barChart" => {
                         in_bar_chart = true;
                     }
-                    "ser" if in_bar_chart || chart_type.as_deref() == Some("pie") => {
+                    "ser"
+                        if in_bar_chart
+                            || chart_type.as_deref() == Some("pie")
+                            || chart_type.as_deref() == Some("line") =>
+                    {
                         in_ser = true;
                         ser_target = "";
                         ser_name = None;
@@ -1730,6 +1738,13 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                         in_v = true;
                         cur_v.clear();
                     }
+                    // <c:legend> is a REAL START tag in python-pptx output
+                    // ("<c:legend><c:legendPos .../><c:layout/><c:overlay .../>
+                    // </c:legend>"), NOT a self-closing <c:legend/>. Word
+                    // draws a legend whenever a <c:legend> element exists
+                    // (regardless of position/overlay attrs), so catch BOTH
+                    // the Start form here and the self-closing form below.
+                    "legend" => has_legend = true,
                     _ => {}
                 }
             }
@@ -1768,6 +1783,17 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "autoTitleDeleted" => {
                         if get_attr(&e, "val").as_deref() == Some("1") {
                             auto_title_deleted = true;
+                        }
+                    }
+                    // <c:marker val="1"/> is a SELF-CLOSING CHILD element of
+                    // <c:lineChart> (python-pptx writes it for LINE_MARKERS).
+                    // marker=1 -> Word draws a filled accent-colour circle at
+                    // each data point. Absent or val="0" -> no markers.
+                    // Same Event::Empty trap as barDir/grouping/legend/
+                    // autoTitleDeleted.
+                    "marker" => {
+                        if get_attr(&e, "val").as_deref().map(|v| v != "0").unwrap_or(true) {
+                            marker = true;
                         }
                     }
                     _ => {}
@@ -1840,6 +1866,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         categories,
         has_legend,
         auto_title_deleted,
+        marker,
     })
 }
 

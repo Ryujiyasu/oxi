@@ -233,6 +233,14 @@ pub struct Chart {
     /// auto-titles, so this flag alone is the discriminator.
     #[serde(default)]
     pub auto_title_deleted: bool,
+    /// True when a line chart declares `<c:marker val="1"/>` (self-closing
+    /// child of <c:lineChart>) — LINE_MARKERS. When true Word draws a 6.96pt
+    /// filled accent-colour circle at every data point (chart_line probe,
+    /// all P0-P6 measured marker=1). A plain LINE chart (val="0" or absent)
+    /// draws no markers — unmeasured, but the flag is read faithfully so the
+    /// renderer can gate on it.
+    #[serde(default)]
+    pub marker: bool,
 }
 
 pub fn default_chart_type() -> String {

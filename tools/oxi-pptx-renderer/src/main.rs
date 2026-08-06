@@ -448,6 +448,7 @@ fn shape_json(sh: &Shape) -> Value {
                 "categories": chart.categories,
                 "has_legend": chart.has_legend,
                 "auto_title_deleted": chart.auto_title_deleted,
+                "marker": chart.marker,
             }),
         ),
     };
@@ -992,6 +993,388 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     );
                                 }
                             }
+                        } else if chart.chart_type == "line" {
+                        // Line chart (Word render-truth 2026-08-06, fitz
+                        // get_drawings + rawdict on the 7-variant probe
+                        // P0-P6; chart_line = the P1 configuration):
+                        //   plot area: left = sx+41.4, top = sy+51.4
+                        //     (1 series -> auto title present), bottom =
+                        //     sy+shh-39.9 (default band; the crowded-label
+                        //     78.62 band is derived-but-unimplemented =
+                        //     two-line label wrapping not yet rendered).
+                        //     plot_right = WITH a legend: sx+sw-41.4-103.82
+                        //     (right legend band), without: sx+sw-41.4-11
+                        //     (same as the bars).
+                        //   category pitch = plot_w/n_cat; point i x =
+                        //     plot_left + pitch/2 + i*pitch
+                        //   value scale = nice_axis_max(max) in 5 steps
+                        //     (6 labels 0,5,...,25); point i y = plot_bot -
+                        //     (val_i/max_axis)*plot_h
+                        //   gridlines: 5 black lines at the value ticks
+                        //     i=1..=axis_steps, drawn BEFORE the polyline
+                        //     (the chart_line valAx declares
+                        //     <c:majorGridlines/>; line charts always carry
+                        //     gridlines - NOT gated on is_stacked)
+                        //   polyline: (n_cat-1) accent1 #4F81BD segments
+                        //     w=2.25 joining consecutive points
+                        //   markers: 6.96pt filled accent1 circles at every
+                        //     point, gated on <c:marker val="1"/>
+                        //     (LINE_MARKERS)
+                        //   legend (when <c:legend> declared) is a LINE
+                        //     swatch: horizontal accent1 line w=2.25 of
+                        //     length 19.20 at legend_left=plot_right+15.65,
+                        //     a 6.96pt marker circle centred on it, and the
+                        //     series name Calibri 18pt beside it;
+                        //     legend_y0 = sy + shh/2 + 17.68 (FRAME-relative,
+                        //     P0/P1/P4 render-truth)
+                        let axis_family = "Calibri";
+                        let sx = sh.x as f64;
+                        let sy = sh.y as f64;
+                        let sw = sh.width as f64;
+                        let shh = sh.height as f64;
+                        let has_auto_title = chart.series.len() == 1;
+                        let plot_left = sx + 41.4;
+                        let plot_top = if has_auto_title {
+                            sy + 51.4
+                        } else {
+                            sy + 16.0
+                        };
+                        // plot_w (measured P1..P6): WITH a legend the right
+                        // band is 103.82pt (frame-width independent),
+                        // WITHOUT it the frame right inset is 11.0pt; then
+                        // plot_right = plot_left + plot_w (P3 no-legend 396w
+                        // -> 457.00 = 113.45 + 343.6; do NOT subtract the
+                        // 41.4 left inset a second time).
+                        let plot_w = if chart.has_legend {
+                            sw - 41.4 - 103.82
+                        } else {
+                            sw - 41.4 - 11.0
+                        };
+                        let plot_right = plot_left + plot_w;
+                        let plot_w = plot_right - plot_left;
+                        let n_cat = chart.categories.len().max(1);
+                        // Crowded category labels -> the 78.62pt bottom band
+                        // (measured P0/P4): when the widest category label
+                        // EXCEEDS the category pitch (ratio > 1.0) Word keeps
+                        // the labels on ONE line by growing the label band;
+                        // else the normal 39.9pt band. Threshold re-derived
+                        // from the 7 probe variants P0..P6 using the REAL
+                        // Calibri hmtx label widths: P0/P4 ratio 1.273 ->
+                        // crowded, P3 0.929 / P2 0.900 / P6 0.891 / P1 0.764 /
+                        // P5 0.208 -> not crowded. The old window (0.64,0.88]
+                        // was a knife-edge misfit (it used a 0.5x-char
+                        // fallback width for the unsupported Calibri family).
+                        let widest_label = chart
+                            .categories
+                            .iter()
+                            .map(|c| {
+                                font_adv::line_hmtx_width_pt(c, 18.0, axis_family)
+                                    .unwrap_or_else(|| {
+                                        c.chars().count() as f32 * 18.0 * 0.5
+                                    }) as f64
+                            })
+                            .fold(0.0f64, f64::max);
+                        let crowded = widest_label / (plot_w / n_cat as f64) > 1.0;
+                        let plot_bot = if crowded {
+                            sy + shh - 78.62
+                        } else {
+                            sy + shh - 39.9
+                        };
+                        let plot_h = plot_bot - plot_top;
+                        let pitch = plot_w / n_cat as f64;
+                        let max_val = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold(0.0f64, f64::max);
+                        let max_axis = nice_axis_max(max_val);
+                        let axis_steps = 5usize;
+                        let line_col = pres
+                            .theme_colors
+                            .get("accent1")
+                            .map(|s| s.as_str())
+                            .or_else(|| DEFAULT_ACCENT.first().copied());
+
+                        // Value axis labels (Calibri 18pt, right edge =
+                        // plot_left-16.64, baseline = tick_y+5.22; same
+                        // rule as the bars).
+                        for i in 0..=axis_steps {
+                            let val = max_axis * i as f64 / axis_steps as f64;
+                            let tick_y = plot_bot - (val / max_axis) * plot_h;
+                            let label = format!("{}", val.round() as i64);
+                            let lw = font_adv::line_hmtx_width_pt(&label, 18.0, axis_family)
+                                .unwrap_or_else(|| {
+                                    label.chars().count() as f32 * 18.0 * 0.5
+                                }) as f64;
+                            let lx = plot_left - 16.64 - lw;
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (tick_y + 5.22) as f32,
+                                &label,
+                                18.0,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Major gridlines: 5 black lines at the value ticks
+                        // (i=0 is the X axis line, drawn in the axis
+                        // section below), BEFORE the polyline.
+                        let grid_pen = CreatePen(
+                            PS_SOLID,
+                            2,
+                            COLORREF(colorref(0, 0, 0)),
+                        );
+                        let old_grid_pen = SelectObject(mem_dc, grid_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let gl = (plot_left * scale).round() as i32;
+                        let gr = (plot_right * scale).round() as i32;
+                        for i in 1..=axis_steps {
+                            let grid_y = plot_bot - plot_h * i as f64 / axis_steps as f64;
+                            let gy = (grid_y * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, gl, gy, None);
+                            let _ = LineTo(mem_dc, gr, gy);
+                        }
+                        SelectObject(mem_dc, old_grid_pen);
+                        let _ = DeleteObject(grid_pen);
+
+                        // Data points (single series; point i x =
+                        // plot_left + pitch/2 + i*pitch, point i y =
+                        // plot_bot - (val_i/max_axis)*plot_h).
+                        let pts: Vec<(f64, f64)> = chart
+                            .series
+                            .first()
+                            .map(|s| {
+                                s.values
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(ci, v)| {
+                                        let x = plot_left + pitch * (ci as f64 + 0.5);
+                                        let y = if max_axis > 0.0 {
+                                            plot_bot - (v / max_axis) * plot_h
+                                        } else {
+                                            plot_bot
+                                        };
+                                        (x, y)
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        // Polyline: (n_cat-1) accent1 #4F81BD segments
+                        // w=2.25 joining consecutive points.
+                        if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
+                            let line_pen = CreatePen(
+                                PS_SOLID,
+                                (2.25 * scale).round().max(1.0) as i32,
+                                COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                            );
+                            let old_line_pen = SelectObject(mem_dc, line_pen);
+                            let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                            for w in pts.windows(2) {
+                                let _ = MoveToEx(
+                                    mem_dc,
+                                    (w[0].0 * scale).round() as i32,
+                                    (w[0].1 * scale).round() as i32,
+                                    None,
+                                );
+                                let _ = LineTo(
+                                    mem_dc,
+                                    (w[1].0 * scale).round() as i32,
+                                    (w[1].1 * scale).round() as i32,
+                                );
+                            }
+                            SelectObject(mem_dc, old_line_pen);
+                            let _ = DeleteObject(line_pen);
+                        }
+
+                        // Markers: 6.96pt filled accent1 circles at every
+                        // point (gated on <c:marker val="1"/>).
+                        if chart.marker {
+                            if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
+                                let m_brush = CreateSolidBrush(COLORREF(
+                                    colorref(rgb.0, rgb.1, rgb.2),
+                                ));
+                                let old_m_brush = SelectObject(mem_dc, m_brush);
+                                let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                let mr = 6.96 / 2.0;
+                                for (px, py) in pts.iter() {
+                                    let _ = Ellipse(
+                                        mem_dc,
+                                        ((px - mr) * scale).round() as i32,
+                                        ((py - mr) * scale).round() as i32,
+                                        ((px + mr) * scale).round() as i32,
+                                        ((py + mr) * scale).round() as i32,
+                                    );
+                                }
+                                SelectObject(mem_dc, old_m_brush);
+                                let _ = DeleteObject(m_brush);
+                            }
+                        }
+
+                        // Category names centred on each category centre,
+                        // ONE line (Word renders the labels as stroke-outline
+                        // glyphs on a single row; baseline = plot_bot+28.67
+                        // normal / +29.7 crowded, measured).
+                        for (ci, name) in chart.categories.iter().enumerate() {
+                            let cat_center = plot_left + pitch * (ci as f64 + 0.5);
+                            let lw = font_adv::line_hmtx_width_pt(name, 18.0, axis_family)
+                                .unwrap_or_else(|| {
+                                    name.chars().count() as f32 * 18.0 * 0.5
+                                }) as f64;
+                            let lx = cat_center - lw / 2.0;
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (plot_bot + if crowded { 29.7 } else { 28.67 }) as f32,
+                                name,
+                                18.0,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Automatic title (single series -> Calibri-Bold
+                        // 21.62pt centred on the frame, baseline sy+28.03;
+                        // same rule as the bars).
+                        if let Some(first) = chart.series.first() {
+                            let tfs = 21.62f32;
+                            let lw = font_adv::line_hmtx_width_pt(&first.name, tfs, axis_family)
+                                .unwrap_or_else(|| {
+                                    first.name.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            let frame_cx = sx + sw / 2.0;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                (sy + 28.03) as f32,
+                                &first.name,
+                                tfs,
+                                axis_family,
+                                None,
+                                scale,
+                                700,
+                            );
+                        }
+
+                        // Line legend (when <c:legend> declared): a horizontal
+                        // accent1 line swatch w=2.25 of length 19.20 at
+                        // legend_left = plot_right+15.65, a 6.96pt marker
+                        // circle centred on it (centre = legend_left+9.57),
+                        // and the series name Calibri 18pt at
+                        // x0 = legend_left+21.29, baseline = legend_y0+5.24.
+                        // legend_y0 = sy + shh/2 + 17.68 (FRAME-relative;
+                        // single-series measured only).
+                        if chart.has_legend {
+                            let legend_y0 = sy + shh / 2.0 + 17.68;
+                            let legend_left = plot_right + 15.65;
+                            if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
+                                let lg_pen = CreatePen(
+                                    PS_SOLID,
+                                    (2.25 * scale).round().max(1.0) as i32,
+                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                                );
+                                let old_lg_pen = SelectObject(mem_dc, lg_pen);
+                                let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                let ly = (legend_y0 * scale).round() as i32;
+                                let _ = MoveToEx(
+                                    mem_dc,
+                                    (legend_left * scale).round() as i32,
+                                    ly,
+                                    None,
+                                );
+                                let _ = LineTo(
+                                    mem_dc,
+                                    ((legend_left + 19.20) * scale).round() as i32,
+                                    ly,
+                                );
+                                // marker diamond on the legend swatch
+                                // (Word renders the line legend marker as a
+                                // 6.96pt filled diamond, rect
+                                // [legend_left+5.22, legend_y0-3.48,
+                                // legend_left+13.92, legend_y0+3.48];
+                                // fill=color=accent1, w=0.75)
+                                let m_brush = CreateSolidBrush(COLORREF(
+                                    colorref(rgb.0, rgb.1, rgb.2),
+                                ));
+                                let old_m_brush = SelectObject(mem_dc, m_brush);
+                                let m_pen = CreatePen(
+                                    PS_SOLID,
+                                    (0.75 * scale).round().max(1.0) as i32,
+                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                                );
+                                let old_m_pen = SelectObject(mem_dc, m_pen);
+                                let mr = 6.96 / 2.0;
+                                let mc = legend_left + 9.57;
+                                let hx = (mc * scale).round() as i32;
+                                let hy = (legend_y0 * scale).round() as i32;
+                                let diamond = [
+                                    POINT { x: ((mc - mr) * scale).round() as i32, y: hy },
+                                    POINT { x: hx, y: ((legend_y0 - mr) * scale).round() as i32 },
+                                    POINT { x: ((mc + mr) * scale).round() as i32, y: hy },
+                                    POINT { x: hx, y: ((legend_y0 + mr) * scale).round() as i32 },
+                                ];
+                                let _ = Polygon(mem_dc, &diamond);
+                                SelectObject(mem_dc, old_m_pen);
+                                let _ = DeleteObject(m_pen);
+                                SelectObject(mem_dc, old_m_brush);
+                                let _ = DeleteObject(m_brush);
+                                SelectObject(mem_dc, old_lg_pen);
+                                let _ = DeleteObject(lg_pen);
+                            }
+                            if let Some(first) = chart.series.first() {
+                                draw_text_baseline(
+                                    mem_dc,
+                                    ((legend_left + 21.29) * scale).round() as i32,
+                                    (legend_y0 + 5.24) as f32,
+                                    &first.name,
+                                    18.0,
+                                    axis_family,
+                                    None,
+                                    scale,
+                                );
+                            }
+                        }
+
+                        // Axis lines + ticks (same as the bars: Y axis
+                        // vertical plot_left, X axis horizontal plot_bot,
+                        // Y ticks 0..=axis_steps at plot_left-5.7, X ticks
+                        // 0..=n_cat at category boundaries, plot frame top
+                        // edge painted).
+                        let axis_pen = CreatePen(
+                            PS_SOLID,
+                            2,
+                            COLORREF(colorref(0, 0, 0)),
+                        );
+                        let old_axis_pen = SelectObject(mem_dc, axis_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let pl = (plot_left * scale).round() as i32;
+                        let pt = (plot_top * scale).round() as i32;
+                        let pr = (plot_right * scale).round() as i32;
+                        let pb = (plot_bot * scale).round() as i32;
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pl, pb);
+                        let _ = MoveToEx(mem_dc, pl, pb, None);
+                        let _ = LineTo(mem_dc, pr, pb);
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pr, pt);
+                        for i in 0..=axis_steps {
+                            let tick_y = plot_bot - plot_h * i as f64 / axis_steps as f64;
+                            let ty = (tick_y * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, ((plot_left - 5.7) * scale).round() as i32, ty, None);
+                            let _ = LineTo(mem_dc, pl, ty);
+                        }
+                        for i in 0..=n_cat {
+                            let tick_x = plot_left + pitch * i as f64;
+                            let tx = (tick_x * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, tx, pb, None);
+                            let _ = LineTo(mem_dc, tx, ((plot_bot + 5.7) * scale).round() as i32);
+                        }
+                        SelectObject(mem_dc, old_axis_pen);
+                        let _ = DeleteObject(axis_pen);
                         } else {
                         let sx = sh.x as f64;
                         let sy = sh.y as f64;
