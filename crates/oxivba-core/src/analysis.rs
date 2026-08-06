@@ -258,6 +258,18 @@ pub const RULES: &[Rule] = &[
         reason: "queries an external file",
     },
     Rule {
+        pattern: "Input",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "reads bytes or characters from an external file",
+    },
+    Rule {
+        pattern: "InputB",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "reads bytes from an external file",
+    },
+    Rule {
         pattern: "LOF",
         how: Match::Exact,
         class: Class::C,
@@ -1603,6 +1615,14 @@ mod tests {
                 a.api_names
             );
         }
+    }
+
+    #[test]
+    fn input_function_with_hash_file_number_is_class_c() {
+        let a = analyse_src("Sub T()\nvalue = Input$(2, #handle)\nEnd Sub");
+        assert_eq!(a.class, Some(Class::C));
+        assert_eq!(a.api_names.get("Input"), Some(&1));
+        assert_eq!(a.metrics.unparsed, 0);
     }
 
     #[test]

@@ -1053,6 +1053,7 @@ impl<'a> Parser<'a> {
             let mut args = vec![Argument {
                 name: None,
                 value: None,
+                file_number: false,
                 force_by_value: false,
             }];
             args.clear();
@@ -1087,6 +1088,7 @@ impl<'a> Parser<'a> {
                 args.push(Argument {
                     name: None,
                     value: None,
+                    file_number: false,
                     force_by_value: false,
                 });
                 continue;
@@ -2204,6 +2206,7 @@ impl<'a> Parser<'a> {
                 args.push(Argument {
                     name: None,
                     value: None,
+                    file_number: false,
                     force_by_value: false,
                 });
                 continue;
@@ -2232,14 +2235,17 @@ impl<'a> Parser<'a> {
             return Some(Argument {
                 name: Some(name),
                 value: Some(value),
+                file_number: false,
                 force_by_value,
             });
         }
+        let file_number = self.eat_punct(Punct::Hash);
         let force_by_value = self.at_punct(Punct::LParen);
         let value = self.parse_expr()?;
         Some(Argument {
             name: None,
             value: Some(value),
+            file_number,
             force_by_value,
         })
     }
@@ -2999,6 +3005,24 @@ mod tests {
             Statement::Close { files, .. } => assert_eq!(files.len(), 2, "{:#?}", p.body[5]),
             other => panic!("expected Close, got {other:#?}"),
         }
+    }
+
+    #[test]
+    fn input_function_preserves_optional_hash_file_number() {
+        let procedure = only_proc("Sub T()\nvalue = Input$(2, #handle)\nEnd Sub");
+        let Statement::Assign { value, .. } = &procedure.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Index { args, .. } = value else {
+            panic!("expected Input call")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(!args[0].file_number);
+        assert!(args[1].file_number);
+        assert_eq!(
+            args[1].value.as_ref().and_then(Expr::dotted_name),
+            Some("handle".to_string())
+        );
     }
 
     #[test]

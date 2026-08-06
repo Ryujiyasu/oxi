@@ -823,6 +823,9 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
             }
             out.push('(');
             for arg in args {
+                if arg.file_number {
+                    out.push('#');
+                }
                 if arg.force_by_value {
                     out.push_str("byval ");
                 }
@@ -1400,6 +1403,16 @@ Sub D()\nx = 4\nEnd Sub";
         assert_ne!(
             fp(get_at, Strength::Loosest).combined,
             fp(put_at, Strength::Loosest).combined
+        );
+    }
+
+    #[test]
+    fn hash_file_number_argument_is_fingerprinted() {
+        let marked = "Sub T()\nvalue = Input$(2, #handle)\nEnd Sub";
+        let plain = "Sub T()\nvalue = Input$(2, handle)\nEnd Sub";
+        assert_ne!(
+            fp(marked, Strength::Strict).combined,
+            fp(plain, Strength::Strict).combined
         );
     }
 
