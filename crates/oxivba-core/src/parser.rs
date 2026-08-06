@@ -37,6 +37,7 @@ pub fn parse_module(source: &str) -> Result<Module, LexError> {
         tokens,
         pos: 0,
         terminated: true,
+        pending_next_counters: Vec::new(),
     };
     Ok(parser.parse_module())
 }
@@ -52,6 +53,9 @@ struct Parser<'a> {
     /// half-interpreted. Without this, leftover tokens get read as the start of
     /// a new statement — a stray `For` can then swallow the rest of a procedure.
     terminated: bool,
+    /// Remaining counters from a combined `Next inner, outer` terminator.
+    /// The inner loop consumes the first and leaves the rest for its parents.
+    pending_next_counters: Vec<Expr>,
 }
 
 impl<'a> Parser<'a> {
@@ -749,7 +753,10 @@ impl<'a> Parser<'a> {
         let mut body = Vec::new();
         loop {
             self.skip_blank();
-            if self.at_eof() || self.at_block_end(terminators) {
+            if self.at_eof()
+                || (terminators.contains(&"next") && !self.pending_next_counters.is_empty())
+                || self.at_block_end(terminators)
+            {
                 break;
             }
             let line_start = self.span();
@@ -1783,11 +1790,12 @@ impl<'a> Parser<'a> {
                 .unwrap_or(Expr::Literal(Literal::Empty, span));
             self.end_statement();
             let body = self.parse_block(&["next"]);
-            self.consume_line();
+            let next_counter = self.parse_next_counter();
             return Statement::ForEach(ForEachStmt {
                 item,
                 collection,
                 body,
+                next_counter,
                 span,
             });
         }
@@ -1811,7 +1819,7 @@ impl<'a> Parser<'a> {
         };
         self.end_statement();
         let body = self.parse_block(&["next"]);
-        self.consume_line();
+        let next_counter = self.parse_next_counter();
 
         Statement::For(ForStmt {
             counter,
@@ -1819,8 +1827,35 @@ impl<'a> Parser<'a> {
             to,
             step,
             body,
+            next_counter,
             span,
         })
+    }
+
+    fn parse_next_counter(&mut self) -> Option<Expr> {
+        if !self.pending_next_counters.is_empty() {
+            return Some(self.pending_next_counters.remove(0));
+        }
+
+        self.eat_kw("next");
+        let mut counters = Vec::new();
+        while !self.at_eol() && !self.at_punct(Punct::Colon) {
+            let Some(counter) = self.parse_postfix() else {
+                break;
+            };
+            counters.push(counter);
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.end_statement();
+        let first = if counters.is_empty() {
+            None
+        } else {
+            Some(counters.remove(0))
+        };
+        self.pending_next_counters.extend(counters);
+        first
     }
 
     fn parse_do(&mut self, span: Span) -> Statement {
@@ -2574,6 +2609,34 @@ mod tests {
 
         let each = only_proc("Sub T()\nFor Each c In Range(\"A1:A3\")\nNext c\nEnd Sub");
         assert!(matches!(&each.body[0], Statement::ForEach(_)));
+    }
+
+    #[test]
+    fn combined_next_counters_close_nested_loops() {
+        let p = only_proc(
+            "Sub T()\n\
+             For outer = 1 To 2\n\
+             For inner = 1 To 2\n\
+             value = value + 1\n\
+             Next inner, outer\n\
+             result = value\n\
+             End Sub",
+        );
+        assert_eq!(p.body.len(), 2, "following statement was swallowed: {p:#?}");
+        let Statement::For(outer) = &p.body[0] else {
+            panic!("expected outer For, got {:#?}", p.body[0]);
+        };
+        assert_eq!(
+            outer.next_counter.as_ref().and_then(Expr::dotted_name),
+            Some("outer".to_string())
+        );
+        let Statement::For(inner) = &outer.body[0] else {
+            panic!("expected inner For, got {:#?}", outer.body[0]);
+        };
+        assert_eq!(
+            inner.next_counter.as_ref().and_then(Expr::dotted_name),
+            Some("inner".to_string())
+        );
     }
 
     #[test]

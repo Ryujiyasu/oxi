@@ -668,6 +668,10 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             render_body(&s.body, locals, depth + 1, out);
             indent(depth, out);
             out.push_str("next");
+            if let Some(counter) = &s.next_counter {
+                out.push(' ');
+                render_expr(counter, locals, out);
+            }
         }
         Statement::ForEach(s) => {
             out.push_str("foreach ");
@@ -678,6 +682,10 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             render_body(&s.body, locals, depth + 1, out);
             indent(depth, out);
             out.push_str("next");
+            if let Some(counter) = &s.next_counter {
+                out.push(' ');
+                render_expr(counter, locals, out);
+            }
         }
         Statement::Do(s) => {
             out.push_str("do");
@@ -1172,7 +1180,8 @@ End Sub";
             .replace(" i ", " cnt ")
             .replace("(i", "(cnt")
             .replace("i *", "cnt *")
-            .replace("& i", "& cnt");
+            .replace("& i", "& cnt")
+            .replace("Next i", "Next cnt");
         assert_ne!(
             fp(ORIGINAL, Strength::Strict).combined,
             fp(&renamed, Strength::Strict).combined
@@ -1193,6 +1202,17 @@ End Sub";
         assert_eq!(
             fp(ORIGINAL, Strength::Loose).combined,
             fp(&next_year, Strength::Loose).combined
+        );
+    }
+
+    #[test]
+    fn combined_next_is_equivalent_to_separate_nested_terminators() {
+        let combined = "Sub T()\nFor i = 1 To 2\nFor j = 1 To 2\nx = x + 1\nNext j, i\nEnd Sub";
+        let separate =
+            "Sub T()\nFor i = 1 To 2\nFor j = 1 To 2\nx = x + 1\nNext j\nNext i\nEnd Sub";
+        assert_eq!(
+            fp(combined, Strength::Strict).combined,
+            fp(separate, Strength::Strict).combined
         );
     }
 

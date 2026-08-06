@@ -540,6 +540,9 @@ pub struct ForStmt {
     pub to: Expr,
     pub step: Option<Expr>,
     pub body: Vec<Statement>,
+    /// The counter written after `Next`, if present. A single
+    /// `Next inner, outer` line is distributed across its nested loops.
+    pub next_counter: Option<Expr>,
     pub span: Span,
 }
 
@@ -548,6 +551,7 @@ pub struct ForEachStmt {
     pub item: Expr,
     pub collection: Expr,
     pub body: Vec<Statement>,
+    pub next_counter: Option<Expr>,
     pub span: Span,
 }
 
