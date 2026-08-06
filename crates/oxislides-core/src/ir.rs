@@ -233,9 +233,16 @@ pub enum SlideBullet {
         ch: char,
         font: Option<String>, // a:buFont/@typeface
     },
-    /// a:buAutoNum — an automatically numbered marker (rendering: follow-up).
+    /// a:buAutoNum — an automatically numbered marker (Spec #11, derived
+    /// 2026-08-06: kind-specific formats, per-(lvl, kind, startAt) counters,
+    /// list split when startAt is present / changes).
     AutoNum {
         kind: String,
+        /// a:buAutoNum/@startAt — the first marker value (a fresh list starts
+        /// at this value; None = 1). A paragraph whose startAt differs from
+        /// the previous paragraph's starts a new list.
+        #[serde(default)]
+        start_at: Option<u32>,
     },
 }
 

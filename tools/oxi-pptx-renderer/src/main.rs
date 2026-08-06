@@ -153,10 +153,15 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                             Some(_) => &pres.master_styles.body,
                                             None => &pres.master_styles.other,
                                         };
+                                    // Spec #11: one AutoNum counter set per text box.
+                                    let mut counters = std::collections::HashMap::<
+                                        (u32, String),
+                                        (Option<u32>, u32),
+                                    >::new();
                                     for (i, para_json) in arr.iter_mut().enumerate() {
                                         if let Some(para) = sh_para(&sh.content, i) {
                                             let def_family = resolve_font(pres, sh);
-                                            let (bases, _marker) = layout_paragraph_baselines(
+                                            let (bases, marker) = layout_paragraph_baselines(
                                                 dc,
                                                 para,
                                                 &mut cursor_pt,
@@ -168,7 +173,11 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 sh.r_ins,
                                                 &master_ctx[..],
                                                 anchor_off,
+                                                &mut counters,
                                             );
+                                            // Spec #11: surface the marker text so autonum
+                                            // number strings can be verified in the dump.
+                                            para_json["marker"] = json!(marker.map(|m| m.text));
                                             para_json["line_baselines"] = json!(
                                                 bases
                                                     .iter()
@@ -275,6 +284,9 @@ fn compute_shape_anchor_off(
     let def_family = resolve_font(pres, sh);
     let mut cursor_pt = 0.0_f32;
     let scale = 1.0_f64;
+    // Spec #11: AutoNum counters are per text box; this measurement pass only
+    // needs the block height, so a throwaway counter set is fine.
+    let mut counters = std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
     for (i, para) in paragraphs.iter().enumerate() {
         let _ = layout_paragraph_baselines(
             dc,
@@ -288,6 +300,7 @@ fn compute_shape_anchor_off(
             sh.r_ins,
             &master_ctx[..],
             0.0,
+            &mut counters,
         );
     }
     // block_h = the block's advance minus the first paragraph's first_off.
@@ -553,6 +566,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             Some(_) => &pres.master_styles.body,
                             None => &pres.master_styles.other,
                         };
+                        // Spec #11: one AutoNum counter set per text box (the
+                        // counters continue across the box's paragraphs, keyed
+                        // by (level, kind) with a startAt reset, inside
+                        // layout_paragraph_baselines).
+                        let mut counters =
+                            std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
                         for (pi, p) in paragraphs.iter().enumerate() {
                             // Effective font size: a run's explicit sz wins (the
                             // max over runs); else the master txStyles level
@@ -591,6 +610,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 sh.r_ins,
                                 &master_ctx[..],
                                 anchor_off,
+                                &mut counters,
                             );
                             if let Some(m) = &marker {
                                 let marker_x =
@@ -599,7 +619,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     mem_dc,
                                     marker_x,
                                     m.baseline,
-                                    &m.ch.to_string(),
+                                    &m.text,
                                     m.fs,
                                     &m.font,
                                     color.as_deref(),
@@ -952,11 +972,13 @@ fn font_baseline_offset_em(family: &str) -> f32 {
     }
 }
 
-/// Bullet marker to draw at the start of a paragraph's first line (Spec #8).
-/// `x_pt` is the marker's left edge in pt relative to P0 (the shape's left text
-/// inset); `baseline` is the slide-absolute baseline in pt (== line 0's).
+/// Bullet / AutoNum marker to draw at the start of a paragraph's first line
+/// (Spec #8 / Spec #11). `text` is the marker string ("•" for buChar, or a
+/// rendered auto-number like "1." / "(i)" for buAutoNum); `x_pt` is the
+/// marker's left edge in pt relative to P0 (the shape's left text inset);
+/// `baseline` is the slide-absolute baseline in pt (== line 0's).
 struct MarkerInfo {
-    ch: char,
+    text: String,
     font: String,
     x_pt: f32,
     baseline: f32,
@@ -998,6 +1020,7 @@ fn layout_paragraph_baselines(
     r_ins: f32,
     master: &[MasterStyleLevel],
     anchor_off: f32,
+    counters: &mut std::collections::HashMap<(u32, String), (Option<u32>, u32)>,
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
@@ -1088,18 +1111,55 @@ fn layout_paragraph_baselines(
     };
     let mut line0_x_off = line0_x_off;
     let mut marker: Option<MarkerInfo> = None;
-    if let SlideBullet::Char { ch, font } = &bullet {
-        let marker_family = font.clone().unwrap_or_else(|| family.clone());
-        let marker_w =
-            font_adv::bullet_advance_em(&marker_family, *ch).unwrap_or(0.0) * fs;
-        line0_x_off = line0_x_off.max(marker_rel + marker_w);
-        marker = Some(MarkerInfo {
-            ch: *ch,
-            font: marker_family,
-            x_pt: marker_rel,
-            baseline: 0.0, // line 0's baseline, filled in the line loop
-            fs,
-        });
+    match &bullet {
+        SlideBullet::Char { ch, font } => {
+            let marker_family = font.clone().unwrap_or_else(|| family.clone());
+            let marker_w =
+                font_adv::bullet_advance_em(&marker_family, *ch).unwrap_or(0.0) * fs;
+            line0_x_off = line0_x_off.max(marker_rel + marker_w);
+            marker = Some(MarkerInfo {
+                text: ch.to_string(),
+                font: marker_family,
+                x_pt: marker_rel,
+                baseline: 0.0, // line 0's baseline, filled in the line loop
+                fs,
+            });
+        }
+        SlideBullet::AutoNum { kind, start_at } => {
+            // Spec #11: the auto-number counter is per (level, kind). The
+            // sequence CONTINUES while startAt stays the same (absent==absent,
+            // or the same value); it starts a NEW list whenever startAt
+            // changes — present/absent or a different value — resetting to
+            // startAt.unwrap_or(1). Word truth: autonum4 G [None][5][None]
+            // renders 1,5,1 (the None list restarts after the [5] list);
+            // autonum p1 L0 1,2,3..4 continues across interleaved levels
+            // because the (lvl,kind) key never changed its startAt.
+            let key = (para.lvl, kind.clone());
+            let entry = counters.entry(key).or_insert((None, 0u32));
+            let (last_start, c) = *entry;
+            let n = if c == 0 || last_start != *start_at {
+                start_at.unwrap_or(1) // new list (first use, or startAt changed)
+            } else {
+                c // same list: continue the sequence
+            };
+            *entry = (*start_at, n + 1);
+            let text = autonum_text(kind, n);
+            // The number is ASCII (digits / I V X / a-z A-Z) so its width is
+            // the hmtx design-advance sum (unsupported families -> 0.0, the
+            // same fallback buChar uses).
+            let marker_family = family.clone();
+            let marker_w =
+                font_adv::line_hmtx_width_pt(&text, fs, &marker_family).unwrap_or(0.0);
+            line0_x_off = line0_x_off.max(marker_rel + marker_w);
+            marker = Some(MarkerInfo {
+                text,
+                font: marker_family,
+                x_pt: marker_rel,
+                baseline: 0.0, // line 0's baseline, filled in the line loop
+                fs,
+            });
+        }
+        _ => {}
     }
 
     let mut out = Vec::with_capacity(n_lines);
@@ -1140,6 +1200,74 @@ fn layout_paragraph_baselines(
         *cursor_pt += sa;
     }
     (out, marker)
+}
+
+/// Render an auto-number marker string for a buAutoNum `kind` at count `n`
+/// (Spec #11, autonum4.pdf 16-scheme render-truth, all PowerPoint-valid kinds).
+/// The body is decimal, uppercase/lowercase roman, or uppercase/lowercase
+/// alpha (Excel-column style: 1=A .. 26=Z .. 27=AA); the wrapper is
+/// `<body>.` (Period), `<body>)` (ParenR), `(<body>)` (ParenBoth), or the
+/// bare body (Plain). Unknown kinds fall back to arabicPeriod ("N.") — the
+/// *Plain roman/alpha kinds crash PowerPoint and never appear in real docs.
+fn autonum_text(kind: &str, n: u32) -> String {
+    let body = if kind.starts_with("romanUc") {
+        to_roman(n)
+    } else if kind.starts_with("romanLc") {
+        to_roman(n).to_lowercase()
+    } else if kind.starts_with("alphaUc") {
+        to_alpha(n)
+    } else if kind.starts_with("alphaLc") {
+        to_alpha(n).to_lowercase()
+    } else {
+        n.to_string()
+    };
+    if kind.ends_with("ParenBoth") {
+        format!("({})", body)
+    } else if kind.ends_with("ParenR") {
+        format!("{})", body)
+    } else if kind.ends_with("Period") {
+        format!("{}.", body)
+    } else {
+        body // Plain and any unknown kind
+    }
+}
+
+/// Standard greedy decimal -> uppercase Roman numeral (1=I .. 3999=MMMCMXCIX).
+fn to_roman(mut n: u32) -> String {
+    const ROMAN: [(u32, &str); 13] = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut s = String::new();
+    for &(v, r) in ROMAN.iter() {
+        while n >= v {
+            s.push_str(r);
+            n -= v;
+        }
+    }
+    s
+}
+
+/// Excel-column style alphabetic numbering: 1=A, 2=B, .. 26=Z, 27=AA.
+fn to_alpha(mut n: u32) -> String {
+    let mut s = String::new();
+    while n > 0 {
+        let d = ((n - 1) % 26) as u8;
+        s.insert(0, (b'A' + d) as char);
+        n = (n - 1) / 26;
+    }
+    s
 }
 
 /// Draw text at a baseline position (converts baseline -> cell top via tmAscent).

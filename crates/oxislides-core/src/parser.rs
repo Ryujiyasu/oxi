@@ -278,7 +278,8 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                     "buAutoNum" if in_level => {
                         let kind =
                             get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
-                        cur_level.bullet = SlideBullet::AutoNum { kind };
+                        let start_at = get_attr(&e, "startAt").and_then(|v| v.parse::<u32>().ok());
+                        cur_level.bullet = SlideBullet::AutoNum { kind, start_at };
                     }
                     _ => {}
                 }
@@ -785,7 +786,8 @@ fn parse_slide(
                     }
                     "buAutoNum" if in_paragraph => {
                         let kind = get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
-                        para_bullet = SlideBullet::AutoNum { kind };
+                        let start_at = get_attr(&e, "startAt").and_then(|v| v.parse::<u32>().ok());
+                        para_bullet = SlideBullet::AutoNum { kind, start_at };
                     }
                     "r" if in_paragraph => {
                         in_run = true;
@@ -1013,7 +1015,8 @@ fn parse_slide(
                     }
                     "buAutoNum" if in_paragraph => {
                         let kind = get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
-                        para_bullet = SlideBullet::AutoNum { kind };
+                        let start_at = get_attr(&e, "startAt").and_then(|v| v.parse::<u32>().ok());
+                        para_bullet = SlideBullet::AutoNum { kind, start_at };
                     }
                     "spcPct" if in_ln_spc => {
                         // a:lnSpc/a:spcPct/@val is the multiple in 100000ths.
