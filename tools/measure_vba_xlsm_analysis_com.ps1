@@ -50,7 +50,7 @@ Private Function SuffixValue$(ByVal number&)
 End Function
 
 Private Function WideValue^()
-    WideValue = 42^
+    WideValue = 42^ + 2
 End Function
 '@)
     $sheet = $workbook.Worksheets.Item(1)
@@ -58,7 +58,7 @@ End Function
     $actualValue = [string]$sheet.Range('A1').Value2
     $fixedLength = [long]$sheet.Range('B1').Value2
     $wideValue = [long]$sheet.Range('C1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 42 -or -not [bool]$sheet.Range('A1').Font.Bold) {
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or -not [bool]$sheet.Range('A1').Font.Bold) {
         throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)

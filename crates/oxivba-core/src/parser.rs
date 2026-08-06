@@ -122,17 +122,25 @@ impl<'a> Parser<'a> {
         matches!(self.kind(), TokenKind::Eol) || self.at_eof()
     }
 
-    fn caret_ends_literal(&self) -> bool {
-        self.at_punct(Punct::Caret)
-            && matches!(
-                self.kind_at(1),
-                TokenKind::Eol
-                    | TokenKind::Eof
-                    | TokenKind::Comment(_)
-                    | TokenKind::Punct(
-                        Punct::RParen | Punct::Comma | Punct::Colon | Punct::Semicolon
-                    )
+    fn caret_is_literal_suffix(&self, number_span: Span) -> bool {
+        if !self.at_punct(Punct::Caret) || self.span().start != number_span.end {
+            return false;
+        }
+        let operator_word = self.word_at(1).is_some_and(|word| {
+            matches!(
+                word.as_str(),
+                "mod" | "is" | "like" | "and" | "or" | "xor" | "eqv" | "imp"
             )
+        });
+        let next_starts_power_operand = matches!(
+            self.kind_at(1),
+            TokenKind::Number(_)
+                | TokenKind::Str(_)
+                | TokenKind::DateLit(_)
+                | TokenKind::Ident(_)
+                | TokenKind::Punct(Punct::LParen | Punct::Dot)
+        ) && !operator_word;
+        !next_starts_power_operand
     }
 
     /// Consume a statement terminator if one is next, and nothing else.
@@ -2198,7 +2206,9 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 let suffix = match self.kind() {
                     TokenKind::TypeSuffix(suffix) => Some(*suffix),
-                    TokenKind::Punct(Punct::Caret) if self.caret_ends_literal() => Some('^'),
+                    TokenKind::Punct(Punct::Caret) if self.caret_is_literal_suffix(span) => {
+                        Some('^')
+                    }
                     _ => None,
                 };
                 if suffix.is_some() {
@@ -2421,6 +2431,17 @@ mod tests {
             other => panic!("expected negation of a power, got {other:?}"),
         }
         assert_eq!(op_of(&expr("value^2")), BinaryOp::Pow);
+        assert_eq!(op_of(&expr("2^3")), BinaryOp::Pow);
+        let typed_add = expr("42^ + 2");
+        assert_eq!(op_of(&typed_add), BinaryOp::Add);
+        assert!(matches!(
+            typed_add,
+            Expr::Binary { lhs, .. }
+                if matches!(*lhs, Expr::Literal(
+                    Literal::TypedNumber { value: 42.0, suffix: '^' }, _))
+        ));
+        let spaced = only_proc("Sub T()\nx = 42 ^ + 2\nEnd Sub");
+        assert!(matches!(spaced.body[0], Statement::Unknown { .. }));
     }
 
     #[test]
