@@ -1715,8 +1715,6 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     }
                     "barChart" => {
                         in_bar_chart = true;
-                        bar_dir = get_attr(&e, "barDir");
-                        grouping = get_attr(&e, "grouping");
                     }
                     "ser" if in_bar_chart || chart_type.as_deref() == Some("pie") => {
                         in_ser = true;
@@ -1741,6 +1739,21 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                 match name.as_str() {
                     "v" => {
                         // empty value — nothing to collect
+                    }
+                    // <c:barDir val="col"/> and <c:grouping val="stacked"/>
+                    // are SELF-CLOSING CHILD elements of <c:barChart> (NOT
+                    // attributes on the barChart tag) — Event::Empty. The
+                    // Word-measured stacked-column spec (chart_stacked probe)
+                    // keys the stack vs cluster split on chart.grouping.
+                    "barDir" => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            bar_dir = Some(v);
+                        }
+                    }
+                    "grouping" => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            grouping = Some(v);
+                        }
                     }
                     // python-pptx writes a bare self-closing <c:legend/> to
                     // enable a legend (no overlay/position attrs). Any legend

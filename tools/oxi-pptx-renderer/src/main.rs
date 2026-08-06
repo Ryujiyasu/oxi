@@ -998,6 +998,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
                         let has_auto_title = chart.series.len() == 1;
+                        let is_stacked = chart.grouping == "stacked";
                         let plot_left = sx + 41.4;
                         let plot_top = if has_auto_title {
                             sy + 51.4
@@ -1013,16 +1014,42 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let axis_fs = 18.0f32;
                         let axis_family = "Calibri";
 
-                        // Value axis labels (0..max_axis in 5 even steps),
-                        // right-aligned to a fixed gutter.
-                        let max_val = chart
-                            .series
-                            .iter()
-                            .flat_map(|s| s.values.iter().copied())
-                            .fold(0.0f64, f64::max);
+                        // Value axis labels (0..max_axis in even steps),
+                        // right-aligned to a fixed gutter. For a CLUSTERED
+                        // chart the scale is 0..max_axis in 5 steps (6
+                        // labels). For a STACKED chart Word scales to the
+                        // largest per-category series SUM (chart_stacked:
+                        // Q2 sum 36.4 -> nice max 40) and draws one label
+                        // per 5-step tick, i.e. (max_axis/5)+1 labels
+                        // (0,5,...,40 = 9 labels, render-truth 2026-08-06).
+                        let max_val = if is_stacked {
+                            // largest per-category sum over all series
+                            (0..n_cat)
+                                .map(|ci| {
+                                    chart
+                                        .series
+                                        .iter()
+                                        .map(|s| {
+                                            s.values.get(ci).copied().unwrap_or(0.0)
+                                        })
+                                        .sum::<f64>()
+                                })
+                                .fold(0.0f64, f64::max)
+                        } else {
+                            chart
+                                .series
+                                .iter()
+                                .flat_map(|s| s.values.iter().copied())
+                                .fold(0.0f64, f64::max)
+                        };
                         let max_axis = nice_axis_max(max_val);
-                        for i in 0..=5usize {
-                            let val = max_axis * i as f64 / 5.0;
+                        let axis_steps = if is_stacked {
+                            (max_axis / 5.0).round().max(1.0) as usize
+                        } else {
+                            5usize
+                        };
+                        for i in 0..=axis_steps {
+                            let val = max_axis * i as f64 / axis_steps as f64;
                             let tick_y = plot_bot - (val / max_axis) * plot_h;
                             let label = format!("{}", val.round() as i64);
                             let lw = font_adv::line_hmtx_width_pt(&label, axis_fs, axis_family)
@@ -1042,6 +1069,41 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
+                        // Horizontal major gridlines (chart_stacked render-
+                        // truth 2026-08-06, fitz get_drawings path[2]):
+                        // Word draws black lines spanning the full plot
+                        // width (plot_left->plot_right) at the value-tick
+                        // rows i=1..=axis_steps (i=0 is the X axis line,
+                        // drawn in the axis section below). They render
+                        // BEHIND the bars (a bar covers its crossing), so
+                        // they are drawn before the bars. Measured for
+                        // STACKED only (clustered Word gridlines not yet
+                        // measured -> not implemented per no-guess rule).
+                        if is_stacked && axis_steps > 0 {
+                            let grid_pen = CreatePen(
+                                PS_SOLID,
+                                2,
+                                COLORREF(colorref(0, 0, 0)),
+                            );
+                            let old_grid_pen =
+                                SelectObject(mem_dc, grid_pen);
+                            let _ = SelectObject(
+                                mem_dc,
+                                GetStockObject(NULL_BRUSH),
+                            );
+                            let gl = (plot_left * scale).round() as i32;
+                            let gr = (plot_right * scale).round() as i32;
+                            for i in 1..=axis_steps {
+                                let grid_y = plot_bot
+                                    - plot_h * i as f64 / axis_steps as f64;
+                                let gy = (grid_y * scale).round() as i32;
+                                let _ = MoveToEx(mem_dc, gl, gy, None);
+                                let _ = LineTo(mem_dc, gr, gy);
+                            }
+                            SelectObject(mem_dc, old_grid_pen);
+                            let _ = DeleteObject(grid_pen);
+                        }
+
                         // Bars: one cluster per category, series side by side
                         // (touching within a cluster). Colour rule: with a
                         // SINGLE series Word colours each data POINT with the
@@ -1052,7 +1114,73 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //   chart2 (n_ser=2) bar_w = 32.71 = pitch/(2+1.5)
                         //   chart3 (n_ser=3) bar_w = 25.44 = pitch/(3+1.5)
                         //   i.e. bar_w = pitch / (n_ser + 1.5) exactly.
+                        // STACKED: one bar per category (width = pitch*0.4,
+                        // render-truth 45.72 = 114.5*0.4, chart_stacked
+                        // 2026-08-06); series 0 is the BOTTOM segment and
+                        // each later series stacks on the one below it.
                         let pitch = plot_w / n_cat as f64;
+                        let vary_points = chart.series.len() == 1;
+                        if is_stacked {
+                            let bar_w = pitch * 0.4;
+                            for ci in 0..n_cat {
+                                let cat_center =
+                                    plot_left + pitch * (ci as f64 + 0.5);
+                                let bx0 = cat_center - bar_w / 2.0;
+                                let mut cum_h = 0.0;
+                                for (si, series) in
+                                    chart.series.iter().enumerate()
+                                {
+                                    let v = series
+                                        .values
+                                        .get(ci)
+                                        .copied()
+                                        .unwrap_or(0.0);
+                                    let seg_h = if max_axis > 0.0 {
+                                        v / max_axis * plot_h
+                                    } else {
+                                        0.0
+                                    };
+                                    let by1 = plot_bot - cum_h;
+                                    let by0 = by1 - seg_h;
+                                    let accent_idx =
+                                        if vary_points { ci } else { si };
+                                    let col_hex = pres
+                                        .theme_colors
+                                        .get(&format!(
+                                            "accent{}",
+                                            accent_idx + 1
+                                        ))
+                                        .map(|s| s.as_str())
+                                        .or_else(|| {
+                                            DEFAULT_ACCENT
+                                                .get(accent_idx)
+                                                .copied()
+                                        });
+                                    if let Some(rgb) =
+                                        col_hex.and_then(parse_hex_rgb)
+                                    {
+                                        let brush = CreateSolidBrush(
+                                            COLORREF(colorref(
+                                                rgb.0, rgb.1, rgb.2,
+                                            )),
+                                        );
+                                        let old_brush =
+                                            SelectObject(mem_dc, brush);
+                                        let r = RECT {
+                                            left: (bx0 * scale).round() as i32,
+                                            top: (by0 * scale).round() as i32,
+                                            right: ((bx0 + bar_w) * scale)
+                                                .round() as i32,
+                                            bottom: (by1 * scale).round() as i32,
+                                        };
+                                        let _ = FillRect(mem_dc, &r, brush);
+                                        SelectObject(mem_dc, old_brush);
+                                        let _ = DeleteObject(brush);
+                                    }
+                                    cum_h += seg_h;
+                                }
+                            }
+                        } else {
                         let bar_w = pitch / (n_ser as f64 + 1.5);
                         let cluster_w = bar_w * n_ser as f64;
                         let vary_points = chart.series.len() == 1;
@@ -1091,6 +1219,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     let _ = DeleteObject(brush);
                                 }
                             }
+                        }
                         }
 
                         // Category names centred on each category centre.
@@ -1270,8 +1399,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let _ = MoveToEx(mem_dc, pl, pt, None);
                         let _ = LineTo(mem_dc, pr, pt);
 
-                        for i in 0..=5usize {
-                            let tick_y = plot_bot - plot_h * i as f64 / 5.0;
+                        for i in 0..=axis_steps {
+                            let tick_y =
+                                plot_bot - plot_h * i as f64 / axis_steps as f64;
                             let ty = (tick_y * scale).round() as i32;
                             let _ = MoveToEx(mem_dc, ((plot_left - 5.7) * scale).round() as i32, ty, None);
                             let _ = LineTo(mem_dc, pl, ty);
