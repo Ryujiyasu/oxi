@@ -754,6 +754,220 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         SelectObject(mem_dc, old_pen);
                         let _ = DeleteObject(pen);
                     }
+                    ShapeContent::Chart { chart } => {
+                        // Step 2-4: clustered column chart. All geometry from
+                        // the chart1 Word render-truth (fitz 2026-08-06,
+                        // get_drawings + rawdict):
+                        //   plot area: left = sh.x+41.4, top = sh.y+51.4,
+                        //     right = sh.x+w-11.0, X-axis/bottom = sh.y+h-39.9
+                        //   bars: width = 0.4 x category pitch,
+                        //     height = val/max_axis x plot_h, bottom on the
+                        //     X axis, colour = theme accent(i+1)
+                        //   value axis: Calibri 18pt right-aligned to
+                        //     plot_left-16.64, baseline = tick_y+5.2
+                        //   category names: centred on each category centre,
+                        //     baseline = plot_bot+28.67
+                        //   legend: series names centred on the chart frame,
+                        //     Calibri-Bold 21.62pt, baseline = sh.y+28.03
+                        let sx = sh.x as f64;
+                        let sy = sh.y as f64;
+                        let sw = sh.width as f64;
+                        let shh = sh.height as f64;
+                        let plot_left = sx + 41.4;
+                        let plot_top = sy + 51.4;
+                        let plot_right = sx + sw - 11.0;
+                        let plot_bot = sy + shh - 39.9;
+                        let plot_w = plot_right - plot_left;
+                        let plot_h = plot_bot - plot_top;
+                        let n_cat = chart.categories.len().max(1);
+                        let n_ser = chart.series.len().max(1);
+                        let axis_fs = 18.0f32;
+                        let axis_family = "Calibri";
+
+                        // Value axis labels (0..max_axis in 5 even steps),
+                        // right-aligned to a fixed gutter.
+                        let max_val = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold(0.0f64, f64::max);
+                        let max_axis = nice_axis_max(max_val);
+                        for i in 0..=5usize {
+                            let val = max_axis * i as f64 / 5.0;
+                            let tick_y = plot_bot - (val / max_axis) * plot_h;
+                            let label = format!("{}", val.round() as i64);
+                            let lw = font_adv::line_hmtx_width_pt(&label, axis_fs, axis_family)
+                                .unwrap_or_else(|| {
+                                    label.chars().count() as f32 * axis_fs * 0.5
+                                }) as f64;
+                            let lx = plot_left - 16.64 - lw;
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (tick_y + 5.2) as f32,
+                                &label,
+                                axis_fs,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Bars: one cluster per category, series side by side.
+                        // Colour rule (chart1 render-truth): with a SINGLE
+                        // series Word colours each data POINT with the theme
+                        // accents in order (varyColors default); with
+                        // multiple series each SERIES takes one accent.
+                        let pitch = plot_w / n_cat as f64;
+                        let bar_w = pitch * 0.4;
+                        let cluster_w = bar_w * n_ser as f64;
+                        let vary_points = chart.series.len() == 1;
+                        for (si, series) in chart.series.iter().enumerate() {
+                            for (ci, v) in series.values.iter().enumerate() {
+                                let accent_idx = if vary_points { ci } else { si };
+                                let col_hex = pres
+                                    .theme_colors
+                                    .get(&format!("accent{}", accent_idx + 1))
+                                    .map(|s| s.as_str())
+                                    .or_else(|| DEFAULT_ACCENT.get(accent_idx).copied());
+                                if let Some(rgb) = col_hex.and_then(parse_hex_rgb) {
+                                    let brush = CreateSolidBrush(COLORREF(colorref(
+                                        rgb.0, rgb.1, rgb.2,
+                                    )));
+                                    let old_brush = SelectObject(mem_dc, brush);
+                                    let cat_center =
+                                        plot_left + pitch * (ci as f64 + 0.5);
+                                    let bx0 = cat_center
+                                        - cluster_w / 2.0
+                                        + si as f64 * bar_w;
+                                    let bar_h = if max_axis > 0.0 {
+                                        v / max_axis * plot_h
+                                    } else {
+                                        0.0
+                                    };
+                                    let by0 = plot_bot - bar_h;
+                                    let r = RECT {
+                                        left: (bx0 * scale).round() as i32,
+                                        top: (by0 * scale).round() as i32,
+                                        right: ((bx0 + bar_w) * scale).round() as i32,
+                                        bottom: (plot_bot * scale).round() as i32,
+                                    };
+                                    let _ = FillRect(mem_dc, &r, brush);
+                                    SelectObject(mem_dc, old_brush);
+                                    let _ = DeleteObject(brush);
+                                }
+                            }
+                        }
+
+                        // Category names centred on each category centre.
+                        for (ci, name) in chart.categories.iter().enumerate() {
+                            let cat_center =
+                                plot_left + pitch * (ci as f64 + 0.5);
+                            let lw = font_adv::line_hmtx_width_pt(name, axis_fs, axis_family)
+                                .unwrap_or_else(|| {
+                                    name.chars().count() as f32 * axis_fs * 0.5
+                                }) as f64;
+                            let lx = cat_center - lw / 2.0;
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (plot_bot + 28.67) as f32,
+                                name,
+                                axis_fs,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Legend: series names centred on the chart frame,
+                        // Calibri-Bold (chart1 render-truth size 21.62pt).
+                        let legend_fs = 21.62f32;
+                        let legend_gap = 8.0f64; // inter-entry gap (unmeasured; 1 series in chart1)
+                        let total_w: f64 = chart
+                            .series
+                            .iter()
+                            .map(|s| {
+                                font_adv::line_hmtx_width_pt(&s.name, legend_fs, axis_family)
+                                    .unwrap_or_else(|| {
+                                        s.name.chars().count() as f32 * legend_fs * 0.5
+                                    }) as f64
+                            })
+                            .sum::<f64>()
+                            + legend_gap * chart.series.len().saturating_sub(1) as f64;
+                        let frame_cx = sx + sw / 2.0;
+                        let leg_baseline = (sy + 28.03) as f32;
+                        let mut leg_x = frame_cx - total_w / 2.0;
+                        for s in chart.series.iter() {
+                            draw_text_baseline_w(
+                                mem_dc,
+                                (leg_x * scale).round() as i32,
+                                leg_baseline,
+                                &s.name,
+                                legend_fs,
+                                axis_family,
+                                None,
+                                scale,
+                                700,
+                            );
+                            let w = font_adv::line_hmtx_width_pt(&s.name, legend_fs, axis_family)
+                                .unwrap_or_else(|| {
+                                    s.name.chars().count() as f32 * legend_fs * 0.5
+                                }) as f64;
+                            leg_x += w + legend_gap;
+                        }
+
+                        // Axis lines + ticks (chart1 render-truth, fitz
+                        // get_drawings 2026-08-06, per-item line paths):
+                        //   Y axis line: vertical (plot_left, plot_top) ->
+                        //     (plot_left, plot_bot)
+                        //   X axis line: horizontal (plot_left, plot_bot) ->
+                        //     (plot_right, plot_bot)
+                        //   Y ticks: 6, x from plot_left-5.7 to plot_left at
+                        //     y = plot_top + i*plot_h/5 (i=0..=5)
+                        //   X ticks: n_cat+1, y from plot_bot to plot_bot+5.7
+                        //     at x = plot_left + i*pitch (i=0..=n_cat; the
+                        //     CATEGORY BOUNDARIES, not the centres)
+                        let axis_pen = CreatePen(
+                            PS_SOLID,
+                            2,
+                            COLORREF(colorref(0, 0, 0)),
+                        );
+                        let old_axis_pen = SelectObject(mem_dc, axis_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+
+                        let pl = (plot_left * scale).round() as i32;
+                        let pt = (plot_top * scale).round() as i32;
+                        let pr = (plot_right * scale).round() as i32;
+                        let pb = (plot_bot * scale).round() as i32;
+
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pl, pb);
+                        let _ = MoveToEx(mem_dc, pl, pb, None);
+                        let _ = LineTo(mem_dc, pr, pb);
+                        // Plot frame TOP edge (render-truth: Word paints a line
+                        // (113.45,123.35)->(457.00,123.35) at plot_top; the chart
+                        // frame / plot frame right edge are declared but NOT
+                        // painted - pixel-checked 2026-08-06)
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pr, pt);
+
+                        for i in 0..=5usize {
+                            let tick_y = plot_bot - plot_h * i as f64 / 5.0;
+                            let ty = (tick_y * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, ((plot_left - 5.7) * scale).round() as i32, ty, None);
+                            let _ = LineTo(mem_dc, pl, ty);
+                        }
+                        for i in 0..=n_cat {
+                            let tick_x = plot_left + pitch * i as f64;
+                            let tx = (tick_x * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, tx, pb, None);
+                            let _ = LineTo(mem_dc, tx, ((plot_bot + 5.7) * scale).round() as i32);
+                        }
+
+                        SelectObject(mem_dc, old_axis_pen);
+                        let _ = DeleteObject(axis_pen);
+                    }
                     _ => {}
                 }
             }
@@ -898,9 +1112,10 @@ fn draw_text_line(
 
 /// Create a GDI font for the given family/size (negative lfHeight = char height).
 #[cfg(windows)]
-fn create_font_for(
+fn create_font_for_w(
     family: &str,
     font_size: f32,
+    weight: i32,
     scale: f64,
 ) -> windows::Win32::Graphics::Gdi::HFONT {
     use windows::Win32::Graphics::Gdi::*;
@@ -911,10 +1126,49 @@ fn create_font_for(
     family_buf[..wide.len()].copy_from_slice(&wide);
     unsafe {
         CreateFontW(
-            -height, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
+            -height, 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0,
             PCWSTR(family_buf.as_ptr()),
         )
     }
+}
+
+/// Regular-weight font (the common case).
+#[cfg(windows)]
+fn create_font_for(
+    family: &str,
+    font_size: f32,
+    scale: f64,
+) -> windows::Win32::Graphics::Gdi::HFONT {
+    create_font_for_w(family, font_size, 400, scale)
+}
+
+/// Office 2016+ default accent colours. Used only as a fallback when the
+/// theme's clrScheme does not declare accentN — real charts resolve their
+/// series colours from `Presentation.theme_colors` (Spec #10).
+const DEFAULT_ACCENT: [&str; 6] = [
+    "4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47",
+];
+
+/// "Nice" ceiling for the value axis: the smallest multiple of a 1/2/5×10^k
+/// step that is >= max. Chart1 render-truth: max 21.4 -> step 5 -> 25.
+fn nice_axis_max(max_val: f64) -> f64 {
+    if max_val <= 0.0 {
+        return 1.0;
+    }
+    let n_ticks = 5.0;
+    let raw = max_val / n_ticks;
+    let mag = 10f64.powf(raw.log10().floor());
+    let resid = raw / mag;
+    let step = if resid < 1.5 {
+        1.0
+    } else if resid < 3.0 {
+        2.0
+    } else if resid < 7.0 {
+        5.0
+    } else {
+        10.0
+    } * mag;
+    (max_val / step).ceil() * step
 }
 
 /// Measure the width of `text` in device pixels (font must be selected).
@@ -1285,7 +1539,7 @@ fn to_alpha(mut n: u32) -> String {
 
 /// Draw text at a baseline position (converts baseline -> cell top via tmAscent).
 #[cfg(windows)]
-fn draw_text_baseline(
+fn draw_text_baseline_w(
     dc: windows::Win32::Graphics::Gdi::HDC,
     x: i32,
     baseline_pt: f32,
@@ -1294,11 +1548,12 @@ fn draw_text_baseline(
     family: &str,
     color: Option<&str>,
     scale: f64,
+    weight: i32,
 ) {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
-    let font = create_font_for(family, font_size, scale);
+    let font = create_font_for_w(family, font_size, weight, scale);
     if font.is_invalid() {
         return;
     }
@@ -1338,6 +1593,21 @@ fn draw_text_baseline(
         SetTextColor(dc, old_color);
         let _ = DeleteObject(font);
     }
+}
+
+/// Regular-weight text at a baseline position.
+#[cfg(windows)]
+fn draw_text_baseline(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    baseline_pt: f32,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    color: Option<&str>,
+    scale: f64,
+) {
+    draw_text_baseline_w(dc, x, baseline_pt, text, font_size, family, color, scale, 400)
 }
 
 /// Draw a justified (non-final) line: split into words, then spread the
