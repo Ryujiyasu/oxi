@@ -14359,12 +14359,28 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // PASS canaries with no PASS benefit from the change). Scope: no-type
         // docGrid (true no-grid keeps S827; typed grid keeps its snap rules) +
         // Latin (CJK keeps S608 MS-Gothic natural) + multiple (singles keep S779).
+        // S1079 (2026-08-06, opt-out OXI_S1079_DISABLE): the threshold above is
+        // the NATURAL (unmultiplied hhea) line, NOT the ink box. S1009 read its
+        // flip off the fitz SPAN BBOX, whose height is the font's own
+        // ascender+descender (1.2207em for Calibri) = exactly the natural line —
+        // but the code then used `ink_lh`, a DIFFERENT quantity (the typo box,
+        // 1.0em), leaving the threshold 2.4-2.7pt too lenient.
+        // _pb_inkleniency_gen.py (Word PDF, 240 arms) pins it directly: with the
+        // target box-top swept in 0.3pt steps the flip window is
+        //   Calibri 11 x1.0792  (13.391, 13.691] ∋ natural 13.428   (box 14.491, ink 11.0)
+        //   Calibri 12 x2.0     (14.397, 14.697] ∋ natural 14.648   (box 29.297, ink 12.0)
+        //   TNR     12 x1.5     (13.598, 13.898] ∋ natural 13.799   (box 20.698, ink 12.0)
+        // and neither box nor ink is inside ANY window. Round 1 of the same probe
+        // also showed a wrapped continuation line, a <w:br/> continuation line, a
+        // fresh 1-line paragraph and a fresh paragraph after an 8pt gap all
+        // flipping at the SAME box-top, so the line class is not a discriminator.
         let no_type_multiple_ink = page.doc_grid_no_type
             && is_multiple_spacing
             && !self.doc_body_has_real_cjk
             && std::env::var("OXI_NTMULT_DISABLE").is_err()
             && (std::env::var("OXI_NTMULT_ALL").is_ok()
                 || para.style.line_spacing.unwrap_or(1.0) < 1.15);
+        let s1079_natural = std::env::var("OXI_S1079_DISABLE").is_err();
         let raw_spaced_tw: f32 = if use_cumulative_basis && !lines.is_empty() {
             let first_line = &lines[0];
             let base = {
@@ -14516,16 +14532,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .all(|f| f.text.trim().is_empty())
                         && !self.doc_body_has_real_cjk
                         && std::env::var("OXI_S902_DISABLE").is_err();
+                    let s1080_mark_fs = std::env::var("OXI_S1080_DISABLE").is_err();
                     if (first_line.fragments.is_empty() || s902_all_ws)
                         && !self.doc_body_has_real_cjk
                         && std::env::var("OXI_S876_DISABLE").is_err()
                     {
+                        // S1080: when S902 fires, the size fallback must come
+                        // from the ¶ mark's own inheritance chain, not from
+                        // `para_font_size` (= the FIRST RUN's size, i.e. the
+                        // whitespace run S902 exists to exclude).
                         let font_size = para
                             .style
                             .ppr_rpr
                             .as_ref()
                             .and_then(|r| r.font_size)
-                            .unwrap_or(para_font_size);
+                            .unwrap_or(if s902_all_ws && s1080_mark_fs {
+                                self.resolve_font_size(&RunStyle::default(), &para.style)
+                            } else {
+                                para_font_size
+                            });
                         let rpr_ref = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                         let m = self.metrics_for_para_mark_g(&rpr_ref, &para.style, true);
                         if !m.is_cjk_83_64_font() {
@@ -15168,8 +15193,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(2.5);
-            // S1055 (2026-08-02, HELD OPT-IN `OXI_S1055=1`, default OFF =
-            // byte-identical): a br-page STUB (an empty paragraph whose only
+            // S1055 (2026-08-02 derived, SHIPPED 2026-08-06 default ON, opt-out
+            // OXI_S1055_DISABLE): a br-page STUB (an empty paragraph whose only
             // content was <w:br w:type="page"/>, parsed to page_break_after) is
             // NOT a spacer empty — it gets no S736 keep tolerance and moves to
             // the next page like any other line when its full box overflows.
@@ -15183,20 +15208,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // at p12 y=132.50 — one 10pt line below the page top, i.e. the same
             // paragraph landing on p12 as a plain empty.
             //
-            // ★HELD: the rule is Word-correct but Oxi's CURSOR at a stub is not
-            // trustworthy yet. Three frozen PASS docs flip (pcd 0 -> +1) because
-            // their page is over-full where the stub sits, so the stub overflows
-            // in Oxi and fits in Word — measured against Word PDFs:
-            //   policies__000f7115    Oxi cursor 764.5 vs Word ~751.1  (-13.4)
-            //   reports__0020157f     Oxi cursor 715.5 vs Word ~691    (-24)
-            //   educational__00161422 Oxi cursor 553.4 vs Word ~520.5  (-33)
-            // (legal__001a2c7f agrees with Word to 0.5pt, which is why it works
-            // there). Pagination cannot see that over-fill because those pages
-            // all end at an explicit break — the stub's fit is the only place it
-            // surfaces, and the d77a phantom-skip below hides it. Ships when
-            // those page heights are right; the over-fill is ~one line each and
-            // two of the three sit right after a TABLE.
-            let s1055_br_stub = std::env::var("OXI_S1055").is_ok()
+            // ★The three docs that blocked this in 2026-08 (policies__000f7115,
+            // educational__00161422, reports__0020157f) were each over-full by
+            // ~one line where their stub sits; all three are PASS 1.0000 with
+            // the stub rule on since S1057 (the empty FOOTER ¶ mark takes the
+            // ASCII font) and S1059 (an over-long token packs to the last
+            // fitting character) landed. Re-verified 2026-08-06.
+            let s1055_br_stub = std::env::var("OXI_S1055_DISABLE").is_err()
                 && !self.doc_body_has_real_cjk
                 && para.style.page_break_after
                 && para.runs.iter().all(|r| r.text.is_empty());
@@ -15360,6 +15378,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 };
                 let s779_floor = if s779_latin && !no_type_multiple_ink {
                     s779_win_heights.get(line_idx).copied().unwrap_or(0.0)
+                } else if no_type_multiple_ink && s1079_natural {
+                    // S1079: the floor is the natural (unmultiplied) line.
+                    natural_line_heights.get(line_idx).copied().unwrap_or(0.0)
                 } else {
                     0.0
                 };
@@ -15826,7 +15847,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let last_line_fit_h = |idx: usize| -> f32 {
                 let full = line_heights.get(idx).copied().unwrap_or(0.0);
                 if no_type_multiple_ink {
-                    return ink_line_heights.get(idx).copied().unwrap_or(full).min(full);
+                    // S1079: natural (unmultiplied) line, not the ink box.
+                    let src = if s1079_natural {
+                        &natural_line_heights
+                    } else {
+                        &ink_line_heights
+                    };
+                    return src.get(idx).copied().unwrap_or(full).min(full);
                 }
                 if !s608 {
                     return full;
@@ -16092,15 +16119,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // so the next block renders on the fresh page directly.
                     // d77a p.11 case: block 127 is just <w:br w:type="page"/>.
                     // See project_d77a_phantom_page_11.md.
-                    // S1055 (opt-in `OXI_S1055=1`): a LATIN doc's stub is a normal
-                    // line — it moves to the next page and its break then sends the
-                    // following block one page further, which is exactly Word's
-                    // blank page. Held: this skip is currently compensating a
-                    // within-page over-fill (see the S1055 note above), so removing
-                    // it flips three frozen PASS docs to +1.
+                    // S1055 (default ON, opt-out OXI_S1055_DISABLE): a LATIN doc's
+                    // stub is a normal line — it moves to the next page and its
+                    // break then sends the following block one page further, which
+                    // is exactly Word's blank page. The skip stays for CJK, where
+                    // it was derived (d77a's Word truth is 12 pages, no blank).
                     if para.runs.is_empty()
                         && para.style.page_break_after
-                        && (self.doc_body_has_real_cjk || std::env::var("OXI_S1055").is_err())
+                        && (self.doc_body_has_real_cjk
+                            || std::env::var("OXI_S1055_DISABLE").is_ok())
                     {
                         current_elements.extend(std::mem::take(&mut elements));
                         dbg_page_push(pages.len(), 0);
@@ -23556,9 +23583,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 if !oversized_ws {
                     return false;
                 }
-                // S1054 (2026-08-02, HELD OPT-IN `OXI_S1054=1`, default OFF =
-                // byte-identical): the same exclusion for an INTERIOR oversized
-                // space run.
+                // S1054 (2026-08-02 derived, SHIPPED 2026-08-06 default ON,
+                // opt-out OXI_S1054_DISABLE): the same exclusion for an INTERIOR
+                // oversized space run.
                 // S1045 measured Word collapsing an oversized space at a line's
                 // EDGE; legal__001a2c7f shows the rule is not about position.
                 // Its title line «for the use of[28pt space]GP Practice data»
@@ -23573,15 +23600,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // making «1 Introduction» start p3 instead of p2 — a phantom
                 // page that carried +1 through i=315.
                 //
-                // ★HELD, paired with S1055 (S559): alone it fires on exactly
-                // that one line and puts «1 Introduction» on Word's p2, but the
-                // document then runs one page SHORT (0.7571 -> 0.3863) because a
-                // SECOND, independent error — the br-page stub Oxi kept on p11
-                // instead of moving to p12 — was cancelling this one in the page
-                // count. With BOTH (`OXI_S1054=1 OXI_S1055=1`) the document is
-                // 0.9947 with 28 pages = Word, but S1055 itself is blocked (see
-                // its note). The two ship together when it is unblocked.
-                (i < first || i > last) || std::env::var("OXI_S1054").is_ok()
+                // ★Paired with S1055 (S559): alone it fires on exactly that one
+                // line and puts «1 Introduction» on Word's p2, but the document
+                // then runs one page SHORT (0.7571 -> 0.3863) because a SECOND,
+                // independent error — the br-page stub Oxi kept on p11 instead of
+                // moving to p12 — was cancelling this one in the page count. With
+                // BOTH the document is 0.9947 with 28 pages = Word, so they ship
+                // together. S1054 also carries creative__00a0a5d2, whose interior
+                // sz=27 space run S1079 would otherwise expose (PASS preserved).
+                (i < first || i > last) || std::env::var("OXI_S1054_DISABLE").is_err()
             }
             None => false,
         }
@@ -23774,11 +23801,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Empty paragraph: use pPr/rPr font size if available (direct paragraph property),
             // otherwise fall back to paragraph style's default run style.
             // COM-confirmed: 3a4f P1 empty, pPr/rPr/sz=48 (24pt) → uses Century 24pt height.
+            // S1080 (2026-08-06, opt-out OXI_S1080_DISABLE): for an all-whitespace
+            // line the fallback must be the ¶ mark's own inheritance chain, NOT
+            // `para_font_size` — that is the FIRST RUN's size, i.e. exactly the
+            // whitespace run whose metrics S902 excludes. administrative__0010e437
+            // para 245 is one Calibri-12 SPACE with a mark that inherits
+            // docDefaults 11pt: Word renders 14.38 (= 11 × 1.2207 × 1.0708), Oxi
+            // rendered 15.59 (12pt) — a +1.21pt step in the middle of page 10.
             let font_size = para_style
                 .ppr_rpr
                 .as_ref()
                 .and_then(|r| r.font_size)
-                .unwrap_or(para_font_size);
+                .unwrap_or(if s902_all_ws
+                    && std::env::var("OXI_S1080_DISABLE").is_err()
+                {
+                    self.resolve_font_size(&RunStyle::default(), para_style)
+                } else {
+                    para_font_size
+                });
             let rpr_ref = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
             // S707: no-grid empty-para line height is governed by the ASCII font.
             // S949 (2026-07-20, opt-out OXI_S949_DISABLE): a Latin doc's CUSTOM-pitch
