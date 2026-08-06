@@ -68,6 +68,7 @@ pub enum Punct {
     BackSlash,
     Caret,
     Amp,
+    Bang,
     Eq,
     Lt,
     Gt,
@@ -96,6 +97,7 @@ impl Punct {
             Punct::BackSlash => "\\",
             Punct::Caret => "^",
             Punct::Amp => "&",
+            Punct::Bang => "!",
             Punct::Eq => "=",
             Punct::Lt => "<",
             Punct::Gt => ">",
@@ -568,9 +570,18 @@ impl<'a> Lexer<'a> {
         self.at_line_start = false;
 
         if let Some(&b) = self.bytes.get(self.pos) {
-            // `!` is also the dictionary-access operator, but as a suffix it is
-            // only ambiguous in contexts the parser resolves.
-            if is_type_suffix(b) {
+            // `value!` declares/uses a Single, while `record!Field` invokes a
+            // default member. A following member name makes the latter
+            // unambiguous before parsing.
+            if b == b'!'
+                && self.bytes.get(self.pos + 1).is_some_and(|_| {
+                    self.bytes.get(self.pos + 1) == Some(&b'[')
+                        || is_ident_start(self.char_at(self.pos + 1))
+                })
+            {
+                self.push_here(TokenKind::Punct(Punct::Bang), self.pos, self.pos + 1);
+                self.pos += 1;
+            } else if is_type_suffix(b) {
                 self.push_here(TokenKind::TypeSuffix(b as char), self.pos, self.pos + 1);
                 self.pos += 1;
             }
@@ -596,6 +607,7 @@ impl<'a> Lexer<'a> {
                     b'\\' => Punct::BackSlash,
                     b'^' => Punct::Caret,
                     b'&' => Punct::Amp,
+                    b'!' => Punct::Bang,
                     b'=' => Punct::Eq,
                     b'<' => Punct::Lt,
                     b'>' => Punct::Gt,
@@ -715,6 +727,29 @@ mod tests {
                 TokenKind::Punct(Punct::Eq),
                 TokenKind::Number(1.0),
                 TokenKind::TypeSuffix('&'),
+            ]
+        );
+    }
+
+    #[test]
+    fn bang_member_access_is_distinct_from_the_single_suffix() {
+        assert_eq!(
+            kinds("record!Field + value!"),
+            vec![
+                ident("record"),
+                TokenKind::Punct(Punct::Bang),
+                ident("Field"),
+                TokenKind::Punct(Punct::Plus),
+                ident("value"),
+                TokenKind::TypeSuffix('!'),
+            ]
+        );
+        assert_eq!(
+            kinds("record![Display Name]"),
+            vec![
+                ident("record"),
+                TokenKind::Punct(Punct::Bang),
+                TokenKind::BracketExpr("Display Name".to_string()),
             ]
         );
     }

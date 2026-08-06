@@ -2174,6 +2174,22 @@ impl<'a> Parser<'a> {
                 }
                 break;
             }
+            if self.at_punct(Punct::Bang) {
+                let name = match self.kind_at(1).clone() {
+                    TokenKind::Ident(name) | TokenKind::BracketExpr(name) => name,
+                    _ => break,
+                };
+                self.pos += 2;
+                if matches!(self.kind(), TokenKind::TypeSuffix(_)) {
+                    self.pos += 1;
+                }
+                expr = Expr::Bang {
+                    object: Box::new(expr),
+                    name,
+                    span,
+                };
+                continue;
+            }
             if self.at_punct(Punct::LParen) {
                 let force_by_value = self
                     .tokens
@@ -2566,6 +2582,22 @@ mod tests {
             e.dotted_name().as_deref(),
             Some("Application.WorksheetFunction.Sum")
         );
+    }
+
+    #[test]
+    fn bang_default_members_and_single_suffixes_stay_distinct() {
+        let bang = expr("records!Current![Display Name]");
+        assert!(matches!(
+            bang,
+            Expr::Bang { name, object, .. }
+                if name == "Display Name"
+                    && matches!(*object, Expr::Bang { ref name, .. } if name == "Current")
+        ));
+        assert!(matches!(
+            expr("value! + 1"),
+            Expr::Binary { op: BinaryOp::Add, lhs, .. }
+                if matches!(*lhs, Expr::Ident(ref name, _) if name == "value")
+        ));
     }
 
     #[test]

@@ -1248,6 +1248,16 @@ End Sub";
     }
 
     #[test]
+    fn bang_member_names_affect_the_fingerprint() {
+        let answer = "Sub T()\nvalue = record!Answer\nEnd Sub";
+        let total = "Sub T()\nvalue = record!Total\nEnd Sub";
+        assert_ne!(
+            fp(answer, Strength::Strict).combined,
+            fp(total, Strength::Strict).combined
+        );
+    }
+
+    #[test]
     fn combined_next_is_equivalent_to_separate_nested_terminators() {
         let combined = "Sub T()\nFor i = 1 To 2\nFor j = 1 To 2\nx = x + 1\nNext j, i\nEnd Sub";
         let separate =

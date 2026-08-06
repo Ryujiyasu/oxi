@@ -1309,6 +1309,16 @@ mod tests {
     }
 
     #[test]
+    fn bang_default_members_are_walked_without_unparsed_input() {
+        let a = analyse_src(
+            "Sub ReadField()\n  Dim record As Object\n  value = record!Answer + record![Display Name]\nEnd Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("Answer"), Some(&1));
+        assert_eq!(a.api_names.get("Display Name"), Some(&1));
+    }
+
+    #[test]
     fn formatting_lifts_it_to_class_a() {
         let a = analyse_src(
             "Sub Report()\n  Range(\"A1\").Value = 1\n  Range(\"A1\").Interior.Color = 255\nEnd Sub",
