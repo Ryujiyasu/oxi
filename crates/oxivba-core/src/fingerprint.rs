@@ -801,8 +801,16 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
             // Member names are API surface; never renamed.
             out.push_str(&name.to_ascii_lowercase());
         }
-        Expr::Index { target, args, .. } => {
+        Expr::Index {
+            target,
+            args,
+            force_by_value,
+            ..
+        } => {
             render_expr(target, locals, out);
+            if *force_by_value {
+                out.push_str(" byval");
+            }
             out.push('(');
             for arg in args {
                 if let Some(name) = &arg.name {
@@ -1225,6 +1233,16 @@ End Sub";
         assert_eq!(
             fp(bare, Strength::Standard).combined,
             fp(explicit, Strength::Standard).combined
+        );
+    }
+
+    #[test]
+    fn forced_by_value_parentheses_change_call_fingerprints() {
+        let by_ref = "Sub T()\nMutate value\nEnd Sub";
+        let by_value = "Sub T()\nMutate (value)\nEnd Sub";
+        assert_ne!(
+            fp(by_ref, Strength::Loosest).combined,
+            fp(by_value, Strength::Loosest).combined
         );
     }
 

@@ -1093,6 +1093,7 @@ impl<'a> Parser<'a> {
         Expr::Index {
             target: Box::new(callee),
             args: std::mem::take(args),
+            force_by_value: false,
             span,
         }
     }
@@ -2135,11 +2136,16 @@ impl<'a> Parser<'a> {
                 break;
             }
             if self.at_punct(Punct::LParen) {
+                let force_by_value = self
+                    .tokens
+                    .get(self.pos.saturating_sub(1))
+                    .is_some_and(|previous| previous.span.end < span.start);
                 self.pos += 1;
                 let args = self.parse_arguments();
                 expr = Expr::Index {
                     target: Box::new(expr),
                     args,
+                    force_by_value,
                     span,
                 };
                 continue;
@@ -2740,6 +2746,26 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn grouped_bare_call_argument_records_forced_by_value() {
+        let p = only_proc(
+            "Sub T()\n\
+             Mutate direct\n\
+             Mutate (wrapped)\n\
+             Call Mutate(called)\n\
+             End Sub",
+        );
+        for (statement, expected) in p.body.iter().zip([false, true, false]) {
+            assert!(matches!(
+                statement,
+                Statement::Call {
+                    target: Expr::Index { force_by_value, .. },
+                    ..
+                } if *force_by_value == expected
+            ));
+        }
     }
 
     #[test]

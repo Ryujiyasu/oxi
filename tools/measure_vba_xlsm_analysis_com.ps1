@@ -38,6 +38,7 @@ Public Sub BuildReport(ByVal target As Worksheet)
     ws.Range("A1").Font.Bold = True
     ws.Range("C1").Value = WideValue()
     ws.Range("D1").Value = PlatformBits
+    ws.Range("E1").Value = ParenthesesValue()
 End Sub
 
 Private Function HiddenHelper(ByVal value As Long) As Long
@@ -58,6 +59,20 @@ End Function
 Private Function WideValue^()
     WideValue = 42^ + 2
 End Function
+
+Private Function ParenthesesValue$()
+    Dim direct As Long
+    Dim wrapped As Long
+    direct = 1
+    wrapped = 1
+    Mutate direct
+    Mutate (wrapped)
+    ParenthesesValue = "D" & CStr(direct) & "W" & CStr(wrapped)
+End Function
+
+Private Sub Mutate(ByRef value As Long)
+    value = 99
+End Sub
 '@)
     $sheet = $workbook.Worksheets.Item(1)
     $excel.Run("'$($workbook.Name)'!AnalysisProbe.BuildReport", $sheet)
@@ -65,12 +80,13 @@ End Function
     $fixedLength = [long]$sheet.Range('B1').Value2
     $wideValue = [long]$sheet.Range('C1').Value2
     $platformBits = [long]$sheet.Range('D1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or -not [bool]$sheet.Range('A1').Font.Bold) {
-        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, bold=$([bool]$sheet.Range('A1').Font.Bold)"
+    $parenthesesValue = [string]$sheet.Range('E1').Value2
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1' -or -not [bool]$sheet.Range('A1').Font.Bold) {
+        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)
     $workbook.SaveCopyAs($workbookCopyPath)
-    $module.CodeModule.ReplaceLine(19, '    HiddenHelper = value + 2')
+    $module.CodeModule.ReplaceLine(20, '    HiddenHelper = value + 2')
     $module.CodeModule.InsertLines(2, 'Private Declare PtrSafe Function SetTimer Lib "user32" (ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr')
     $module.CodeModule.AddFromString(@'
 
@@ -97,7 +113,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 4, statements: 17',
+        'procedures: 6, statements: 26',
         'unparsed: 0',
         '#If Win64 Then: conditional compilation; the source differs by build',
         '#End If: conditional compilation; the source differs by build',
@@ -120,7 +136,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '50.0% (shared 3; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '62.5% (shared 5; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {

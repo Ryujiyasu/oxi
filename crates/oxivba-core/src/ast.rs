@@ -711,6 +711,9 @@ pub enum Expr {
     Index {
         target: Box<Expr>,
         args: Vec<Argument>,
+        /// `Mutate (value)` forces the grouped argument to be passed by value,
+        /// unlike `Mutate value` or `Call Mutate(value)`.
+        force_by_value: bool,
         span: Span,
     },
     /// `a!b`, the dictionary-access operator.
