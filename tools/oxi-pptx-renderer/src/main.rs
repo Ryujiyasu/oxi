@@ -1190,8 +1190,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let _ = DeleteObject(line_pen);
                         }
 
-                        // Markers: 6.96pt filled accent1 circles at every
-                        // point (gated on <c:marker val="1"/>).
+                        // Markers: 6.96pt filled accent1 DIAMONDS at every
+                        // point (gated on <c:marker val="1"/>). Word renders
+                        // the LINE_MARKERS data marker as a 6.96pt filled
+                        // diamond (fitz drawing items = 4 lines joining the
+                        // bbox side-midpoints: top/right/bottom/left), same
+                        // shape as the legend diamond. Filled, same-colour
+                        // stroke (w=0.75) so the outline is invisible.
                         if chart.marker {
                             if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
                                 let m_brush = CreateSolidBrush(COLORREF(
@@ -1201,13 +1206,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
                                 let mr = 6.96 / 2.0;
                                 for (px, py) in pts.iter() {
-                                    let _ = Ellipse(
-                                        mem_dc,
-                                        ((px - mr) * scale).round() as i32,
-                                        ((py - mr) * scale).round() as i32,
-                                        ((px + mr) * scale).round() as i32,
-                                        ((py + mr) * scale).round() as i32,
-                                    );
+                                    let hx = (px * scale).round() as i32;
+                                    let hy = (py * scale).round() as i32;
+                                    let diamond = [
+                                        POINT { x: ((px - mr) * scale).round() as i32, y: hy },
+                                        POINT { x: hx, y: ((py - mr) * scale).round() as i32 },
+                                        POINT { x: ((px + mr) * scale).round() as i32, y: hy },
+                                        POINT { x: hx, y: ((py + mr) * scale).round() as i32 },
+                                    ];
+                                    let _ = Polygon(mem_dc, &diamond);
                                 }
                                 SelectObject(mem_dc, old_m_brush);
                                 let _ = DeleteObject(m_brush);
