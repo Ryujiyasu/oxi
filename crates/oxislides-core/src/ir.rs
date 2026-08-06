@@ -190,8 +190,12 @@ pub enum ShapeContent {
 ///     pitch = plot_height/5), Calibri 18pt right-aligned to plot_left.
 ///   - category names = Calibri 18pt centred under each bar (y = plot_bottom
 ///     + text height).
-///   - legend = series names, Calibri-Bold, one row above the plot area
-///     (top ≈ shape_top + ~28pt for the default legend).
+///   - legend (when `<c:legend>` is declared) = per-series swatch + series
+///     name, RIGHT-aligned overlay: the swatch column sits at
+///     legend_right - max_label_w - gap (legend_right = frame right - 10pt),
+///     the block is vertically centred on the frame, and the plot area is
+///     NOT shrunk (COM Legend.IncludeInLayout=False; chart_legend/chart_legend3
+///     render-truth 2026-08-06).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chart {
     /// c:barChart/c:barDir@val — "col" (column/vertical) or "bar" (horizontal).
@@ -206,6 +210,12 @@ pub struct Chart {
     /// Category labels from the first series' c:cat strCache (c:tx may be
     /// shared; category count == values count for a rectangular chart).
     pub categories: Vec<String>,
+    /// True when the chart XML declares `<c:legend/>`. When true Word draws
+    /// a legend (series names + accent-colour swatches) as an overlay on the
+    /// right side of the plot area; when false (no <c:legend>) it is not
+    /// drawn at all. None of the 4 chart1-4 probes declare one.
+    #[serde(default)]
+    pub has_legend: bool,
 }
 
 pub fn default_chart_bar_dir() -> String {

@@ -17,6 +17,8 @@ DOCS = {
     "chart2": r"pipeline_data\pptx_probes\chart2\chart2.pdf",
     "chart2b": r"pipeline_data\pptx_probes\chart2b\chart2b.pdf",
     "chart3": r"pipeline_data\pptx_probes\chart3\chart3.pdf",
+    "chart_legend": r"pipeline_data\pptx_probes\chart_legend\chart_legend.pdf",
+    "chart_legend3": r"pipeline_data\pptx_probes\chart_legend3\chart_legend3.pdf",
 }
 DPI = 150
 

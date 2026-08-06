@@ -930,6 +930,95 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
+                        // Legend (when <c:legend> is declared): per-series
+                        // swatch (accent colour 9.89x9.89pt) + series name
+                        // (Calibri 18pt). Placement DERIVED from Word
+                        // get_drawings + rawdict on chart_legend (2 series)
+                        // and chart_legend3 (3 series), 2026-08-06:
+                        //   right-aligned overlay: legend_right = frame right
+                        //     - 10.0; swatch_x1 = legend_right - max_label_w
+                        //     - 4.62 (max over series names, Calibri 18pt);
+                        //     swatch_x0 = swatch_x1 - 9.89; label_x0 =
+                        //     swatch_x1 + 4.62
+                        //   vertically centred on the frame:
+                        //     legend_total_h = (n_ser-1)*27.75 + 9.89;
+                        //     legend_y0 = sy + sh/2 - legend_total_h/2
+                        //     (2 ser 197.18 / 3 ser 183.30 = Word EXACT)
+                        //   row pitch 27.75; label baseline = swatch bottom
+                        //     + 0.28
+                        //   plot area is NOT shrunk (overlay; COM
+                        //     Legend.IncludeInLayout = False; plot_top/X-axis
+                        //     identical to the no-legend chart3)
+                        if chart.has_legend {
+                            let lfs = 18.0f32;
+                            let max_label_w = chart
+                                .series
+                                .iter()
+                                .map(|s| {
+                                    font_adv::line_hmtx_width_pt(
+                                        &s.name,
+                                        lfs,
+                                        axis_family,
+                                    )
+                                    .unwrap_or_else(|| {
+                                        s.name.chars().count() as f32 * lfs * 0.5
+                                    }) as f64
+                                })
+                                .fold(0.0f64, f64::max);
+                            let swatch_w = 9.89f64;
+                            let gap = 4.62f64;
+                            let row_pitch = 27.75f64;
+                            let legend_right = (sx + sw) - 10.0;
+                            let swatch_x1 = legend_right - max_label_w - gap;
+                            let swatch_x0 = swatch_x1 - swatch_w;
+                            let label_x0 = swatch_x1 + gap;
+                            let legend_total_h =
+                                (n_ser as f64 - 1.0) * row_pitch + swatch_w;
+                            let legend_y0 = (sy + shh / 2.0)
+                                - legend_total_h / 2.0;
+                            for (si, series) in
+                                chart.series.iter().enumerate()
+                            {
+                                let sw_y =
+                                    legend_y0 + si as f64 * row_pitch;
+                                let col_hex = pres
+                                    .theme_colors
+                                    .get(&format!("accent{}", si + 1))
+                                    .map(|s| s.as_str())
+                                    .or_else(|| DEFAULT_ACCENT.get(si).copied());
+                                if let Some(rgb) =
+                                    col_hex.and_then(parse_hex_rgb)
+                                {
+                                    let brush = CreateSolidBrush(COLORREF(
+                                        colorref(rgb.0, rgb.1, rgb.2),
+                                    ));
+                                    let old_brush =
+                                        SelectObject(mem_dc, brush);
+                                    let r = RECT {
+                                        left: (swatch_x0 * scale).round() as i32,
+                                        top: (sw_y * scale).round() as i32,
+                                        right: (swatch_x1 * scale).round() as i32,
+                                        bottom: ((sw_y + swatch_w) * scale).round() as i32,
+                                    };
+                                    let _ = FillRect(mem_dc, &r, brush);
+                                    SelectObject(mem_dc, old_brush);
+                                    let _ = DeleteObject(brush);
+                                }
+                                let label_baseline =
+                                    sw_y + swatch_w + 0.28;
+                                draw_text_baseline(
+                                    mem_dc,
+                                    (label_x0 * scale).round() as i32,
+                                    label_baseline as f32,
+                                    &series.name,
+                                    lfs,
+                                    axis_family,
+                                    None,
+                                    scale,
+                                );
+                            }
+                        }
+
                         // Axis lines + ticks (chart1 render-truth, fitz
                         // get_drawings 2026-08-06, per-item line paths):
                         //   Y axis line: vertical (plot_left, plot_top) ->

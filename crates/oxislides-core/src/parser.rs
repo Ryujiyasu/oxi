@@ -1691,6 +1691,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut grouping: Option<String> = None;
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut categories: Vec<String> = Vec::new();
+    let mut has_legend = false;
 
     // Per-`c:ser` state
     let mut in_ser = false;
@@ -1736,6 +1737,10 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "v" => {
                         // empty value — nothing to collect
                     }
+                    // python-pptx writes a bare self-closing <c:legend/> to
+                    // enable a legend (no overlay/position attrs). Any legend
+                    // declaration -> has_legend.
+                    "legend" => has_legend = true,
                     _ => {}
                 }
             }
@@ -1803,6 +1808,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         grouping: grouping.unwrap_or_else(default_chart_grouping),
         series,
         categories,
+        has_legend,
     })
 }
 
