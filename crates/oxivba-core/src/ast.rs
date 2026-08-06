@@ -687,6 +687,11 @@ pub enum Literal {
         value: f64,
         suffix: char,
     },
+    /// A decimal LongLong literal beyond f64's exact integer range.
+    LargeInteger {
+        digits: String,
+        suffix: char,
+    },
     Str(String),
     /// Kept as written; interpretation needs a locale.
     Date(String),

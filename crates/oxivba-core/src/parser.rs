@@ -2265,7 +2265,17 @@ impl<'a> Parser<'a> {
                 if suffix.is_some() {
                     self.pos += 1;
                 }
+                let source = self.src.get(span.start..span.end).unwrap_or_default();
+                let exact_long_long = suffix == Some('^')
+                    && source.bytes().all(|b| b.is_ascii_digit())
+                    && source
+                        .parse::<u64>()
+                        .is_ok_and(|value| value > (1_u64 << 53));
                 let literal = match suffix {
+                    Some(suffix) if exact_long_long => Literal::LargeInteger {
+                        digits: source.to_string(),
+                        suffix,
+                    },
                     Some(suffix) => Literal::TypedNumber { value: n, suffix },
                     None => Literal::Number(n),
                 };
@@ -3158,6 +3168,20 @@ mod tests {
                 },
                 _
             )
+        ));
+    }
+
+    #[test]
+    fn large_longlong_literals_keep_every_decimal_digit() {
+        assert!(matches!(
+            expr("9007199254740993^"),
+            Expr::Literal(
+                Literal::LargeInteger {
+                    ref digits,
+                    suffix: '^'
+                },
+                _
+            ) if digits == "9007199254740993"
         ));
     }
 

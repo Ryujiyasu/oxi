@@ -875,13 +875,13 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
 
 fn render_literal(lit: &Literal, norm: Normalization, out: &mut String) {
     if norm.erase_literals {
-        if let Literal::TypedNumber { suffix, .. } = lit {
+        if let Literal::TypedNumber { suffix, .. } | Literal::LargeInteger { suffix, .. } = lit {
             let _ = write!(out, "<num{suffix}>");
             return;
         }
         let tag = match lit {
             Literal::Number(_) => "<num>",
-            Literal::TypedNumber { .. } => unreachable!(),
+            Literal::TypedNumber { .. } | Literal::LargeInteger { .. } => unreachable!(),
             Literal::Str(_) => "<str>",
             Literal::Date(_) => "<date>",
             Literal::Bool(_) => "<bool>",
@@ -898,6 +898,9 @@ fn render_literal(lit: &Literal, norm: Normalization, out: &mut String) {
         }
         Literal::TypedNumber { value, suffix } => {
             let _ = write!(out, "{value}{suffix}");
+        }
+        Literal::LargeInteger { digits, suffix } => {
+            let _ = write!(out, "{digits}{suffix}");
         }
         Literal::Str(s) => {
             let _ = write!(out, "{s:?}");
@@ -1634,6 +1637,20 @@ Sub D()\nx = 4\nEnd Sub";
         assert_ne!(
             fp(long, Strength::Loose).combined,
             fp(long_long, Strength::Loose).combined
+        );
+    }
+
+    #[test]
+    fn adjacent_large_longlong_literals_do_not_collapse() {
+        let lower = "Sub T()\nvalue = 9007199254740992^\nEnd Sub";
+        let upper = "Sub T()\nvalue = 9007199254740993^\nEnd Sub";
+        assert_ne!(
+            fp(lower, Strength::Standard).combined,
+            fp(upper, Strength::Standard).combined
+        );
+        assert_eq!(
+            fp(lower, Strength::Loose).combined,
+            fp(upper, Strength::Loose).combined
         );
     }
 
