@@ -63,11 +63,14 @@ End Function
 Private Function ParenthesesValue$()
     Dim direct As Long
     Dim wrapped As Long
+    Dim explicitGrouped As Long
     direct = 1
     wrapped = 1
+    explicitGrouped = 1
     Mutate direct
     Mutate (wrapped)
-    ParenthesesValue = "D" & CStr(direct) & "W" & CStr(wrapped)
+    Call Mutate((explicitGrouped))
+    ParenthesesValue = "D" & CStr(direct) & "W" & CStr(wrapped) & "G" & CStr(explicitGrouped)
 End Function
 
 Private Sub Mutate(ByRef value As Long)
@@ -81,7 +84,7 @@ End Sub
     $wideValue = [long]$sheet.Range('C1').Value2
     $platformBits = [long]$sheet.Range('D1').Value2
     $parenthesesValue = [string]$sheet.Range('E1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1' -or -not [bool]$sheet.Range('A1').Font.Bold) {
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or -not [bool]$sheet.Range('A1').Font.Bold) {
         throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)
@@ -113,7 +116,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 6, statements: 26',
+        'procedures: 6, statements: 29',
         'unparsed: 0',
         '#If Win64 Then: conditional compilation; the source differs by build',
         '#End If: conditional compilation; the source differs by build',

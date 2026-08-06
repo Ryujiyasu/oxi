@@ -1046,6 +1046,7 @@ impl<'a> Parser<'a> {
             let mut args = vec![Argument {
                 name: None,
                 value: None,
+                force_by_value: false,
             }];
             args.clear();
             let target = self.parse_bare_call_args(first, &mut args, span);
@@ -1079,6 +1080,7 @@ impl<'a> Parser<'a> {
                 args.push(Argument {
                     name: None,
                     value: None,
+                    force_by_value: false,
                 });
                 continue;
             }
@@ -2167,6 +2169,7 @@ impl<'a> Parser<'a> {
                 args.push(Argument {
                     name: None,
                     value: None,
+                    force_by_value: false,
                 });
                 continue;
             }
@@ -2189,16 +2192,20 @@ impl<'a> Parser<'a> {
             (self.kind().clone(), self.kind_at(1))
         {
             self.pos += 2;
+            let force_by_value = self.at_punct(Punct::LParen);
             let value = self.parse_expr()?;
             return Some(Argument {
                 name: Some(name),
                 value: Some(value),
+                force_by_value,
             });
         }
+        let force_by_value = self.at_punct(Punct::LParen);
         let value = self.parse_expr()?;
         Some(Argument {
             name: None,
             value: Some(value),
+            force_by_value,
         })
     }
 
@@ -2755,16 +2762,27 @@ mod tests {
              Mutate direct\n\
              Mutate (wrapped)\n\
              Call Mutate(called)\n\
+             Call Mutate((grouped))\n\
              End Sub",
         );
-        for (statement, expected) in p.body.iter().zip([false, true, false]) {
-            assert!(matches!(
-                statement,
-                Statement::Call {
-                    target: Expr::Index { force_by_value, .. },
-                    ..
-                } if *force_by_value == expected
-            ));
+        for (statement, expected) in
+            p.body
+                .iter()
+                .zip([(false, false), (true, false), (false, false), (false, true)])
+        {
+            let Statement::Call {
+                target:
+                    Expr::Index {
+                        args,
+                        force_by_value,
+                        ..
+                    },
+                ..
+            } = statement
+            else {
+                panic!("expected indexed call")
+            };
+            assert_eq!((*force_by_value, args[0].force_by_value), expected);
         }
     }
 

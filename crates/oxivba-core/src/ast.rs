@@ -756,6 +756,9 @@ pub struct Argument {
     pub name: Option<String>,
     /// `None` for an omitted positional argument: `Foo a, , c`.
     pub value: Option<Expr>,
+    /// An extra pair of parentheses forces a `ByRef` parameter to receive a
+    /// temporary value: `Call Mutate((value))`.
+    pub force_by_value: bool,
 }
 
 impl Expr {

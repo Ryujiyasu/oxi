@@ -813,6 +813,9 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
             }
             out.push('(');
             for arg in args {
+                if arg.force_by_value {
+                    out.push_str("byval ");
+                }
                 if let Some(name) = &arg.name {
                     let _ = write!(out, "{}:=", name.to_ascii_lowercase());
                 }
@@ -1240,9 +1243,14 @@ End Sub";
     fn forced_by_value_parentheses_change_call_fingerprints() {
         let by_ref = "Sub T()\nMutate value\nEnd Sub";
         let by_value = "Sub T()\nMutate (value)\nEnd Sub";
+        let explicit_by_value = "Sub T()\nCall Mutate((value))\nEnd Sub";
         assert_ne!(
             fp(by_ref, Strength::Loosest).combined,
             fp(by_value, Strength::Loosest).combined
+        );
+        assert_ne!(
+            fp(by_ref, Strength::Loosest).combined,
+            fp(explicit_by_value, Strength::Loosest).combined
         );
     }
 
