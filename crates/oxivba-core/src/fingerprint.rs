@@ -848,8 +848,13 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
 
 fn render_literal(lit: &Literal, norm: Normalization, out: &mut String) {
     if norm.erase_literals {
+        if let Literal::TypedNumber { suffix, .. } = lit {
+            let _ = write!(out, "<num{suffix}>");
+            return;
+        }
         let tag = match lit {
             Literal::Number(_) => "<num>",
+            Literal::TypedNumber { .. } => unreachable!(),
             Literal::Str(_) => "<str>",
             Literal::Date(_) => "<date>",
             Literal::Bool(_) => "<bool>",
@@ -863,6 +868,9 @@ fn render_literal(lit: &Literal, norm: Normalization, out: &mut String) {
     match lit {
         Literal::Number(n) => {
             let _ = write!(out, "{n}");
+        }
+        Literal::TypedNumber { value, suffix } => {
+            let _ = write!(out, "{value}{suffix}");
         }
         Literal::Str(s) => {
             let _ = write!(out, "{s:?}");
@@ -1492,6 +1500,27 @@ Sub D()\nx = 4\nEnd Sub";
         assert_eq!(
             fp(four, Strength::Loose).combined,
             fp(eight, Strength::Loose).combined
+        );
+    }
+
+    #[test]
+    fn numeric_literal_suffixes_remain_significant_when_values_are_erased() {
+        let plain = "Sub T()\nx = 42\nEnd Sub";
+        let long = "Sub T()\nx = 42&\nEnd Sub";
+        let other_long = "Sub T()\nx = 99&\nEnd Sub";
+        let double = "Sub T()\nx = 42#\nEnd Sub";
+
+        assert_ne!(
+            fp(plain, Strength::Standard).combined,
+            fp(long, Strength::Standard).combined
+        );
+        assert_eq!(
+            fp(long, Strength::Loose).combined,
+            fp(other_long, Strength::Loose).combined
+        );
+        assert_ne!(
+            fp(long, Strength::Loose).combined,
+            fp(double, Strength::Loose).combined
         );
     }
 

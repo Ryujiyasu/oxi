@@ -2177,10 +2177,18 @@ impl<'a> Parser<'a> {
         match self.kind().clone() {
             TokenKind::Number(n) => {
                 self.pos += 1;
-                if matches!(self.kind(), TokenKind::TypeSuffix(_)) {
+                let suffix = match self.kind() {
+                    TokenKind::TypeSuffix(suffix) => Some(*suffix),
+                    _ => None,
+                };
+                if suffix.is_some() {
                     self.pos += 1;
                 }
-                Some(Expr::Literal(Literal::Number(n), span))
+                let literal = match suffix {
+                    Some(suffix) => Literal::TypedNumber { value: n, suffix },
+                    None => Literal::Number(n),
+                };
+                Some(Expr::Literal(literal, span))
             }
             TokenKind::Str(s) => {
                 self.pos += 1;
@@ -2915,6 +2923,22 @@ mod tests {
                 if matches!(decl.items[0].type_name.fixed_length.as_ref(),
                     Some(Expr::Literal(Literal::Number(4.0), _)))
         ));
+    }
+
+    #[test]
+    fn numeric_literal_type_suffixes_are_preserved() {
+        for (source, expected_suffix) in [("42&", '&'), ("42#", '#'), ("42@", '@')] {
+            assert!(matches!(
+                expr(source),
+                Expr::Literal(
+                    Literal::TypedNumber {
+                        value: 42.0,
+                        suffix
+                    },
+                    _
+                ) if suffix == expected_suffix
+            ));
+        }
     }
 
     #[test]

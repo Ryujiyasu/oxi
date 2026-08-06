@@ -665,6 +665,11 @@ pub enum BinaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Number(f64),
+    /// A number with an explicit VBA literal type, such as `42&` or `1.5#`.
+    TypedNumber {
+        value: f64,
+        suffix: char,
+    },
     Str(String),
     /// Kept as written; interpretation needs a locale.
     Date(String),
