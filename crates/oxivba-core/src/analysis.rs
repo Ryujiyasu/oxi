@@ -520,6 +520,7 @@ struct Walker {
     current_statements: usize,
     current_depth: usize,
     current_max_depth: usize,
+    with_subjects: Vec<Option<String>>,
 }
 
 impl Walker {
@@ -615,6 +616,7 @@ impl Walker {
         self.current_statements = 0;
         self.current_depth = 0;
         self.current_max_depth = 0;
+        self.with_subjects.clear();
 
         for param in &proc.params {
             self.walk_type_name(&param.type_name, proc.span.line);
@@ -882,7 +884,11 @@ impl Walker {
             }
             Statement::With { subject, body, .. } => {
                 self.walk_expr(subject);
+                let parent = self.with_subjects.last().and_then(|name| name.as_deref());
+                let resolved = resolve_expr_name(subject, parent);
+                self.with_subjects.push(resolved);
                 self.nested(body);
+                self.with_subjects.pop();
             }
             Statement::OnError(OnError::ResumeNext { span }) => {
                 self.blanket_error_handlers += 1;
@@ -966,7 +972,8 @@ impl Walker {
 
     fn walk_expr(&mut self, expr: &Expr) {
         let mut names = Vec::new();
-        collect_names(expr, &mut names);
+        let with_subject = self.with_subjects.last().and_then(|name| name.as_deref());
+        collect_names(expr, with_subject, &mut names);
         for (name, line) in names {
             self.record_name(&name, line);
         }
@@ -1196,57 +1203,82 @@ fn is_intrinsic_type(name: &str) -> bool {
 
 /// Collect the longest dotted name of each member chain, so that
 /// `Application.WorksheetFunction.Sum` is recorded once rather than three times.
-fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
+fn resolve_expr_name(expr: &Expr, with_subject: Option<&str>) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Some(name.clone()),
+        Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+            Some(format!("{}.{}", with_subject?, name))
+        }
+        Expr::Member { object, name, .. } | Expr::Bang { object, name, .. } => Some(format!(
+            "{}.{}",
+            resolve_expr_name(object, with_subject)?,
+            name
+        )),
+        Expr::Index { target, .. } => resolve_expr_name(target, with_subject),
+        _ => None,
+    }
+}
+
+fn collect_names(expr: &Expr, with_subject: Option<&str>, out: &mut Vec<(String, u32)>) {
     match expr {
         Expr::EvaluateShortcut { span, .. } => {
             out.push(("Evaluate".to_string(), span.line));
         }
-        Expr::Ident(..) | Expr::TypedIdent { .. } | Expr::Member { .. } | Expr::Bang { .. } => {
-            if let Some(name) = expr.dotted_name() {
+        Expr::Ident(..)
+        | Expr::TypedIdent { .. }
+        | Expr::WithMember(..)
+        | Expr::WithBangMember(..)
+        | Expr::Member { .. }
+        | Expr::Bang { .. } => {
+            if let Some(name) = resolve_expr_name(expr, with_subject) {
                 out.push((name, expr.span().line));
                 // Still descend into any arguments hidden inside the chain.
             }
             if let Expr::Member { object, .. } | Expr::Bang { object, .. } = expr {
-                descend_arguments(object, out);
+                descend_arguments(object, with_subject, out);
             }
         }
         Expr::Index { target, args, .. } => {
-            if let Some(name) = expr.dotted_name() {
+            if let Some(name) = resolve_expr_name(expr, with_subject) {
                 out.push((name, expr.span().line));
             } else {
-                collect_names(target, out);
+                collect_names(target, with_subject, out);
             }
-            descend_arguments(target, out);
+            descend_arguments(target, with_subject, out);
             for arg in args {
                 if let Some(value) = &arg.value {
-                    collect_names(value, out);
+                    collect_names(value, with_subject, out);
                 }
             }
         }
         Expr::New { type_name, span } => out.push((type_name.clone(), span.line)),
         Expr::AddressOf { procedure, span } => out.push((procedure.clone(), span.line)),
-        Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } => collect_names(operand, out),
-        Expr::Binary { lhs, rhs, .. } => {
-            collect_names(lhs, out);
-            collect_names(rhs, out);
+        Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } => {
+            collect_names(operand, with_subject, out)
         }
-        Expr::Literal(..) | Expr::WithMember(..) | Expr::WithBangMember(..) => {}
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_names(lhs, with_subject, out);
+            collect_names(rhs, with_subject, out);
+        }
+        Expr::Literal(..) => {}
     }
 }
 
 /// A call can hide inside a chain: `Sheets(Name).Range(Addr)`. The chain's own
 /// name is recorded by the caller; this picks up the arguments along it.
-fn descend_arguments(expr: &Expr, out: &mut Vec<(String, u32)>) {
+fn descend_arguments(expr: &Expr, with_subject: Option<&str>, out: &mut Vec<(String, u32)>) {
     match expr {
         Expr::Index { target, args, .. } => {
-            descend_arguments(target, out);
+            descend_arguments(target, with_subject, out);
             for arg in args {
                 if let Some(value) = &arg.value {
-                    collect_names(value, out);
+                    collect_names(value, with_subject, out);
                 }
             }
         }
-        Expr::Member { object, .. } | Expr::Bang { object, .. } => descend_arguments(object, out),
+        Expr::Member { object, .. } | Expr::Bang { object, .. } => {
+            descend_arguments(object, with_subject, out)
+        }
         _ => {}
     }
 }
@@ -1323,6 +1355,27 @@ mod tests {
         assert_eq!(a.metrics.unparsed, 0);
         assert_eq!(a.api_names.get("book.Sheets.Data.Range.Value"), Some(&1));
         assert_eq!(a.api_names.len(), 1);
+        assert_eq!(a.class, Some(Class::B));
+    }
+
+    #[test]
+    fn with_relative_members_resolve_against_the_subject() {
+        let a = analyse_src(
+            "Sub FormatCell()\n  Dim cell As Object\n  Set cell = Range(\"A1\")\n  With cell\n    .Value = 1\n    .Font.Bold = True\n  End With\nEnd Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("cell.Value"), Some(&1));
+        assert_eq!(a.api_names.get("cell.Font.Bold"), Some(&1));
+        assert_eq!(a.class, Some(Class::A));
+    }
+
+    #[test]
+    fn nested_with_and_bang_subjects_keep_the_full_chain() {
+        let a = analyse_src(
+            "Sub ReadCell()\n  Dim book As Object\n  Dim value As Variant\n  With book!Sheets!Data\n    With .Range(\"A1\")\n      value = .Value\n    End With\n  End With\nEnd Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("book.Sheets.Data.Range.Value"), Some(&1));
         assert_eq!(a.class, Some(Class::B));
     }
 
