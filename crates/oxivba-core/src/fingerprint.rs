@@ -104,6 +104,7 @@ impl Strength {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcedureFingerprint {
     pub name: String,
+    pub kind: ProcKind,
     pub hash: u128,
     pub statements: usize,
     pub line: u32,
@@ -143,6 +144,7 @@ pub fn fingerprint_module(module: &Module, strength: Strength) -> ModuleFingerpr
             };
             procedures.push(ProcedureFingerprint {
                 name: proc.name.clone(),
+                kind: proc.kind,
                 hash: hash128(&canonical),
                 statements: count_statements(&proc.body),
                 line: proc.span.line,
@@ -932,16 +934,16 @@ pub fn compare(a: &ModuleFingerprint, b: &ModuleFingerprint) -> Similarity {
     let shared = ha.intersection(&hb).count();
     let union = ha.union(&hb).count();
 
-    let by_name_a: BTreeMap<String, u128> = a
+    let by_name_a: BTreeMap<(String, ProcKind), u128> = a
         .procedures
         .iter()
-        .map(|p| (p.name.to_ascii_lowercase(), p.hash))
+        .map(|p| ((p.name.to_ascii_lowercase(), p.kind), p.hash))
         .collect();
     let mut diverged = Vec::new();
     for p in &b.procedures {
-        if let Some(other) = by_name_a.get(&p.name.to_ascii_lowercase()) {
+        if let Some(other) = by_name_a.get(&(p.name.to_ascii_lowercase(), p.kind)) {
             if *other != p.hash {
-                diverged.push(p.name.clone());
+                diverged.push(procedure_display_name(p));
             }
         }
     }
@@ -957,6 +959,15 @@ pub fn compare(a: &ModuleFingerprint, b: &ModuleFingerprint) -> Similarity {
         },
         diverged,
         declarations_differ: a.declarations != b.declarations,
+    }
+}
+
+fn procedure_display_name(procedure: &ProcedureFingerprint) -> String {
+    match procedure.kind {
+        ProcKind::Sub | ProcKind::Function => procedure.name.clone(),
+        ProcKind::PropertyGet => format!("{} (Property Get)", procedure.name),
+        ProcKind::PropertyLet => format!("{} (Property Let)", procedure.name),
+        ProcKind::PropertySet => format!("{} (Property Set)", procedure.name),
     }
 }
 
@@ -1304,6 +1315,26 @@ Sub D()\nx = 4\nEnd Sub";
         let s = compare(&fp(a, Strength::Standard), &fp(b, Strength::Standard));
         assert_eq!(s.diverged, vec!["Calc".to_string()]);
         assert_eq!(s.shared, 0);
+    }
+
+    #[test]
+    fn property_accessors_with_the_same_name_are_compared_by_kind() {
+        let original = "Private valueField As Long\n\
+                        Public Property Get Value() As Long\n\
+                        Value = valueField\n\
+                        End Property\n\
+                        Public Property Let Value(ByVal newValue As Long)\n\
+                        valueField = newValue\n\
+                        End Property";
+        let changed = original.replace("valueField = newValue", "valueField = newValue + 1");
+        let similarity = compare(
+            &fp(original, Strength::Standard),
+            &fp(&changed, Strength::Standard),
+        );
+        assert_eq!(similarity.shared, 1);
+        assert_eq!(similarity.only_a, 1);
+        assert_eq!(similarity.only_b, 1);
+        assert_eq!(similarity.diverged, ["Value (Property Let)".to_string()]);
     }
 
     #[test]
