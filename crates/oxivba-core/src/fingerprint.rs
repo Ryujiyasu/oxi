@@ -1644,6 +1644,8 @@ Sub D()\nx = 4\nEnd Sub";
     fn adjacent_large_longlong_literals_do_not_collapse() {
         let lower = "Sub T()\nvalue = 9007199254740992^\nEnd Sub";
         let upper = "Sub T()\nvalue = 9007199254740993^\nEnd Sub";
+        let hex_lower = "Sub T()\nvalue = &H20000000000000^\nEnd Sub";
+        let hex_upper = "Sub T()\nvalue = &H20000000000001^\nEnd Sub";
         assert_ne!(
             fp(lower, Strength::Standard).combined,
             fp(upper, Strength::Standard).combined
@@ -1651,6 +1653,14 @@ Sub D()\nx = 4\nEnd Sub";
         assert_eq!(
             fp(lower, Strength::Loose).combined,
             fp(upper, Strength::Loose).combined
+        );
+        assert_ne!(
+            fp(hex_lower, Strength::Standard).combined,
+            fp(hex_upper, Strength::Standard).combined
+        );
+        assert_eq!(
+            fp(upper, Strength::Standard).combined,
+            fp(hex_upper, Strength::Standard).combined
         );
     }
 

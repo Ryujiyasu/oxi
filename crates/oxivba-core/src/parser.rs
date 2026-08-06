@@ -2266,14 +2266,10 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                 }
                 let source = self.src.get(span.start..span.end).unwrap_or_default();
-                let exact_long_long = suffix == Some('^')
-                    && source.bytes().all(|b| b.is_ascii_digit())
-                    && source
-                        .parse::<u64>()
-                        .is_ok_and(|value| value > (1_u64 << 53));
+                let exact_long_long = exact_longlong_value(source, suffix);
                 let literal = match suffix {
-                    Some(suffix) if exact_long_long => Literal::LargeInteger {
-                        digits: source.to_string(),
+                    Some(suffix) if exact_long_long.is_some() => Literal::LargeInteger {
+                        digits: exact_long_long.unwrap_or_default(),
                         suffix,
                     },
                     Some(suffix) => Literal::TypedNumber { value: n, suffix },
@@ -2373,6 +2369,22 @@ fn binary(op: BinaryOp, lhs: Expr, rhs: Expr) -> Expr {
         rhs: Box::new(rhs),
         span,
     }
+}
+
+fn exact_longlong_value(source: &str, suffix: Option<char>) -> Option<String> {
+    if suffix != Some('^') {
+        return None;
+    }
+    let value = if source.len() > 2 && source[..2].eq_ignore_ascii_case("&H") {
+        u64::from_str_radix(&source[2..], 16).ok()? as i64
+    } else if source.len() > 2 && source[..2].eq_ignore_ascii_case("&O") {
+        u64::from_str_radix(&source[2..], 8).ok()? as i64
+    } else if source.bytes().all(|b| b.is_ascii_digit()) {
+        source.parse::<i64>().ok()?
+    } else {
+        return None;
+    };
+    (value.unsigned_abs() > (1_u64 << 53)).then(|| value.to_string())
 }
 
 fn type_name_from_suffix(suffix: char) -> TypeName {
@@ -3175,6 +3187,16 @@ mod tests {
     fn large_longlong_literals_keep_every_decimal_digit() {
         assert!(matches!(
             expr("9007199254740993^"),
+            Expr::Literal(
+                Literal::LargeInteger {
+                    ref digits,
+                    suffix: '^'
+                },
+                _
+            ) if digits == "9007199254740993"
+        ));
+        assert!(matches!(
+            expr("&H20000000000001^"),
             Expr::Literal(
                 Literal::LargeInteger {
                     ref digits,

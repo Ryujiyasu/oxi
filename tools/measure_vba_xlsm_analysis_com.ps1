@@ -122,7 +122,7 @@ Private Function RadixValue() As String
 End Function
 
 Private Function LongLongDelta^()
-    LongLongDelta = 9007199254740993^ - 9007199254740992^
+    LongLongDelta = (9007199254740993^ - 9007199254740992^) + (&H20000000000001^ - &H20000000000000^)
 End Function
 '@)
     $sheet = $workbook.Worksheets.Item(1)
@@ -136,7 +136,7 @@ End Function
     $nestedNextValue = [long]$sheet.Range('G1').Value2
     $radixValue = [string]$sheet.Range('H1').Value2
     $longLongDelta = [long]$sheet.Range('I1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or $settingValue -ne 'missing' -or $nestedNextValue -ne 4 -or $radixValue -ne '-1:65535:4294967295:-1' -or $longLongDelta -ne 1 -or -not [bool]$sheet.Range('A1').Font.Bold) {
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or $settingValue -ne 'missing' -or $nestedNextValue -ne 4 -or $radixValue -ne '-1:65535:4294967295:-1' -or $longLongDelta -ne 2 -or -not [bool]$sheet.Range('A1').Font.Bold) {
         throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], setting=[$settingValue], nested-next=$nestedNextValue, radix=[$radixValue], longlong-delta=$longLongDelta, bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)
