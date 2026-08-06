@@ -1009,6 +1009,16 @@ impl Walker {
         }
         *self.api_names.entry(name.to_string()).or_default() += 1;
 
+        if name.eq_ignore_ascii_case("Application.Run") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "dispatches a macro by name; target resolution requires workbook context"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
+
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
                 self.current_calls.insert(root.to_string());
@@ -1657,6 +1667,25 @@ mod tests {
              End Sub\n",
         );
         assert!(a.dead_procedures().is_empty());
+    }
+
+    #[test]
+    fn application_run_is_reported_without_guessing_a_private_target() {
+        let a = analyse_src(
+            "Public Sub Entry()\n\
+             Application.Run \"Module1.HiddenValue\"\n\
+             End Sub\n\
+             Private Function HiddenValue() As Long\n\
+             HiddenValue = 42\n\
+             End Function\n",
+        );
+        assert_eq!(a.dead_procedures(), ["HiddenValue".to_string()]);
+        assert_eq!(a.api_names.get("Application.Run"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Application.Run")
+                && finding.reason.contains("workbook context")
+                && finding.class.is_none()
+        }));
     }
 
     #[test]
