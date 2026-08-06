@@ -847,6 +847,7 @@ impl Expr {
             Expr::Member { object, name, .. } => {
                 Some(format!("{}.{}", object.dotted_name()?, name))
             }
+            Expr::Bang { object, name, .. } => Some(format!("{}.{}", object.dotted_name()?, name)),
             Expr::Index { target, .. } => target.dotted_name(),
             _ => None,
         }

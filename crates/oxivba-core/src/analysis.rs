@@ -1201,12 +1201,12 @@ fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
         Expr::EvaluateShortcut { span, .. } => {
             out.push(("Evaluate".to_string(), span.line));
         }
-        Expr::Ident(..) | Expr::TypedIdent { .. } | Expr::Member { .. } => {
+        Expr::Ident(..) | Expr::TypedIdent { .. } | Expr::Member { .. } | Expr::Bang { .. } => {
             if let Some(name) = expr.dotted_name() {
                 out.push((name, expr.span().line));
                 // Still descend into any arguments hidden inside the chain.
             }
-            if let Expr::Member { object, .. } = expr {
+            if let Expr::Member { object, .. } | Expr::Bang { object, .. } = expr {
                 descend_arguments(object, out);
             }
         }
@@ -1222,10 +1222,6 @@ fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
                     collect_names(value, out);
                 }
             }
-        }
-        Expr::Bang { object, name, span } => {
-            out.push((name.clone(), span.line));
-            collect_names(object, out);
         }
         Expr::New { type_name, span } => out.push((type_name.clone(), span.line)),
         Expr::AddressOf { procedure, span } => out.push((procedure.clone(), span.line)),
@@ -1315,8 +1311,19 @@ mod tests {
             "Sub ReadField()\n  Dim record As Object\n  value = record!Answer + record![Display Name]\nEnd Sub",
         );
         assert_eq!(a.metrics.unparsed, 0);
-        assert_eq!(a.api_names.get("Answer"), Some(&1));
-        assert_eq!(a.api_names.get("Display Name"), Some(&1));
+        assert_eq!(a.api_names.get("record.Answer"), Some(&1));
+        assert_eq!(a.api_names.get("record.Display Name"), Some(&1));
+    }
+
+    #[test]
+    fn bang_and_dot_member_chains_are_recorded_once_at_full_length() {
+        let a = analyse_src(
+            "Sub ReadCell()\n  Dim book As Object\n  Dim value As Variant\n  value = book!Sheets!Data.Range(\"A1\").Value\nEnd Sub",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("book.Sheets.Data.Range.Value"), Some(&1));
+        assert_eq!(a.api_names.len(), 1);
+        assert_eq!(a.class, Some(Class::B));
     }
 
     #[test]

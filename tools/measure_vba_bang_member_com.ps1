@@ -75,8 +75,8 @@ End Function
     $probeModule = @($jsonReport.projects[0].modules | Where-Object { $_.name -eq 'BangProbe' })[0]
     if ($null -eq $probeModule -or
         $probeModule.metrics.unparsed -ne 0 -or
-        $probeModule.api_names.Answer -ne 1 -or
-        $probeModule.api_names.'Display Name' -ne 1) {
+        $probeModule.api_names.'values.Answer' -ne 1 -or
+        $probeModule.api_names.'values.Display Name' -ne 1) {
         throw 'Bang member JSON analysis did not preserve default-member names'
     }
     if (@($jsonReport.errors).Count -ne 0) {
