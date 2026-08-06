@@ -2830,6 +2830,28 @@ impl LayoutEngine {
         };
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
+        // S1081 (2026-08-06, opt-out OXI_S1081_DISABLE): an ambiguous quote that
+        // sits INSIDE Latin text is Latin, whatever the eastAsia lang/font says.
+        // The break site already decides it that way (`latin_ctx_quote`: a glued
+        // non-space ASCII neighbour makes the quote Latin) — this resolver did
+        // not, so ONE fragment was priced Latin for WIDTH and eastAsia for LINE
+        // HEIGHT. correspondence__001f8f70 (English manuscript, docDefaults
+        // lang eastAsia="ja-JP" + Normal eastAsia="MS Mincho") grew every
+        // quote-bearing line to 83/64 x 12 = 15.5625 -> 15.50 while Word draws
+        // the whole span in TimesNewRomanPSMT at 13.80 (Word PDF span font,
+        // verified) — 5 quote lines on p1 alone, +7.5pt, spilling one paragraph
+        // to p2 and cascading to +47 on p3.
+        // ★DERIVED from db9ca (the S763b canary) rendered by Word: its quotes go
+        // BOTH ways in the SAME document — «Use").» and ""This Content"" draw in
+        // TimesNewRomanPSMT, while a run holding a BARE " (rPr = colour only)
+        // draws in MS-PGothic. So the discriminator is the run's own content,
+        // not the document: quote glued to ASCII -> Latin, quote alone -> the
+        // eastAsia chain (S763b/S763c keep deciding that case).
+        let s1081_latin_ctx = has_quote
+            && std::env::var("OXI_S1081_DISABLE").is_err()
+            && text
+                .chars()
+                .any(|c| c.is_ascii() && !c.is_ascii_whitespace());
         // S763b: for a quote-only «CJK» presence, follow the eastAsia chain —
         // an explicit REAL-CJK eastAsia font (db9ca «“…”» runs name
         // ＭＳ Ｐゴシック; Word renders those quotes eastAsia — the flat
@@ -2838,6 +2860,8 @@ impl LayoutEngine {
         // absent one goes Latin. is_latin_only_font = the S634 discriminator.
         let has_cjk = if has_real_cjk {
             true
+        } else if s1081_latin_ctx && s763 {
+            false
         } else if has_quote && s763 {
             // S763c (2026-07-09): the docDefaults East-Asian LANGUAGE decides the
             // ambiguous curly-quote font, NOT the eastAsia font name. nyserda's
