@@ -1696,6 +1696,19 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut auto_title_deleted = false;
     let mut marker = false;
 
+    // Data-label (`c:dLbls`) state. `in_dlbls` scopes the numFmt handler
+    // (the axes also carry `c:numFmt`, so it must not fire outside dLbls).
+    let mut in_dlbls = false;
+    let mut has_data_labels = false;
+    let mut datalabel_position = String::new();
+    let mut number_format = String::new();
+    let mut show_val = false;
+    let mut show_cat_name = false;
+    let mut show_ser_name = false;
+    let mut show_percent = false;
+    let mut show_legend_key = false;
+    let mut show_bubble_size = false;
+
     // Per-`c:ser` state
     let mut in_ser = false;
     // Which cache we're collecting: "tx" | "cat" | "val" | ""
@@ -1737,6 +1750,14 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "v" => {
                         in_v = true;
                         cur_v.clear();
+                    }
+                    // <c:dLbls> is a real START tag in python-pptx output
+                    // (it carries the label child elements), so catch it
+                    // here; the matching End resets in_dlbls. Word draws
+                    // data labels whenever a <c:dLbls> exists.
+                    "dLbls" => {
+                        in_dlbls = true;
+                        has_data_labels = true;
                     }
                     // <c:legend> is a REAL START tag in python-pptx output
                     // ("<c:legend><c:legendPos .../><c:layout/><c:overlay .../>
@@ -1796,6 +1817,40 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             marker = true;
                         }
                     }
+                    // Data-label child elements are all SELF-CLOSING
+                    // (Event::Empty) in python-pptx output: <c:dLblPos
+                    // val="ctr"/>, <c:numFmt sourceLinked="0"
+                    // formatCode="0.0%"/>, <c:showVal val="1"/> etc.
+                    // All are gated on in_dlbls so the AXES' <c:numFmt>
+                    // (which appears outside any dLbls) is never captured.
+                    "dLblPos" if in_dlbls => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            datalabel_position = v;
+                        }
+                    }
+                    "numFmt" if in_dlbls => {
+                        if let Some(fmt) = get_attr(&e, "formatCode") {
+                            number_format = fmt;
+                        }
+                    }
+                    "showVal" if in_dlbls => {
+                        show_val = get_attr(&e, "val").as_deref() == Some("1");
+                    }
+                    "showCatName" if in_dlbls => {
+                        show_cat_name = get_attr(&e, "val").as_deref() == Some("1");
+                    }
+                    "showSerName" if in_dlbls => {
+                        show_ser_name = get_attr(&e, "val").as_deref() == Some("1");
+                    }
+                    "showPercent" if in_dlbls => {
+                        show_percent = get_attr(&e, "val").as_deref() == Some("1");
+                    }
+                    "showLegendKey" if in_dlbls => {
+                        show_legend_key = get_attr(&e, "val").as_deref() == Some("1");
+                    }
+                    "showBubbleSize" if in_dlbls => {
+                        show_bubble_size = get_attr(&e, "val").as_deref() == Some("1");
+                    }
                     _ => {}
                 }
             }
@@ -1849,6 +1904,9 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "barChart" => {
                         in_bar_chart = false;
                     }
+                    "dLbls" => {
+                        in_dlbls = false;
+                    }
                     _ => {}
                 }
             }
@@ -1867,6 +1925,15 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         has_legend,
         auto_title_deleted,
         marker,
+        has_data_labels,
+        datalabel_position,
+        number_format,
+        show_val,
+        show_cat_name,
+        show_ser_name,
+        show_percent,
+        show_legend_key,
+        show_bubble_size,
     })
 }
 

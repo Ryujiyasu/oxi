@@ -1621,6 +1621,152 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         }
                         }
 
+                        // Data labels (c:dLbls): Word renders each bar's
+                        // value in Calibri 18pt black, centred on the bar,
+                        // positioned by c:dLblPos (outEnd / ctr / inEnd).
+                        // Measured 2026-08-06 (chart_dlbls S1-S4, PDF
+                        // baseline vs bar-top): OUTSIDE_END baseline
+                        // ~ bar_top - 9.28, INSIDE_END ~ bar_top + 21.70,
+                        // CENTER ~ bar vertical centre + 6.2. Format:
+                        // numFmt "0.0%" -> value*100 one-decimal + "%".
+                        if chart.has_data_labels && chart.show_val {
+                            let num_fmt = chart.number_format.clone();
+                            let format_label = |v: f64| -> String {
+                                if num_fmt == "0.0%" {
+                                    format!("{:.1}%", v * 100.0)
+                                } else {
+                                    format!("{}", v.round() as i64)
+                                }
+                            };
+                            // Default data-label position: STACKED charts
+                            // centre their labels (COM position = -4108,
+                            // chart_dlbls S5); CLUSTERED place them above
+                            // the bar (OUTSIDE_END, S1).
+                            let dlbl_pos = if chart.datalabel_position.is_empty() {
+                                if chart.grouping == "stacked" {
+                                    "ctr"
+                                } else {
+                                    "outEnd"
+                                }
+                            } else {
+                                chart.datalabel_position.as_str()
+                            };
+                            if chart.grouping == "stacked" {
+                                let bar_w = pitch * 0.4;
+                                for ci in 0..n_cat {
+                                    let cat_center =
+                                        plot_left + pitch * (ci as f64 + 0.5);
+                                    let bx0 = cat_center - bar_w / 2.0;
+                                    let bar_center = bx0 + bar_w / 2.0;
+                                    let mut cum_h = 0.0f64;
+                                    for s in chart.series.iter() {
+                                        let v = s
+                                            .values
+                                            .get(ci)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        if v <= 0.0 {
+                                            continue;
+                                        }
+                                        let seg_h = if max_axis > 0.0 {
+                                            v / max_axis * plot_h
+                                        } else {
+                                            0.0
+                                        };
+                                        let by1 = plot_bot - cum_h;
+                                        let by0 = by1 - seg_h;
+                                        let text = format_label(v);
+                                        let lw = font_adv::line_hmtx_width_pt(
+                                            &text,
+                                            axis_fs,
+                                            axis_family,
+                                        )
+                                        .unwrap_or_else(|| {
+                                            text.chars().count() as f32
+                                                * axis_fs
+                                                * 0.5
+                                        }) as f64;
+                                        let lx = bar_center - lw / 2.0;
+                                        let baseline = match dlbl_pos {
+                                            "inEnd" => by0 + 21.70,
+                                            "ctr" => {
+                                                by0 + seg_h / 2.0 + 6.2
+                                            }
+                                            _ => by0 - 9.28, // outEnd
+                                        };
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            (lx * scale).round() as i32,
+                                            baseline as f32,
+                                            &text,
+                                            axis_fs,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                        cum_h += seg_h;
+                                    }
+                                }
+                            } else {
+                                let bar_w = pitch / (n_ser as f64 + 1.5);
+                                let cluster_w = bar_w * n_ser as f64;
+                                for ci in 0..n_cat {
+                                    let cat_center =
+                                        plot_left + pitch * (ci as f64 + 0.5);
+                                    for (si, s) in chart.series.iter().enumerate()
+                                    {
+                                        let v = s
+                                            .values
+                                            .get(ci)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        if v <= 0.0 {
+                                            continue;
+                                        }
+                                        let bx0 = cat_center
+                                            - cluster_w / 2.0
+                                            + si as f64 * bar_w;
+                                        let bar_center = bx0 + bar_w / 2.0;
+                                        let bar_h = if max_axis > 0.0 {
+                                            v / max_axis * plot_h
+                                        } else {
+                                            0.0
+                                        };
+                                        let by0 = plot_bot - bar_h;
+                                        let text = format_label(v);
+                                        let lw = font_adv::line_hmtx_width_pt(
+                                            &text,
+                                            axis_fs,
+                                            axis_family,
+                                        )
+                                        .unwrap_or_else(|| {
+                                            text.chars().count() as f32
+                                                * axis_fs
+                                                * 0.5
+                                        }) as f64;
+                                        let lx = bar_center - lw / 2.0;
+                                        let baseline = match dlbl_pos {
+                                            "inEnd" => by0 + 21.70,
+                                            "ctr" => {
+                                                by0 + bar_h / 2.0 + 6.2
+                                            }
+                                            _ => by0 - 9.28, // outEnd
+                                        };
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            (lx * scale).round() as i32,
+                                            baseline as f32,
+                                            &text,
+                                            axis_fs,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         // Category names centred on each category centre.
                         for (ci, name) in chart.categories.iter().enumerate() {
                             let cat_center =

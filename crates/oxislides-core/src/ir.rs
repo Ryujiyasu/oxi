@@ -241,6 +241,43 @@ pub struct Chart {
     /// renderer can gate on it.
     #[serde(default)]
     pub marker: bool,
+    /// True when the chart XML declares `<c:dLbls>` (data labels). When true
+    /// Word draws a value label per data point, formatted by `number_format`
+    /// and placed according to `datalabel_position` (chart_datalabel probe,
+    /// measured on the Word PDF 2026-08-06). Absent <c:dLbls> draws none.
+    #[serde(default)]
+    pub has_data_labels: bool,
+    /// c:dLbls/c:dLblPos@val — "outEnd" (default, above the bar),
+    /// "ctr" (centre of the bar), "inEnd" (inside the bar top). Maps to the
+    /// COM XL_LABEL_POSITION constants 2 / -4108 / 3. Measured on
+    /// chart_datalabel S1/S3/S4 (outEnd/ctr/inEnd).
+    #[serde(default = "default_datalabel_position")]
+    pub datalabel_position: String,
+    /// c:dLbls/c:numFmt@formatCode — e.g. "0.0%". Empty means General
+    /// (a plain value). The renderer applies the format to the raw value
+    /// (e.g. "0.0%" → value*100 with one decimal + "%", measured on
+    /// chart_datalabel S2: 19.2 → "1920.0%").
+    #[serde(default)]
+    pub number_format: String,
+    /// c:dLbls/c:showVal@val — draw the data value. (chart_datalabel S1-S5
+    /// all declare showVal=1.)
+    #[serde(default)]
+    pub show_val: bool,
+    /// c:dLbls/c:showCatName@val — draw the category name.
+    #[serde(default)]
+    pub show_cat_name: bool,
+    /// c:dLbls/c:showSerName@val — draw the series name.
+    #[serde(default)]
+    pub show_ser_name: bool,
+    /// c:dLbls/c:showPercent@val — draw the percentage (pie).
+    #[serde(default)]
+    pub show_percent: bool,
+    /// c:dLbls/c:showLegendKey@val — draw the legend key swatch.
+    #[serde(default)]
+    pub show_legend_key: bool,
+    /// c:dLbls/c:showBubbleSize@val — draw the bubble size.
+    #[serde(default)]
+    pub show_bubble_size: bool,
 }
 
 pub fn default_chart_type() -> String {
@@ -251,6 +288,9 @@ pub fn default_chart_bar_dir() -> String {
 }
 pub fn default_chart_grouping() -> String {
     "clustered".to_string()
+}
+pub fn default_datalabel_position() -> String {
+    "outEnd".to_string()
 }
 
 /// One c:ser element: a named series of values (per category).
