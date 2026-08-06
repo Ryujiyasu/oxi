@@ -504,6 +504,15 @@ impl Walker {
                 ModuleItem::Option(..) => {}
                 ModuleItem::DefType(_) => {}
                 ModuleItem::Attribute { .. } => {}
+                ModuleItem::Comment { .. } => {}
+                ModuleItem::Directive { text, span } => {
+                    self.findings.push(Finding {
+                        what: text.clone(),
+                        reason: "conditional compilation; the source differs by build".to_string(),
+                        class: None,
+                        line: span.line,
+                    });
+                }
                 ModuleItem::Implements { interface, span } => {
                     self.record_type_name(interface, span.line);
                 }
@@ -1561,6 +1570,22 @@ mod tests {
         assert_eq!(a.metrics.unparsed, 0);
         assert!(a.has_option_explicit);
         assert!(a.api_names.is_empty());
+    }
+
+    #[test]
+    fn module_comments_and_directives_are_not_unparsed() {
+        let a = analyse_src(
+            "' platform declaration\n\
+             #If Win64 Then\n\
+             Private value As LongLong\n\
+             #End If\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert!(a
+            .findings
+            .iter()
+            .any(|finding| finding.what == "#If Win64 Then"));
+        assert!(a.findings.iter().any(|finding| finding.what == "#End If"));
     }
 
     #[test]

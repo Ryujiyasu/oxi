@@ -62,6 +62,16 @@ pub enum ModuleItem {
         span: Span,
     },
     Option(ModuleOption, Span),
+    Comment {
+        text: String,
+        span: Span,
+    },
+    /// `#If`, `#Else`, `#End If`, and `#Const`, preserved without evaluating
+    /// host-specific compiler constants.
+    Directive {
+        text: String,
+        span: Span,
+    },
     /// `DefInt A-C, I` and the other module-level implicit-type directives.
     DefType(DefTypeDecl),
     /// `Dim` / `Private` / `Public` / `Const` at module level.

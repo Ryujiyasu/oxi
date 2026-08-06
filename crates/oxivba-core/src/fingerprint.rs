@@ -1004,7 +1004,10 @@ fn canonical_module_declarations(module: &Module, norm: Normalization) -> String
     };
     for item in &module.items {
         match item {
-            ModuleItem::Option(..) | ModuleItem::DefType(_) => {}
+            ModuleItem::Option(..) | ModuleItem::DefType(_) | ModuleItem::Comment { .. } => {}
+            ModuleItem::Directive { text, .. } => {
+                entries.push(format!("directive {}", text.to_ascii_lowercase()));
+            }
             ModuleItem::Variables(decl) => {
                 let mut text = format!(
                     "modulevar {:?}{}{}",
@@ -1623,6 +1626,16 @@ Sub D()\nx = 4\nEnd Sub";
         assert_eq!(
             fp(plain, Strength::Strict).combined,
             fp(commented, Strength::Strict).combined
+        );
+    }
+
+    #[test]
+    fn compiler_directives_change_module_fingerprints() {
+        let win64 = "#If Win64 Then\n#End If\nSub T()\nEnd Sub";
+        let vba7 = "#If VBA7 Then\n#End If\nSub T()\nEnd Sub";
+        assert_ne!(
+            fp(win64, Strength::Loosest).combined,
+            fp(vba7, Strength::Loosest).combined
         );
     }
 

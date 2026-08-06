@@ -250,16 +250,13 @@ impl<'a> Parser<'a> {
             let text = text.clone();
             self.pos += 1;
             self.end_statement();
-            return Some(ModuleItem::Unknown {
-                text: format!("'{text}"),
-                span,
-            });
+            return Some(ModuleItem::Comment { text, span });
         }
         if let TokenKind::Directive(text) = self.kind() {
             let text = text.clone();
             self.pos += 1;
             self.end_statement();
-            return Some(ModuleItem::Unknown { text, span });
+            return Some(ModuleItem::Directive { text, span });
         }
 
         if self.at_kw("attribute") {
@@ -3064,6 +3061,24 @@ mod tests {
             &m.items[3],
             ModuleItem::Option(ModuleOption::PrivateModule, _)
         ));
+    }
+
+    #[test]
+    fn module_comments_and_compiler_directives_are_structured() {
+        let m = module(
+            "' platform declaration\n\
+             #If Win64 Then\n\
+             #Else\n\
+             #End If\n",
+        );
+        assert!(matches!(&m.items[0], ModuleItem::Comment { text, .. }
+            if text == " platform declaration"));
+        assert!(matches!(&m.items[1], ModuleItem::Directive { text, .. }
+            if text == "#If Win64 Then"));
+        assert!(matches!(&m.items[2], ModuleItem::Directive { text, .. }
+            if text == "#Else"));
+        assert!(matches!(&m.items[3], ModuleItem::Directive { text, .. }
+            if text == "#End If"));
     }
 
     #[test]
