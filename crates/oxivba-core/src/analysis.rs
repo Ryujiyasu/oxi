@@ -1018,6 +1018,16 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("CallByName") || name.eq_ignore_ascii_case("VBA.CallByName") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason:
+                    "dispatches an object member by name; target resolution requires runtime type context"
+                        .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -1686,6 +1696,30 @@ mod tests {
                 && finding.reason.contains("workbook context")
                 && finding.class.is_none()
         }));
+    }
+
+    #[test]
+    fn callbyname_is_reported_as_runtime_member_dispatch() {
+        let a = analyse_src(
+            "Public Function ReadValue(ByVal target As Object) As Variant\n\
+             CallByName target, \"Value\", VbLet, 40\n\
+             ReadValue = VBA.CallByName(target, \"Value\", VbGet)\n\
+             End Function\n",
+        );
+        assert_eq!(a.api_names.get("CallByName"), Some(&1));
+        assert_eq!(a.api_names.get("VBA.CallByName"), Some(&1));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("runtime type context"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("runtime type context"))
+            .all(|finding| finding.class.is_none()));
     }
 
     #[test]
