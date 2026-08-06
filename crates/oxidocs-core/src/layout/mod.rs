@@ -28712,6 +28712,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             Alignment::Justify | Alignment::Distribute
                                         ) && self.balance_single_byte_double_byte_width
                                             && self.compress_punctuation;
+                                    // S1082: the S825 compat-15 justified space-shrink capacity,
+                                    // ported to this cell breaker (see the effective_wrap site).
+                                    let s1082_cell_shrink = !self.doc_body_has_real_cjk
+                                        && self.compat_mode >= 15
+                                        && self.compat_mode_explicit
+                                        && matches!(
+                                            para.alignment,
+                                            Alignment::Justify | Alignment::Distribute
+                                        )
+                                        && std::env::var("OXI_S1082_DISABLE").is_err()
+                                        && std::env::var("OXI_S825_DISABLE").is_err();
                                     // S497b FALSIFIED (2026-06-05): extending the compute_compression wrap
                                     // lookahead to left-aligned compressPunctuation cells (to model Word's
                                     // end-of-line yakumono oikomi at wrap for non-justified paras) was a NO-OP
@@ -29298,6 +29309,59 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             } else {
                                                 wrap_w
                                             };
+                                            // S1082 (2026-08-06, opt-out OXI_S1082_DISABLE): the
+                                            // CELL wrapper gets the S825 compat-15 justified
+                                            // SPACE-SHRINK capacity that break_into_lines has.
+                                            // The cell wrapper is a separate greedy breaker (the
+                                            // S869 LATINEM / S1017 KERNBREAK family) and it had no
+                                            // shrink credit at all, so a justified cell line was
+                                            // fitted at its NATURAL width where Word compresses
+                                            // the inter-word spaces.
+                                            // MEASURED (technical__00501ca3, Word PDF per-char
+                                            // origins, Times New Roman 9.96 in a 259.35pt cell):
+                                            // the line «change, and the new value of the
+                                            // parameter.  A printed copy of the » is 265.77 at
+                                            // hmtx-natural, and Word paints it with its 14 spaces
+                                            // at 2.281-2.490 (natural 2.490) for a VISIBLE extent
+                                            // of 258.61 — inside Oxi's own 259.35 budget. Oxi
+                                            // dropped «the», the right cell took a 10th line, the
+                                            // last row grew 8.4pt and «(Table Added 2018)» spilled
+                                            // to the next page.
+                                            // The capacity is S825's, per space: 0.25 x em (the cs
+                                            // term is folded in — a cell run's cs is 0 in every
+                                            // measured case and 0.25 vs 0.24 on it is < 0.01pt).
+                                            // ★The credit is NOT available on the paragraph's LAST
+                                            // line: a justified paragraph's last line is rendered
+                                            // LEFT-aligned, so Word has no inter-word slack to
+                                            // compress there (the cell counterpart of S725).
+                                            // MEASURED (technical__008ae1fa, Word PDF merged lines,
+                                            // same cell, 9pt TNR, content width 231.6): Word
+                                            // STRETCHES the interior line «practice successfully in
+                                            // the profession. » (4 spaces at 13.29-13.43 vs natural
+                                            // 2.25) out to the cell edge 760.28 and puts the final
+                                            // word «(Proactive)» alone on the last line — it does
+                                            // NOT shrink to fit it, though the overflow is only
+                                            // ~2.1pt and 5 spaces of credit would cover it.
+                                            let s1082_last_word = s1082_cell_shrink && {
+                                                let gpos = s586_run_offset + s586_ci;
+                                                !s586_para_chars
+                                                    .iter()
+                                                    .skip(gpos)
+                                                    .skip_while(|c| !c.is_whitespace())
+                                                    .any(|c| !c.is_whitespace())
+                                            };
+                                            let effective_wrap = effective_wrap
+                                                + if s1082_cell_shrink && !s1082_last_word {
+                                                    (current_line_chars
+                                                        .iter()
+                                                        .chain(buf_chars.iter())
+                                                        .filter(|c| c.ch == ' ')
+                                                        .map(|c| c.natural_advance)
+                                                        .sum::<f32>())
+                                                        * 0.25
+                                                } else {
+                                                    0.0
+                                                };
                                             // Trailing spaces don't trigger line wrapping (Word behavior)
                                             let is_space = ch == ' ' || ch == '\u{3000}';
                                             // S118 wrap-decision lookahead: when env var ON + gate active,
@@ -33987,7 +34051,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let jc_gate_active = matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             && self.balance_single_byte_double_byte_width
             && self.compress_punctuation;
+        // S1082 estimate mirror of the render-loop gate.
+        let s1082_cell_shrink = !self.doc_body_has_real_cjk
+            && self.compat_mode >= 15
+            && self.compat_mode_explicit
+            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+            && std::env::var("OXI_S1082_DISABLE").is_err()
+            && std::env::var("OXI_S825_DISABLE").is_err();
         let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
+        // S1082: paragraph-wide char stream + running offset, so the estimate can
+        // answer the same "is this the paragraph's last word?" question the render
+        // loop answers with s586_para_chars / s586_run_offset.
+        let s1082_para_chars: Vec<char> = para.runs.iter().flat_map(|r| r.text.chars()).collect();
+        let mut s1082_gpos = 0usize;
 
         for run in &para.runs {
             let font_size = self.resolve_font_size(&run.style, &para.style);
@@ -34002,6 +34078,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // (below) matches the render loop's s586_run_chars.get(ci+1).
             let s1017_chars: Vec<char> = run.text.chars().collect();
             for (s1017_i, ch) in s1017_chars.iter().copied().enumerate() {
+                let s1082_here = s1082_gpos;
+                s1082_gpos += 1;
                 // Session 109 (2026-05-19): mirror the cell renderer's soft-line-
                 // break handling so the line-count estimate matches what the
                 // renderer actually produces. Otherwise estimate < render →
@@ -34201,6 +34279,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     wrap_w
                 };
+                // S1082 estimate mirror (see the render-loop comment). The row-height
+                // estimate must use the SAME budget as the render or the row grows a
+                // phantom line (the S716/S751 three-pass rule).
+                let s1082_last_word = s1082_cell_shrink && {
+                    !s1082_para_chars
+                        .iter()
+                        .skip(s1082_here)
+                        .skip_while(|c| !c.is_whitespace())
+                        .any(|c| !c.is_whitespace())
+                };
+                let effective_wrap = effective_wrap
+                    + if s1082_cell_shrink && !s1082_last_word {
+                        (current_line_chars
+                            .iter()
+                            .chain(buf_chars.iter())
+                            .filter(|c| c.ch == ' ')
+                            .map(|c| c.natural_advance)
+                            .sum::<f32>())
+                            * 0.25
+                    } else {
+                        0.0
+                    };
                 let is_space = ch == ' ' || ch == '\u{3000}';
                 // S123: mirror cell renderer's compute_compression lookahead.
                 // When gate active + this run has neg cs + natural would overflow,
