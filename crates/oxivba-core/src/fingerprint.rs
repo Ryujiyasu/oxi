@@ -237,6 +237,26 @@ fn render_type_name(type_name: &TypeName, locals: &mut LocalNames, out: &mut Str
     }
 }
 
+fn render_array_bounds(
+    bounds: &Option<Vec<ArrayBound>>,
+    locals: &mut LocalNames,
+    out: &mut String,
+) {
+    let Some(bounds) = bounds else {
+        return;
+    };
+    out.push('[');
+    for bound in bounds {
+        if let Some(lower) = &bound.lower {
+            render_expr(lower, locals, out);
+            out.push_str(" to ");
+        }
+        render_expr(&bound.upper, locals, out);
+        out.push(';');
+    }
+    out.push(']');
+}
+
 fn count_statements(body: &[Statement]) -> usize {
     let mut n = 0;
     for stmt in body {
@@ -410,11 +430,17 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             render_expr(target, locals, out);
         }
         Statement::Dim(decl) => {
-            let _ = write!(out, "dim{}", if decl.is_const { " const" } else { "" });
+            let _ = write!(
+                out,
+                "dim{}{}",
+                if decl.is_static { " static" } else { "" },
+                if decl.is_const { " const" } else { "" }
+            );
             for item in &decl.items {
                 let name = locals.render(&item.name);
                 let _ = write!(out, " {name}:");
                 render_type_name(&item.type_name, locals, out);
+                render_array_bounds(&item.array_bounds, locals, out);
                 if let Some(value) = &item.value {
                     out.push('=');
                     render_expr(value, locals, out);
@@ -427,7 +453,9 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
             let _ = write!(out, "redim{}", if *preserve { " preserve" } else { "" });
             for item in items {
                 let name = locals.render(&item.name);
-                let _ = write!(out, " {name}");
+                let _ = write!(out, " {name}:");
+                render_type_name(&item.type_name, locals, out);
+                render_array_bounds(&item.array_bounds, locals, out);
             }
         }
         Statement::Erase { targets, .. } => {
@@ -1072,18 +1100,7 @@ fn render_module_var_item(item: &VarItem, locals: &mut LocalNames, out: &mut Str
     }
     let _ = write!(out, "{}:", item.name.to_ascii_lowercase());
     render_type_name(&item.type_name, locals, out);
-    if let Some(bounds) = &item.array_bounds {
-        out.push('[');
-        for bound in bounds {
-            if let Some(lower) = &bound.lower {
-                render_expr(lower, locals, out);
-                out.push_str(" to ");
-            }
-            render_expr(&bound.upper, locals, out);
-            out.push(';');
-        }
-        out.push(']');
-    }
+    render_array_bounds(&item.array_bounds, locals, out);
     if let Some(value) = &item.value {
         out.push('=');
         render_expr(value, locals, out);
@@ -1476,6 +1493,38 @@ Sub D()\nx = 4\nEnd Sub";
             fp(four, Strength::Loose).combined,
             fp(eight, Strength::Loose).combined
         );
+    }
+
+    #[test]
+    fn local_array_shapes_and_static_storage_are_fingerprinted() {
+        let scalar = "Sub T()\nDim values As Long\nEnd Sub";
+        let dynamic = "Sub T()\nDim values() As Long\nEnd Sub";
+        let bounded = "Sub T()\nDim values(1 To 4) As Long\nEnd Sub";
+        let larger = "Sub T()\nDim values(1 To 8) As Long\nEnd Sub";
+        let static_local = "Sub T()\nStatic values As Long\nEnd Sub";
+        for different in [dynamic, bounded, larger, static_local] {
+            assert_ne!(
+                fp(scalar, Strength::Standard).combined,
+                fp(different, Strength::Standard).combined
+            );
+        }
+        assert_ne!(
+            fp(bounded, Strength::Standard).combined,
+            fp(larger, Strength::Standard).combined
+        );
+    }
+
+    #[test]
+    fn redim_bounds_and_element_types_are_fingerprinted() {
+        let base = "Sub T()\nReDim values(1 To 4) As Long\nEnd Sub";
+        let larger = "Sub T()\nReDim values(1 To 8) As Long\nEnd Sub";
+        let strings = "Sub T()\nReDim values(1 To 4) As String\nEnd Sub";
+        for different in [larger, strings] {
+            assert_ne!(
+                fp(base, Strength::Standard).combined,
+                fp(different, Strength::Standard).combined
+            );
+        }
     }
 
     #[test]

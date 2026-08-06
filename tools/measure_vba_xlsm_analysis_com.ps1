@@ -39,7 +39,10 @@ End Function
 
 Private Function SuffixValue$(ByVal number&)
     Dim padded As String * 4
-    padded = CStr(number&)
+    Dim chunks() As String
+    ReDim chunks(1 To 2) As String
+    chunks(1) = CStr(number&)
+    padded = chunks(1)
     SuffixValue$ = padded
 End Function
 '@)
@@ -79,7 +82,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 3, statements: 9',
+        'procedures: 3, statements: 12',
         'unparsed: 0',
         'Summary:'
     )
