@@ -1459,17 +1459,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
-                        // Horizontal major gridlines (chart_stacked render-
-                        // truth 2026-08-06, fitz get_drawings path[2]):
+                        // Horizontal major gridlines (Word render-truth
+                        // 2026-08-06, fitz get_drawings items level):
                         // Word draws black lines spanning the full plot
                         // width (plot_left->plot_right) at the value-tick
                         // rows i=1..=axis_steps (i=0 is the X axis line,
                         // drawn in the axis section below). They render
                         // BEHIND the bars (a bar covers its crossing), so
-                        // they are drawn before the bars. Measured for
-                        // STACKED only (clustered Word gridlines not yet
-                        // measured -> not implemented per no-guess rule).
-                        if is_stacked && axis_steps > 0 {
+                        // they are drawn before the bars. STACKED = 8
+                        // lines (chart_stacked), CLUSTERED = 5 lines
+                        // (chart1/2/3/2b all identical, y = plot_bot -
+                        // i*plot_h/5), LINE = 5 lines (chart_line).
+                        if axis_steps > 0 {
                             let grid_pen = CreatePen(
                                 PS_SOLID,
                                 2,
