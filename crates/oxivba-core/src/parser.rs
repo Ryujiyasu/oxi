@@ -607,6 +607,11 @@ impl<'a> Parser<'a> {
             let suffix = *suffix;
             self.pos += 1;
             Some(suffix)
+        } else if self.at_punct(Punct::Caret) {
+            // `^` is LongLong's declaration character in 64-bit VBA. Keep it
+            // contextual here so `value ^ 2` remains the power operator.
+            self.pos += 1;
+            Some('^')
         } else {
             None
         };
@@ -2293,6 +2298,7 @@ fn type_name_from_suffix(suffix: char) -> TypeName {
         '#' => "Double",
         '@' => "Currency",
         '$' => "String",
+        '^' => "LongLong",
         _ => "Variant",
     };
     TypeName {
@@ -2400,6 +2406,7 @@ mod tests {
             } => assert_eq!(op_of(&operand), BinaryOp::Pow),
             other => panic!("expected negation of a power, got {other:?}"),
         }
+        assert_eq!(op_of(&expr("value^2")), BinaryOp::Pow);
     }
 
     #[test]
@@ -2876,7 +2883,7 @@ mod tests {
     fn declaration_type_suffixes_are_preserved_and_resolved() {
         let m = module(
             "Private total&\n\
-             Private Function Convert$(ByVal count&, ratio!, price@, index%, score#)\n\
+             Private Function Convert$(ByVal count&, ratio!, price@, index%, score#, wide^)\n\
              End Function",
         );
         let ModuleItem::Variables(decl) = &m.items[0] else {
@@ -2895,8 +2902,9 @@ mod tests {
                 .iter()
                 .map(|param| param.type_name.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Long", "Single", "Currency", "Integer", "Double"]
+            ["Long", "Single", "Currency", "Integer", "Double", "LongLong"]
         );
+        assert_eq!(procedure.params[5].type_name.suffix, Some('^'));
     }
 
     #[test]

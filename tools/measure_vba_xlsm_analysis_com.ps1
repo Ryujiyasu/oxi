@@ -31,6 +31,7 @@ Public Sub BuildReport(ByVal target As Worksheet)
     ws.Range("A1").Value = SuffixValue$(42&)
     ws.Range("B1").Value = Len(SuffixValue$(42&))
     ws.Range("A1").Font.Bold = True
+    ws.Range("C1").Value = WideValue()
 End Sub
 
 Private Function HiddenHelper(ByVal value As Long) As Long
@@ -47,17 +48,22 @@ Private Function SuffixValue$(ByVal number&)
     padded = lazy(1)
     SuffixValue$ = padded
 End Function
+
+Private Function WideValue^()
+    WideValue = CLngLng(42)
+End Function
 '@)
     $sheet = $workbook.Worksheets.Item(1)
     $excel.Run("'$($workbook.Name)'!AnalysisProbe.BuildReport", $sheet)
     $actualValue = [string]$sheet.Range('A1').Value2
     $fixedLength = [long]$sheet.Range('B1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or -not [bool]$sheet.Range('A1').Font.Bold) {
-        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, bold=$([bool]$sheet.Range('A1').Font.Bold)"
+    $wideValue = [long]$sheet.Range('C1').Value2
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 42 -or -not [bool]$sheet.Range('A1').Font.Bold) {
+        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)
     $workbook.SaveCopyAs($workbookCopyPath)
-    $module.CodeModule.ReplaceLine(12, '    HiddenHelper = value + 2')
+    $module.CodeModule.ReplaceLine(13, '    HiddenHelper = value + 2')
     $module.CodeModule.InsertLines(2, 'Private Declare PtrSafe Function SetTimer Lib "user32" (ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr')
     $module.CodeModule.AddFromString(@'
 
@@ -84,7 +90,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 3, statements: 14',
+        'procedures: 4, statements: 16',
         'unparsed: 0',
         'Summary:'
     )
@@ -105,7 +111,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '40.0% (shared 2; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '50.0% (shared 3; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {

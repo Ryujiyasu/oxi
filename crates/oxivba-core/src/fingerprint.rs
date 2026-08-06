@@ -1477,11 +1477,13 @@ Sub D()\nx = 4\nEnd Sub";
 
     #[test]
     fn type_suffixes_match_equivalent_as_types() {
-        let suffix = "Private Function Convert$(ByVal value&)\nDim ratio!\nEnd Function";
+        let suffix = "Private Function Convert$(ByVal value&)\nDim ratio!\nDim wide^\nEnd Function";
         let explicit = "Private Function Convert(ByVal value As Long) As String\n\
                         Dim ratio As Single\n\
+                        Dim wide As LongLong\n\
                         End Function";
-        let different = "Private Function Convert#(ByVal value%)\nDim ratio@\nEnd Function";
+        let different =
+            "Private Function Convert#(ByVal value%)\nDim ratio@\nDim wide As Long\nEnd Function";
         assert_eq!(
             fp(suffix, Strength::Standard).combined,
             fp(explicit, Strength::Standard).combined
