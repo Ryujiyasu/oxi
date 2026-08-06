@@ -1524,6 +1524,7 @@ Sub D()\nx = 4\nEnd Sub";
         let long = "Sub T()\nx = 42&\nEnd Sub";
         let other_long = "Sub T()\nx = 99&\nEnd Sub";
         let double = "Sub T()\nx = 42#\nEnd Sub";
+        let long_long = "Sub T()\nx = 42^\nEnd Sub";
 
         assert_ne!(
             fp(plain, Strength::Standard).combined,
@@ -1536,6 +1537,10 @@ Sub D()\nx = 4\nEnd Sub";
         assert_ne!(
             fp(long, Strength::Loose).combined,
             fp(double, Strength::Loose).combined
+        );
+        assert_ne!(
+            fp(long, Strength::Loose).combined,
+            fp(long_long, Strength::Loose).combined
         );
     }
 

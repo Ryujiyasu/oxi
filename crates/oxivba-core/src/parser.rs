@@ -122,6 +122,19 @@ impl<'a> Parser<'a> {
         matches!(self.kind(), TokenKind::Eol) || self.at_eof()
     }
 
+    fn caret_ends_literal(&self) -> bool {
+        self.at_punct(Punct::Caret)
+            && matches!(
+                self.kind_at(1),
+                TokenKind::Eol
+                    | TokenKind::Eof
+                    | TokenKind::Comment(_)
+                    | TokenKind::Punct(
+                        Punct::RParen | Punct::Comma | Punct::Colon | Punct::Semicolon
+                    )
+            )
+    }
+
     /// Consume a statement terminator if one is next, and nothing else.
     ///
     /// Deliberately not greedy. Skipping ahead to the newline would swallow the
@@ -2185,6 +2198,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 let suffix = match self.kind() {
                     TokenKind::TypeSuffix(suffix) => Some(*suffix),
+                    TokenKind::Punct(Punct::Caret) if self.caret_ends_literal() => Some('^'),
                     _ => None,
                 };
                 if suffix.is_some() {
@@ -2956,7 +2970,7 @@ mod tests {
 
     #[test]
     fn numeric_literal_type_suffixes_are_preserved() {
-        for (source, expected_suffix) in [("42&", '&'), ("42#", '#'), ("42@", '@')] {
+        for (source, expected_suffix) in [("42&", '&'), ("42#", '#'), ("42@", '@'), ("42^", '^')] {
             assert!(matches!(
                 expr(source),
                 Expr::Literal(

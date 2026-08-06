@@ -50,7 +50,7 @@ Private Function SuffixValue$(ByVal number&)
 End Function
 
 Private Function WideValue^()
-    WideValue = CLngLng(42)
+    WideValue = 42^
 End Function
 '@)
     $sheet = $workbook.Worksheets.Item(1)
