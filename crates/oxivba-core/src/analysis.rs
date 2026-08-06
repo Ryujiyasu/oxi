@@ -564,6 +564,11 @@ impl Walker {
 
     fn walk_procedure(&mut self, proc: &Procedure) {
         self.current_locals = self.module_names.clone();
+        // A Function or Property Get assigns its return value through the
+        // procedure name.  Treating that bare name as a call makes every such
+        // private procedure appear used by itself.  The same rule also keeps
+        // self-recursion from hiding an otherwise unreachable procedure.
+        self.current_locals.insert(proc.name.to_ascii_lowercase());
         self.current_locals.extend(
             proc.params
                 .iter()
@@ -1416,6 +1421,26 @@ mod tests {
              End Sub\n",
         );
         assert!(a.dead_procedures().is_empty());
+    }
+
+    #[test]
+    fn function_result_assignment_is_not_a_self_call() {
+        let a = analyse_src(
+            "Private Function HiddenValue() As Long\n\
+             HiddenValue = 7\n\
+             End Function\n",
+        );
+        assert_eq!(a.dead_procedures(), ["HiddenValue".to_string()]);
+    }
+
+    #[test]
+    fn self_recursion_does_not_make_a_procedure_reachable() {
+        let a = analyse_src(
+            "Private Sub RecursiveOnly()\n\
+             RecursiveOnly\n\
+             End Sub\n",
+        );
+        assert_eq!(a.dead_procedures(), ["RecursiveOnly".to_string()]);
     }
 
     #[test]
