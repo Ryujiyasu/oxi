@@ -806,6 +806,10 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
             out.push(']');
         }
         Expr::Ident(name, _) => out.push_str(&locals.render(name)),
+        Expr::TypedIdent { name, suffix, .. } => {
+            out.push_str(&locals.render(name));
+            out.push(*suffix);
+        }
         Expr::WithMember(name, _) => {
             out.push('.');
             out.push_str(&name.to_ascii_lowercase());
@@ -1254,6 +1258,20 @@ End Sub";
         assert_ne!(
             fp(answer, Strength::Strict).combined,
             fp(total, Strength::Strict).combined
+        );
+    }
+
+    #[test]
+    fn expression_identifier_suffixes_affect_the_fingerprint() {
+        let variant = "Function T(value)\nT = Left(value, 1)\nEnd Function";
+        let string = "Function T(value)\nT = Left$(value, 1)\nEnd Function";
+        assert_ne!(
+            fp(variant, Strength::Strict).combined,
+            fp(string, Strength::Strict).combined
+        );
+        assert_ne!(
+            fp(variant, Strength::Loose).combined,
+            fp(string, Strength::Loose).combined
         );
     }
 

@@ -1117,13 +1117,14 @@ fn collect_declared_names(body: &[Statement], names: &mut BTreeSet<String>) {
                 }
             }
             Statement::For(for_statement) => {
-                if let Expr::Ident(name, _) = &for_statement.counter {
+                if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = &for_statement.counter
+                {
                     names.insert(name.to_ascii_lowercase());
                 }
                 collect_declared_names(&for_statement.body, names);
             }
             Statement::ForEach(for_each) => {
-                if let Expr::Ident(name, _) = &for_each.item {
+                if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = &for_each.item {
                     names.insert(name.to_ascii_lowercase());
                 }
                 collect_declared_names(&for_each.body, names);
@@ -1200,7 +1201,7 @@ fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
         Expr::EvaluateShortcut { span, .. } => {
             out.push(("Evaluate".to_string(), span.line));
         }
-        Expr::Ident(..) | Expr::Member { .. } => {
+        Expr::Ident(..) | Expr::TypedIdent { .. } | Expr::Member { .. } => {
             if let Some(name) = expr.dotted_name() {
                 out.push((name, expr.span().line));
                 // Still descend into any arguments hidden inside the chain.

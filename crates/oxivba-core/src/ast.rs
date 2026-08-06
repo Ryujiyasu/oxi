@@ -713,6 +713,14 @@ pub enum Expr {
     /// A bare name. Whether it is a variable, a call, or a property is not
     /// decidable without type information, so it is left as a name.
     Ident(String, Span),
+    /// A name carrying an expression type character, such as `Left$` or
+    /// `value%`. This is semantically visible even though API lookup uses the
+    /// undecorated name.
+    TypedIdent {
+        name: String,
+        suffix: char,
+        span: Span,
+    },
     /// `.Value` inside a `With` block.
     WithMember(String, Span),
     /// `a.b`
@@ -783,6 +791,7 @@ impl Expr {
             Expr::Literal(_, s)
             | Expr::EvaluateShortcut { span: s, .. }
             | Expr::Ident(_, s)
+            | Expr::TypedIdent { span: s, .. }
             | Expr::WithMember(_, s)
             | Expr::Member { span: s, .. }
             | Expr::Index { span: s, .. }
@@ -816,6 +825,7 @@ impl Expr {
             Expr::Literal(..)
             | Expr::EvaluateShortcut { .. }
             | Expr::Ident(..)
+            | Expr::TypedIdent { .. }
             | Expr::WithMember(..)
             | Expr::New { .. }
             | Expr::AddressOf { .. } => {}
@@ -830,6 +840,7 @@ impl Expr {
     pub fn dotted_name(&self) -> Option<String> {
         match self {
             Expr::Ident(name, _) => Some(name.clone()),
+            Expr::TypedIdent { name, .. } => Some(name.clone()),
             Expr::Member { object, name, .. } => {
                 Some(format!("{}.{}", object.dotted_name()?, name))
             }

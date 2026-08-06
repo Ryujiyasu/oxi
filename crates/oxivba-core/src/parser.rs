@@ -2371,8 +2371,10 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
                 self.pos += 1;
-                if matches!(self.kind(), TokenKind::TypeSuffix(_)) {
+                if let TokenKind::TypeSuffix(suffix) = self.kind() {
+                    let suffix = *suffix;
                     self.pos += 1;
+                    return Some(Expr::TypedIdent { name, suffix, span });
                 }
                 Some(Expr::Ident(name, span))
             }
@@ -2596,7 +2598,22 @@ mod tests {
         assert!(matches!(
             expr("value! + 1"),
             Expr::Binary { op: BinaryOp::Add, lhs, .. }
-                if matches!(*lhs, Expr::Ident(ref name, _) if name == "value")
+                if matches!(*lhs, Expr::TypedIdent { ref name, suffix: '!', .. } if name == "value")
+        ));
+    }
+
+    #[test]
+    fn expression_identifier_type_suffixes_are_preserved() {
+        assert!(matches!(
+            expr("Left$(value, 1)"),
+            Expr::Index { target, .. }
+                if matches!(*target, Expr::TypedIdent { ref name, suffix: '$', .. } if name == "Left")
+        ));
+        assert!(matches!(
+            expr("count% + amount@"),
+            Expr::Binary { lhs, rhs, .. }
+                if matches!(*lhs, Expr::TypedIdent { suffix: '%', .. })
+                    && matches!(*rhs, Expr::TypedIdent { suffix: '@', .. })
         ));
     }
 
