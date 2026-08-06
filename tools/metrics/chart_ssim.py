@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """Compare Oxi chart renders against the Word PDFs (150dpi).
 
-Usage: python tools/metrics/chart_ssim.py <doc_id> <oxi_png>
+Usage: python tools/metrics/chart_ssim.py <doc_id> <oxi_png> [page_index]
 e.g.  python tools/metrics/chart_ssim.py chart1 scratchpad/chart_step5/render_chart1/c1_s1.png
       python tools/metrics/chart_ssim.py chart2 scratchpad/chart_step5/render_chart2/c2_s1.png
       python tools/metrics/chart_ssim.py chart2b scratchpad/chart_step5/render_chart2b/c2b_s1.png
       python tools/metrics/chart_ssim.py chart3 scratchpad/chart_step5/render_chart3/c3_s1.png
+      python tools/metrics/chart_ssim.py chart_pie2 scratchpad/pie_render/chart_pie2_s3.png 2
 """
 import sys
 import numpy as np
@@ -19,6 +20,9 @@ DOCS = {
     "chart3": r"pipeline_data\pptx_probes\chart3\chart3.pdf",
     "chart_legend": r"pipeline_data\pptx_probes\chart_legend\chart_legend.pdf",
     "chart_legend3": r"pipeline_data\pptx_probes\chart_legend3\chart_legend3.pdf",
+    "chart_pie": r"pipeline_data\pptx_probes\chart_pie\chart_pie.pdf",
+    "chart_pie3": r"pipeline_data\pptx_probes\chart_pie3\chart_pie3.pdf",
+    "chart_pie2": r"pipeline_data\pptx_probes\chart_pie2\chart_pie2.pdf",
 }
 DPI = 150
 
@@ -37,7 +41,8 @@ def main() -> None:
     word_pdf = DOCS[doc_id]
 
     doc = fitz.open(word_pdf)
-    pix = doc[0].get_pixmap(matrix=fitz.Matrix(DPI / 72, DPI / 72))
+    page_idx = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    pix = doc[page_idx].get_pixmap(matrix=fitz.Matrix(DPI / 72, DPI / 72))
     word = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
         pix.height, pix.width, pix.n
     )

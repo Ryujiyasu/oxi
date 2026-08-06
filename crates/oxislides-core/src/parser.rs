@@ -13,9 +13,9 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    default_chart_bar_dir, default_chart_grouping, Chart, ChartSeries, MasterStyleLevel,
-    MasterTxStyles, Presentation, Shape, ShapeContent, Slide, SlideAlignment, SlideBullet,
-    SlideParagraph, SlideRun, Table, TableCell,
+    default_chart_bar_dir, default_chart_grouping, default_chart_type, Chart, ChartSeries,
+    MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
+    SlideAlignment, SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
 };
 
 #[derive(Error, Debug)]
@@ -1687,11 +1687,13 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     reader.config_mut().trim_text(false);
 
     let mut in_bar_chart = false;
+    let mut chart_type: Option<String> = None;
     let mut bar_dir: Option<String> = None;
     let mut grouping: Option<String> = None;
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut categories: Vec<String> = Vec::new();
     let mut has_legend = false;
+    let mut auto_title_deleted = false;
 
     // Per-`c:ser` state
     let mut in_ser = false;
@@ -1708,12 +1710,15 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
             Ok(Event::Start(e)) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "pieChart" => {
+                        chart_type = Some("pie".to_string());
+                    }
                     "barChart" => {
                         in_bar_chart = true;
                         bar_dir = get_attr(&e, "barDir");
                         grouping = get_attr(&e, "grouping");
                     }
-                    "ser" if in_bar_chart => {
+                    "ser" if in_bar_chart || chart_type.as_deref() == Some("pie") => {
                         in_ser = true;
                         ser_target = "";
                         ser_name = None;
@@ -1741,6 +1746,17 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     // enable a legend (no overlay/position attrs). Any legend
                     // declaration -> has_legend.
                     "legend" => has_legend = true,
+                    // Self-closing <c:autoTitleDeleted val="1"/> — python-pptx
+                    // writes it when the auto title is explicitly removed
+                    // (chart.has_title=False). When absent (or val=0) Word
+                    // draws the automatic series-name title and shifts the
+                    // pie circle down. This is an Event::Empty (self-closing),
+                    // NOT a Start — the same trap as <c:chart r:id=.../>.
+                    "autoTitleDeleted" => {
+                        if get_attr(&e, "val").as_deref() == Some("1") {
+                            auto_title_deleted = true;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1804,11 +1820,13 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     }
 
     Ok(Chart {
+        chart_type: chart_type.unwrap_or_else(default_chart_type),
         bar_dir: bar_dir.unwrap_or_else(default_chart_bar_dir),
         grouping: grouping.unwrap_or_else(default_chart_grouping),
         series,
         categories,
         has_legend,
+        auto_title_deleted,
     })
 }
 

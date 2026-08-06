@@ -198,6 +198,12 @@ pub enum ShapeContent {
 ///     render-truth 2026-08-06).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chart {
+    /// The chart type (c:pieChart / c:barChart / ... element name). "col" is
+    /// the legacy default used when no chart-type element was matched (the
+    /// pre-pie parser only handled c:barChart). "pie" selects the pie
+    /// rendering path.
+    #[serde(default = "default_chart_type")]
+    pub chart_type: String,
     /// c:barChart/c:barDir@val — "col" (column/vertical) or "bar" (horizontal).
     #[serde(default = "default_chart_bar_dir")]
     pub bar_dir: String,
@@ -216,8 +222,22 @@ pub struct Chart {
     /// drawn at all. None of the 4 chart1-4 probes declare one.
     #[serde(default)]
     pub has_legend: bool,
+    /// True when the chart XML declares `<c:autoTitleDeleted val="1"/>`
+    /// (self-closing). Word derives the chart's plot geometry AND whether the
+    /// automatic series-name title is drawn from this flag: a pie with
+    /// autoTitleDeleted=0 is "titled" — the series name is drawn at the
+    /// frame top and the circle is shifted down; autoTitleDeleted=1 draws no
+    /// title and the circle sits higher. Measured on chart_pie (0 → titled),
+    /// chart_pie3 A/C/E (1 → untitled), chart_pie3 B/D/F (0 + <c:title> →
+    /// titled) — the title element presence and this flag always agree for
+    /// auto-titles, so this flag alone is the discriminator.
+    #[serde(default)]
+    pub auto_title_deleted: bool,
 }
 
+pub fn default_chart_type() -> String {
+    "col".to_string()
+}
 pub fn default_chart_bar_dir() -> String {
     "col".to_string()
 }

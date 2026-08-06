@@ -437,6 +437,7 @@ fn shape_json(sh: &Shape) -> Value {
         ShapeContent::Chart { chart } => (
             "chart",
             json!({
+                "chart_type": chart.chart_type,
                 "bar_dir": chart.bar_dir,
                 "grouping": chart.grouping,
                 "series": chart
@@ -445,6 +446,8 @@ fn shape_json(sh: &Shape) -> Value {
                     .map(|s| json!({ "name": s.name, "values": s.values }))
                     .collect::<Vec<_>>(),
                 "categories": chart.categories,
+                "has_legend": chart.has_legend,
+                "auto_title_deleted": chart.auto_title_deleted,
             }),
         ),
     };
@@ -777,6 +780,219 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //     baseline = sh.y+28.03); >=2 series -> none.
                         //     A legend is drawn only when the chart XML
                         //     declares <c:legend> (none of the 4 probes do).
+                        if chart.chart_type == "pie" {
+                            // Pie chart (Word render-truth 2026-08-06, fitz
+                            // get_drawings on chart_pie / chart_pie3 + the
+                            // XML autoTitleDeleted census):
+                            //   auto title: drawn when the series count == 1
+                            //     AND the XML does NOT declare
+                            //     <c:autoTitleDeleted val="1"/>. The series
+                            //     name is drawn Calibri-Bold 21.62pt centred
+                            //     on the frame, baseline = sh.y+28.03 (the
+                            //     same rule as the bar auto title).
+                            //   circle geometry (frame-size independent,
+                            //     derived from 6 measured probes A-F):
+                            //     center_x = sx + sw/2
+                            //     bottom   = sy + shh - 11
+                            //     top      = sy + 11    (untitled)
+                            //              = sy + 46.37 (titled)
+                            //     r        = (bottom-top)/2
+                            //     center_y = (top+bottom)/2
+                            //   slices: start at -90 deg (12 o'clock) and
+                            //     sweep CLOCKWISE; angle = value/total*360.
+                            //     colour = theme accent(i+1) per CATEGORY
+                            //     (varyColors: a single series colours each
+                            //     point in order). Fill only, no outline
+                            //     (the Word PDF slice paths are closed
+                            //     2c+2l fills with stroke=None).
+                            //   legend (when <c:legend> is declared):
+                            //     per-category swatch + category name,
+                            //     right-aligned overlay (same geometry as
+                            //     the bar legend EXCEPT legend_y0 is centred
+                            //     on the CIRCLE centre, not the frame
+                            //     centre - chart_pie2 slide2/3 render-truth
+                            //     2026-08-06).
+                            let axis_family = "Calibri";
+                            let sx = sh.x as f64;
+                            let sy = sh.y as f64;
+                            let sw = sh.width as f64;
+                            let shh = sh.height as f64;
+                            let has_title_draw =
+                                chart.series.len() == 1 && !chart.auto_title_deleted;
+                            if let Some(first) = chart.series.first() {
+                                if has_title_draw {
+                                    let tfs = 21.62f32;
+                                    let lw = font_adv::line_hmtx_width_pt(
+                                        &first.name,
+                                        tfs,
+                                        axis_family,
+                                    )
+                                    .unwrap_or_else(|| {
+                                        first.name.chars().count() as f32 * tfs * 0.5
+                                    }) as f64;
+                                    let frame_cx = sx + sw / 2.0;
+                                    draw_text_baseline_w(
+                                        mem_dc,
+                                        ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                        (sy + 28.03) as f32,
+                                        &first.name,
+                                        tfs,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                        700,
+                                    );
+                                }
+                            }
+                            let circle_cx = sx + sw / 2.0;
+                            let circle_bot = sy + shh - 11.0;
+                            let circle_top =
+                                sy + if has_title_draw { 46.37 } else { 11.0 };
+                            let r = (circle_bot - circle_top) / 2.0;
+                            let circle_cy = (circle_top + circle_bot) / 2.0;
+                            let bx0 = ((circle_cx - r) * scale).round() as i32;
+                            let by0 = ((circle_cy - r) * scale).round() as i32;
+                            let bx1 = ((circle_cx + r) * scale).round() as i32;
+                            let by1 = ((circle_cy + r) * scale).round() as i32;
+                            let total: f64 = chart
+                                .series
+                                .iter()
+                                .flat_map(|s| s.values.iter().copied())
+                                .sum();
+                            let _ =
+                                SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                            let mut start_deg = -90.0f64;
+                            if let Some(first) = chart.series.first() {
+                                for (ci, v) in first.values.iter().enumerate() {
+                                    if total <= 0.0 || *v <= 0.0 {
+                                        continue;
+                                    }
+                                    let sweep = v / total * 360.0;
+                                    let end_deg = start_deg + sweep;
+                                    let to_rad = |deg: f64| {
+                                        deg * std::f64::consts::PI / 180.0
+                                    };
+                                    let p1 = (
+                                        circle_cx
+                                            + r * (to_rad(start_deg)).cos(),
+                                        circle_cy
+                                            + r * (to_rad(start_deg)).sin(),
+                                    );
+                                    let p2 = (
+                                        circle_cx + r * (to_rad(end_deg)).cos(),
+                                        circle_cy + r * (to_rad(end_deg)).sin(),
+                                    );
+                                    let col_hex = pres
+                                        .theme_colors
+                                        .get(&format!("accent{}", ci + 1))
+                                        .map(|s| s.as_str())
+                                        .or_else(|| DEFAULT_ACCENT.get(ci).copied());
+                                    if let Some(rgb) =
+                                        col_hex.and_then(parse_hex_rgb)
+                                    {
+                                        let brush = CreateSolidBrush(COLORREF(
+                                            colorref(rgb.0, rgb.1, rgb.2),
+                                        ));
+                                        let old_brush =
+                                            SelectObject(mem_dc, brush);
+                                        // GDI Pie() sweeps COUNTER-CLOCKWISE from
+                                        // (xr1,yr1) to (xr2,yr2). Word's slices
+                                        // sweep CLOCKWISE from -90 deg, so pass
+                                        // the endpoints in reverse order (p2 =
+                                        // the clockwise END of the slice).
+                                        let _ = Pie(
+                                            mem_dc,
+                                            bx0,
+                                            by0,
+                                            bx1,
+                                            by1,
+                                            (p2.0 * scale).round() as i32,
+                                            (p2.1 * scale).round() as i32,
+                                            (p1.0 * scale).round() as i32,
+                                            (p1.1 * scale).round() as i32,
+                                        );
+                                        SelectObject(mem_dc, old_brush);
+                                        let _ = DeleteObject(brush);
+                                    }
+                                    start_deg = end_deg;
+                                }
+                            }
+                            // Legend (when <c:legend> declared): per-category
+                            // swatch + category name, right-aligned overlay,
+                            // vertically centred on the CIRCLE centre.
+                            if chart.has_legend {
+                                let lfs = 18.0f32;
+                                let n_cat = chart.categories.len().max(1);
+                                let max_label_w = chart
+                                    .categories
+                                    .iter()
+                                    .map(|name| {
+                                        font_adv::line_hmtx_width_pt(
+                                            name,
+                                            lfs,
+                                            axis_family,
+                                        )
+                                        .unwrap_or_else(|| {
+                                            name.chars().count() as f32 * lfs * 0.5
+                                        }) as f64
+                                    })
+                                    .fold(0.0f64, f64::max);
+                                let swatch_w = 9.89f64;
+                                let gap = 4.62f64;
+                                let row_pitch = 27.75f64;
+                                let legend_right = (sx + sw) - 10.0;
+                                let swatch_x1 = legend_right - max_label_w - gap;
+                                let swatch_x0 = swatch_x1 - swatch_w;
+                                let label_x0 = swatch_x1 + gap;
+                                let legend_total_h =
+                                    (n_cat as f64 - 1.0) * row_pitch + swatch_w;
+                                let legend_y0 =
+                                    circle_cy - legend_total_h / 2.0;
+                                for (ci, name) in
+                                    chart.categories.iter().enumerate()
+                                {
+                                    let sw_y =
+                                        legend_y0 + ci as f64 * row_pitch;
+                                    let col_hex = pres
+                                        .theme_colors
+                                        .get(&format!("accent{}", ci + 1))
+                                        .map(|s| s.as_str())
+                                        .or_else(|| {
+                                            DEFAULT_ACCENT.get(ci).copied()
+                                        });
+                                    if let Some(rgb) =
+                                        col_hex.and_then(parse_hex_rgb)
+                                    {
+                                        let brush = CreateSolidBrush(COLORREF(
+                                            colorref(rgb.0, rgb.1, rgb.2),
+                                        ));
+                                        let old_brush =
+                                            SelectObject(mem_dc, brush);
+                                        let r = RECT {
+                                            left: (swatch_x0 * scale).round() as i32,
+                                            top: (sw_y * scale).round() as i32,
+                                            right: (swatch_x1 * scale).round() as i32,
+                                            bottom: ((sw_y + swatch_w) * scale).round() as i32,
+                                        };
+                                        let _ = FillRect(mem_dc, &r, brush);
+                                        SelectObject(mem_dc, old_brush);
+                                        let _ = DeleteObject(brush);
+                                    }
+                                    let label_baseline =
+                                        sw_y + swatch_w + 0.28;
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        (label_x0 * scale).round() as i32,
+                                        label_baseline as f32,
+                                        name,
+                                        lfs,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                    );
+                                }
+                            }
+                        } else {
                         let sx = sh.x as f64;
                         let sy = sh.y as f64;
                         let sw = sh.width as f64;
@@ -1069,6 +1285,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                         SelectObject(mem_dc, old_axis_pen);
                         let _ = DeleteObject(axis_pen);
+                        }
                     }
                     _ => {}
                 }
