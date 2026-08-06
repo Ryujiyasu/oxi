@@ -467,7 +467,7 @@ impl<'a> Lexer<'a> {
         while matches!(self.bytes.get(self.pos), Some(b) if b.is_ascii_digit()) {
             self.pos += 1;
         }
-        if self.bytes.get(self.pos) == Some(&b'.') && self.peek_digit(1) {
+        if self.bytes.get(self.pos) == Some(&b'.') {
             self.pos += 1;
             while matches!(self.bytes.get(self.pos), Some(b) if b.is_ascii_digit()) {
                 self.pos += 1;
@@ -738,6 +738,9 @@ mod tests {
     fn double_precision_exponent_uses_d() {
         assert_eq!(kinds("1.5D3"), vec![TokenKind::Number(1500.0)]);
         assert_eq!(kinds("1.5E3"), vec![TokenKind::Number(1500.0)]);
+        assert_eq!(kinds(".5"), vec![TokenKind::Number(0.5)]);
+        assert_eq!(kinds("1."), vec![TokenKind::Number(1.0)]);
+        assert_eq!(kinds("1.E2"), vec![TokenKind::Number(100.0)]);
     }
 
     #[test]

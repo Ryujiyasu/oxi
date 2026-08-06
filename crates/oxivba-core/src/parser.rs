@@ -2518,6 +2518,20 @@ mod tests {
     }
 
     #[test]
+    fn leading_and_trailing_decimal_points_parse_as_numbers() {
+        assert!(matches!(
+            expr(".5 + 1."),
+            Expr::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+                ..
+            } if matches!(*lhs, Expr::Literal(Literal::Number(0.5), _))
+                && matches!(*rhs, Expr::Literal(Literal::Number(1.0), _))
+        ));
+    }
+
+    #[test]
     fn logical_operators_ladder_correctly() {
         // a And b Or c  ==  (a And b) Or c
         assert_eq!(op_of(&expr("a And b Or c")), BinaryOp::Or);

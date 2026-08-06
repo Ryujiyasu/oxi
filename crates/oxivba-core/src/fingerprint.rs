@@ -1223,6 +1223,16 @@ End Sub";
     }
 
     #[test]
+    fn optional_decimal_zeroes_are_the_same_literal() {
+        let compact = "Sub T()\nvalue = .5 + 1.\nEnd Sub";
+        let explicit = "Sub T()\nvalue = 0.5 + 1.0\nEnd Sub";
+        assert_eq!(
+            fp(compact, Strength::Strict).combined,
+            fp(explicit, Strength::Strict).combined
+        );
+    }
+
+    #[test]
     fn combined_next_is_equivalent_to_separate_nested_terminators() {
         let combined = "Sub T()\nFor i = 1 To 2\nFor j = 1 To 2\nx = x + 1\nNext j, i\nEnd Sub";
         let separate =
