@@ -158,11 +158,70 @@ pub enum ShapeContent {
         data: Vec<u8>,
         content_type: Option<String>,
     },
+    /// A DrawingML chart (a:graphicFrame -> a:graphicData uri=.../chart ->
+    /// c:chart). Data is pulled from the embedded chart part (strCache /
+    /// numCache), since the external xlsx workbook is not read.
+    Chart {
+        chart: Chart,
+    },
     /// Unsupported element with type label (e.g. "SmartArt", "Chart", "OLE")
     Unsupported {
         element_type: String,
     },
     Placeholder, // shapes we can't parse yet
+}
+
+/// A DrawingML chart (c:chartSpace/c:chart/c:plotArea/<chartType>).
+///
+/// Word render-truth (chart1 repro, 2026-08, fitz get_drawings — the
+/// decisive measurement for vector charts; text spans alone cannot see
+/// bars/axes):
+///   - shape frame = the a:xfrm of the graphicFrame (72,72,396,288pt).
+///   - plot area   = (113.4,123.4,457,280.8) = frame insets for the value
+///     axis labels (left), category names (bottom) and legend (top).
+///     Word derives these from the axis text extent; for a clustered column
+///     with 3 categories the measured inset is ~(41.4,51.4,0,40.7).
+///   - bar width   = 40% of the category pitch (= plot_width / n_categories);
+///     bar height  = value / max_value * plot_height (plot_height =
+///     plot_bottom - plot_top); bar bottom = the X axis y.
+///   - series colour = theme accent(i+1) for series i (accent1 #4F81BD,
+///     accent2 #C0504D, accent3 #9BBB59 in the default Office theme).
+///   - value axis = 0..max, evenly spaced labels (5 ticks for max 25 →
+///     pitch = plot_height/5), Calibri 18pt right-aligned to plot_left.
+///   - category names = Calibri 18pt centred under each bar (y = plot_bottom
+///     + text height).
+///   - legend = series names, Calibri-Bold, one row above the plot area
+///     (top ≈ shape_top + ~28pt for the default legend).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chart {
+    /// c:barChart/c:barDir@val — "col" (column/vertical) or "bar" (horizontal).
+    #[serde(default = "default_chart_bar_dir")]
+    pub bar_dir: String,
+    /// c:barChart/c:grouping@val — "clustered", "stacked", "percentStacked".
+    #[serde(default = "default_chart_grouping")]
+    pub grouping: String,
+    /// Series in document order (c:ser/c:idx). Series i renders with theme
+    /// accent(i+1).
+    pub series: Vec<ChartSeries>,
+    /// Category labels from the first series' c:cat strCache (c:tx may be
+    /// shared; category count == values count for a rectangular chart).
+    pub categories: Vec<String>,
+}
+
+pub fn default_chart_bar_dir() -> String {
+    "col".to_string()
+}
+pub fn default_chart_grouping() -> String {
+    "clustered".to_string()
+}
+
+/// One c:ser element: a named series of values (per category).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChartSeries {
+    /// c:tx -> strCache "Series 1" (the legend entry).
+    pub name: String,
+    /// c:val -> numCache, one value per category.
+    pub values: Vec<f64>,
 }
 
 /// A DrawingML table (a:tbl). Cell text is stored as paragraphs per cell so

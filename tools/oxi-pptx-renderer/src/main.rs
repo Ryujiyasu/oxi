@@ -434,6 +434,19 @@ fn shape_json(sh: &Shape) -> Value {
         ),
         ShapeContent::Unsupported { element_type } => ("unsupported", json!({ "element_type": element_type })),
         ShapeContent::Placeholder => ("placeholder", json!({})),
+        ShapeContent::Chart { chart } => (
+            "chart",
+            json!({
+                "bar_dir": chart.bar_dir,
+                "grouping": chart.grouping,
+                "series": chart
+                    .series
+                    .iter()
+                    .map(|s| json!({ "name": s.name, "values": s.values }))
+                    .collect::<Vec<_>>(),
+                "categories": chart.categories,
+            }),
+        ),
     };
     json!({
         "x": sh.x,

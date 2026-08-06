@@ -13,8 +13,9 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide, SlideAlignment,
-    SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
+    default_chart_bar_dir, default_chart_grouping, Chart, ChartSeries, MasterStyleLevel,
+    MasterTxStyles, Presentation, Shape, ShapeContent, Slide, SlideAlignment, SlideBullet,
+    SlideParagraph, SlideRun, Table, TableCell,
 };
 
 #[derive(Error, Debug)]
@@ -512,6 +513,10 @@ fn parse_slide(
     let mut in_tbl_cell = false;
     let mut tbl_cur_cell_paragraphs: Vec<SlideParagraph> = Vec::new();
 
+    // Chart state (a:graphicFrame -> a:graphicData uri=.../chart -> c:chart)
+    let mut in_chart_graphic = false;
+    let mut chart_r_id: Option<String> = None;
+
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
@@ -578,6 +583,9 @@ fn parse_slide(
                         tbl_cur_row.clear();
                         in_tbl_cell = false;
                         tbl_cur_cell_paragraphs.clear();
+                        // Chart state reset
+                        in_chart_graphic = false;
+                        chart_r_id = None;
                         shape_ph_type = None;
                         shape_ph_idx = None;
                         shape_has_xfrm = false;
@@ -593,6 +601,25 @@ fn parse_slide(
                         tbl_col_widths.clear();
                         tbl_row_heights.clear();
                         tbl_rows.clear();
+                    }
+                    "graphicData" if in_graphic_frame => {
+                        // a:graphicData/@uri discriminates the content type inside
+                        // a graphicFrame: chart, table, SmartArt, etc.
+                        if let Some(uri) = get_attr(&e, "uri") {
+                            if uri == "http://schemas.openxmlformats.org/drawingml/2006/chart" {
+                                in_chart_graphic = true;
+                            }
+                        }
+                    }
+                    "chart" if in_chart_graphic => {
+                        // c:chart/@r:id references the chart part via the slide rels.
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:id" || key.ends_with(":id") {
+                                chart_r_id =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
                     }
                     "gridCol" if in_table => {
                         // a:tblGrid/a:gridCol/@w in EMU; 12700 EMU = 1pt
@@ -922,6 +949,18 @@ fn parse_slide(
                             shape_h = cy.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
                         }
                     }
+                    "chart" if in_chart_graphic => {
+                        // c:chart/@r:id references the chart part via the slide rels.
+                        // The element is typically self-closing (<c:chart r:id=".."/>),
+                        // so the same extraction as the Start arm must run here.
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:id" || key.ends_with(":id") {
+                                chart_r_id =
+                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
                     "blip" if in_shape && shape_is_image => {
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
@@ -1240,7 +1279,39 @@ fn parse_slide(
                     "graphicFrame" if in_graphic_frame => {
                         in_graphic_frame = false;
                         in_shape = false;
-                        let content = if !tbl_rows.is_empty() {
+                        let content = if in_chart_graphic {
+                            // A chart graphicFrame. Resolve the chart part via the
+                            // slide rels and parse it (bar chart: series/categories/
+                            // values from the cached data).
+                            if let Some(ref r_id) = chart_r_id {
+                                if let Some(rel) = rels.get(r_id) {
+                                    let chart_path = resolve_slide_relative_path(
+                                        slide_rels_path,
+                                        &rel.target,
+                                    );
+                                    match archive.try_read_part(&chart_path) {
+                                        Ok(Some(chart_xml)) => {
+                                            parse_chart(&chart_xml).map(|chart| {
+                                                ShapeContent::Chart { chart }
+                                            }).unwrap_or_else(|_| ShapeContent::Unsupported {
+                                                element_type: "chart".to_string(),
+                                            })
+                                        }
+                                        _ => ShapeContent::Unsupported {
+                                            element_type: "chart".to_string(),
+                                        },
+                                    }
+                                } else {
+                                    ShapeContent::Unsupported {
+                                        element_type: "chart".to_string(),
+                                    }
+                                }
+                            } else {
+                                ShapeContent::Unsupported {
+                                    element_type: "chart".to_string(),
+                                }
+                            }
+                        } else if !tbl_rows.is_empty() {
                             ShapeContent::Table {
                                 table: Table {
                                     col_widths: std::mem::take(&mut tbl_col_widths),
@@ -1603,6 +1674,136 @@ fn resolve_slide_relative_path(rels_path: &str, target: &str) -> String {
     }
 
     base_parts.join("/")
+}
+
+/// Parse a chart part (chartN.xml) into a Chart IR.
+///
+/// Extracts a bar chart's cached data: the series names, categories and values
+/// from the `c:barChart`'s `c:ser` children (strCache / numCache). Chart part
+/// discovery / parsing is the chart Ra-loop Step 1 (impact order item 8); the
+/// Word-measured plot geometry is consumed at render time (Step 2+).
+fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+
+    let mut in_bar_chart = false;
+    let mut bar_dir: Option<String> = None;
+    let mut grouping: Option<String> = None;
+    let mut series: Vec<ChartSeries> = Vec::new();
+    let mut categories: Vec<String> = Vec::new();
+
+    // Per-`c:ser` state
+    let mut in_ser = false;
+    // Which cache we're collecting: "tx" | "cat" | "val" | ""
+    let mut ser_target = "";
+    let mut ser_name: Option<String> = None;
+    let mut ser_values: Vec<f64> = Vec::new();
+    let mut in_v = false;
+    let mut cur_v = String::new();
+    let mut ser_categories: Vec<String> = Vec::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "barChart" => {
+                        in_bar_chart = true;
+                        bar_dir = get_attr(&e, "barDir");
+                        grouping = get_attr(&e, "grouping");
+                    }
+                    "ser" if in_bar_chart => {
+                        in_ser = true;
+                        ser_target = "";
+                        ser_name = None;
+                        ser_values.clear();
+                        ser_categories.clear();
+                    }
+                    "tx" if in_ser => ser_target = "tx",
+                    "cat" if in_ser => ser_target = "cat",
+                    "val" if in_ser => ser_target = "val",
+                    "v" => {
+                        in_v = true;
+                        cur_v.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = local_name(e.name().as_ref());
+                // A v may be empty; treat as no-op but keep flag semantics.
+                match name.as_str() {
+                    "v" => {
+                        // empty value — nothing to collect
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_v {
+                    cur_v.push_str(&e.unescape().unwrap_or_default());
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "v" => {
+                        if in_v {
+                            in_v = false;
+                            match ser_target {
+                                "tx" => {
+                                    if ser_name.is_none() && !cur_v.trim().is_empty() {
+                                        ser_name = Some(cur_v.trim().to_string());
+                                    }
+                                }
+                                "cat" => {
+                                    if !cur_v.trim().is_empty() {
+                                        ser_categories.push(cur_v.trim().to_string());
+                                    }
+                                }
+                                "val" => {
+                                    if let Ok(v) = cur_v.trim().parse::<f64>() {
+                                        ser_values.push(v);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "ser" => {
+                        if in_ser {
+                            in_ser = false;
+                            ser_target = "";
+                            let name = ser_name.take().unwrap_or_default();
+                            if categories.is_empty() {
+                                categories = std::mem::take(&mut ser_categories);
+                            } else {
+                                ser_categories.clear();
+                            }
+                            series.push(ChartSeries {
+                                name,
+                                values: std::mem::take(&mut ser_values),
+                            });
+                        }
+                    }
+                    "barChart" => {
+                        in_bar_chart = false;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(PptxError::Xml(e)),
+            _ => {}
+        }
+    }
+
+    Ok(Chart {
+        bar_dir: bar_dir.unwrap_or_else(default_chart_bar_dir),
+        grouping: grouping.unwrap_or_else(default_chart_grouping),
+        series,
+        categories,
+    })
 }
 
 /// Detect content type from file extension.
