@@ -39,6 +39,7 @@ Public Sub BuildReport(ByVal target As Worksheet)
     ws.Range("C1").Value = WideValue()
     ws.Range("D1").Value = PlatformBits
     ws.Range("E1").Value = ParenthesesValue()
+    ws.Range("F1").Value = GetSetting("OxiVbaCoreMissingProbe", "Analysis", "Value", "missing")
 End Sub
 
 Private Function HiddenHelper(ByVal value As Long) As Long
@@ -96,6 +97,11 @@ End Sub
 
 Private Sub DeadChainB()
 End Sub
+
+Private Sub RegistrySettings()
+    SaveSetting "OxiVbaCoreUncalledProbe", "Analysis", "Value", "saved"
+    DeleteSetting "OxiVbaCoreUncalledProbe", "Analysis"
+End Sub
 '@)
     $sheet = $workbook.Worksheets.Item(1)
     $excel.Run("'$($workbook.Name)'!AnalysisProbe.BuildReport", $sheet)
@@ -104,12 +110,13 @@ End Sub
     $wideValue = [long]$sheet.Range('C1').Value2
     $platformBits = [long]$sheet.Range('D1').Value2
     $parenthesesValue = [string]$sheet.Range('E1').Value2
-    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or -not [bool]$sheet.Range('A1').Font.Bold) {
-        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], bold=$([bool]$sheet.Range('A1').Font.Bold)"
+    $settingValue = [string]$sheet.Range('F1').Value2
+    if ($actualValue -ne '42' -or $fixedLength -ne 4 -or $wideValue -ne 44 -or $platformBits -ne 64 -or $parenthesesValue -ne 'D99W1G1' -or $settingValue -ne 'missing' -or -not [bool]$sheet.Range('A1').Font.Bold) {
+        throw "COM execution mismatch: value=[$actualValue], fixed-length=$fixedLength, wide=$wideValue, platform=$platformBits, parentheses=[$parenthesesValue], setting=[$settingValue], bold=$([bool]$sheet.Range('A1').Font.Bold)"
     }
     $workbook.SaveAs($workbookPath, 52)
     $workbook.SaveCopyAs($workbookCopyPath)
-    $module.CodeModule.ReplaceLine(20, '    HiddenHelper = value + 2')
+    $module.CodeModule.ReplaceLine(21, '    HiddenHelper = value + 2')
     $module.CodeModule.InsertLines(2, 'Private Declare PtrSafe Function SetTimer Lib "user32" (ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr')
     $module.CodeModule.AddFromString(@'
 
@@ -135,8 +142,8 @@ End Function
 
     $expectations = @(
         '[AnalysisProbe]',
-        'verdict: A (report generation)',
-        'procedures: 11, statements: 34',
+        'verdict: C (out of scope: reaches outside Excel)',
+        'procedures: 12, statements: 37',
         'unparsed: 0',
         '#If Win64 Then: conditional compilation; the source differs by build',
         '#End If: conditional compilation; the source differs by build',
@@ -159,7 +166,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '76.9% (shared 10; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '78.6% (shared 11; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {
@@ -206,6 +213,9 @@ End Function
     }
     if ($variantModule.api_names.Collection -ne 1) {
         throw "As New declaration type was not reported"
+    }
+    if ($variantModule.api_names.GetSetting -ne 1 -or $variantModule.api_names.SaveSetting -ne 1 -or $variantModule.api_names.DeleteSetting -ne 1) {
+        throw "Registry setting APIs were not all reported"
     }
     if (@($variantModule.uncalled_procedures) -notcontains 'LabelCollision') {
         throw "GoTo label incorrectly counted as a call to LabelCollision"

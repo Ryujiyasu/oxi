@@ -294,6 +294,24 @@ pub const RULES: &[Rule] = &[
         reason: "reads the process environment",
     },
     Rule {
+        pattern: "GetSetting",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "reads the current user's Windows registry settings",
+    },
+    Rule {
+        pattern: "SaveSetting",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "writes the current user's Windows registry settings",
+    },
+    Rule {
+        pattern: "DeleteSetting",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "deletes the current user's Windows registry settings",
+    },
+    Rule {
         pattern: "SaveAs",
         how: Match::Segment,
         class: Class::C,
@@ -1611,6 +1629,22 @@ mod tests {
         ] {
             assert!(a.api_names.contains_key(name), "missing {name}");
         }
+    }
+
+    #[test]
+    fn registry_setting_apis_are_class_c() {
+        let a = analyse_src(
+            "Sub T()\n\
+             value = GetSetting(\"Oxi\", \"Probe\", \"Value\", \"missing\")\n\
+             SaveSetting \"Oxi\", \"Probe\", \"Value\", value\n\
+             DeleteSetting \"Oxi\", \"Probe\"\n\
+             End Sub",
+        );
+        assert_eq!(a.class, Some(Class::C));
+        assert_eq!(a.api_names.get("GetSetting"), Some(&1));
+        assert_eq!(a.api_names.get("SaveSetting"), Some(&1));
+        assert_eq!(a.api_names.get("DeleteSetting"), Some(&1));
+        assert_eq!(a.metrics.unparsed, 0);
     }
 
     #[test]
