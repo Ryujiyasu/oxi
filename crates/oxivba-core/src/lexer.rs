@@ -41,6 +41,8 @@ pub enum TokenKind {
     Str(String),
     /// `#1999-12-31#` or `#12/31/1999#`.
     DateLit(String),
+    /// Excel's shorthand for `Evaluate`, such as `[A1]` or `[SUM(A1:A2)]`.
+    BracketExpr(String),
     /// A line number at the start of a line, kept because `Erl` reports it and
     /// `GoTo 100` targets it.
     LineNumber(u32),
@@ -122,6 +124,7 @@ pub struct Token {
 pub enum LexError {
     UnterminatedString { line: u32 },
     UnterminatedDate { line: u32 },
+    UnterminatedBracketExpr { line: u32 },
     UnexpectedChar { ch: char, line: u32 },
 }
 
@@ -133,6 +136,9 @@ impl fmt::Display for LexError {
             }
             LexError::UnterminatedDate { line } => {
                 write!(f, "unterminated date literal on line {line}")
+            }
+            LexError::UnterminatedBracketExpr { line } => {
+                write!(f, "unterminated bracket expression on line {line}")
             }
             LexError::UnexpectedChar { ch, line } => {
                 write!(f, "unexpected character {ch:?} on line {line}")
@@ -219,6 +225,12 @@ impl<'a> Lexer<'a> {
 
             if c == b'"' {
                 self.lex_string()?;
+                self.at_line_start = false;
+                continue;
+            }
+
+            if c == b'[' {
+                self.lex_bracket_expr()?;
                 self.at_line_start = false;
                 continue;
             }
@@ -352,6 +364,39 @@ impl<'a> Lexer<'a> {
         self.push_here(TokenKind::Str(value), start, i);
         self.pos = i;
         Ok(())
+    }
+
+    fn lex_bracket_expr(&mut self) -> Result<(), LexError> {
+        let start = self.pos;
+        let mut end = start + 1;
+        let mut depth = 1usize;
+        let mut in_string = false;
+        while let Some(&byte) = self.bytes.get(end) {
+            if byte == b'\n' {
+                break;
+            }
+            if byte == b'"' {
+                if in_string && self.bytes.get(end + 1) == Some(&b'"') {
+                    end += 2;
+                    continue;
+                }
+                in_string = !in_string;
+            } else if !in_string {
+                if byte == b'[' {
+                    depth += 1;
+                } else if byte == b']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        let value = self.src[start + 1..end].to_string();
+                        self.push_here(TokenKind::BracketExpr(value), start, end + 1);
+                        self.pos = end + 1;
+                        return Ok(());
+                    }
+                }
+            }
+            end += 1;
+        }
+        Err(LexError::UnterminatedBracketExpr { line: self.line })
     }
 
     /// `#` starts either a date literal or a compiler directive.
@@ -741,6 +786,30 @@ mod tests {
         assert_eq!(kinds(".5"), vec![TokenKind::Number(0.5)]);
         assert_eq!(kinds("1."), vec![TokenKind::Number(1.0)]);
         assert_eq!(kinds("1.E2"), vec![TokenKind::Number(100.0)]);
+    }
+
+    #[test]
+    fn excel_bracket_expressions_are_single_tokens() {
+        assert_eq!(
+            kinds("[A1] + [SUM(A1:A2)]"),
+            vec![
+                TokenKind::BracketExpr("A1".to_string()),
+                TokenKind::Punct(Punct::Plus),
+                TokenKind::BracketExpr("SUM(A1:A2)".to_string()),
+            ]
+        );
+        assert!(matches!(
+            tokenize("[A1"),
+            Err(LexError::UnterminatedBracketExpr { line: 1 })
+        ));
+        assert_eq!(
+            kinds("[SUM(DataTable[Amount])]"),
+            vec![TokenKind::BracketExpr("SUM(DataTable[Amount])".to_string())]
+        );
+        assert_eq!(
+            kinds(r#"[IF(A1=1,"[ok]","")]"#),
+            vec![TokenKind::BracketExpr(r#"IF(A1=1,"[ok]","")"#.to_string())]
+        );
     }
 
     #[test]

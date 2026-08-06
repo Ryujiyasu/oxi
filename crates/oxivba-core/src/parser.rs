@@ -2285,6 +2285,10 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Some(Expr::Literal(Literal::Date(s), span))
             }
+            TokenKind::BracketExpr(text) => {
+                self.pos += 1;
+                Some(Expr::EvaluateShortcut { text, span })
+            }
             TokenKind::Punct(Punct::LParen) => {
                 self.pos += 1;
                 let inner = self.parse_expr()?;
@@ -2528,6 +2532,20 @@ mod tests {
                 ..
             } if matches!(*lhs, Expr::Literal(Literal::Number(0.5), _))
                 && matches!(*rhs, Expr::Literal(Literal::Number(1.0), _))
+        ));
+    }
+
+    #[test]
+    fn excel_bracket_expressions_parse_as_evaluate_shortcuts() {
+        assert!(matches!(
+            expr("[A1] + [SUM(A1:A2)]"),
+            Expr::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+                ..
+            } if matches!(*lhs, Expr::EvaluateShortcut { ref text, .. } if text == "A1")
+                && matches!(*rhs, Expr::EvaluateShortcut { ref text, .. } if text == "SUM(A1:A2)")
         ));
     }
 

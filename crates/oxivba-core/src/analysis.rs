@@ -410,6 +410,12 @@ pub const RULES: &[Rule] = &[
         reason: "reads or writes cells",
     },
     Rule {
+        pattern: "Evaluate",
+        how: Match::Exact,
+        class: Class::B,
+        reason: "evaluates an Excel name or formula",
+    },
+    Rule {
         pattern: "Value",
         how: Match::Segment,
         class: Class::B,
@@ -1191,6 +1197,9 @@ fn is_intrinsic_type(name: &str) -> bool {
 /// `Application.WorksheetFunction.Sum` is recorded once rather than three times.
 fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
     match expr {
+        Expr::EvaluateShortcut { span, .. } => {
+            out.push(("Evaluate".to_string(), span.line));
+        }
         Expr::Ident(..) | Expr::Member { .. } => {
             if let Some(name) = expr.dotted_name() {
                 out.push((name, expr.span().line));
@@ -1288,6 +1297,15 @@ mod tests {
             analyse_src("Sub Total()\n  Range(\"A1\").Value = Range(\"A2\").Value + 1\nEnd Sub");
         assert_eq!(a.class, Some(Class::B));
         assert!(!a.needs_formula_engine);
+    }
+
+    #[test]
+    fn excel_bracket_expressions_require_evaluation() {
+        let a = analyse_src("Sub Total()\n  value = [A1] + [SUM(A1:A2)]\nEnd Sub");
+        assert_eq!(a.class, Some(Class::B));
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Evaluate"), Some(&2));
+        assert_eq!(a.metrics.unparsed, 0);
     }
 
     #[test]

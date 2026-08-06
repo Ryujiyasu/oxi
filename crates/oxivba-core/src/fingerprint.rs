@@ -800,6 +800,11 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
 fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
     match expr {
         Expr::Literal(lit, _) => render_literal(lit, locals.norm, out),
+        Expr::EvaluateShortcut { text, .. } => {
+            out.push('[');
+            out.push_str(text);
+            out.push(']');
+        }
         Expr::Ident(name, _) => out.push_str(&locals.render(name)),
         Expr::WithMember(name, _) => {
             out.push('.');
@@ -1229,6 +1234,16 @@ End Sub";
         assert_eq!(
             fp(compact, Strength::Strict).combined,
             fp(explicit, Strength::Strict).combined
+        );
+    }
+
+    #[test]
+    fn bracket_expression_text_affects_the_fingerprint() {
+        let a1 = "Sub T()\nvalue = [A1]\nEnd Sub";
+        let b1 = "Sub T()\nvalue = [B1]\nEnd Sub";
+        assert_ne!(
+            fp(a1, Strength::Strict).combined,
+            fp(b1, Strength::Strict).combined
         );
     }
 

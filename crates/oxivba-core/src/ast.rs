@@ -705,6 +705,11 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal, Span),
+    /// Excel's `[A1]` shorthand for `Evaluate("A1")`.
+    EvaluateShortcut {
+        text: String,
+        span: Span,
+    },
     /// A bare name. Whether it is a variable, a call, or a property is not
     /// decidable without type information, so it is left as a name.
     Ident(String, Span),
@@ -776,6 +781,7 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Expr::Literal(_, s)
+            | Expr::EvaluateShortcut { span: s, .. }
             | Expr::Ident(_, s)
             | Expr::WithMember(_, s)
             | Expr::Member { span: s, .. }
@@ -808,6 +814,7 @@ impl Expr {
                 rhs.visit(f);
             }
             Expr::Literal(..)
+            | Expr::EvaluateShortcut { .. }
             | Expr::Ident(..)
             | Expr::WithMember(..)
             | Expr::New { .. }
