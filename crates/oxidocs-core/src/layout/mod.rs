@@ -33743,7 +33743,58 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // When nested table overflows parent cell, Word keeps earlier columns
         // at their specified width and shrinks only the last column to fit.
         if !table.grid_columns.is_empty() {
-            let total: f32 = table.grid_columns.iter().sum();
+            // S1078 (2026-08-06, opt-out OXI_S1078_DISABLE): in an AUTOFIT table
+            // the per-cell tcW "preferred width" outranks the tblGrid hint when
+            // the grid would force a break INSIDE an unbreakable token.
+            // technical__00332445's coordinate table declares gridCol 1440x3 but
+            // tcW 2880x3, and Word lays it out on the tcW pitch (measured column
+            // pitch 144.03pt = 2880tw) while Oxi used the grid (72pt) and wrapped
+            // '38.97514' in half, costing p1 a line.
+            //
+            // The gate is the NARROW form: some column's gridCol is narrower than
+            // that column's min-content AND its tcW is wider (i.e. tcW relieves a
+            // grid that cannot hold the content). The BROAD form (take tcW
+            // whenever its sum exceeds the grid's) is kept behind OXI_S1078 for
+            // experiments only — measured, it moves 10 documents including the JP
+            // flagships (3a4f / model / tokyoshugyo), the word_png floor docs
+            // (d77a / ed025c / e3c545) and frozen ukhmrc / uklocalspending.
+            let mut grid_cols = table.grid_columns.clone();
+            let s1078_broad = std::env::var("OXI_S1078").is_ok();
+            let s1078_narrow = std::env::var("OXI_S1078_DISABLE").is_err();
+            if (s1078_broad || s1078_narrow)
+                && table.style.layout.as_deref() != Some("fixed")
+            {
+                if let Some(fr) = table.rows.first() {
+                    let ws: Vec<f32> = fr.cells.iter().filter_map(|c| c.width).collect();
+                    if ws.len() == grid_cols.len()
+                        && !ws.is_empty()
+                        && ws.iter().sum::<f32>() > grid_cols.iter().sum::<f32>() + 0.01
+                    {
+                        // The narrow test is LATIN-scoped: column_content_mins
+                        // splits only on whitespace and is_break_after, neither
+                        // of which knows CJK line breaking, so a Japanese
+                        // paragraph reads as ONE unbreakable segment and its
+                        // min-content comes out enormous. Every JP table would
+                        // fire on that artefact.
+                        let take = if s1078_broad {
+                            true
+                        } else if self.doc_body_has_real_cjk {
+                            false
+                        } else {
+                            let mins = self.column_content_mins(table);
+                            mins.len() == grid_cols.len()
+                                && grid_cols.iter().zip(&mins).zip(&ws).any(
+                                    |((g, m), w)| *g + 0.01 < *m && *w > *g + 0.01,
+                                )
+                        };
+                        if take {
+                            grid_cols = ws;
+                        }
+                    }
+                }
+            }
+            let table_grid_columns = &grid_cols;
+            let total: f32 = table_grid_columns.iter().sum();
             let indent = table.style.indent.unwrap_or(0.0);
             let available = content_width - indent;
             // Floating tables (tblpPr) are not constrained by content_width
@@ -33774,20 +33825,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 && !is_fixed
                 && !is_dxa_fixed
                 && total > available
-                && table.grid_columns.len() > 1
+                && table_grid_columns.len() > 1
             {
                 // S1003: a DIRECT BODY autofit table waterfills all columns; the
                 // last-column-only clamp is the nested-table rule (report §14.2).
                 if std::env::var("OXI_S1003").is_ok() && !is_nested {
                     return self.waterfill_autofit_columns(table, available);
                 }
-                let mut cols = table.grid_columns.clone();
+                let mut cols = table_grid_columns.clone();
                 let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
                 let last = (available - prefix_sum).max(0.0);
                 *cols.last_mut().unwrap() = last;
                 return cols;
             }
-            return table.grid_columns.clone();
+            return grid_cols;
         }
 
         // 2. Use cell widths from first row
