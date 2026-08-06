@@ -814,6 +814,10 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
             out.push('.');
             out.push_str(&name.to_ascii_lowercase());
         }
+        Expr::WithBangMember(name, _) => {
+            out.push('!');
+            out.push_str(&name.to_ascii_lowercase());
+        }
         Expr::Member {
             object,
             name,
@@ -1266,6 +1270,16 @@ End Sub";
         assert_ne!(
             fp(answer, Strength::Strict).combined,
             fp(total, Strength::Strict).combined
+        );
+    }
+
+    #[test]
+    fn leading_with_member_operator_affects_the_fingerprint() {
+        let dot = "Sub T()\nWith record\nvalue = .Answer\nEnd With\nEnd Sub";
+        let bang = "Sub T()\nWith record\nvalue = !Answer\nEnd With\nEnd Sub";
+        assert_ne!(
+            fp(dot, Strength::Strict).combined,
+            fp(bang, Strength::Strict).combined
         );
     }
 

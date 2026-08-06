@@ -723,6 +723,8 @@ pub enum Expr {
     },
     /// `.Value` inside a `With` block.
     WithMember(String, Span),
+    /// `!Field` or `![Display Name]` inside a `With` block.
+    WithBangMember(String, Span),
     /// `a.b`
     Member {
         object: Box<Expr>,
@@ -796,6 +798,7 @@ impl Expr {
             | Expr::Ident(_, s)
             | Expr::TypedIdent { span: s, .. }
             | Expr::WithMember(_, s)
+            | Expr::WithBangMember(_, s)
             | Expr::Member { span: s, .. }
             | Expr::Index { span: s, .. }
             | Expr::Bang { span: s, .. }
@@ -830,6 +833,7 @@ impl Expr {
             | Expr::Ident(..)
             | Expr::TypedIdent { .. }
             | Expr::WithMember(..)
+            | Expr::WithBangMember(..)
             | Expr::New { .. }
             | Expr::AddressOf { .. } => {}
         }

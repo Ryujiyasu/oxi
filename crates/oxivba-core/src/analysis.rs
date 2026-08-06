@@ -1230,7 +1230,7 @@ fn collect_names(expr: &Expr, out: &mut Vec<(String, u32)>) {
             collect_names(lhs, out);
             collect_names(rhs, out);
         }
-        Expr::Literal(..) | Expr::WithMember(..) => {}
+        Expr::Literal(..) | Expr::WithMember(..) | Expr::WithBangMember(..) => {}
     }
 }
 

@@ -29,15 +29,29 @@ Public Function BangValue() As Long
     values.Add "Display Name", 8
     BangValue = values!Answer + values![Display Name]
 End Function
+
+Public Function WithBangValue() As Long
+    Dim values As Object
+    Set values = CreateObject("Scripting.Dictionary")
+    values.Add "Answer", 42
+    values.Add "Display Name", 8
+    With values
+        WithBangValue = !Answer + ![Display Name]
+    End With
+End Function
 '@)
 
     $actual = [long]$excel.Run("'$($workbook.Name)'!BangProbe.BangValue")
+    $withActual = [long]$excel.Run("'$($workbook.Name)'!BangProbe.WithBangValue")
     $storedSource = $component.CodeModule.Lines(1, $component.CodeModule.CountOfLines)
-    if ($actual -ne 50) {
-        throw "Bang member COM execution mismatch: expected 50, got $actual"
+    if ($actual -ne 50 -or $withActual -ne 50) {
+        throw "Bang member COM execution mismatch: direct=$actual with=$withActual"
     }
     if (-not $storedSource.Contains('values!Answer + values![Display Name]')) {
         throw 'VBE did not preserve bang member access'
+    }
+    if (-not $storedSource.Contains('WithBangValue = !Answer + ![Display Name]')) {
+        throw 'VBE did not preserve leading bang access inside With'
     }
 
     $workbook.SaveAs($workbookPath, 52)
@@ -58,7 +72,7 @@ End Function
     foreach ($expected in @(
         '[BangProbe]',
         'verdict: C (out of scope: reaches outside Excel)',
-        'procedures: 1, statements: 5',
+        'procedures: 2, statements: 11',
         'unparsed: 0',
         'CreateObject: late-binds an external COM object'
     )) {
@@ -83,8 +97,8 @@ End Function
         throw 'Bang member JSON inventory reported unexpected errors'
     }
 
-    Write-Output "Excel COM value: values!Answer + values![Display Name] = $actual"
-    Write-Output 'VBE stored both bang member forms verbatim'
+    Write-Output "Excel COM values: direct bang=$actual; leading bang inside With=$withActual"
+    Write-Output 'VBE stored direct and With-relative bang forms verbatim'
     $analysis.TrimEnd()
     Write-Output 'VBA bang member COM execution and analysis: PASS'
 }

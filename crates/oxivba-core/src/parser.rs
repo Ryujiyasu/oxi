@@ -2325,6 +2325,16 @@ impl<'a> Parser<'a> {
                     None
                 }
             }
+            // `!Field` with no object: a default member of the enclosing
+            // `With` subject. Brackets permit member names containing spaces.
+            TokenKind::Punct(Punct::Bang) => {
+                let name = match self.kind_at(1).clone() {
+                    TokenKind::Ident(name) | TokenKind::BracketExpr(name) => name,
+                    _ => return None,
+                };
+                self.pos += 2;
+                Some(Expr::WithBangMember(name, span))
+            }
             TokenKind::Ident(name) => {
                 let lower = name.to_ascii_lowercase();
                 match lower.as_str() {
@@ -2604,6 +2614,23 @@ mod tests {
             expr("value! + 1"),
             Expr::Binary { op: BinaryOp::Add, lhs, .. }
                 if matches!(*lhs, Expr::TypedIdent { ref name, suffix: '!', .. } if name == "value")
+        ));
+    }
+
+    #[test]
+    fn with_blocks_capture_leading_bang_members() {
+        let procedure =
+            only_proc("Sub T()\nWith record\nvalue = !Answer + ![Display Name]\nEnd With\nEnd Sub");
+        let Statement::With { body, .. } = &procedure.body[0] else {
+            panic!("expected With block");
+        };
+        assert!(matches!(
+            &body[0],
+            Statement::Assign {
+                value: Expr::Binary { lhs, rhs, .. },
+                ..
+            } if matches!(**lhs, Expr::WithBangMember(ref name, _) if name == "Answer")
+                && matches!(**rhs, Expr::WithBangMember(ref name, _) if name == "Display Name")
         ));
     }
 
