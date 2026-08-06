@@ -1089,11 +1089,6 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .fold(0.0f64, f64::max);
                         let max_axis = nice_axis_max(max_val);
                         let axis_steps = 5usize;
-                        let line_col = pres
-                            .theme_colors
-                            .get("accent1")
-                            .map(|s| s.as_str())
-                            .or_else(|| DEFAULT_ACCENT.first().copied());
 
                         // Value axis labels (Calibri 18pt, right edge =
                         // plot_left-16.64, baseline = tick_y+5.22; same
@@ -1140,12 +1135,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         SelectObject(mem_dc, old_grid_pen);
                         let _ = DeleteObject(grid_pen);
 
-                        // Data points (single series; point i x =
+                        // Data points PER SERIES (point i x =
                         // plot_left + pitch/2 + i*pitch, point i y =
                         // plot_bot - (val_i/max_axis)*plot_h).
-                        let pts: Vec<(f64, f64)> = chart
+                        let series_pts: Vec<Vec<(f64, f64)>> = chart
                             .series
-                            .first()
+                            .iter()
                             .map(|s| {
                                 s.values
                                     .iter()
@@ -1161,63 +1156,69 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     })
                                     .collect()
                             })
-                            .unwrap_or_default();
+                            .collect();
 
-                        // Polyline: (n_cat-1) accent1 #4F81BD segments
-                        // w=2.25 joining consecutive points.
-                        if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
-                            let line_pen = CreatePen(
-                                PS_SOLID,
-                                (2.25 * scale).round().max(1.0) as i32,
-                                COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
-                            );
-                            let old_line_pen = SelectObject(mem_dc, line_pen);
-                            let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
-                            for w in pts.windows(2) {
-                                let _ = MoveToEx(
-                                    mem_dc,
-                                    (w[0].0 * scale).round() as i32,
-                                    (w[0].1 * scale).round() as i32,
-                                    None,
+                        // Polylines: PER SERIES (n_cat-1) border-colour
+                        // segments w=2.25 joining consecutive points
+                        // (measured border colours: S1 #4A7EBB / S2
+                        // #BE4B48 / S3 #98B954).
+                        for (si, pts) in series_pts.iter().enumerate() {
+                            let (_, border_hex) = line_series_colors(si);
+                            if let Some(rgb) = parse_hex_rgb(&border_hex) {
+                                let line_pen = CreatePen(
+                                    PS_SOLID,
+                                    (2.25 * scale).round().max(1.0) as i32,
+                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
                                 );
-                                let _ = LineTo(
-                                    mem_dc,
-                                    (w[1].0 * scale).round() as i32,
-                                    (w[1].1 * scale).round() as i32,
-                                );
+                                let old_line_pen = SelectObject(mem_dc, line_pen);
+                                let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                for w in pts.windows(2) {
+                                    let _ = MoveToEx(
+                                        mem_dc,
+                                        (w[0].0 * scale).round() as i32,
+                                        (w[0].1 * scale).round() as i32,
+                                        None,
+                                    );
+                                    let _ = LineTo(
+                                        mem_dc,
+                                        (w[1].0 * scale).round() as i32,
+                                        (w[1].1 * scale).round() as i32,
+                                    );
+                                }
+                                SelectObject(mem_dc, old_line_pen);
+                                let _ = DeleteObject(line_pen);
                             }
-                            SelectObject(mem_dc, old_line_pen);
-                            let _ = DeleteObject(line_pen);
                         }
 
-                        // Markers: 6.96pt filled accent1 DIAMONDS at every
+                        // Markers: 6.96pt filled PER-SERIES shapes at every
                         // point (gated on <c:marker val="1"/>). Word renders
-                        // the LINE_MARKERS data marker as a 6.96pt filled
-                        // diamond (fitz drawing items = 4 lines joining the
-                        // bbox side-midpoints: top/right/bottom/left), same
-                        // shape as the legend diamond. Filled, same-colour
+                        // the LINE_MARKERS data marker as a per-series shape
+                        // (S1 diamond / S2 square / S3 triangle, measured)
+                        // filled with the series fill colour; same-colour
                         // stroke (w=0.75) so the outline is invisible.
                         if chart.marker {
-                            if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
-                                let m_brush = CreateSolidBrush(COLORREF(
-                                    colorref(rgb.0, rgb.1, rgb.2),
-                                ));
-                                let old_m_brush = SelectObject(mem_dc, m_brush);
-                                let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
-                                let mr = 6.96 / 2.0;
-                                for (px, py) in pts.iter() {
-                                    let hx = (px * scale).round() as i32;
-                                    let hy = (py * scale).round() as i32;
-                                    let diamond = [
-                                        POINT { x: ((px - mr) * scale).round() as i32, y: hy },
-                                        POINT { x: hx, y: ((py - mr) * scale).round() as i32 },
-                                        POINT { x: ((px + mr) * scale).round() as i32, y: hy },
-                                        POINT { x: hx, y: ((py + mr) * scale).round() as i32 },
-                                    ];
-                                    let _ = Polygon(mem_dc, &diamond);
+                            for (si, pts) in series_pts.iter().enumerate() {
+                                let (fill_hex, _) = line_series_colors(si);
+                                if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                    let m_brush = CreateSolidBrush(COLORREF(
+                                        colorref(rgb.0, rgb.1, rgb.2),
+                                    ));
+                                    let old_m_brush = SelectObject(mem_dc, m_brush);
+                                    let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                    let mr = 6.96 / 2.0;
+                                    for (px, py) in pts.iter() {
+                                        draw_line_marker(
+                                            mem_dc,
+                                            line_marker_shape(si),
+                                            *px,
+                                            *py,
+                                            mr,
+                                            scale,
+                                        );
+                                    }
+                                    SelectObject(mem_dc, old_m_brush);
+                                    let _ = DeleteObject(m_brush);
                                 }
-                                SelectObject(mem_dc, old_m_brush);
-                                let _ = DeleteObject(m_brush);
                             }
                         }
 
@@ -1244,10 +1245,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
-                        // Automatic title (single series -> Calibri-Bold
-                        // 21.62pt centred on the frame, baseline sy+28.03;
-                        // same rule as the bars).
-                        if let Some(first) = chart.series.first() {
+                        // Automatic title (single series only -> the series
+                        // name Calibri-Bold 21.62pt centred on the frame,
+                        // baseline sy+28.03; same rule as the bars. Word
+                        // shows the series name as the auto title only for
+                        // a single series).
+                        if chart.series.len() == 1 {
+                            let first = &chart.series[0];
                             let tfs = 21.62f32;
                             let lw = font_adv::line_hmtx_width_pt(&first.name, tfs, axis_family)
                                 .unwrap_or_else(|| {
@@ -1276,68 +1280,72 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // legend_y0 = sy + shh/2 + 17.68 (FRAME-relative;
                         // single-series measured only).
                         if chart.has_legend {
-                            let legend_y0 = sy + shh / 2.0 + 17.68;
+                            // Per-series legend: n>=2 is frame-vertically
+                            // centred (legend_y0 = sy + shh/2 -
+                            // (n-1)*27.75/2, measured chart_line3), n==1
+                            // keeps the single-series offset
+                            // sy+shh/2+17.68 (chart_line SSIM). Each row:
+                            // border-colour line swatch w=2.25 of length
+                            // 19.20 at legend_left = plot_right+15.65, the
+                            // series' 6.96pt marker centred on it (centre
+                            // = legend_left+9.57), and the series name
+                            // Calibri 18pt at x0 = legend_left+21.29,
+                            // baseline = row_y+5.24.
+                            let n = chart.series.len();
+                            let legend_y0 = if n <= 1 {
+                                sy + shh / 2.0 + 17.68
+                            } else {
+                                sy + shh / 2.0 - (n as f64 - 1.0) * 27.75 / 2.0
+                            };
                             let legend_left = plot_right + 15.65;
-                            if let Some(rgb) = line_col.and_then(parse_hex_rgb) {
-                                let lg_pen = CreatePen(
-                                    PS_SOLID,
-                                    (2.25 * scale).round().max(1.0) as i32,
-                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
-                                );
-                                let old_lg_pen = SelectObject(mem_dc, lg_pen);
-                                let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
-                                let ly = (legend_y0 * scale).round() as i32;
-                                let _ = MoveToEx(
-                                    mem_dc,
-                                    (legend_left * scale).round() as i32,
-                                    ly,
-                                    None,
-                                );
-                                let _ = LineTo(
-                                    mem_dc,
-                                    ((legend_left + 19.20) * scale).round() as i32,
-                                    ly,
-                                );
-                                // marker diamond on the legend swatch
-                                // (Word renders the line legend marker as a
-                                // 6.96pt filled diamond, rect
-                                // [legend_left+5.22, legend_y0-3.48,
-                                // legend_left+13.92, legend_y0+3.48];
-                                // fill=color=accent1, w=0.75)
-                                let m_brush = CreateSolidBrush(COLORREF(
-                                    colorref(rgb.0, rgb.1, rgb.2),
-                                ));
-                                let old_m_brush = SelectObject(mem_dc, m_brush);
-                                let m_pen = CreatePen(
-                                    PS_SOLID,
-                                    (0.75 * scale).round().max(1.0) as i32,
-                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
-                                );
-                                let old_m_pen = SelectObject(mem_dc, m_pen);
-                                let mr = 6.96 / 2.0;
-                                let mc = legend_left + 9.57;
-                                let hx = (mc * scale).round() as i32;
-                                let hy = (legend_y0 * scale).round() as i32;
-                                let diamond = [
-                                    POINT { x: ((mc - mr) * scale).round() as i32, y: hy },
-                                    POINT { x: hx, y: ((legend_y0 - mr) * scale).round() as i32 },
-                                    POINT { x: ((mc + mr) * scale).round() as i32, y: hy },
-                                    POINT { x: hx, y: ((legend_y0 + mr) * scale).round() as i32 },
-                                ];
-                                let _ = Polygon(mem_dc, &diamond);
-                                SelectObject(mem_dc, old_m_pen);
-                                let _ = DeleteObject(m_pen);
-                                SelectObject(mem_dc, old_m_brush);
-                                let _ = DeleteObject(m_brush);
-                                SelectObject(mem_dc, old_lg_pen);
-                                let _ = DeleteObject(lg_pen);
-                            }
-                            if let Some(first) = chart.series.first() {
+                            for (si, s) in chart.series.iter().enumerate() {
+                                let row_y = legend_y0 + si as f64 * 27.75;
+                                let (fill_hex, border_hex) = line_series_colors(si);
+                                if let Some(rgb) = parse_hex_rgb(&border_hex) {
+                                    let lg_pen = CreatePen(
+                                        PS_SOLID,
+                                        (2.25 * scale).round().max(1.0) as i32,
+                                        COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                                    );
+                                    let old_lg_pen = SelectObject(mem_dc, lg_pen);
+                                    let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                    let ly = (row_y * scale).round() as i32;
+                                    let _ = MoveToEx(
+                                        mem_dc,
+                                        (legend_left * scale).round() as i32,
+                                        ly,
+                                        None,
+                                    );
+                                    let _ = LineTo(
+                                        mem_dc,
+                                        ((legend_left + 19.20) * scale).round() as i32,
+                                        ly,
+                                    );
+                                    SelectObject(mem_dc, old_lg_pen);
+                                    let _ = DeleteObject(lg_pen);
+                                }
+                                if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                    let m_brush = CreateSolidBrush(COLORREF(
+                                        colorref(rgb.0, rgb.1, rgb.2),
+                                    ));
+                                    let old_m_brush = SelectObject(mem_dc, m_brush);
+                                    let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                    draw_line_marker(
+                                        mem_dc,
+                                        line_marker_shape(si),
+                                        legend_left + 9.57,
+                                        row_y,
+                                        6.96 / 2.0,
+                                        scale,
+                                    );
+                                    SelectObject(mem_dc, old_m_brush);
+                                    let _ = DeleteObject(m_brush);
+                                }
                                 draw_text_baseline(
                                     mem_dc,
                                     ((legend_left + 21.29) * scale).round() as i32,
-                                    (legend_y0 + 5.24) as f32,
-                                    &first.name,
+                                    (row_y + 5.24) as f32,
+                                    &s.name,
                                     18.0,
                                     axis_family,
                                     None,
@@ -1988,6 +1996,118 @@ fn create_font_for(
 const DEFAULT_ACCENT: [&str; 6] = [
     "4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47",
 ];
+
+/// Per-series LINE chart (fill, border) colours, measured from a Word PDF
+/// export of a 3-series LINE_MARKERS chart (2026-08-06):
+///   S1 fill #4F81BD / border #4A7EBB
+///   S2 fill #C0504D / border #BE4B48
+///   S3 fill #9BBB59 / border #98B954
+/// S4+ are UNMEASURED -> fall back to DEFAULT_ACCENT with a same-colour
+/// border (the measured S1-S3 differ from DEFAULT_ACCENT; only add more
+/// measured entries when a 4+-series specimen is verified).
+fn line_series_colors(si: usize) -> (String, String) {
+    const MEASURED: [(&str, &str); 3] = [
+        ("4F81BD", "4A7EBB"),
+        ("C0504D", "BE4B48"),
+        ("9BBB59", "98B954"),
+    ];
+    if let Some((f, b)) = MEASURED.get(si) {
+        (f.to_string(), b.to_string())
+    } else {
+        let accent = DEFAULT_ACCENT[si % DEFAULT_ACCENT.len()];
+        (accent.to_string(), accent.to_string())
+    }
+}
+
+/// Per-series LINE chart data-marker SHAPE (measured, 2026-08-06):
+///   index 0 = diamond (4 lines joining the bbox side-midpoints)
+///   index 1 = square (6.96x6.96 rect)
+///   index 2 = triangle (3 lines: top, right, bottom-left)
+///   index 3+ = diamond fallback (UNMEASURED; Word's marker cycle for
+///   series beyond the measured three is not yet known).
+fn line_marker_shape(si: usize) -> u8 {
+    match si {
+        0 => 0, // diamond
+        1 => 1, // square
+        2 => 2, // triangle
+        _ => 0, // diamond fallback (unmeasured)
+    }
+}
+
+/// Draw one 6.96pt data marker (per-series shape) centred at (cx, cy),
+/// with the caller's brush selected (fill colour) and NULL_PEN (same-
+/// colour stroke invisible, = Word's w=0.75 outline).
+fn draw_line_marker(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    shape: u8,
+    cx: f64,
+    cy: f64,
+    mr: f64,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{Polygon, Rectangle};
+    let hx = (cx * scale).round() as i32;
+    let hy = (cy * scale).round() as i32;
+    match shape {
+        1 => {
+            // square: 6.96x6.96 rect
+            unsafe {
+                let _ = Rectangle(
+                    dc,
+                    ((cx - mr) * scale).round() as i32,
+                    ((cy - mr) * scale).round() as i32,
+                    ((cx + mr) * scale).round() as i32,
+                    ((cy + mr) * scale).round() as i32,
+                );
+            }
+        }
+        2 => {
+            // triangle: top, right, bottom-left (3 lines)
+            let pts = [
+                POINT {
+                    x: hx,
+                    y: ((cy - mr) * scale).round() as i32,
+                },
+                POINT {
+                    x: ((cx + mr) * scale).round() as i32,
+                    y: ((cy + mr) * scale).round() as i32,
+                },
+                POINT {
+                    x: ((cx - mr) * scale).round() as i32,
+                    y: ((cy + mr) * scale).round() as i32,
+                },
+            ];
+            unsafe {
+                let _ = Polygon(dc, &pts);
+            }
+        }
+        _ => {
+            // diamond: top, right, bottom, left (4 lines)
+            let pts = [
+                POINT {
+                    x: hx,
+                    y: ((cy - mr) * scale).round() as i32,
+                },
+                POINT {
+                    x: ((cx + mr) * scale).round() as i32,
+                    y: hy,
+                },
+                POINT {
+                    x: hx,
+                    y: ((cy + mr) * scale).round() as i32,
+                },
+                POINT {
+                    x: ((cx - mr) * scale).round() as i32,
+                    y: hy,
+                },
+            ];
+            unsafe {
+                let _ = Polygon(dc, &pts);
+            }
+        }
+    }
+}
 
 /// "Nice" ceiling for the value axis: the smallest multiple of a 1/2/5×10^k
 /// step that is >= max. Chart1 render-truth: max 21.4 -> step 5 -> 25.
