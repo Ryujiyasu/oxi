@@ -373,7 +373,7 @@ impl<'a> Parser<'a> {
             self.eat_kw("sub");
             false
         };
-        let name = self.parse_ident()?;
+        let (name, name_suffix) = self.parse_typed_ident()?;
         self.eat_kw("lib");
         let lib = match self.kind() {
             TokenKind::Str(s) => {
@@ -396,7 +396,9 @@ impl<'a> Parser<'a> {
             None
         };
         let params = self.parse_param_list();
-        let return_type = self.parse_as_type();
+        let return_type = self
+            .parse_as_type()
+            .or_else(|| name_suffix.map(type_name_from_suffix));
         self.end_statement();
         Some(ModuleItem::ExternalProc(ExternalProc {
             visibility,
@@ -487,9 +489,11 @@ impl<'a> Parser<'a> {
                 ProcKind::PropertySet
             }
         };
-        let name = self.parse_ident()?;
+        let (name, name_suffix) = self.parse_typed_ident()?;
         let params = self.parse_param_list();
-        let return_type = self.parse_as_type();
+        let return_type = self
+            .parse_as_type()
+            .or_else(|| name_suffix.map(type_name_from_suffix));
         self.end_statement();
 
         let terminator = match kind {
@@ -533,7 +537,7 @@ impl<'a> Parser<'a> {
                 // reassign the caller's variable.
                 ParamMode::ByRef
             };
-            let Some(name) = self.parse_ident() else {
+            let Some((name, name_suffix)) = self.parse_typed_ident() else {
                 break;
             };
             let is_array = if self.at_punct(Punct::LParen)
@@ -544,7 +548,10 @@ impl<'a> Parser<'a> {
             } else {
                 false
             };
-            let type_name = self.parse_as_type().unwrap_or_else(TypeName::implicit);
+            let type_name = self
+                .parse_as_type()
+                .or_else(|| name_suffix.map(type_name_from_suffix))
+                .unwrap_or_else(TypeName::implicit);
             let default = if self.eat_punct(Punct::Eq) {
                 self.parse_expr()
             } else {
@@ -577,15 +584,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_ident(&mut self) -> Option<String> {
+        self.parse_typed_ident().map(|(name, _)| name)
+    }
+
+    fn parse_typed_ident(&mut self) -> Option<(String, Option<char>)> {
         let name = match self.kind() {
             TokenKind::Ident(s) => s.clone(),
             _ => return None,
         };
         self.pos += 1;
-        if let TokenKind::TypeSuffix(_) = self.kind() {
+        let suffix = if let TokenKind::TypeSuffix(suffix) = self.kind() {
+            let suffix = *suffix;
             self.pos += 1;
-        }
-        Some(name)
+            Some(suffix)
+        } else {
+            None
+        };
+        Some((name, suffix))
     }
 
     fn parse_qualified_name(&mut self) -> Option<String> {
@@ -637,13 +652,16 @@ impl<'a> Parser<'a> {
 
     fn parse_var_item(&mut self) -> Option<VarItem> {
         let with_events = self.eat_kw("withevents");
-        let name = self.parse_ident()?;
+        let (name, name_suffix) = self.parse_typed_ident()?;
         let array_bounds = if self.at_punct(Punct::LParen) {
             Some(self.parse_array_bounds())
         } else {
             None
         };
-        let type_name = self.parse_as_type().unwrap_or_else(TypeName::implicit);
+        let type_name = self
+            .parse_as_type()
+            .or_else(|| name_suffix.map(type_name_from_suffix))
+            .unwrap_or_else(TypeName::implicit);
         let value = if self.eat_punct(Punct::Eq) {
             self.parse_expr()
         } else {
@@ -2249,6 +2267,22 @@ fn binary(op: BinaryOp, lhs: Expr, rhs: Expr) -> Expr {
     }
 }
 
+fn type_name_from_suffix(suffix: char) -> TypeName {
+    let name = match suffix {
+        '%' => "Integer",
+        '&' => "Long",
+        '!' => "Single",
+        '#' => "Double",
+        '@' => "Currency",
+        '$' => "String",
+        _ => "Variant",
+    };
+    TypeName {
+        name: name.to_string(),
+        suffix: Some(suffix),
+    }
+}
+
 fn def_type_name(keyword: &str) -> Option<&'static str> {
     match keyword {
         "defbool" => Some("Boolean"),
@@ -2816,6 +2850,33 @@ mod tests {
             assert!(matches!(&p.body[0], Statement::Open(open)
                 if open.mode == expected && open.lock == Some(FileLock::Shared)));
         }
+    }
+
+    #[test]
+    fn declaration_type_suffixes_are_preserved_and_resolved() {
+        let m = module(
+            "Private total&\n\
+             Private Function Convert$(ByVal count&, ratio!, price@, index%, score#)\n\
+             End Function",
+        );
+        let ModuleItem::Variables(decl) = &m.items[0] else {
+            panic!("expected module variable")
+        };
+        assert_eq!(decl.items[0].type_name.name, "Long");
+        assert_eq!(decl.items[0].type_name.suffix, Some('&'));
+
+        let ModuleItem::Procedure(procedure) = &m.items[1] else {
+            panic!("expected function")
+        };
+        assert_eq!(procedure.return_type.as_ref().unwrap().name, "String");
+        assert_eq!(
+            procedure
+                .params
+                .iter()
+                .map(|param| param.type_name.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Long", "Single", "Currency", "Integer", "Double"]
+        );
     }
 
     #[test]

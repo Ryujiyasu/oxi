@@ -1273,6 +1273,7 @@ mod tests {
         let a = analyse_src(
             "Private Function Convert(ByVal number As Long) As String\n\
                Dim ready As Boolean\n\
+               Dim legacy&\n\
              End Function",
         );
         assert!(a.api_names.is_empty(), "unexpected APIs: {:?}", a.api_names);

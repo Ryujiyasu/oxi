@@ -1446,6 +1446,23 @@ Sub D()\nx = 4\nEnd Sub";
     }
 
     #[test]
+    fn type_suffixes_match_equivalent_as_types() {
+        let suffix = "Private Function Convert$(ByVal value&)\nDim ratio!\nEnd Function";
+        let explicit = "Private Function Convert(ByVal value As Long) As String\n\
+                        Dim ratio As Single\n\
+                        End Function";
+        let different = "Private Function Convert#(ByVal value%)\nDim ratio@\nEnd Function";
+        assert_eq!(
+            fp(suffix, Strength::Standard).combined,
+            fp(explicit, Strength::Standard).combined
+        );
+        assert_ne!(
+            fp(suffix, Strength::Standard).combined,
+            fp(different, Strength::Standard).combined
+        );
+    }
+
+    #[test]
     fn module_declarations_are_fingerprinted() {
         let procedure = "\nSub T()\nEnd Sub";
         for (left, right) in [

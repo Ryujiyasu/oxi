@@ -28,12 +28,16 @@ Option Explicit
 Public Sub BuildReport(ByVal target As Worksheet)
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Worksheets(1)
-    ws.Range("A1").Value = 42
+    ws.Range("A1").Value = SuffixValue$(42&)
     ws.Range("A1").Font.Bold = True
 End Sub
 
 Private Function HiddenHelper(ByVal value As Long) As Long
     HiddenHelper = value + 1
+End Function
+
+Private Function SuffixValue$(ByVal number&)
+    SuffixValue$ = CStr(number&)
 End Function
 '@)
     $sheet = $workbook.Worksheets.Item(1)
@@ -70,7 +74,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 2, statements: 5',
+        'procedures: 3, statements: 6',
         'unparsed: 0',
         'Summary:'
     )
@@ -91,7 +95,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '25.0% (shared 1; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '40.0% (shared 2; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {
