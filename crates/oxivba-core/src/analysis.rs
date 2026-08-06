@@ -994,19 +994,46 @@ impl Walker {
             .filter_map(|f| f.class)
             .max_by_key(|c| c.severity());
 
-        let called: BTreeSet<String> = self
-            .procedures
-            .iter()
-            .flat_map(|p| p.calls.iter().map(|call| call.to_ascii_lowercase()))
-            .collect();
+        let mut procedures_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, procedure) in self.procedures.iter().enumerate() {
+            procedures_by_name
+                .entry(procedure.name.to_ascii_lowercase())
+                .or_default()
+                .push(index);
+        }
+
+        // A mention in dead code does not make its callee live.  Start with
+        // procedures the host or another module may call, then follow only
+        // calls made by those reachable procedures.
+        let mut reachable = BTreeSet::new();
+        let mut pending = Vec::new();
+        for procedure in &self.procedures {
+            if is_externally_reachable(&procedure.name, procedure.visibility, procedure.kind) {
+                let name = procedure.name.to_ascii_lowercase();
+                if reachable.insert(name.clone()) {
+                    pending.push(name);
+                }
+            }
+        }
+        while let Some(name) = pending.pop() {
+            let Some(indices) = procedures_by_name.get(&name) else {
+                continue;
+            };
+            for &index in indices {
+                for call in &self.procedures[index].calls {
+                    let callee = call.to_ascii_lowercase();
+                    if procedures_by_name.contains_key(&callee) && reachable.insert(callee.clone())
+                    {
+                        pending.push(callee);
+                    }
+                }
+            }
+        }
 
         let uncalled = self
             .defined_procedures
             .iter()
-            .filter(|(name, visibility, kind)| {
-                !called.contains(&name.to_ascii_lowercase())
-                    && !is_externally_reachable(name, *visibility, *kind)
-            })
+            .filter(|(name, _, _)| !reachable.contains(&name.to_ascii_lowercase()))
             .map(|(name, _, _)| name.clone())
             .collect();
 
@@ -1310,15 +1337,30 @@ mod tests {
     #[test]
     fn addressof_callback_counts_as_a_procedure_reference() {
         let a = analyse_src(
-            "Private Sub Hook()\n\
+            "Public Sub Hook()\n\
                timerId = SetTimer(0, 0, 1000, AddressOf TimerProc)\n\
              End Sub\n\
              Private Sub TimerProc()\n\
              End Sub",
         );
-        assert!(a.uncalled_procedures.contains(&"Hook".to_string()));
+        assert!(!a.uncalled_procedures.contains(&"Hook".to_string()));
         assert!(!a.uncalled_procedures.contains(&"TimerProc".to_string()));
         assert_eq!(a.metrics.unparsed, 0);
+    }
+
+    #[test]
+    fn addressof_from_dead_code_does_not_make_the_callback_reachable() {
+        let a = analyse_src(
+            "Private Sub DeadHook()\n\
+               timerId = SetTimer(0, 0, 1000, AddressOf DeadTimerProc)\n\
+             End Sub\n\
+             Private Sub DeadTimerProc()\n\
+             End Sub",
+        );
+        assert_eq!(
+            a.dead_procedures(),
+            ["DeadHook".to_string(), "DeadTimerProc".to_string()]
+        );
     }
 
     #[test]
@@ -1441,6 +1483,36 @@ mod tests {
              End Sub\n",
         );
         assert_eq!(a.dead_procedures(), ["RecursiveOnly".to_string()]);
+    }
+
+    #[test]
+    fn calls_from_dead_code_do_not_make_their_callees_reachable() {
+        let a = analyse_src(
+            "Private Sub DeadCaller()\n\
+             DeadCallee\n\
+             End Sub\n\
+             Private Sub DeadCallee()\n\
+             End Sub\n",
+        );
+        assert_eq!(
+            a.dead_procedures(),
+            ["DeadCaller".to_string(), "DeadCallee".to_string()]
+        );
+    }
+
+    #[test]
+    fn calls_from_public_entry_points_are_followed_transitively() {
+        let a = analyse_src(
+            "Public Sub Entry()\n\
+             FirstStep\n\
+             End Sub\n\
+             Private Sub FirstStep()\n\
+             LastStep\n\
+             End Sub\n\
+             Private Sub LastStep()\n\
+             End Sub\n",
+        );
+        assert!(a.dead_procedures().is_empty());
     }
 
     #[test]

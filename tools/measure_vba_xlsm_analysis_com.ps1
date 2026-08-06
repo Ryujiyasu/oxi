@@ -89,6 +89,13 @@ End Sub
 Private Function SelfNamedValue() As Long
     SelfNamedValue = 7
 End Function
+
+Private Sub DeadChainA()
+    DeadChainB
+End Sub
+
+Private Sub DeadChainB()
+End Sub
 '@)
     $sheet = $workbook.Worksheets.Item(1)
     $excel.Run("'$($workbook.Name)'!AnalysisProbe.BuildReport", $sheet)
@@ -129,7 +136,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 9, statements: 33',
+        'procedures: 11, statements: 34',
         'unparsed: 0',
         '#If Win64 Then: conditional compilation; the source differs by build',
         '#End If: conditional compilation; the source differs by build',
@@ -152,7 +159,7 @@ End Function
         'probe-copy.xlsm::AnalysisProbe',
         'Related modules (standard fingerprint):',
         'probe-variant.xlsm::AnalysisProbe',
-        '72.7% (shared 8; only 1/2; diverged: HiddenHelper; declarations differ)',
+        '76.9% (shared 10; only 1/2; diverged: HiddenHelper; declarations differ)',
         'Inventory: 3 succeeded, 0 failed'
     )
     foreach ($expected in $inventoryExpectations) {
@@ -205,6 +212,9 @@ End Function
     }
     if (@($variantModule.uncalled_procedures) -notcontains 'SelfNamedValue') {
         throw "Function result assignment incorrectly counted as a call to SelfNamedValue"
+    }
+    if (@($variantModule.uncalled_procedures) -notcontains 'DeadChainA' -or @($variantModule.uncalled_procedures) -notcontains 'DeadChainB') {
+        throw "Dead private call chain was not fully reported as uncalled"
     }
     if (@($variantModule.uncalled_procedures) -contains 'LabelBranch') {
         throw "Called LabelBranch was incorrectly reported as uncalled"
