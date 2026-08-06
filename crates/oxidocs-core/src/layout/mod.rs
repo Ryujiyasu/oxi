@@ -11391,11 +11391,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let s1hdr = !self.doc_body_has_real_cjk
                         && std::env::var("OXI_S1HDR_DISABLE").is_err()
                         && std::env::var("OXI_S742_DISABLE").is_err();
-                    let has_real_text = para
-                        .runs
-                        .iter()
-                        .any(|r| r.text.chars().any(|c| !c.is_whitespace()));
-                    if s1hdr && has_real_text {
+                    // S1084 (2026-08-06): the merge gate must mirror the PARSER's
+                    // own `image_only` predicate (parser/ooxml.rs: all runs have
+                    // EMPTY text), not "has a non-whitespace char". A header host
+                    // paragraph whose only text is a TAB (a very common logo-header
+                    // shape) is NOT image_only, so the parser keeps the paragraph
+                    // AND pushes its inline images as sibling blocks — which means
+                    // those images DO belong to this paragraph's line. The old
+                    // has_real_text gate missed it and charged the line twice
+                    // (administrative__001eef60: 14.648 + 42.573 = 57.22 where Word
+                    // draws max(14.648, 42.573) = 42.57, so the header ran 14.6pt
+                    // long on every page). Using the parser's predicate keeps the
+                    // discriminator EXACT: any-text => the images came from THIS
+                    // paragraph; no-text => the paragraph was not suppressed for
+                    // some other reason and a following bare Image may be its own
+                    // image-only paragraph, so stay conservative and do not merge.
+                    let has_any_text = if std::env::var("OXI_S1084_DISABLE").is_err() {
+                        para.runs.iter().any(|r| !r.text.is_empty())
+                    } else {
+                        para.runs
+                            .iter()
+                            .any(|r| r.text.chars().any(|c| !c.is_whitespace()))
+                    };
+                    if s1hdr && has_any_text {
                         // Collect the immediately-following inline images.
                         let mut j = bi + 1;
                         let mut img_heights: Vec<f32> = Vec::new();
