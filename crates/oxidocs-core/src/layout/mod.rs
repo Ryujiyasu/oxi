@@ -25616,6 +25616,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let mut s728_hdr_elems: Vec<LayoutElement> = Vec::new();
         let mut s728_hdr_h: f32 = 0.0;
         let mut s728_capture_done = false;
+        // S1083 (2026-08-06, default ON, opt-out OXI_S1083_DISABLE):
+        // (row_idx, entry cursor) for the rows laid
+        // out on the CURRENT page, so a page push can pull a keepNext row-chain
+        // over with the row that triggered it. Cleared at every page push.
+        let mut s1083_row_start: Vec<(usize, f32)> = Vec::new();
+        let s1083_on =
+            std::env::var("OXI_S1083_DISABLE").is_err() && !self.doc_body_has_real_cjk;
+        // A row "keeps with the next row" when its LEFTMOST cell's FIRST
+        // paragraph declares keepNext (the S1024 row-chain predicate).
+        let s1083_kn = |ri: usize| -> bool {
+            table
+                .rows
+                .get(ri)
+                .and_then(|r| r.cells.first())
+                .and_then(|c| {
+                    c.blocks.iter().find_map(|b| match b {
+                        Block::Paragraph(p) => Some(p.style.keep_next),
+                        _ => None,
+                    })
+                })
+                .unwrap_or(false)
+        };
         let mut s728_hdr_rows_seen: usize = 0;
         for (row_idx, row) in table.rows.iter().enumerate() {
             // S740: page-transition bookkeeping + commit of the PREVIOUS row's
@@ -25698,6 +25720,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let s503_enable = std::env::var("OXI_S503_ENABLE").is_ok();
             let mut center_row_h: f32 = 0.0;
             let row_entry_cursor_y = cursor.cursor_y;
+            // S1083 (2026-08-06, default ON, opt-out OXI_S1083_DISABLE):
+            // remember where each row of THIS page
+            // started, so a page push can walk back over a keepNext row-chain.
+            s1083_row_start.push((row_idx, row_entry_cursor_y));
 
             // S361 (2026-05-27, FALSIFIED): hypothesized that trHeight rows
             // should NOT grid-snap the cell line (b5f706e9 row 1 Word cellH=17pt
@@ -27004,6 +27030,46 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         is_single_cell_row, has_lrpb_mid_row, s754_split, s814_lrpb_veto,
                         row.height, txt);
                 }
+                // S1083 (2026-08-06, default ON, opt-out OXI_S1083_DISABLE):
+                // Word will not split a table INSIDE
+                // a keepNext row-chain. DERIVED on technical__00501ca3 (Word
+                // PDF + COM): its 24-row table 2 has keepNext on the leftmost
+                // cell's first paragraph of EVERY row but row 12; Word breaks
+                // p7/p8 exactly after that row-12 terminator and moves the whole
+                // rows-13..23 chain (caption + 2 header rows + data) to p8 even
+                // though ~135pt were free. Oxi packed rows 13-15 onto p7 (the
+                // 12 mismatched paragraphs). This is the mid-table split
+                // counterpart of S1024's whole-table row-chain rule.
+                // Back-pull with ACTUAL geometry (the S963b/S970 contract, never
+                // an estimate): the chain rows are already laid out, so their
+                // extent is (cursor - chain_start_y).
+                let mut s1083_moved: Vec<LayoutElement> = Vec::new();
+                let mut s1083_extent = 0.0f32;
+                if s1083_on {
+                    let mut c = row_idx;
+                    while c > 0
+                        && s1083_row_start.iter().any(|(ri, _)| *ri == c - 1)
+                        && s1083_kn(c - 1)
+                    {
+                        c -= 1;
+                    }
+                    let first_on_page = s1083_row_start.first().map(|(ri, _)| *ri);
+                    // never blank the page: something must remain above the chain
+                    let keeps_content = Some(c) != first_on_page || !current_elements.is_empty();
+                    if c < row_idx && keeps_content {
+                        if let Some((_, cy)) =
+                            s1083_row_start.iter().find(|(ri, _)| *ri == c).copied()
+                        {
+                            let (keep, moved): (Vec<LayoutElement>, Vec<LayoutElement>) =
+                                std::mem::take(&mut elements)
+                                    .into_iter()
+                                    .partition(|e: &LayoutElement| e.y < cy - 0.1);
+                            elements = keep;
+                            s1083_moved = moved;
+                            s1083_extent = (cursor.cursor_y - cy).max(0.0);
+                        }
+                    }
+                }
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
                 dbg_page_push(pages.len(), 0);
@@ -27013,6 +27079,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     elements: std::mem::take(current_elements),
                 });
                 cursor.set(page_top);
+                s1083_row_start.clear();
+                if !s1083_moved.is_empty() {
+                    let y0 = s1083_moved
+                        .iter()
+                        .map(|e| e.y)
+                        .fold(f32::INFINITY, f32::min);
+                    let dy = page_top - y0;
+                    for el in &s1083_moved {
+                        let mut cl = el.clone();
+                        cl.y += dy;
+                        if let LayoutContent::TableBorder { y1, y2, .. } = &mut cl.content {
+                            *y1 += dy;
+                            *y2 += dy;
+                        }
+                        elements.push(cl);
+                    }
+                    cursor.set(page_top + s1083_extent);
+                }
                 // S728: replay the captured tblHeader row(s) at the new page
                 // top (mid-table continuation break; NOT a widow whole-table
                 // move, NOT above a header row itself). Clones shift by
@@ -27028,6 +27112,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && !s728_hdr_elems.is_empty()
                     && !row.header
                     && !widow_break_needed
+                    && s1083_moved.is_empty()
                 {
                     let y0 = s728_hdr_elems
                         .iter()
