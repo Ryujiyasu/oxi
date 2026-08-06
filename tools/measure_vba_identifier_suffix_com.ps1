@@ -35,17 +35,38 @@ Public Function StringLeftNullError() As Long
 Handler:
     StringLeftNullError = Err.Number
 End Function
+
+Public Function QualifiedVariantLeftPreservesNull() As Boolean
+    QualifiedVariantLeftPreservesNull = IsNull(VBA.Left(Null, 1))
+End Function
+
+Public Function QualifiedStringLeftNullError() As Long
+    On Error GoTo Handler
+    Dim result As String
+    result = VBA.Left$(Null, 1)
+    QualifiedStringLeftNullError = 0
+    Exit Function
+Handler:
+    QualifiedStringLeftNullError = Err.Number
+End Function
 '@)
 
     $variantPreservesNull = [bool]$excel.Run("'$($workbook.Name)'!SuffixProbe.VariantLeftPreservesNull")
     $stringError = [long]$excel.Run("'$($workbook.Name)'!SuffixProbe.StringLeftNullError")
+    $qualifiedVariantPreservesNull = [bool]$excel.Run("'$($workbook.Name)'!SuffixProbe.QualifiedVariantLeftPreservesNull")
+    $qualifiedStringError = [long]$excel.Run("'$($workbook.Name)'!SuffixProbe.QualifiedStringLeftNullError")
     $storedSource = $component.CodeModule.Lines(1, $component.CodeModule.CountOfLines)
-    if (-not $variantPreservesNull -or $stringError -ne 94) {
-        throw "Identifier suffix COM mismatch: variant=$variantPreservesNull stringError=$stringError"
+    if (-not $variantPreservesNull -or $stringError -ne 94 -or
+        -not $qualifiedVariantPreservesNull -or $qualifiedStringError -ne 94) {
+        throw "Identifier suffix COM mismatch: variant=$variantPreservesNull stringError=$stringError qualifiedVariant=$qualifiedVariantPreservesNull qualifiedStringError=$qualifiedStringError"
     }
     if (-not $storedSource.Contains('Left(Null, 1)') -or
         -not $storedSource.Contains('Left$(Null, 1)')) {
         throw 'VBE did not preserve the suffixed and unsuffixed calls'
+    }
+    if (-not $storedSource.Contains('VBA.Left(Null, 1)') -or
+        -not $storedSource.Contains('VBA.Left$(Null, 1)')) {
+        throw 'VBE did not preserve the qualified suffixed and unsuffixed calls'
     }
 
     $workbook.SaveAs($workbookPath, 52)
@@ -65,7 +86,7 @@ End Function
     }
     foreach ($expected in @(
         '[SuffixProbe]',
-        'procedures: 2',
+        'procedures: 4',
         'unparsed: 0'
     )) {
         if (-not $analysis.Contains($expected)) {
@@ -81,7 +102,8 @@ End Function
     $probeModule = @($jsonReport.projects[0].modules | Where-Object { $_.name -eq 'SuffixProbe' })[0]
     if ($null -eq $probeModule -or
         $probeModule.metrics.unparsed -ne 0 -or
-        $probeModule.api_names.Left -ne 2) {
+        $probeModule.api_names.Left -ne 2 -or
+        $probeModule.api_names.'VBA.Left' -ne 2) {
         throw 'Identifier suffix JSON analysis did not retain the undecorated API name'
     }
     if (@($jsonReport.errors).Count -ne 0) {
@@ -89,7 +111,8 @@ End Function
     }
 
     Write-Output "Excel COM values: Left(Null, 1) preserves Null=$variantPreservesNull; Left`$(Null, 1) error=$stringError"
-    Write-Output 'VBE stored the suffixed and unsuffixed calls distinctly'
+    Write-Output "Excel COM values: VBA.Left(Null, 1) preserves Null=$qualifiedVariantPreservesNull; VBA.Left`$(Null, 1) error=$qualifiedStringError"
+    Write-Output 'VBE stored bare and qualified suffix forms distinctly'
     $analysis.TrimEnd()
     Write-Output 'VBA identifier suffix COM execution and analysis: PASS'
 }

@@ -2162,12 +2162,17 @@ impl<'a> Parser<'a> {
             if self.at_punct(Punct::Dot) {
                 if let TokenKind::Ident(name) = self.kind_at(1).clone() {
                     self.pos += 2;
-                    if matches!(self.kind(), TokenKind::TypeSuffix(_)) {
+                    let suffix = if let TokenKind::TypeSuffix(suffix) = self.kind() {
+                        let suffix = *suffix;
                         self.pos += 1;
-                    }
+                        Some(suffix)
+                    } else {
+                        None
+                    };
                     expr = Expr::Member {
                         object: Box::new(expr),
                         name,
+                        suffix,
                         span,
                     };
                     continue;
@@ -2614,6 +2619,15 @@ mod tests {
             Expr::Binary { lhs, rhs, .. }
                 if matches!(*lhs, Expr::TypedIdent { suffix: '%', .. })
                     && matches!(*rhs, Expr::TypedIdent { suffix: '@', .. })
+        ));
+    }
+
+    #[test]
+    fn qualified_member_type_suffixes_are_preserved() {
+        assert!(matches!(
+            expr("VBA.Left$(value, 1)"),
+            Expr::Index { target, .. }
+                if matches!(*target, Expr::Member { ref name, suffix: Some('$'), .. } if name == "Left")
         ));
     }
 

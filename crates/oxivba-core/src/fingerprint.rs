@@ -814,11 +814,19 @@ fn render_expr(expr: &Expr, locals: &mut LocalNames, out: &mut String) {
             out.push('.');
             out.push_str(&name.to_ascii_lowercase());
         }
-        Expr::Member { object, name, .. } => {
+        Expr::Member {
+            object,
+            name,
+            suffix,
+            ..
+        } => {
             render_expr(object, locals, out);
             out.push('.');
             // Member names are API surface; never renamed.
             out.push_str(&name.to_ascii_lowercase());
+            if let Some(suffix) = suffix {
+                out.push(*suffix);
+            }
         }
         Expr::Index {
             target,
@@ -1265,6 +1273,20 @@ End Sub";
     fn expression_identifier_suffixes_affect_the_fingerprint() {
         let variant = "Function T(value)\nT = Left(value, 1)\nEnd Function";
         let string = "Function T(value)\nT = Left$(value, 1)\nEnd Function";
+        assert_ne!(
+            fp(variant, Strength::Strict).combined,
+            fp(string, Strength::Strict).combined
+        );
+        assert_ne!(
+            fp(variant, Strength::Loose).combined,
+            fp(string, Strength::Loose).combined
+        );
+    }
+
+    #[test]
+    fn qualified_member_suffixes_affect_the_fingerprint() {
+        let variant = "Function T(value)\nT = VBA.Left(value, 1)\nEnd Function";
+        let string = "Function T(value)\nT = VBA.Left$(value, 1)\nEnd Function";
         assert_ne!(
             fp(variant, Strength::Strict).combined,
             fp(string, Strength::Strict).combined

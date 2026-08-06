@@ -727,6 +727,9 @@ pub enum Expr {
     Member {
         object: Box<Expr>,
         name: String,
+        /// A return/declaration type character attached to the member name,
+        /// as in `VBA.Left$`.
+        suffix: Option<char>,
         span: Span,
     },
     /// `a(1)` — indexing and calling are the same syntax in VBA.
