@@ -31,6 +31,7 @@ ENGINES = {
     "SILURUS": "silurus",
     "BetterOffice": "betteroffice",
     "eigenpal": "eigenpal",
+    "GenOffice": "genoffice",
 }
 
 X0, X1, Y0, Y1 = 42.0, 328.0, 300.0, 26.0
@@ -80,10 +81,10 @@ def rewrite(html: str, rows_by_lang: dict[str, list[dict]]) -> tuple[str, list[s
         eng_name = m.group("eng_en") or m.group("eng_jp")
         ja_flag = m.group("ja_en") or m.group("ja_jp")
         # the JA page's last two labels omit the "Japanese" marker; the page
-        # order is 5 English scatters then 5 Japanese ones, so fall back to
+        # order is 6 English scatters then 6 Japanese ones, so fall back to
         # position when the label itself is ambiguous.
         seen["count"] += 1
-        lang = "ja" if (ja_flag or seen["count"] > 5) else "en"
+        lang = "ja" if (ja_flag or seen["count"] > 6) else "en"
         eng = ENGINES.get(eng_name)
         if eng is None:
             notes.append(f"  ?? unknown engine in aria-label: {eng_name}")
