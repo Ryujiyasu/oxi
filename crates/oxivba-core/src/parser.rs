@@ -578,7 +578,7 @@ impl<'a> Parser<'a> {
         if !self.eat_kw("as") {
             return None;
         }
-        self.eat_kw("new");
+        let is_new = self.eat_kw("new");
         let name = self.parse_qualified_name()?;
         let fixed_length = if name.eq_ignore_ascii_case("String") && self.eat_punct(Punct::Star) {
             self.parse_expr()
@@ -587,6 +587,7 @@ impl<'a> Parser<'a> {
         };
         Some(TypeName {
             name,
+            is_new,
             suffix: None,
             fixed_length,
         })
@@ -2296,6 +2297,7 @@ fn type_name_from_suffix(suffix: char) -> TypeName {
     };
     TypeName {
         name: name.to_string(),
+        is_new: false,
         suffix: Some(suffix),
         fixed_length: None,
     }
@@ -2923,6 +2925,25 @@ mod tests {
                 if matches!(decl.items[0].type_name.fixed_length.as_ref(),
                     Some(Expr::Literal(Literal::Number(4.0), _)))
         ));
+    }
+
+    #[test]
+    fn as_new_is_preserved_on_declared_types() {
+        let procedure = only_proc(
+            "Sub T()\n\
+             Dim ordinary As Collection\n\
+             Dim lazy As New Collection\n\
+             End Sub",
+        );
+        let Statement::Dim(ordinary) = &procedure.body[0] else {
+            panic!("expected ordinary declaration")
+        };
+        let Statement::Dim(lazy) = &procedure.body[1] else {
+            panic!("expected As New declaration")
+        };
+        assert!(!ordinary.items[0].type_name.is_new);
+        assert!(lazy.items[0].type_name.is_new);
+        assert_eq!(lazy.items[0].type_name.name, "Collection");
     }
 
     #[test]

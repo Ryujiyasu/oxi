@@ -40,9 +40,11 @@ End Function
 Private Function SuffixValue$(ByVal number&)
     Dim padded As String * 4
     Dim chunks() As String
+    Dim lazy As New Collection
     ReDim chunks(1 To 2) As String
     chunks(1) = CStr(number&)
-    padded = chunks(1)
+    lazy.Add chunks(1)
+    padded = lazy(1)
     SuffixValue$ = padded
 End Function
 '@)
@@ -82,7 +84,7 @@ End Function
     $expectations = @(
         '[AnalysisProbe]',
         'verdict: A (report generation)',
-        'procedures: 3, statements: 12',
+        'procedures: 3, statements: 14',
         'unparsed: 0',
         'Summary:'
     )
@@ -147,6 +149,9 @@ End Function
     }
     if ($variantModule.api_names.Worksheet -ne 2) {
         throw "Procedure and local declaration types were not both reported"
+    }
+    if ($variantModule.api_names.Collection -ne 1) {
+        throw "As New declaration type was not reported"
     }
     if (@($jsonReport.errors).Count -ne 0) {
         throw "JSON inventory reported unexpected errors"

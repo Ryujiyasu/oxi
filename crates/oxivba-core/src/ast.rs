@@ -27,6 +27,8 @@ pub enum Visibility {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeName {
     pub name: String,
+    /// `As New Collection`: automatically instantiate the object when read.
+    pub is_new: bool,
     /// A type suffix such as the `$` in `Dim s$`.
     pub suffix: Option<char>,
     /// `String * 20`, used by fixed-width records and legacy file formats.
@@ -37,6 +39,7 @@ impl TypeName {
     pub fn implicit() -> TypeName {
         TypeName {
             name: "Variant".to_string(),
+            is_new: false,
             suffix: None,
             fixed_length: None,
         }

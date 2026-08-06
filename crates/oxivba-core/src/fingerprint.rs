@@ -230,6 +230,9 @@ fn render_param(param: &Param, locals: &mut LocalNames, out: &mut String) {
 }
 
 fn render_type_name(type_name: &TypeName, locals: &mut LocalNames, out: &mut String) {
+    if type_name.is_new {
+        out.push_str("new ");
+    }
     out.push_str(&type_name.name.to_ascii_lowercase());
     if let Some(length) = &type_name.fixed_length {
         out.push('*');
@@ -1500,6 +1503,16 @@ Sub D()\nx = 4\nEnd Sub";
         assert_eq!(
             fp(four, Strength::Loose).combined,
             fp(eight, Strength::Loose).combined
+        );
+    }
+
+    #[test]
+    fn as_new_declarations_have_distinct_fingerprints() {
+        let ordinary = "Sub T()\nDim value As Collection\nEnd Sub";
+        let lazy = "Sub T()\nDim value As New Collection\nEnd Sub";
+        assert_ne!(
+            fp(ordinary, Strength::Loosest).combined,
+            fp(lazy, Strength::Loosest).combined
         );
     }
 
