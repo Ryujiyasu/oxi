@@ -6136,7 +6136,26 @@ impl LayoutEngine {
                             // estimate is left untouched — high blast radius on Phase-1).
                             let s709 = std::env::var("OXI_S709_DISABLE").is_err();
                             let this_h = if s709 {
-                                let head_reset = !para.style.has_direct_spacing
+                                // S1087 (2026-08-07, opt-out OXI_S1087_DISABLE): the estimate's
+                                // ACTUAL reset key is `has_direct_before` — S855 moved
+                                // cell_spacing_reset_sides onto the per-SIDE flags ("the
+                                // before/after RESET keys on whether the DIRECT pPr set
+                                // before/after, NOT on has_direct_spacing") but S709's mirror
+                                // was left on the pre-S855 predicate. A heading whose direct
+                                // pPr sets ONLY `after` (reports__00196a Heading2
+                                // `<w:spacing w:after="120"/>` over a style before=200) then
+                                // kept head_reset=false while the estimate still dropped its
+                                // 10pt space_before → this_h under-counted by exactly that
+                                // (23.2 vs 33.2), the follower's 2 lines "fit" the 52.0pt
+                                // remainder by 1.8pt and the heading stayed at the page bottom
+                                // where Word pushes the pair. Mirror reset_before exactly.
+                                let s1087 = std::env::var("OXI_S1087_DISABLE").is_err();
+                                let reset_key = if s1087 {
+                                    !para.style.has_direct_before
+                                } else {
+                                    !para.style.has_direct_spacing
+                                };
+                                let head_reset = reset_key
                                     && para.style.line_spacing_rule.as_deref() != Some("exact")
                                     && para.style.line_spacing_rule.as_deref() != Some("atLeast");
                                 if head_reset {
@@ -6157,7 +6176,17 @@ impl LayoutEngine {
                                     } else {
                                         0.0
                                     };
-                                    this_h0 + prev_sa.max(this_sb)
+                                    // S1087: the correction restores EXACTLY what the
+                                    // estimate dropped — the paragraph's OWN space_before.
+                                    // The `max(prev_sa, ...)` form is only accidentally
+                                    // right when prev_sa <= this_sb: it also fires on a
+                                    // paragraph with NO space_before at all, adding the
+                                    // PREVIOUS paragraph's after (which `remaining` already
+                                    // accounts for). technical__0056b52f's S.2.1/UR.2
+                                    // headings (sb=None, prev after=12) were pushed on that
+                                    // phantom 12pt and the doc collapsed 0.9849 -> 0.4121.
+                                    this_h0
+                                        + if s1087 { this_sb } else { prev_sa.max(this_sb) }
                                 } else {
                                     this_h0
                                 }
@@ -6533,8 +6562,9 @@ impl LayoutEngine {
                                     .flat_map(|r| r.text.chars())
                                     .take(16)
                                     .collect();
-                                eprintln!("[KN635] {:?} this_h={:.1} next_h={:.1} rem={:.1} 1line={:.1} nlines={} wc={} pair_ov={} fmw={} do_push={}",
-                                    t, this_h, next_h, remaining, one_line_h, next_lines, next_para.style.widow_control, pair_overflows, follower_moves_wholly, do_push);
+                                eprintln!("[KN635] {:?} this_h0={:.1} this_h={:.1} next_h={:.1} rem={:.1} 1line={:.1} nlines={} wc={} pair_ov={} fmw={} do_push={} sb={:?} hds={} hdba={} rule={:?}",
+                                    t, this_h0, this_h, next_h, remaining, one_line_h, next_lines, next_para.style.widow_control, pair_overflows, follower_moves_wholly, do_push,
+                                    para.style.space_before, para.style.has_direct_spacing, para.style.has_direct_before_after, para.style.line_spacing_rule);
                             }
                             if do_push {
                                 // S802B (2026-07-13, default ON, opt-out OXI_S802B_DISABLE):
