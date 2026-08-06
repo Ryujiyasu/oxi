@@ -755,26 +755,39 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let _ = DeleteObject(pen);
                     }
                     ShapeContent::Chart { chart } => {
-                        // Step 2-4: clustered column chart. All geometry from
-                        // the chart1 Word render-truth (fitz 2026-08-06,
-                        // get_drawings + rawdict):
-                        //   plot area: left = sh.x+41.4, top = sh.y+51.4,
-                        //     right = sh.x+w-11.0, X-axis/bottom = sh.y+h-39.9
-                        //   bars: width = 0.4 x category pitch,
-                        //     height = val/max_axis x plot_h, bottom on the
-                        //     X axis, colour = theme accent(i+1)
+                        // Step 2-4 + Step 5: clustered column chart. Geometry
+                        // from the Word render-truth (fitz get_drawings +
+                        // rawdict, chart1/2/2b/3 2026-08-06):
+                        //   plot area: left = sh.x+41.4, top = sh.y+51.4
+                        //     (auto-title present) or sh.y+16.0 (no title),
+                        //     right = sh.x+w-11.0, bottom = sh.y+h-39.9
+                        //   bars: width = pitch / (n_ser + 1.5), height =
+                        //     val/max_axis x plot_h, bottom on the X axis,
+                        //     cluster centred on the category centre, bars
+                        //     touching within a cluster, colour = theme
+                        //     accent: per-POINT for a single series
+                        //     (varyColors), per-SERIES for multiple
                         //   value axis: Calibri 18pt right-aligned to
                         //     plot_left-16.64, baseline = tick_y+5.2
                         //   category names: centred on each category centre,
                         //     baseline = plot_bot+28.67
-                        //   legend: series names centred on the chart frame,
-                        //     Calibri-Bold 21.62pt, baseline = sh.y+28.03
+                        //   auto title: with a SINGLE series Word shows an
+                        //     automatic chart title = the series name
+                        //     (Calibri-Bold 21.62pt, centred on the frame,
+                        //     baseline = sh.y+28.03); >=2 series -> none.
+                        //     A legend is drawn only when the chart XML
+                        //     declares <c:legend> (none of the 4 probes do).
                         let sx = sh.x as f64;
                         let sy = sh.y as f64;
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
+                        let has_auto_title = chart.series.len() == 1;
                         let plot_left = sx + 41.4;
-                        let plot_top = sy + 51.4;
+                        let plot_top = if has_auto_title {
+                            sy + 51.4
+                        } else {
+                            sy + 16.0
+                        };
                         let plot_right = sx + sw - 11.0;
                         let plot_bot = sy + shh - 39.9;
                         let plot_w = plot_right - plot_left;
@@ -813,13 +826,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
-                        // Bars: one cluster per category, series side by side.
-                        // Colour rule (chart1 render-truth): with a SINGLE
-                        // series Word colours each data POINT with the theme
-                        // accents in order (varyColors default); with
+                        // Bars: one cluster per category, series side by side
+                        // (touching within a cluster). Colour rule: with a
+                        // SINGLE series Word colours each data POINT with the
+                        // theme accents in order (varyColors default); with
                         // multiple series each SERIES takes one accent.
+                        // Bar width derived 2026-08-06 (Word get_drawings):
+                        //   chart1 (n_ser=1) bar_w = 45.81 = pitch/(1+1.5)
+                        //   chart2 (n_ser=2) bar_w = 32.71 = pitch/(2+1.5)
+                        //   chart3 (n_ser=3) bar_w = 25.44 = pitch/(3+1.5)
+                        //   i.e. bar_w = pitch / (n_ser + 1.5) exactly.
                         let pitch = plot_w / n_cat as f64;
-                        let bar_w = pitch * 0.4;
+                        let bar_w = pitch / (n_ser as f64 + 1.5);
                         let cluster_w = bar_w * n_ser as f64;
                         let vary_points = chart.series.len() == 1;
                         for (si, series) in chart.series.iter().enumerate() {
@@ -880,41 +898,36 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
-                        // Legend: series names centred on the chart frame,
-                        // Calibri-Bold (chart1 render-truth size 21.62pt).
-                        let legend_fs = 21.62f32;
-                        let legend_gap = 8.0f64; // inter-entry gap (unmeasured; 1 series in chart1)
-                        let total_w: f64 = chart
-                            .series
-                            .iter()
-                            .map(|s| {
-                                font_adv::line_hmtx_width_pt(&s.name, legend_fs, axis_family)
-                                    .unwrap_or_else(|| {
-                                        s.name.chars().count() as f32 * legend_fs * 0.5
-                                    }) as f64
-                            })
-                            .sum::<f64>()
-                            + legend_gap * chart.series.len().saturating_sub(1) as f64;
-                        let frame_cx = sx + sw / 2.0;
-                        let leg_baseline = (sy + 28.03) as f32;
-                        let mut leg_x = frame_cx - total_w / 2.0;
-                        for s in chart.series.iter() {
+                        // Automatic chart title: with a SINGLE series Word
+                        // shows the series name as the chart title
+                        // (Calibri-Bold 21.62pt, centred on the frame,
+                        // baseline = sh.y+28.03 - chart1/chart2b render-truth
+                        // 2026-08-06: 'Series 1' / 'Revenue' at
+                        // origin=(235.37/231.17,100.03), frame_cx = sh.x+sh.w/2
+                        // = 270.0). A <c:legend> is drawn only when declared
+                        // (none of the 4 probes carry one -> not drawn).
+                        if let Some(first) = chart.series.first() {
+                            let tfs = 21.62f32;
+                            let lw = font_adv::line_hmtx_width_pt(
+                                &first.name,
+                                tfs,
+                                axis_family,
+                            )
+                            .unwrap_or_else(|| {
+                                first.name.chars().count() as f32 * tfs * 0.5
+                            }) as f64;
+                            let frame_cx = sx + sw / 2.0;
                             draw_text_baseline_w(
                                 mem_dc,
-                                (leg_x * scale).round() as i32,
-                                leg_baseline,
-                                &s.name,
-                                legend_fs,
+                                ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                (sy + 28.03) as f32,
+                                &first.name,
+                                tfs,
                                 axis_family,
                                 None,
                                 scale,
                                 700,
                             );
-                            let w = font_adv::line_hmtx_width_pt(&s.name, legend_fs, axis_family)
-                                .unwrap_or_else(|| {
-                                    s.name.chars().count() as f32 * legend_fs * 0.5
-                                }) as f64;
-                            leg_x += w + legend_gap;
                         }
 
                         // Axis lines + ticks (chart1 render-truth, fitz
