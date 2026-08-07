@@ -1181,6 +1181,18 @@ impl Walker {
                 line,
             });
         }
+        if ["Rnd", "Randomize", "VBA.Rnd", "VBA.Randomize"]
+            .iter()
+            .any(|random| name.eq_ignore_ascii_case(random))
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "uses VBA's process-global pseudorandom generator; results depend on seed and call order"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2118,6 +2130,31 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("local time zone"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn random_functions_are_reported_as_generator_state_dependent() {
+        let a = analyse_src(
+            "Public Function Sample() As Single\n\
+             Randomize 42\n\
+             Sample = Rnd() + VBA.Rnd()\n\
+             End Function\n",
+        );
+        for name in ["Randomize", "Rnd", "VBA.Rnd"] {
+            assert_eq!(a.api_names.get(name), Some(&1), "missing {name}");
+        }
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("seed and call order"))
+                .count(),
+            3
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("seed and call order"))
             .all(|finding| finding.class.is_none()));
     }
 
