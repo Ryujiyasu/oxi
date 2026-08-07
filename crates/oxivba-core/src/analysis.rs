@@ -1262,6 +1262,30 @@ impl Walker {
                 line,
             });
         }
+        for (format_state, reason) in [
+            (
+                "Application.FindFormat",
+                "reads or changes Excel's process-global find-format criteria",
+            ),
+            (
+                "Application.ReplaceFormat",
+                "reads or changes Excel's process-global replace-format criteria",
+            ),
+        ] {
+            if name.eq_ignore_ascii_case(format_state)
+                || (name
+                    .get(..format_state.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(format_state))
+                    && name.as_bytes().get(format_state.len()) == Some(&b'.'))
+            {
+                self.findings.push(Finding {
+                    what: name.to_string(),
+                    reason: reason.to_string(),
+                    class: None,
+                    line,
+                });
+            }
+        }
         if name.eq_ignore_ascii_case("Application.CalculateFull") {
             self.findings.push(Finding {
                 what: name.to_string(),
@@ -2296,6 +2320,47 @@ mod tests {
                 && finding.reason.contains("omitted options")
                 && finding.class.is_none()
         }));
+    }
+
+    #[test]
+    fn application_search_formats_are_global_state() {
+        let a = analyse_src(
+            "Public Function ExerciseSearchFormats() As Long\n\
+             Application.FindFormat.Clear\n\
+             Application.ReplaceFormat.Clear\n\
+             Application.FindFormat.Font.Bold = True\n\
+             Application.ReplaceFormat.Font.Italic = True\n\
+             ExerciseSearchFormats = CLng(Application.FindFormat.Font.Bold) + CLng(Application.ReplaceFormat.Font.Italic)\n\
+             Application.FindFormat.Clear\n\
+             Application.ReplaceFormat.Clear\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::A));
+        assert_eq!(a.api_names.get("Application.FindFormat.Clear"), Some(&2));
+        assert_eq!(a.api_names.get("Application.ReplaceFormat.Clear"), Some(&2));
+        assert_eq!(
+            a.api_names.get("Application.FindFormat.Font.Bold"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.api_names.get("Application.ReplaceFormat.Font.Italic"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("find-format criteria"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("replace-format criteria"))
+                .count(),
+            4
+        );
     }
 
     #[test]
