@@ -1251,6 +1251,17 @@ impl Walker {
                 line,
             });
         }
+        if segments(name).any(|segment| segment.eq_ignore_ascii_case("Range"))
+            && terminal.eq_ignore_ascii_case("Replace")
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "uses Excel's stateful Range.Replace settings; omitted options can inherit previous UI or VBA choices"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
         if name.eq_ignore_ascii_case("Application.CalculateFull") {
             self.findings.push(Finding {
                 what: name.to_string(),
@@ -2265,6 +2276,24 @@ mod tests {
         assert!(a.findings.iter().any(|finding| {
             finding.what.eq_ignore_ascii_case("Sheet1.Range.FindNext")
                 && finding.reason.contains("preceding Range.Find")
+                && finding.class.is_none()
+        }));
+    }
+
+    #[test]
+    fn range_replace_is_reported_as_stateful_operation() {
+        let a = analyse_src(
+            "Public Function ReplaceValues() As String\n\
+             Sheet1.Range(\"A1:A3\").Replace What:=\"foo\", Replacement:=\"baz\", LookAt:=xlWhole, SearchOrder:=xlByRows, MatchCase:=False, SearchFormat:=False, ReplaceFormat:=False\n\
+             ReplaceValues = Sheet1.Range(\"A1\").Value2 & \"|\" & Sheet1.Range(\"A2\").Value2 & \"|\" & Sheet1.Range(\"A3\").Value2\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::B));
+        assert_eq!(a.api_names.get("Sheet1.Range.Replace"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Sheet1.Range.Replace")
+                && finding.reason.contains("omitted options")
                 && finding.class.is_none()
         }));
     }
