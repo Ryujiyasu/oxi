@@ -4685,6 +4685,38 @@ impl LayoutEngine {
         // paragraph now sits BELOW the image, so resolving from the paragraph's
         // y would double-shift).
         let mut s734_flow_pos: std::collections::HashMap<usize, (usize, f32)> = Default::default();
+        // S1089 (2026-08-07, opt-out OXI_S1089_DISABLE): S734 covers floating
+        // IMAGES only — a wrapTopAndBottom float that is a wps SHAPE lands in
+        // page.text_boxes (S839) and reserved NOTHING.  technical__002c6778's
+        // title block anchors a 0.1pt Freeform rule (posOffset 1.25pt) in the
+        // "Models: DC-6174" paragraph: Word draws the rule at 138.37 and starts
+        // that paragraph's text at 145.83 = band bottom + the 7.3pt before, i.e.
+        // exactly S734's model (band = pos.y + height, reserved BEFORE the
+        // paragraph's own spacing).  Oxi drew the rule in the right place but
+        // never advanced, so page 1 ran 1.57pt high and the keepNext pair at its
+        // foot fit by 0.13pt where Word overflows by 1.43.
+        let s1089_tb_bands: std::collections::HashMap<usize, f32> =
+            if std::env::var("OXI_S1089_DISABLE").is_err() {
+                let mut m: std::collections::HashMap<usize, f32> = Default::default();
+                for tb in &page.text_boxes {
+                    if tb.wrap_type != Some(crate::ir::WrapType::TopAndBottom) {
+                        continue;
+                    }
+                    let off = match tb.position.as_ref() {
+                        Some(p) if p.v_relative.as_deref() == Some("paragraph") => p.y.max(0.0),
+                        _ => continue,
+                    };
+                    let e = m.entry(tb.anchor_block_index).or_insert(0.0_f32);
+                    *e = e.max(off + tb.height);
+                }
+                m
+            } else {
+                Default::default()
+            };
+        // anchor_block_index → (page, band top): the paint keeps the band where
+        // it was reserved (the anchor paragraph now sits BELOW it, so resolving
+        // from the paragraph's y would double-shift) — the S734 contract.
+        let mut s1089_flow_pos: std::collections::HashMap<usize, (usize, f32)> = Default::default();
         // S758 (2026-07-06, default ON, opt-out OXI_S758_DISABLE): wrapSquare
         // floating-IMAGE side-wrap. Word narrows every LINE whose y-range
         // intersects the float's band to (float_left − distL) [right-side
@@ -4900,6 +4932,35 @@ impl LayoutEngine {
                     );
                 }
                 s734_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
+                cursor.advance(band_h);
+            }
+            // S1089: the same reservation for a wrapTopAndBottom wps SHAPE.
+            if let Some(&band_h) = s1089_tb_bands.get(&block_idx) {
+                let remaining = (start_y + content_height) - cursor.cursor_y;
+                if band_h > remaining && band_h <= content_height && !elements.is_empty() {
+                    dbg_page_push(pages.len(), 0);
+                    pages.push(LayoutPage {
+                        width: page.size.width,
+                        height: page.size.height,
+                        elements: std::mem::take(&mut elements),
+                    });
+                    if let Some(g) = s755_geom.as_ref() {
+                        start_y = g.top(pages.len() + 1);
+                        content_height = g.ch(pages.len() + 1);
+                    }
+                    cursor.set(start_y);
+                    lm2_cells = 0;
+                    current_page_idx += 1;
+                    footnote_reserve_current = 0.0;
+                    footnote_ids_current_page.clear();
+                    s900_fold(
+                        &mut footnote_reserve_current,
+                        &mut footnote_ids_current_page,
+                        &mut s900_pending_deferred,
+                        current_page_idx,
+                    );
+                }
+                s1089_flow_pos.insert(block_idx, (current_page_idx, cursor.cursor_y));
                 cursor.advance(band_h);
             }
             // S842 (2026-07-14, opt-out OXI_S842_DISABLE): a PAGE-anchored
@@ -6330,8 +6391,18 @@ impl LayoutEngine {
                             // "8 Metadata and documentation" headings (keepNext+keepLines,
                             // widowControl=0) head keepLines FirstLevel clauses: Word
                             // pushes heading+clause together, Oxi left the heading behind.
+                            // S1090 (2026-08-07, opt-out OXI_S1090_DISABLE): a
+                            // ONE-LINE follower always moves wholly — there is
+                            // nothing to split, so widowControl is irrelevant.
+                            // S635 derived the <=3 arm on a widowControl=ON doc
+                            // and gated the whole thing on widow_control;
+                            // technical__002c6778's "1.03 Submittals" (H4,
+                            // keepNext) is followed by a 1-line "A. Product
+                            // Data" with widowControl OFF, and Word pushes both.
                             let follower_moves_wholly = (next_para.style.widow_control
                                 && (next_lines <= 3 || follower_orphans))
+                                || (next_lines <= 1
+                                    && std::env::var("OXI_S1090_DISABLE").is_err())
                                 || (next_para.style.keep_lines
                                     && std::env::var("OXI_S1039_DISABLE").is_err());
                             // S802 (2026-07-12, opt-out OXI_S802_DISABLE): keepNext CHAIN —
@@ -9367,7 +9438,37 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             text_box.position.as_ref().and_then(|p| p.v_relative.clone()),
                             preview);
                     }
-                    let tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
+                    let mut tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
+                    // S1089: keep the band where it was RESERVED — the anchor
+                    // paragraph has since moved below it, so the block-relative
+                    // resolve would double-shift (the S734 image contract).
+                    let mut target_page = target_page;
+                    if let Some(&(fp, fy)) = s1089_flow_pos.get(&text_box.anchor_block_index) {
+                        let off = text_box
+                            .position
+                            .as_ref()
+                            .filter(|p| p.v_relative.as_deref() == Some("paragraph"))
+                            .map(|p| p.y.max(0.0));
+                        if text_box.wrap_type == Some(crate::ir::WrapType::TopAndBottom) {
+                            if let Some(off) = off {
+                                let (_, ry) =
+                                    self.resolve_textbox_position(text_box, page, &block_y_positions);
+                                let dy = (fy + off) - ry;
+                                if dy.abs() > 0.001 {
+                                    for e in tb_elements.iter_mut() {
+                                        e.y += dy;
+                                        if let LayoutContent::TableBorder { y1, y2, .. } =
+                                            &mut e.content
+                                        {
+                                            *y1 += dy;
+                                            *y2 += dy;
+                                        }
+                                    }
+                                }
+                                target_page = fp;
+                            }
+                        }
+                    }
                     if let Some(lp) = pages.get_mut(target_page) {
                         if s918_behind_body && behind_doc {
                             let insert_at = behind_insert_counts[target_page];
