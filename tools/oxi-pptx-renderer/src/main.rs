@@ -882,7 +882,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 );
                             }
                             let circle_cx = sx + sw / 2.0;
-                            let circle_bot = sy + shh - 11.0;
+                            // Data labels (c:dLbls) may shrink the pie circle
+                            // (see the OUTSIDE_END rule below) — top/bottom
+                            // must be mutable.
+                            let mut circle_bot = sy + shh - 11.0;
                             // Pie circle top: untitled sy+11 / auto-title
                             // sy+46.37 / EXPLICIT title sy+40.7. The explicit
                             // value = bar explicit plot_top (45.69) − 5.0,
@@ -890,13 +893,31 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // 51.4−5 = 46.37 — the pie circle sits 5pt above
                             // the bar plot area). chart_title_pie render-truth
                             // 2026-08-07: circle top = 112.70 = sy+40.7.
-                            let circle_top = sy + if has_explicit_title {
+                            let mut circle_top = sy + if has_explicit_title {
                                 40.7
                             } else if has_title_draw {
                                 46.37
                             } else {
                                 11.0
                             };
+                            // PIE data labels (c:dLbls): present when a
+                            // <c:dLbls> with showVal=1 is declared. CENTER
+                            // labels leave the circle unchanged; OUTSIDE_END
+                            // (the pie default when no <c:dLblPos> is written,
+                            // i.e. datalabel_position == "") shrinks the
+                            // circle inward by 15.78pt on BOTH sides, keeping
+                            // circle_cy fixed — chart_datalabel_pie P1/P2
+                            // render-truth 2026-08-07: r 115.31 -> 99.53,
+                            // circle_top 118.37 -> 134.15, circle_bot
+                            // 349.0 -> 333.21, circle_cy unchanged at 233.68.
+                            let has_pie_labels =
+                                chart.has_data_labels && chart.show_val;
+                            let pie_labels_outside = has_pie_labels
+                                && chart.datalabel_position != "ctr";
+                            if pie_labels_outside {
+                                circle_top += 15.78;
+                                circle_bot -= 15.78;
+                            }
                             let r = (circle_bot - circle_top) / 2.0;
                             let circle_cy = (circle_top + circle_bot) / 2.0;
                             let bx0 = ((circle_cx - r) * scale).round() as i32;
@@ -966,6 +987,81 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     start_deg = end_deg;
                                 }
                             }
+                            // PIE data labels (c:dLbls): Word renders each
+                            // point's value in Calibri 18pt black on the
+                            // slice's mid-angle ray (chart_datalabel_pie
+                            // render-truth 2026-08-07):
+                            //   CENTER:      anchor at 0.5*r along the
+                            //                mid-angle (no circle shrink).
+                            //   OUTSIDE_END: anchor at 0.78*r (shrunk
+                            //                circle) along the mid-angle.
+                            //   baseline = anchor.y + 6.2 and the text is
+                            //   horizontally centred at anchor.x — the same
+                            //   vertical rule as the line/bar data labels.
+                            //   Format: numFmt "0.0%" -> value*100 one-decimal
+                            //   + "%"; otherwise Word prints the value with
+                            //   its decimals ('19.2' etc.), so keep the raw
+                            //   number.
+                            if has_pie_labels {
+                                let dlfs = 18.0f32;
+                                let num_fmt = chart.number_format.clone();
+                                let format_label = |v: f64| -> String {
+                                    if num_fmt == "0.0%" {
+                                        format!("{:.1}%", v * 100.0)
+                                    } else {
+                                        format!("{}", v)
+                                    }
+                                };
+                                let label_r = if pie_labels_outside {
+                                    r * 0.78
+                                } else {
+                                    r * 0.5
+                                };
+                                let mut lab_deg = -90.0f64;
+                                if let Some(first) = chart.series.first() {
+                                    for v in first.values.iter() {
+                                        if total <= 0.0 || *v <= 0.0 {
+                                            continue;
+                                        }
+                                        let sweep = v / total * 360.0;
+                                        let end_deg = lab_deg + sweep;
+                                        let mid_deg = (lab_deg + end_deg) / 2.0;
+                                        let to_rad = |deg: f64| {
+                                            deg * std::f64::consts::PI / 180.0
+                                        };
+                                        let anchor = (
+                                            circle_cx
+                                                + label_r * to_rad(mid_deg).cos(),
+                                            circle_cy
+                                                + label_r * to_rad(mid_deg).sin(),
+                                        );
+                                        let text = format_label(*v);
+                                        let lw = font_adv::line_hmtx_width_pt(
+                                            &text,
+                                            dlfs,
+                                            axis_family,
+                                        )
+                                        .unwrap_or_else(|| {
+                                            text.chars().count() as f32
+                                                * dlfs
+                                                * 0.5
+                                        }) as f64;
+                                        let lx = anchor.0 - lw / 2.0;
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            (lx * scale).round() as i32,
+                                            (anchor.1 + 6.2) as f32,
+                                            &text,
+                                            dlfs,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                        lab_deg = end_deg;
+                                    }
+                                }
+                            }
+
                             // Legend (when <c:legend> declared): per-category
                             // swatch + category name, right-aligned overlay,
                             // vertically centred on the CIRCLE centre.
