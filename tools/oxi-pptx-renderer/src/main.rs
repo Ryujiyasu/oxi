@@ -1396,10 +1396,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
                         let has_auto_title = chart.series.len() == 1;
+                        let has_explicit_title = chart.explicit_title.is_some();
                         let is_100pct = chart.grouping == "percentStacked";
                         let is_stacked = chart.grouping == "stacked" || is_100pct;
                         let plot_left = if is_100pct { sx + 63.44 } else { sx + 41.4 };
-                        let plot_top = if has_auto_title {
+                        let plot_top = if has_explicit_title {
+                            // An explicit <c:title> shifts the plot down by
+                            // the title line: plot_top = sy+45.69
+                            // (chart_title/chart_title2 render-truth
+                            // 2026-08-07; Arial 18pt title, vs the auto
+                            // title's 21.62pt Calibri-Bold at sy+51.4).
+                            sy + 45.69
+                        } else if has_auto_title {
                             sy + 51.4
                         } else {
                             sy + 16.0
@@ -1828,6 +1836,32 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
+                        // EXPLICIT <c:title> text: Word draws it as Arial
+                        // 18pt (regular), centred on the frame, baseline
+                        // sy+24.43, and it suppresses the automatic
+                        // series-name title (chart_title / chart_title2
+                        // render-truth 2026-08-07: origin=(194.66,96.43),
+                        // frame_cx = 270.06, plot_top = sy+45.69).
+                        if let Some(title) = &chart.explicit_title {
+                            let tfs = 18.0f32;
+                            let lw = font_adv::line_hmtx_width_pt(title, tfs, "Arial")
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            let frame_cx = sx + sw / 2.0;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                (sy + 24.43) as f32,
+                                title,
+                                tfs,
+                                "Arial",
+                                None,
+                                scale,
+                                400,
+                            );
+                        }
+
                         // Automatic chart title: with a SINGLE series Word
                         // shows the series name as the chart title
                         // (Calibri-Bold 21.62pt, centred on the frame,
@@ -1840,7 +1874,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // chart2 / chart3 / chart_stacked / percentStacked)
                         // has NO automatic title (render-truth: only the
                         // single-series chart1 / chart2b render one).
-                        if has_auto_title {
+                        if has_auto_title && !has_explicit_title {
                         if let Some(first) = chart.series.first() {
                             let tfs = 21.62f32;
                             let lw = font_adv::line_hmtx_width_pt(

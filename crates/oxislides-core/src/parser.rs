@@ -1694,6 +1694,10 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut categories: Vec<String> = Vec::new();
     let mut has_legend = false;
     let mut auto_title_deleted = false;
+    let mut explicit_title: Option<String> = None;
+    let mut in_title = false;
+    let mut in_title_t = false;
+    let mut title_text = String::new();
     let mut marker = false;
 
     // Data-label (`c:dLbls`) state. `in_dlbls` scopes the numFmt handler
@@ -1766,6 +1770,19 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     // (regardless of position/overlay attrs), so catch BOTH
                     // the Start form here and the self-closing form below.
                     "legend" => has_legend = true,
+                    // <c:title> is a REAL START tag carrying the explicit
+                    // chart-title text: <c:title><c:tx><c:rich><a:p><a:r>
+                    // <a:t>Quarterly Revenue</a:t></a:r></a:p>...</c:title>.
+                    // Word draws it (Arial 18pt regular) INSTEAD of the
+                    // automatic series-name title — chart_title / chart_title2
+                    // render-truth 2026-08-07.
+                    "title" => in_title = true,
+                    // <a:t> (drawingml) is the text-run element inside
+                    // c:title/c:tx/c:rich.
+                    "t" if in_title => {
+                        in_title_t = true;
+                        title_text.clear();
+                    }
                     _ => {}
                 }
             }
@@ -1857,6 +1874,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
             Ok(Event::Text(e)) => {
                 if in_v {
                     cur_v.push_str(&e.unescape().unwrap_or_default());
+                } else if in_title_t {
+                    title_text.push_str(&e.unescape().unwrap_or_default());
                 }
             }
             Ok(Event::End(e)) => {
@@ -1907,6 +1926,15 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "dLbls" => {
                         in_dlbls = false;
                     }
+                    "t" if in_title => {
+                        in_title_t = false;
+                    }
+                    "title" => {
+                        in_title = false;
+                        if !title_text.trim().is_empty() {
+                            explicit_title = Some(title_text.trim().to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1924,6 +1952,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         categories,
         has_legend,
         auto_title_deleted,
+        explicit_title,
         marker,
         has_data_labels,
         datalabel_position,

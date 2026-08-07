@@ -233,6 +233,14 @@ pub struct Chart {
     /// auto-titles, so this flag alone is the discriminator.
     #[serde(default)]
     pub auto_title_deleted: bool,
+    /// Text of an EXPLICIT `<c:title>` (c:title/c:tx/c:rich/a:p/a:r/a:t).
+    /// python-pptx writes it when chart.has_title=True + chart_title text is
+    /// set. When present Word draws THIS text as the chart title (Arial 18pt,
+    /// regular, centred on the frame, baseline sy+24.43) and does NOT draw
+    /// the automatic series-name title — chart_title / chart_title2
+    /// render-truth 2026-08-07.
+    #[serde(default)]
+    pub explicit_title: Option<String>,
     /// True when a line chart declares `<c:marker val="1"/>` (self-closing
     /// child of <c:lineChart>) — LINE_MARKERS. When true Word draws a 6.96pt
     /// filled accent-colour circle at every data point (chart_line probe,
