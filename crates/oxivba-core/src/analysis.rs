@@ -154,6 +154,12 @@ pub const RULES: &[Rule] = &[
         class: Class::D,
         reason: "shows an interactive message box",
     },
+    Rule {
+        pattern: "StatusBar",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "writes progress or status text to Excel's user interface",
+    },
     // -- C: leaves Excel ---------------------------------------------------
     Rule {
         pattern: "Shell",
@@ -2165,6 +2171,30 @@ mod tests {
                 .filter(|finding| finding.class == Some(Class::D))
                 .count(),
             5
+        );
+    }
+
+    #[test]
+    fn application_status_bar_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Function ShowProgress() As String\n\
+             Application.StatusBar = \"Oxi 42\"\n\
+             ShowProgress = CStr(Application.StatusBar)\n\
+             Application.StatusBar = False\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.StatusBar"), Some(&3));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| {
+                    finding.what.eq_ignore_ascii_case("Application.StatusBar")
+                        && finding.class == Some(Class::D)
+                })
+                .count(),
+            3
         );
     }
 
