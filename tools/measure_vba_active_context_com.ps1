@@ -55,7 +55,9 @@ End Function
     foreach ($expectedFragment in @(
         '[ActiveContextProbe]',
         'procedures: 1, statements: 3, max nesting: 0, unparsed: 0',
-        'verdict: B',
+        'verdict: D',
+        "Sheet1.Activate: changes Excel's active workbook, sheet, or object UI context",
+        "Sheet1.Range.Select: changes Excel's active selection UI context",
         "reads Excel's active UI context; result depends on the current workbook, sheet, cell, or selection"
     )) {
         if (-not $analysis.Contains($expectedFragment)) {

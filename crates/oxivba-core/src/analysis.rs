@@ -166,6 +166,18 @@ pub const RULES: &[Rule] = &[
         class: Class::D,
         reason: "shows or hides Excel's status-bar user interface",
     },
+    Rule {
+        pattern: "Activate",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes Excel's active workbook, sheet, or object UI context",
+    },
+    Rule {
+        pattern: "Select",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes Excel's active selection UI context",
+    },
     // -- C: leaves Excel ---------------------------------------------------
     Rule {
         pattern: "Shell",
@@ -2149,6 +2161,17 @@ mod tests {
              End Function\n",
         );
         assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Sheet1.Activate")
+                && finding.reason.contains("active workbook")
+                && finding.class == Some(Class::D)
+        }));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Sheet1.Range.Select")
+                && finding.reason.contains("active selection")
+                && finding.class == Some(Class::D)
+        }));
         for api in [
             "Application.ActiveWorkbook.Name",
             "Application.ActiveSheet.Name",
