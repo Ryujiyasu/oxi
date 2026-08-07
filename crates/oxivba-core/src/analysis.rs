@@ -160,6 +160,12 @@ pub const RULES: &[Rule] = &[
         class: Class::D,
         reason: "writes progress or status text to Excel's user interface",
     },
+    Rule {
+        pattern: "DisplayStatusBar",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides Excel's status-bar user interface",
+    },
     // -- C: leaves Excel ---------------------------------------------------
     Rule {
         pattern: "Shell",
@@ -2195,6 +2201,31 @@ mod tests {
                 })
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn display_status_bar_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ToggleStatusBar()\n\
+             Application.DisplayStatusBar = False\n\
+             Application.DisplayStatusBar = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.DisplayStatusBar"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| {
+                    finding
+                        .what
+                        .eq_ignore_ascii_case("Application.DisplayStatusBar")
+                        && finding.class == Some(Class::D)
+                })
+                .count(),
+            2
         );
     }
 
