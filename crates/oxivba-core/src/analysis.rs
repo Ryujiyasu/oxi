@@ -384,6 +384,30 @@ pub const RULES: &[Rule] = &[
         reason: "opens an external workbook from a path",
     },
     Rule {
+        pattern: "LinkSources",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "enumerates external workbook links",
+    },
+    Rule {
+        pattern: "UpdateLink",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "refreshes data from an external workbook link",
+    },
+    Rule {
+        pattern: "ChangeLink",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "retargets an external workbook link",
+    },
+    Rule {
+        pattern: "BreakLink",
+        how: Match::Segment,
+        class: Class::C,
+        reason: "removes an external workbook link and replaces formulas with values",
+    },
+    Rule {
         pattern: "OpenText",
         how: Match::Segment,
         class: Class::C,
@@ -2352,6 +2376,34 @@ mod tests {
                 && finding.reason.contains("external workbook")
                 && finding.class == Some(Class::C)
         }));
+    }
+
+    #[test]
+    fn managing_external_workbook_links_is_class_c() {
+        let a = analyse_src(
+            "Public Sub ManageLinks()\n\
+             Dim links As Variant\n\
+             links = ThisWorkbook.LinkSources(xlExcelLinks)\n\
+             ThisWorkbook.UpdateLink Name:=links(1), Type:=xlExcelLinks\n\
+             ThisWorkbook.ChangeLink Name:=links(1), NewName:=\"next.xlsx\", Type:=xlExcelLinks\n\
+             ThisWorkbook.BreakLink Name:=links(1), Type:=xlLinkTypeExcelLinks\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::C));
+        for api in [
+            "ThisWorkbook.LinkSources",
+            "ThisWorkbook.UpdateLink",
+            "ThisWorkbook.ChangeLink",
+            "ThisWorkbook.BreakLink",
+        ] {
+            assert_eq!(a.api_names.get(api), Some(&1), "missing {api}");
+            assert!(a.findings.iter().any(|finding| {
+                finding.what.eq_ignore_ascii_case(api)
+                    && finding.reason.contains("external workbook link")
+                    && finding.class == Some(Class::C)
+            }));
+        }
     }
 
     #[test]
