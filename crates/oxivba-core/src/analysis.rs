@@ -440,6 +440,12 @@ pub const RULES: &[Rule] = &[
         reason: "converts formula references between A1 and R1C1 notation",
     },
     Rule {
+        pattern: "Volatile",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "marks a VBA function for execution on every Excel recalculation",
+    },
+    Rule {
         pattern: "Value",
         how: Match::Segment,
         class: Class::B,
@@ -469,6 +475,7 @@ const FORMULA_ENGINE_MARKERS: &[&str] = &[
     "Evaluate",
     "ExecuteExcel4Macro",
     "ConvertFormula",
+    "Volatile",
     "Calculate",
 ];
 
@@ -1854,6 +1861,23 @@ mod tests {
                 .eq_ignore_ascii_case("Application.Caller.Address")
                 && finding.reason.contains("calling cell or object")
                 && finding.class.is_none()
+        }));
+    }
+
+    #[test]
+    fn application_volatile_is_a_recalculation_dependency() {
+        let a = analyse_src(
+            "Public Function RecalculatedValue() As Long\n\
+             Application.Volatile\n\
+             RecalculatedValue = 42\n\
+             End Function\n",
+        );
+        assert_eq!(a.class, Some(Class::B));
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Application.Volatile"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Application.Volatile")
+                && finding.reason.contains("every Excel recalculation")
         }));
     }
 
