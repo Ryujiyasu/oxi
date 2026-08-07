@@ -1076,6 +1076,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //     legend_y0 = sy + shh/2 + 17.68 (FRAME-relative,
                         //     P0/P1/P4 render-truth)
                         let axis_family = "Calibri";
+                        let axis_fs = 18.0f32;
                         let sx = sh.x as f64;
                         let sy = sh.y as f64;
                         let sw = sh.width as f64;
@@ -1275,6 +1276,50 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     }
                                     SelectObject(mem_dc, old_m_brush);
                                     let _ = DeleteObject(m_brush);
+                                }
+                            }
+                        }
+
+                        // Data labels (c:dLbls): Word renders each data
+                        // point's value in Calibri 18pt black, centred on the
+                        // point, baseline = point_y + 6.2 (chart_datalabel_line
+                        // render-truth 2026-08-07: '19.2' at (164.76,175.20)
+                        // for point (155.25,169.0); same for both single- and
+                        // multi-series). Format: numFmt "0.0%" -> value*100
+                        // one-decimal + "%" (same as the bars).
+                        if chart.has_data_labels && chart.show_val {
+                            let num_fmt = chart.number_format.clone();
+                            let format_label = |v: f64| -> String {
+                                if num_fmt == "0.0%" {
+                                    format!("{:.1}%", v * 100.0)
+                                } else {
+                                    format!("{}", v.round() as i64)
+                                }
+                            };
+                            for (si, pts) in series_pts.iter().enumerate() {
+                                for (pt, s) in pts.iter().zip(
+                                    chart.series.get(si).map(|s| &s.values).into_iter().flatten(),
+                                ) {
+                                    let text = format_label(*s);
+                                    let lw = font_adv::line_hmtx_width_pt(
+                                        &text,
+                                        axis_fs,
+                                        axis_family,
+                                    )
+                                    .unwrap_or_else(|| {
+                                        text.chars().count() as f32 * axis_fs * 0.5
+                                    }) as f64;
+                                    let lx = pt.0 - lw / 2.0;
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        (lx * scale).round() as i32,
+                                        (pt.1 + 6.2) as f32,
+                                        &text,
+                                        axis_fs,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                    );
                                 }
                             }
                         }

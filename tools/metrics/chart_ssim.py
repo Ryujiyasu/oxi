@@ -34,6 +34,8 @@ DOCS = {
     "chart_line": r"pipeline_data\pptx_probes\chart_line\chart_line.pdf",
     "chart_line2": r"pipeline_data\pptx_probes\chart_line2\chart_line2.pdf",
     "chart_line3": r"pipeline_data\pptx_probes\chart_line3\chart_line3.pdf",
+    "chart_datalabel_line": r"pipeline_data\pptx_probes\chart_datalabel_line\chart_datalabel_line.pdf",
+    "chart_datalabel_pie": r"pipeline_data\pptx_probes\chart_datalabel_pie\chart_datalabel_pie.pdf",
 }
 DPI = 150
 
