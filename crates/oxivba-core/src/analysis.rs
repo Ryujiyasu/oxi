@@ -178,6 +178,12 @@ pub const RULES: &[Rule] = &[
         class: Class::D,
         reason: "changes Excel's active selection UI context",
     },
+    Rule {
+        pattern: "Goto",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "activates and scrolls to an Excel range or object",
+    },
     // -- C: leaves Excel ---------------------------------------------------
     Rule {
         pattern: "Shell",
@@ -2185,6 +2191,31 @@ mod tests {
                     && finding.class.is_none()
             }));
         }
+    }
+
+    #[test]
+    fn application_goto_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Function GoToCell() As String\n\
+             Application.Goto Reference:=Sheet1.Range(\"C3\"), Scroll:=True\n\
+             GoToCell = Application.ActiveCell.Address(False, False)\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.Goto"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Application.Goto")
+                && finding.reason.contains("activates and scrolls")
+                && finding.class == Some(Class::D)
+        }));
+        assert!(a.findings.iter().any(|finding| {
+            finding
+                .what
+                .eq_ignore_ascii_case("Application.ActiveCell.Address")
+                && finding.reason.contains("active UI context")
+                && finding.class.is_none()
+        }));
     }
 
     #[test]
