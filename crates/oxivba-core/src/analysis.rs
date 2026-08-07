@@ -372,6 +372,18 @@ pub const RULES: &[Rule] = &[
         reason: "writes a file to a path",
     },
     Rule {
+        pattern: "Workbooks.Open",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "opens an external workbook from a path",
+    },
+    Rule {
+        pattern: "Application.Workbooks.Open",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "opens an external workbook from a path",
+    },
+    Rule {
         pattern: "OpenText",
         how: Match::Segment,
         class: Class::C,
@@ -2318,6 +2330,28 @@ mod tests {
             .iter()
             .filter(|finding| finding.reason.contains("screen redraw state"))
             .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn opening_an_external_workbook_is_class_c() {
+        let a = analyse_src(
+            "Public Function ReadExternalWorkbook(ByVal path As String) As Double\n\
+             Dim opened As Workbook\n\
+             Set opened = Application.Workbooks.Open(Filename:=path, ReadOnly:=True)\n\
+             ReadExternalWorkbook = opened.Worksheets(1).Range(\"A1\").Value2\n\
+             opened.Close SaveChanges:=False\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::C));
+        assert_eq!(a.api_names.get("Application.Workbooks.Open"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding
+                .what
+                .eq_ignore_ascii_case("Application.Workbooks.Open")
+                && finding.reason.contains("external workbook")
+                && finding.class == Some(Class::C)
+        }));
     }
 
     #[test]
