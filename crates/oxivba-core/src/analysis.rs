@@ -1227,6 +1227,30 @@ impl Walker {
                 line,
             });
         }
+        let terminal = name.rsplit('.').next().unwrap_or(name);
+        if segments(name).any(|segment| segment.eq_ignore_ascii_case("Range"))
+            && terminal.eq_ignore_ascii_case("Find")
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "uses Excel's stateful Range.Find settings; omitted options can inherit previous UI or VBA choices"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
+        if segments(name).any(|segment| segment.eq_ignore_ascii_case("Range"))
+            && ["FindNext", "FindPrevious"]
+                .iter()
+                .any(|member| terminal.eq_ignore_ascii_case(member))
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "continues Excel's stateful preceding Range.Find operation".to_string(),
+                class: None,
+                line,
+            });
+        }
         if name.eq_ignore_ascii_case("Application.CalculateFull") {
             self.findings.push(Finding {
                 what: name.to_string(),
@@ -2214,6 +2238,33 @@ mod tests {
                 .what
                 .eq_ignore_ascii_case("Application.ActiveCell.Address")
                 && finding.reason.contains("active UI context")
+                && finding.class.is_none()
+        }));
+    }
+
+    #[test]
+    fn range_find_is_reported_as_stateful_search() {
+        let a = analyse_src(
+            "Public Function FindValues() As String\n\
+             Dim found As Range\n\
+             Dim following As Range\n\
+             Set found = Sheet1.Range(\"A1:A3\").Find(What:=42, After:=Sheet1.Range(\"A1\"), LookIn:=xlValues, LookAt:=xlWhole, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)\n\
+             Set following = Sheet1.Range(\"A1:A3\").FindNext(After:=found)\n\
+             FindValues = found.Address(False, False) & \"|\" & following.Address(False, False)\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::B));
+        assert_eq!(a.api_names.get("Sheet1.Range.Find"), Some(&1));
+        assert_eq!(a.api_names.get("Sheet1.Range.FindNext"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Sheet1.Range.Find")
+                && finding.reason.contains("omitted options")
+                && finding.class.is_none()
+        }));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Sheet1.Range.FindNext")
+                && finding.reason.contains("preceding Range.Find")
                 && finding.class.is_none()
         }));
     }
