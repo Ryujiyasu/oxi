@@ -12713,6 +12713,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         }
 
+        if std::env::var("OXI_DBG_CTX").is_ok() {
+            let t: String = para.runs.iter().flat_map(|r| r.text.chars()).take(14).collect();
+            eprintln!("[CTX] sid={:?} prev_sid={:?} ctx={} prev_ctx={} a={:.2} b={:.2} eff={:.2} txt={:?}",
+                para.style.style_id, prev_style_id, para.style.contextual_spacing,
+                prev_contextual_spacing, prev_space_after, space_before, effective_spacing, t);
+        }
+
         // S931 (2026-07-18, default ON, opt-out OXI_S931_DISABLE): HTML
         // autospacing is suppressed between adjacent list items of the SAME
         // list — the boundary gap is ZERO (line pitch only). DERIVED via a
