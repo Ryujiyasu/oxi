@@ -1152,6 +1152,16 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.Wait") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason:
+                    "blocks Excel until a wall-clock deadline and suspends application activity"
+                        .to_string(),
+                class: None,
+                line,
+            });
+        }
         if name.eq_ignore_ascii_case("Application.International") {
             self.findings.push(Finding {
                 what: name.to_string(),
@@ -2008,6 +2018,22 @@ mod tests {
         assert!(a.findings.iter().any(|finding| {
             finding.what.eq_ignore_ascii_case("Application.OnTime")
                 && finding.reason.contains("application event loop")
+                && finding.class.is_none()
+        }));
+    }
+
+    #[test]
+    fn application_wait_is_reported_as_blocking_clock_dependency() {
+        let a = analyse_src(
+            "Public Function WaitOneSecond() As Boolean\n\
+             WaitOneSecond = Application.Wait(Now + TimeSerial(0, 0, 1))\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.api_names.get("Application.Wait"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Application.Wait")
+                && finding.reason.contains("wall-clock deadline")
                 && finding.class.is_none()
         }));
     }
