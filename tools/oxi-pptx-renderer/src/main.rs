@@ -1517,7 +1517,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // Calibri 18pt at x0 = legend_left+21.29,
                             // baseline = row_y+5.24.
                             let n = chart.series.len();
-                            let legend_y0 = if n <= 1 {
+                            // Explicit `<c:title>` probes (chart_title_line/
+                            // chart_title_line2) anchor the legend block at
+                            // sy + shh/2 + 14.85 (Word-measured, both n=1 and
+                            // n=2), while no-title probes keep +17.68 (n<=1)
+                            // / frame-vertical centering (n>=2).
+                            let legend_y0 = if has_explicit_title {
+                                sy + shh / 2.0 + 14.85
+                                    - (n as f64 - 1.0) * 27.75 / 2.0
+                            } else if n <= 1 {
                                 sy + shh / 2.0 + 17.68
                             } else {
                                 sy + shh / 2.0 - (n as f64 - 1.0) * 27.75 / 2.0
