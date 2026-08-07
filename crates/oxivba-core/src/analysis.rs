@@ -1230,6 +1230,14 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.ScreenUpdating") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "changes Excel's process-global screen redraw state".to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2286,6 +2294,29 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("programmatically opened files"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn screen_updating_is_reported_as_global_excel_state() {
+        let a = analyse_src(
+            "Public Sub ToggleRedraw()\n\
+             Application.ScreenUpdating = False\n\
+             Application.ScreenUpdating = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Application.ScreenUpdating"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("screen redraw state"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("screen redraw state"))
             .all(|finding| finding.class.is_none()));
     }
 
