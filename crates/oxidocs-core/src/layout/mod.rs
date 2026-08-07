@@ -8915,8 +8915,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // The p45 residual (~5.4pt) needs a real inline-image line-box
                     // probe, not a blanket scope change.
                     let img_line = self.s971_image_line_h(img, content_width, page.grid_line_pitch);
+                    // S1101 (2026-08-08, default ON, opt-out OXI_S1101_DISABLE):
+                    // a NO-TYPE docGrid does NOT round the image-only paragraph
+                    // to whole cells — the extent is used EXACTLY, which is what
+                    // S549's own derivation says for "docGrid none". A no-type
+                    // grid only reaches the rounding path because S571-refine
+                    // makes grid_line_pitch Some for a custom (non-360) pitch.
+                    // ★The NOTE above ("TESTED and is WRONG … Word does round
+                    // most of them") was decided on the pagination score alone;
+                    // measuring Word GEOMETRY over all 20 figures of
+                    // policies__00148f8d (no-type linePitch 326 = 16.3pt) shows
+                    // the opposite — in 13 of them Oxi's gap to the next line is
+                    // exactly Word's gap PLUS the snap padding
+                    // (pad = ceil(h/16.3)*16.3 − h), i.e. only Oxi rounds:
+                    //   p45  h=182.20 pad=13.40 | Word gap 0.05  Oxi gap 13.40
+                    //   p55  h=150.15 pad=12.85 | Word gap 4.02  Oxi gap 16.85
+                    //   p49  h=104.75 pad= 9.35 | Word gap 6.27  Oxi gap 15.35
+                    // With the skip, 9 of 10 sampled figures land within 0.4pt of
+                    // Word's own y/bottom/gap. legal__001410a8's vector figure
+                    // agrees too (Word gap ~4.28, skip 3.00, round 16.25).
+                    let s1101_no_type_exact = page.doc_grid_no_type
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1101_DISABLE").is_err();
                     let img_adv = match page.grid_line_pitch {
-                        Some(p) if p > 0.1 && std::env::var("OXI_S549_DISABLE").is_err() => {
+                        Some(p)
+                            if p > 0.1
+                                && !s1101_no_type_exact
+                                && std::env::var("OXI_S549_DISABLE").is_err() =>
+                        {
                             (img_line / p).ceil() * p
                         }
                         _ => img_line,
