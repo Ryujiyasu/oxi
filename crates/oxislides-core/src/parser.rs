@@ -1736,6 +1736,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     }
                     "barChart" => {
                         in_bar_chart = true;
+                        chart_type = Some("bar".to_string());
                     }
                     "ser"
                         if in_bar_chart

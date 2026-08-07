@@ -289,7 +289,7 @@ pub struct Chart {
 }
 
 pub fn default_chart_type() -> String {
-    "col".to_string()
+    "bar".to_string()
 }
 pub fn default_chart_bar_dir() -> String {
     "col".to_string()
