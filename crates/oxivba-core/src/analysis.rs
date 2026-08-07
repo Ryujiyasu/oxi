@@ -428,6 +428,12 @@ pub const RULES: &[Rule] = &[
         reason: "evaluates an Excel name or formula",
     },
     Rule {
+        pattern: "ExecuteExcel4Macro",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "executes a legacy Excel 4.0 macro string",
+    },
+    Rule {
         pattern: "Value",
         how: Match::Segment,
         class: Class::B,
@@ -455,6 +461,7 @@ const FORMULA_ENGINE_MARKERS: &[&str] = &[
     "Formula2R1C1",
     "WorksheetFunction",
     "Evaluate",
+    "ExecuteExcel4Macro",
     "Calculate",
 ];
 
@@ -1744,6 +1751,24 @@ mod tests {
             finding.what.eq_ignore_ascii_case("Application.OnTime")
                 && finding.reason.contains("application event loop")
                 && finding.class.is_none()
+        }));
+    }
+
+    #[test]
+    fn execute_excel4_macro_is_a_formula_engine_dependency() {
+        let a = analyse_src(
+            "Public Function LegacyFormula() As Double\n\
+             LegacyFormula = Application.ExecuteExcel4Macro(\"SUM(40,2)\")\n\
+             End Function\n",
+        );
+        assert_eq!(a.class, Some(Class::B));
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Application.ExecuteExcel4Macro"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding
+                .what
+                .eq_ignore_ascii_case("Application.ExecuteExcel4Macro")
+                && finding.reason.contains("legacy Excel 4.0 macro")
         }));
     }
 
