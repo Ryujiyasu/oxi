@@ -448,6 +448,7 @@ fn shape_json(sh: &Shape) -> Value {
                 "categories": chart.categories,
                 "has_legend": chart.has_legend,
                 "auto_title_deleted": chart.auto_title_deleted,
+                "explicit_title": chart.explicit_title,
                 "marker": chart.marker,
             }),
         ),
@@ -818,8 +819,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let sy = sh.y as f64;
                             let sw = sh.width as f64;
                             let shh = sh.height as f64;
-                            let has_title_draw =
-                                chart.series.len() == 1 && !chart.auto_title_deleted;
+                            let has_explicit_title = chart.explicit_title.is_some();
+                            // Auto title (single series, NOT autoTitleDeleted,
+                            // AND no explicit <c:title> — an explicit title
+                            // suppresses the auto series-name title, same as
+                            // the bar/line branches).
+                            let has_title_draw = chart.series.len() == 1
+                                && !chart.auto_title_deleted
+                                && !has_explicit_title;
                             if let Some(first) = chart.series.first() {
                                 if has_title_draw {
                                     let tfs = 21.62f32;
@@ -845,10 +852,51 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     );
                                 }
                             }
+                            // EXPLICIT <c:title> text: Word draws it as Arial
+                            // 18pt (regular), centred on the frame, baseline
+                            // sy+24.43 (chart_title_pie render-truth
+                            // 2026-08-07: origin=(194.66,96.43), same as the
+                            // bar/line explicit title). It suppresses the
+                            // auto series-name title.
+                            if let Some(title) = &chart.explicit_title {
+                                let tfs = 18.0f32;
+                                let lw = font_adv::line_hmtx_width_pt(
+                                    title,
+                                    tfs,
+                                    "Arial",
+                                )
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                                let frame_cx = sx + sw / 2.0;
+                                draw_text_baseline_w(
+                                    mem_dc,
+                                    ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                    (sy + 24.43) as f32,
+                                    title,
+                                    tfs,
+                                    "Arial",
+                                    None,
+                                    scale,
+                                    400,
+                                );
+                            }
                             let circle_cx = sx + sw / 2.0;
                             let circle_bot = sy + shh - 11.0;
-                            let circle_top =
-                                sy + if has_title_draw { 46.37 } else { 11.0 };
+                            // Pie circle top: untitled sy+11 / auto-title
+                            // sy+46.37 / EXPLICIT title sy+40.7. The explicit
+                            // value = bar explicit plot_top (45.69) − 5.0,
+                            // consistent with the other two (16−5 = 11 and
+                            // 51.4−5 = 46.37 — the pie circle sits 5pt above
+                            // the bar plot area). chart_title_pie render-truth
+                            // 2026-08-07: circle top = 112.70 = sy+40.7.
+                            let circle_top = sy + if has_explicit_title {
+                                40.7
+                            } else if has_title_draw {
+                                46.37
+                            } else {
+                                11.0
+                            };
                             let r = (circle_bot - circle_top) / 2.0;
                             let circle_cy = (circle_top + circle_bot) / 2.0;
                             let bx0 = ((circle_cx - r) * scale).round() as i32;
@@ -1033,8 +1081,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
                         let has_auto_title = chart.series.len() == 1;
+                        let has_explicit_title = chart.explicit_title.is_some();
                         let plot_left = sx + 41.4;
-                        let plot_top = if has_auto_title {
+                        let plot_top = if has_explicit_title {
+                            // An explicit <c:title> shifts the plot down by
+                            // the title line: plot_top = sy+45.69
+                            // (chart_title_line/chart_title_line2 render-truth
+                            // 2026-08-07; Arial 18pt title, same as the bar
+                            // explicit title, vs the auto title's 21.62pt
+                            // Calibri-Bold at sy+51.4).
+                            sy + 45.69
+                        } else if has_auto_title {
                             sy + 51.4
                         } else {
                             sy + 16.0
@@ -1245,12 +1302,39 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             );
                         }
 
+                        // EXPLICIT <c:title> text: Word draws it as Arial
+                        // 18pt (regular), centred on the frame, baseline
+                        // sy+24.43 (chart_title_line/chart_title_line2
+                        // render-truth 2026-08-07: origin=(194.66,96.43),
+                        // same as the bar explicit title). It suppresses the
+                        // automatic series-name title.
+                        if let Some(title) = &chart.explicit_title {
+                            let tfs = 18.0f32;
+                            let lw = font_adv::line_hmtx_width_pt(title, tfs, "Arial")
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            let frame_cx = sx + sw / 2.0;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                (sy + 24.43) as f32,
+                                title,
+                                tfs,
+                                "Arial",
+                                None,
+                                scale,
+                                400,
+                            );
+                        }
+
                         // Automatic title (single series only -> the series
                         // name Calibri-Bold 21.62pt centred on the frame,
                         // baseline sy+28.03; same rule as the bars. Word
                         // shows the series name as the auto title only for
-                        // a single series).
-                        if chart.series.len() == 1 {
+                        // a single series; an explicit <c:title> suppresses
+                        // it).
+                        if chart.series.len() == 1 && !has_explicit_title {
                             let first = &chart.series[0];
                             let tfs = 21.62f32;
                             let lw = font_adv::line_hmtx_width_pt(&first.name, tfs, axis_family)
