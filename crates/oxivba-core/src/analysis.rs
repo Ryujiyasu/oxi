@@ -1028,6 +1028,16 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.OnTime") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason:
+                    "schedules a macro by name; execution depends on Excel's application event loop"
+                        .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -1720,6 +1730,21 @@ mod tests {
             .iter()
             .filter(|finding| finding.reason.contains("runtime type context"))
             .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn application_ontime_is_reported_as_scheduled_macro_dispatch() {
+        let a = analyse_src(
+            "Public Sub ScheduleReport()\n\
+             Application.OnTime EarliestTime:=Now + TimeSerial(0, 0, 1), Procedure:=\"ReportModule.RefreshReport\"\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Application.OnTime"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Application.OnTime")
+                && finding.reason.contains("application event loop")
+                && finding.class.is_none()
+        }));
     }
 
     #[test]
