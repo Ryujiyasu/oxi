@@ -1907,6 +1907,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let format_label = |v: f64| -> String {
                                 if num_fmt == "0.0%" {
                                     format!("{:.1}%", v * 100.0)
+                                } else if num_fmt == "0%" {
+                                    format!(
+                                        "{}%",
+                                        (v * 100.0).round() as i64
+                                    )
                                 } else {
                                     format!("{}", v.round() as i64)
                                 }
@@ -1916,7 +1921,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // chart_dlbls S5); CLUSTERED place them above
                             // the bar (OUTSIDE_END, S1).
                             let dlbl_pos = if chart.datalabel_position.is_empty() {
-                                if chart.grouping == "stacked" {
+                                if is_stacked {
                                     "ctr"
                                 } else {
                                     "outEnd"
@@ -1924,7 +1929,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             } else {
                                 chart.datalabel_position.as_str()
                             };
-                            if chart.grouping == "stacked" {
+                            if is_stacked {
                                 let bar_w = pitch * 0.4;
                                 for ci in 0..n_cat {
                                     let cat_center =
@@ -1941,7 +1946,23 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         if v <= 0.0 {
                                             continue;
                                         }
-                                        let seg_h = if max_axis > 0.0 {
+                                        let seg_h = if is_100pct {
+                                            let sum_cat = chart
+                                                .series
+                                                .iter()
+                                                .map(|s| {
+                                                    s.values
+                                                        .get(ci)
+                                                        .copied()
+                                                        .unwrap_or(0.0)
+                                                })
+                                                .sum::<f64>();
+                                            if sum_cat > 0.0 {
+                                                v / sum_cat * plot_h
+                                            } else {
+                                                0.0
+                                            }
+                                        } else if max_axis > 0.0 {
                                             v / max_axis * plot_h
                                         } else {
                                             0.0
