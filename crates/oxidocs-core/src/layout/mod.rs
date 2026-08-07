@@ -14948,15 +14948,45 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // device-snaps only the RENDERED baseline. test_line_heights mean |O−W|
         // 0.266→0.032. CJK paras keep the cumulative model (their S629 device-snap is a
         // separate wall). Scope flag from the first line (must be all non-CJK).
+        // S1091 (2026-08-07, opt-out OXI_S1091_DISABLE): an EMPTY paragraph has
+        // no fragments, so S671's `!lines[0].fragments.is_empty()` guard (there
+        // only so the all()-over-fragments CJK test is not vacuously true) threw
+        // it back onto the 10tw cumulative round — every empty Latin paragraph
+        // advanced by a 0.5pt-quantised height while its text siblings advanced
+        // by the exact one.  correspondence__000f9471: Oxi advanced 15.50 where
+        // line_height_for_line_inner had already computed 15.442 (Calibri 11
+        // hhea x 1.15) and Word steps 25.50/25.50/.../24.75 = 15.42 average;
+        // 0.08pt x 17 empties = the 1.4pt drift that put its last spacer over
+        // the page bottom.  Decide the CJK test from the ¶ MARK instead — the
+        // same font the height itself was measured from (S583/S707/S876/S989).
+        // ★HELD OPT-IN (OXI_S1091=1, default byte-identical): the rule is
+        // Word-correct on both measured docs, but removing the per-empty
+        // inflation EXPOSES compensating errors — policies__000f7115
+        // 1.0000 -> 0.1794 and reports__0020157f 1.0000 -> 0.8065 (its own
+        // empties are 15.50 rounded / 15.80 exact / Word 15.75, so ON is the
+        // closer value yet the doc gains a page).  It also does NOT fix its
+        // own target: correspondence__000f9471 keeps 0.9524 because Word
+        // pushes that last empty even though the box fits by 0.72pt.
+        let s1091_empty_fine = lines.len() == 1
+            && lines[0].fragments.is_empty()
+            && !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1091").is_ok()
+            && {
+                let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                !self
+                    .metrics_for_para_mark_g(&rpr, &para.style, true)
+                    .is_cjk_83_64_font()
+            };
         let s671_fine = !lines.is_empty()
             && page.doc_grid_no_type
             && std::env::var("OXI_S671_DISABLE").is_err()
-            && !lines[0].fragments.is_empty()
-            && lines[0].fragments.iter().all(|f| {
-                !self
-                    .metrics_for_text(&f.text, &f.style, &para.style)
-                    .is_cjk_83_64_font()
-            });
+            && (s1091_empty_fine
+                || (!lines[0].fragments.is_empty()
+                    && lines[0].fragments.iter().all(|f| {
+                        !self
+                            .metrics_for_text(&f.text, &f.style, &para.style)
+                            .is_cjk_83_64_font()
+                    })));
 
         // S842 (2026-07-14, opt-out OXI_S842_DISABLE): a PAGE-anchored
         // wrapTopAndBottom float band pushes this paragraph's lines below it.
@@ -32542,6 +32572,93 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     0.0
                 };
+                // S1092 (2026-08-07, opt-out OXI_S1092_DISABLE): a split-row fragment must
+                // contain the LAST paragraph's OWN `space_after`. DERIVED on
+                // policies__0028d1be (Letter, one 5-page table row) with a
+                // bottom-margin ladder + a causal after=0 arm (Word COM):
+                //   orig    cbot 720.00  box_bot 708.30  room 11.70 → PUSH
+                //   after=0 cbot 720.00  box_bot 708.30  room 11.70 → KEEP
+                //   after=0 cbot 712.00  box_bot 708.30  room  3.70 → KEEP
+                //   before=0 (control)   room 11.70            → PUSH
+                // and the fine ladder puts the required room in (13.2, 13.7] =
+                // the paragraph's 14.0 auto after within COM's 0.75 quantum.
+                // The COLLAPSED inter-paragraph gap is NOT the quantity:
+                // zeroing this paragraph's after leaves the gap at
+                // max(0, next.before) = 14 yet flips the verdict, so the
+                // fragment closes on the paragraph's OWN after. S819 already
+                // reserves tcMar_b + bw (the cell frame); this is the content
+                // term that sits above it. Latin-scoped + natural split only,
+                // mirroring S819.
+                let s1092 = !self.doc_body_has_real_cjk
+                    && s819_natural_split
+                    && std::env::var("OXI_S1092_DISABLE").is_err();
+                let mut s1092_after: std::collections::HashMap<(usize, usize), f32> =
+                    Default::default();
+                let mut s1092_last: std::collections::HashMap<(usize, usize), f32> =
+                    Default::default();
+                if s1092 {
+                    let tps = table.style.para_style.as_ref();
+                    let s952_tbl =
+                        tps.map_or(false, |ts| ts.before_autospacing || ts.after_autospacing);
+                    for (ci, cell) in row.cells.iter().enumerate() {
+                        let paras: Vec<&Paragraph> = cell
+                            .blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                Block::Paragraph(p) => Some(p),
+                                _ => None,
+                            })
+                            .collect();
+                        let n = paras.len();
+                        for (pi, para) in paras.iter().enumerate() {
+                            let (sb, sa) = self.cell_para_spacing(para, tps, table_grid_pitch);
+                            let sa = if para.style.before_autospacing
+                                || para.style.after_autospacing
+                                || s952_tbl
+                            {
+                                self.cell_autospace_effective(
+                                    para,
+                                    tps,
+                                    pi == 0,
+                                    pi + 1 == n,
+                                    sb,
+                                    sa,
+                                )
+                                .1
+                            } else {
+                                sa
+                            };
+                            // The trailing after and the cell's bottom frame
+                            // (tcMar_b + border = S819's q) OVERLAP rather than
+                            // stack: Word's fragment closes at
+                            //   last_line_bottom + max(after, tcMar_b + bw)
+                            // (uklocalspending p40 render-truth: the row's bottom
+                            // border sits at last_line_bottom + 5.97 = q, NOT
+                            // + after 6.0 + q). Only the EXCESS over q is new
+                            // reservation; policies__0028d1be has q = 0 so its
+                            // whole 14pt after applies.
+                            let extra = (sa - s819_q).max(0.0);
+                            if extra > 0.01 {
+                                s1092_after.insert((ci, pi), extra);
+                            }
+                        }
+                    }
+                    for e in row_elements.iter() {
+                        if matches!(
+                            e.content,
+                            LayoutContent::TableBorder { .. } | LayoutContent::CellShading { .. }
+                        ) {
+                            continue;
+                        }
+                        if let (Some(ci), Some(pi)) = (e.cell_col_index, e.cell_paragraph_index) {
+                            let b = e.y + e.height;
+                            let cur = s1092_last.entry((ci, pi)).or_insert(b);
+                            if b > *cur {
+                                *cur = b;
+                            }
+                        }
+                    }
+                }
                 // Partition elements: those fitting on current page vs overflow
                 let mut current_page_elems: Vec<LayoutElement> = Vec::new();
                 let mut next_page_elems: Vec<LayoutElement> = Vec::new();
@@ -32680,7 +32797,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // continuation start), not split-threshold tweaking.
                             // S819: the text fill threshold reserves the cell
                             // bottom frame (tcMar_b + bw); 0.0 when off.
-                            if elem_bottom <= split_y + 0.1 - s819_q {
+                            // S1092: the LAST line of a cell paragraph must also
+                            // fit that paragraph's own space_after.
+                            let s1092_extra = if s1092 {
+                                match (elem.cell_col_index, elem.cell_paragraph_index) {
+                                    (Some(ci), Some(pi)) => {
+                                        if s1092_last
+                                            .get(&(ci, pi))
+                                            .map_or(false, |b| (elem_bottom - *b).abs() < 0.01)
+                                        {
+                                            *s1092_after.get(&(ci, pi)).unwrap_or(&0.0)
+                                        } else {
+                                            0.0
+                                        }
+                                    }
+                                    _ => 0.0,
+                                }
+                            } else {
+                                0.0
+                            };
+                            if elem_bottom + s1092_extra <= split_y + 0.1 - s819_q {
                                 current_page_elems.push(elem);
                             } else {
                                 let shift = split_y - page_top;
@@ -33208,6 +33344,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let mut this_page: Vec<LayoutElement> = Vec::new();
                     let mut overflow: Vec<LayoutElement> = Vec::new();
 
+                    // S1092: recompute the per-paragraph LAST-line bottom from the
+                    // elements still to place (they are re-shifted each iteration,
+                    // so the first-split map's absolute values are stale here).
+                    let mut s1092_ovlast: std::collections::HashMap<(usize, usize), f32> =
+                        Default::default();
+                    if s1092 {
+                        for e in remaining.iter() {
+                            if matches!(
+                                e.content,
+                                LayoutContent::TableBorder { .. }
+                                    | LayoutContent::CellShading { .. }
+                            ) {
+                                continue;
+                            }
+                            if let (Some(ci), Some(pi)) =
+                                (e.cell_col_index, e.cell_paragraph_index)
+                            {
+                                let bt = e.y + e.height;
+                                let cur = s1092_ovlast.entry((ci, pi)).or_insert(bt);
+                                if bt > *cur {
+                                    *cur = bt;
+                                }
+                            }
+                        }
+                    }
+
                     for elem in remaining {
                         let _elem_top = elem.y;
                         match &elem.content {
@@ -33322,7 +33484,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 // on p5 (777.25<785.2), bottom-check moves to p6
                                 // (788.87>785.3). Fixes 4 -1 outliers in e3c545.
                                 let elem_bottom = elem.y + elem.height;
-                                if elem_bottom <= next_split + 0.1 {
+                                // S1092: the LAST line of a cell paragraph must also
+                                // fit that paragraph's own space_after.
+                                let s1092_extra = if s1092 {
+                                    match (elem.cell_col_index, elem.cell_paragraph_index) {
+                                        (Some(ci), Some(pi)) => {
+                                            if s1092_ovlast
+                                                .get(&(ci, pi))
+                                                .map_or(false, |b| (elem_bottom - *b).abs() < 0.01)
+                                            {
+                                                *s1092_after.get(&(ci, pi)).unwrap_or(&0.0)
+                                            } else {
+                                                0.0
+                                            }
+                                        }
+                                        _ => 0.0,
+                                    }
+                                } else {
+                                    0.0
+                                };
+                                if elem_bottom + s1092_extra <= next_split + 0.1 {
                                     this_page.push(elem);
                                 } else {
                                     let shift = next_split - page_top;
