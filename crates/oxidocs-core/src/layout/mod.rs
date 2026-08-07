@@ -19043,6 +19043,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // pagination moves), SSIM 0 regressed (all previously-changed word_png docs
         // byte-identical via the seg-meta + kinsoku gate). See [[char_budget_wall]].
         let latin_wordwrap = std::env::var("OXI_LATIN_WORDWRAP_DISABLE").is_err();
+        // S1100 (2026-08-08, default ON, opt-out OXI_S1100_DISABLE): an EM DASH
+        // (U+2014) / EN DASH (U+2013) carries a break OPPORTUNITY AFTER it.
+        // DERIVED (tools/metrics/_pb_emdash_gen.py, 76 arms = 4 shapes x 19
+        // right-indent steps sweeping the dash across the margin, Word PDF):
+        //   NB (NBSP-joined, the target's shape «1300 mm —400 mm»)
+        //     right 3000tw  line1 = «… 1300 mm —400 mm»   whole token fits
+        //     right 3100..3800 line1 = «…t over 1300 mm —»  ★break AFTER the dash
+        //     right 3900+   line1 = «…ww wwww not over»    dash itself does not fit
+        //   GL («1300mm—400mm», no spaces at all) 3300..3900 = «…1300mm—» — same
+        //   EN (U+2013) 3200..3900 = «…1300 mm –» — same
+        // Not ONE arm of the 76 breaks BEFORE the dash, so the after-only
+        // opportunity explains the whole sweep (UAX #14 puts U+2014 in class B2
+        // = both sides, but Word's observable behaviour needs only the after).
+        // ★This is the OPPORTUNITY model (word_breaks), NOT the flush model: the
+        // maximal token is kept together and split only when it overflows, which
+        // is exactly what the sweep shows. The S1044 note records an
+        // "after-break-CHARACTER" attempt that was reverted for breaking
+        // legal__0001482d wi=1030 — that put the dash in `is_break_after`, whose
+        // non-latin_wordwrap path FLUSHES at the dash.
+        // policies__00148f8d p68: «…not over 1300\u{a0}mm\u{a0}—400\u{a0}mm…» is one
+        // unbreakable token for Oxi (cur 4247 + word 2007 = 6254 > avail 5481) so
+        // the whole thing wrapped; Word ends line 1 at «…1300 mm —» (x1 474.10 <=
+        // content right 475.05). Latin-doc scope, shared with S801's own
+        // classification of these dashes → JP byte-identical by construction.
+        let s1100_dash_break = std::env::var("OXI_S1100_DISABLE").is_err();
         // KERNBREAK space-compression credit (2026-07-07, ★default ON,
         // opt-out OXI_KERNBREAK_DISABLE):
         // Word's JUSTIFIED Latin fit test allows squeezing word spaces below
@@ -21524,8 +21549,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             }
                         }
                     }
-                } else if is_break_after(ch) {
+                } else if is_break_after(ch) || (s1100_dash_break && s801_latin_dash) {
                     // Characters like '-', '/' that allow a line break AFTER them.
+                    // S1100 adds the Latin-doc EM/EN DASH (s801_latin_dash, which
+                    // already carries the `!doc_body_has_real_cjk` gate).
                     // Include them in the current word, flush, and allow a break.
                     if word_style.is_none() {
                         word_style = Some(style.clone());
@@ -21574,7 +21601,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && !(c14_active
                             && c14_space_tw > 0
                             && std::env::var("OXI_S1028_HY_DISABLE").is_err());
-                    if latin_wordwrap && !s783_hyphen_flush {
+                    // S1100: an EM/EN DASH is a REAL word boundary (Word fills a
+                    // partial line up to it), exactly like S783's hyphen — the
+                    // opportunity model below is the URL model («the whole token
+                    // wraps to the next line first»), and the 76-arm sweep shows
+                    // Word does NOT do that for a dash (NB3100: line 1 ends
+                    // «…1300 mm —» while the NBSP-joined token would otherwise
+                    // move whole). So dashes take the flush path.
+                    let s1100_flush = s1100_dash_break && s801_latin_dash;
+                    if latin_wordwrap && !s783_hyphen_flush && !s1100_flush {
                         // Record a break OPPORTUNITY (after this char) instead of forcing
                         // a flush — the maximal Latin token is kept together and only split
                         // by flush_word when it overflows a full line (Western word-wrap).
