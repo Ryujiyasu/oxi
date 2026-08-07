@@ -1045,6 +1045,14 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.International") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "reads Excel locale settings; behavior can vary by machine".to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -1770,6 +1778,28 @@ mod tests {
                 .eq_ignore_ascii_case("Application.ExecuteExcel4Macro")
                 && finding.reason.contains("legacy Excel 4.0 macro")
         }));
+    }
+
+    #[test]
+    fn application_international_is_reported_as_locale_dependent() {
+        let a = analyse_src(
+            "Public Function Separators() As String\n\
+             Separators = Application.International(xlDecimalSeparator) & Application.International(xlListSeparator)\n\
+             End Function\n",
+        );
+        assert_eq!(a.api_names.get("Application.International"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("locale settings"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("locale settings"))
+            .all(|finding| finding.class.is_none()));
     }
 
     #[test]
