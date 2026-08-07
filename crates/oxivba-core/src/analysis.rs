@@ -1193,6 +1193,14 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.EnableEvents") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "changes Excel's process-global event delivery state".to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2155,6 +2163,30 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("seed and call order"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn enable_events_is_reported_as_global_excel_state() {
+        let a = analyse_src(
+            "Public Sub WriteWithoutRecursion()\n\
+             Application.EnableEvents = False\n\
+             Range(\"A1\").Value2 = 1\n\
+             Application.EnableEvents = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Application.EnableEvents"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("event delivery state"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("event delivery state"))
             .all(|finding| finding.class.is_none()));
     }
 
