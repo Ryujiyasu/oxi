@@ -1141,6 +1141,15 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("DoEvents") || name.eq_ignore_ascii_case("VBA.DoEvents") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "yields to the Windows/Office event loop and permits reentrant execution"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2016,6 +2025,30 @@ mod tests {
                 .count(),
             5
         );
+    }
+
+    #[test]
+    fn doevents_is_reported_as_event_loop_reentrancy() {
+        let a = analyse_src(
+            "Public Function PumpMessages() As Long\n\
+             DoEvents\n\
+             PumpMessages = VBA.DoEvents()\n\
+             End Function\n",
+        );
+        assert_eq!(a.api_names.get("DoEvents"), Some(&1));
+        assert_eq!(a.api_names.get("VBA.DoEvents"), Some(&1));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("reentrant execution"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("reentrant execution"))
+            .all(|finding| finding.class.is_none()));
     }
 
     #[test]
