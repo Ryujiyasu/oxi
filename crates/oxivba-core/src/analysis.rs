@@ -1283,6 +1283,14 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.Interactive") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "changes Excel's process-global keyboard and mouse input state".to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2385,6 +2393,29 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("prompt policy"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn interactive_is_reported_as_global_excel_state() {
+        let a = analyse_src(
+            "Public Sub ToggleUserInput()\n\
+             Application.Interactive = False\n\
+             Application.Interactive = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Application.Interactive"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("keyboard and mouse input state"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("keyboard and mouse input state"))
             .all(|finding| finding.class.is_none()));
     }
 
