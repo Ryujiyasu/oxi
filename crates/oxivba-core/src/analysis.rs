@@ -477,6 +477,8 @@ const FORMULA_ENGINE_MARKERS: &[&str] = &[
     "ConvertFormula",
     "Volatile",
     "Calculate",
+    "CalculateFull",
+    "CalculateFullRebuild",
 ];
 
 /// A construct worth telling the reader about, with the reason attached.
@@ -1075,6 +1077,23 @@ impl Walker {
             self.findings.push(Finding {
                 what: name.to_string(),
                 reason: "reads the Excel invocation context; behavior depends on the calling cell or object"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
+        if name.eq_ignore_ascii_case("Application.CalculateFull") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "forces a full Excel workbook recalculation".to_string(),
+                class: None,
+                line,
+            });
+        }
+        if name.eq_ignore_ascii_case("Application.CalculateFullRebuild") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "rebuilds Excel's formula dependencies and recalculates every workbook"
                     .to_string(),
                 class: None,
                 line,
@@ -1879,6 +1898,31 @@ mod tests {
             finding.what.eq_ignore_ascii_case("Application.Volatile")
                 && finding.reason.contains("every Excel recalculation")
         }));
+    }
+
+    #[test]
+    fn full_recalculation_variants_are_formula_engine_dependencies() {
+        let a = analyse_src(
+            "Public Sub RecalculateEverything()\n\
+             Application.CalculateFull\n\
+             Application.CalculateFullRebuild\n\
+             End Sub\n",
+        );
+        assert_eq!(a.class, None);
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Application.CalculateFull"), Some(&1));
+        assert_eq!(
+            a.api_names.get("Application.CalculateFullRebuild"),
+            Some(&1)
+        );
+        assert!(a
+            .findings
+            .iter()
+            .any(|finding| finding.reason.contains("full Excel workbook")));
+        assert!(a
+            .findings
+            .iter()
+            .any(|finding| finding.reason.contains("formula dependencies")));
     }
 
     #[test]
