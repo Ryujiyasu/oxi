@@ -434,6 +434,12 @@ pub const RULES: &[Rule] = &[
         reason: "executes a legacy Excel 4.0 macro string",
     },
     Rule {
+        pattern: "ConvertFormula",
+        how: Match::Segment,
+        class: Class::B,
+        reason: "converts formula references between A1 and R1C1 notation",
+    },
+    Rule {
         pattern: "Value",
         how: Match::Segment,
         class: Class::B,
@@ -462,6 +468,7 @@ const FORMULA_ENGINE_MARKERS: &[&str] = &[
     "WorksheetFunction",
     "Evaluate",
     "ExecuteExcel4Macro",
+    "ConvertFormula",
     "Calculate",
 ];
 
@@ -1800,6 +1807,24 @@ mod tests {
             .iter()
             .filter(|finding| finding.reason.contains("locale settings"))
             .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn convert_formula_is_a_formula_engine_dependency() {
+        let a = analyse_src(
+            "Public Function ConvertedAddress() As String\n\
+             ConvertedAddress = Application.ConvertFormula(\"=R2C2\", xlR1C1, xlA1)\n\
+             End Function\n",
+        );
+        assert_eq!(a.class, Some(Class::B));
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Application.ConvertFormula"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding
+                .what
+                .eq_ignore_ascii_case("Application.ConvertFormula")
+                && finding.reason.contains("A1 and R1C1")
+        }));
     }
 
     #[test]
