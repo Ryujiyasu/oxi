@@ -1183,6 +1183,32 @@ impl Walker {
                 line,
             });
         }
+        if [
+            "ActiveWorkbook",
+            "ActiveSheet",
+            "ActiveCell",
+            "Selection",
+            "Application.ActiveWorkbook",
+            "Application.ActiveSheet",
+            "Application.ActiveCell",
+            "Application.Selection",
+        ]
+        .iter()
+        .any(|context| {
+            name.eq_ignore_ascii_case(context)
+                || (name
+                    .get(..context.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(context))
+                    && name.as_bytes().get(context.len()) == Some(&b'.'))
+        }) {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "reads Excel's active UI context; result depends on the current workbook, sheet, cell, or selection"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
         if name.eq_ignore_ascii_case("Application.CalculateFull") {
             self.findings.push(Finding {
                 what: name.to_string(),
@@ -2111,6 +2137,31 @@ mod tests {
                 && finding.reason.contains("calling cell or object")
                 && finding.class.is_none()
         }));
+    }
+
+    #[test]
+    fn active_excel_context_is_reported_through_member_chains() {
+        let a = analyse_src(
+            "Public Function ActiveContext() As String\n\
+             Sheet1.Activate\n\
+             Sheet1.Range(\"B2\").Select\n\
+             ActiveContext = Application.ActiveWorkbook.Name & \"|\" & Application.ActiveSheet.Name & \"|\" & Application.ActiveCell.Address(False, False) & \"|\" & Application.Selection.Address(False, False)\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        for api in [
+            "Application.ActiveWorkbook.Name",
+            "Application.ActiveSheet.Name",
+            "Application.ActiveCell.Address",
+            "Application.Selection.Address",
+        ] {
+            assert_eq!(a.api_names.get(api), Some(&1), "missing {api}");
+            assert!(a.findings.iter().any(|finding| {
+                finding.what.eq_ignore_ascii_case(api)
+                    && finding.reason.contains("active UI context")
+                    && finding.class.is_none()
+            }));
+        }
     }
 
     #[test]
