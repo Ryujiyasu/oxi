@@ -14078,7 +14078,56 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             li, obj_h, descent, extra, para.style.line_spacing_rule,
                             para.style.line_spacing, line_heights[li], txt);
                     }
-                    let target = obj_h + descent + extra;
+                    // S1095 (2026-08-07, opt-out OXI_S1095_DISABLE): an inline
+                    // object run that carries `w:position` is RAISED/LOWERED, so
+                    // it does not sit with its bottom on the baseline. Word
+                    // composes the line from the two sides independently:
+                    //     ascent  = max(text_ascent,  obj_h - lower)
+                    //     descent = max(text_descent, lower)
+                    // (lower = -position, clamped at 0). Word render-truth on
+                    // policies__0016b30b's `Construct an [x̄] control chart …`
+                    // (obj 17.0, position -6 = 3pt lowered, TNR 12):
+                    //   entry pitch 2.3.3→2.3.4  28.60 vs a plain 25.80 = +2.80
+                    //       = max(11.20, 17.0-3.0) - 11.20   ✓ (ascent side)
+                    //   exit advance line1→'limits:' 14.20 vs 13.799 = +0.404
+                    //       = max(2.596, 3.0) - 2.596        ✓ (descent side)
+                    //   line total = 14.0 + 3.0 = 17.0 = obj_h
+                    // This UNIFIES the two rules already in the tree: with
+                    // lower = 0 it is algebraically the old `obj_h + descent`
+                    // (S875's MIXED, and its SOLO stays obj_h since a
+                    // text-less line has descent = 0), and it reproduces
+                    // S1066b's cell finding (`max(lh, obj_h)`) for a
+                    // position=-6 object. Only a positioned object changes.
+                    // Latin scope: the model was derived on a no-type-docGrid
+                    // Latin document. The only CJK docs that carry a positioned
+                    // inline object (3a4f / model, `w:position=-22` on a manual
+                    // fraction) sit in a TYPED docGrid whose lines snap to whole
+                    // grid cells and whose paragraph spacing does not decompose
+                    // into the same ascent/descent sum (model p29 measures an
+                    // entry pitch of +26.79 and an exit of +27.24 against a
+                    // 29.25pt object) — that stack stays on its calibration.
+                    let target = if !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1095_DISABLE").is_err()
+                    {
+                        let lower = -line
+                            .fragments
+                            .iter()
+                            .filter(|f| {
+                                f.style.inline_object_image.is_some()
+                                    || f.style.hr_rule.is_some()
+                            })
+                            .filter_map(|f| f.style.position)
+                            .fold(0.0f32, f32::min);
+                        let lower = lower.max(0.0);
+                        let text_asc = if descent > 0.0 {
+                            (line_heights[li] - descent).max(0.0)
+                        } else {
+                            0.0
+                        };
+                        (obj_h - lower).max(text_asc) + lower.max(descent) + extra
+                    } else {
+                        obj_h + descent + extra
+                    };
                     if target > line_heights[li] {
                         line_heights[li] = target;
                     }
@@ -32875,16 +32924,53 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && next_page_elems
                         .iter()
                         .any(|e| matches!(e.content, LayoutContent::Image { .. }));
+                let anchors = |e: &LayoutElement| -> bool {
+                    matches!(&e.content,
+                        LayoutContent::Text { text, .. } if !s570 || !s719_collapsible(text))
+                        || (s998_reanchor_img
+                            && matches!(&e.content, LayoutContent::Image { .. }))
+                };
                 let min_overflow_text_y = next_page_elems
                     .iter()
-                    .filter(|e| {
-                        matches!(&e.content,
-                        LayoutContent::Text { text, .. } if !s570 || !s719_collapsible(text))
-                            || (s998_reanchor_img
-                                && matches!(&e.content, LayoutContent::Image { .. }))
-                    })
+                    .filter(|e| anchors(e))
                     .map(|e| e.y)
                     .fold(f32::INFINITY, f32::min);
+                // S1093 (2026-08-07, opt-out OXI_S1093_DISABLE): Word restarts
+                // EACH CELL's remaining content at the continuation cell top —
+                // the re-anchor above takes ONE global minimum and shifts the
+                // whole overflow by it, which lands a cell whose first overflow
+                // line sat lower than another cell's below the continuation top.
+                // DERIVED (`tools/metrics/_pb_cellanchor_gen.py`, 4 arms: a
+                // 2-cell row split with DIFFERENT font sizes per cell so the two
+                // cells have different line phases; Word PDF baselines minus the
+                // TNR ascent 0.891*fs):
+                //   EQ  12/12pt  A 83.90  B 83.90            -> top 73.21 / 73.21
+                //   AB1 12/ 8pt  A 83.90  B 80.30            -> top 73.21 / 73.17
+                //   AB2 12/16pt  A 83.90  B 87.62            -> top 73.21 / 73.36
+                //   AB3 16/ 8pt  A 87.62  B 80.30            -> top 73.36 / 73.17
+                // i.e. all 12 cells restart at the SAME continuation top even
+                // though their pre-split y and their baselines differ.  Real-doc
+                // specimen: uk_local_spending p46/p47 row 11 — Word's ink bands
+                // are col2 75.08..83.72 | 86.60..93.32 and col3 75.08..81.80, so
+                // the two cells' continuations share the first line; Oxi put them
+                // one line apart.  A single-cell row has one group so its adjust
+                // is unchanged (harassbun S570 / tokyoshugyo S719b are 1x1), and
+                // a multi-cell row whose cells share a line phase has one common
+                // minimum -- both are byte-identical by construction.  Latin
+                // scope, matching S817/S819/S1092 in this same region.
+                let s1093 = !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S1093_DISABLE").is_err();
+                let mut s1093_col_min: std::collections::HashMap<usize, f32> = Default::default();
+                if s1093 {
+                    for e in next_page_elems.iter().filter(|e| anchors(e)) {
+                        if let Some(ci) = e.cell_col_index {
+                            let m = s1093_col_min.entry(ci).or_insert(e.y);
+                            if e.y < *m {
+                                *m = e.y;
+                            }
+                        }
+                    }
+                }
                 if s570 && min_overflow_text_y.is_finite() {
                     next_page_elems.retain(|e| {
                         !matches!(&e.content,
@@ -32947,12 +33033,40 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         eprintln!("[REANCHOR] page_top={:.2} split_y={:.2} min_overflow_text_y={:.2} orig_shift={:.2} correct_shift={:.2} adjust={:.2} -> first_overflow_line_y={:.2}",
                             page_top, split_y, min_overflow_text_y, original_shift, correct_shift, adjust, first_after);
                     }
+                    // S1093 fires only when the split genuinely spans MULTIPLE
+                    // columns and every shifted element carries a cell index —
+                    // otherwise per-cell and global adjusts would decouple
+                    // elements of the same cell (a single-column row has nothing
+                    // to restart independently, and keeps the S570/S719b path).
+                    let s1093_ok = s1093
+                        && s1093_col_min.len() >= 2
+                        && next_page_elems
+                            .iter()
+                            .filter(|e| {
+                                matches!(e.content, LayoutContent::Text { .. })
+                                    || matches!(e.content, LayoutContent::Image { .. })
+                            })
+                            .all(|e| {
+                                e.cell_col_index
+                                    .map(|ci| s1093_col_min.contains_key(&ci))
+                                    .unwrap_or(false)
+                            });
                     for e in next_page_elems.iter_mut() {
                         if matches!(e.content, LayoutContent::Text { .. })
                             || (s998_reanchor_img
                                 && matches!(e.content, LayoutContent::Image { .. }))
                         {
-                            e.y -= adjust;
+                            // S1093: each cell restarts at the continuation top,
+                            // so use that cell's own first overflow line.
+                            let cell_adjust = if s1093_ok {
+                                e.cell_col_index
+                                    .and_then(|ci| s1093_col_min.get(&ci))
+                                    .map(|m| *m - (page_top + s817_cont_pad))
+                                    .unwrap_or(adjust)
+                            } else {
+                                adjust
+                            };
+                            e.y -= cell_adjust;
                         }
                     }
                 }
@@ -36035,7 +36149,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         0.0
                     };
-                    let obj_composed = obj_h + descent + extra;
+                    // S1094 (2026-08-07, opt-out OXI_S1094_DISABLE): mirror the
+                    // S1066b correction that landed on the EMIT side (step 6) but
+                    // never reached this estimate. Word's cell line is
+                    // max(paragraph_line, object_height) — the object sits WITHIN
+                    // the line box, so the text win-descent is NOT stacked on top.
+                    // The stale `obj_h + descent` here over-counted every mixed
+                    // object+text cell line by the descent (policies__0016b30b:
+                    // estimate 19.596 vs emit 17.000 vs Word 16.98), and since the
+                    // row height is max(estimate, actual) the surplus was permanent.
+                    let s1094 = std::env::var("OXI_S1094_DISABLE").is_err();
+                    let obj_composed = if s1094 {
+                        obj_h.max(max_line_height) + extra
+                    } else {
+                        obj_h + descent + extra
+                    };
+                    let _ = descent;
                     if std::env::var("OXI_DBG_CELLOLE").is_ok() {
                         eprintln!("[CELL-OLE] phase=estimate enabled=1 use_render_lh={} obj_h={} desc={:.2} extra={:.2} composed={:.2} prev_max_lh={:.2} lines={}",
                             use_render_lh, obj_h, descent, extra, obj_composed, max_line_height, line_count);
