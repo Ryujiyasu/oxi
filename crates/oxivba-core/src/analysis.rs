@@ -1060,6 +1060,19 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.Caller")
+            || name
+                .get(.."Application.Caller.".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Application.Caller."))
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "reads the Excel invocation context; behavior depends on the calling cell or object"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -1824,6 +1837,23 @@ mod tests {
                 .what
                 .eq_ignore_ascii_case("Application.ConvertFormula")
                 && finding.reason.contains("A1 and R1C1")
+        }));
+    }
+
+    #[test]
+    fn application_caller_is_reported_through_member_chains() {
+        let a = analyse_src(
+            "Public Function CallerAddress() As String\n\
+             CallerAddress = Application.Caller.Address(False, False)\n\
+             End Function\n",
+        );
+        assert_eq!(a.api_names.get("Application.Caller.Address"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding
+                .what
+                .eq_ignore_ascii_case("Application.Caller.Address")
+                && finding.reason.contains("calling cell or object")
+                && finding.class.is_none()
         }));
     }
 
