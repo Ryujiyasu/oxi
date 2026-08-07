@@ -521,6 +521,7 @@ const FORMULA_ENGINE_MARKERS: &[&str] = &[
     "Calculate",
     "CalculateFull",
     "CalculateFullRebuild",
+    "Calculation",
 ];
 
 /// A construct worth telling the reader about, with the reason attached.
@@ -1197,6 +1198,14 @@ impl Walker {
             self.findings.push(Finding {
                 what: name.to_string(),
                 reason: "changes Excel's process-global event delivery state".to_string(),
+                class: None,
+                line,
+            });
+        }
+        if name.eq_ignore_ascii_case("Application.Calculation") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "changes Excel's process-global automatic calculation mode".to_string(),
                 class: None,
                 line,
             });
@@ -2187,6 +2196,30 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("event delivery state"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn calculation_mode_is_a_global_formula_engine_dependency() {
+        let a = analyse_src(
+            "Public Sub ToggleCalculation()\n\
+             Application.Calculation = xlCalculationManual\n\
+             Application.Calculation = xlCalculationAutomatic\n\
+             End Sub\n",
+        );
+        assert!(a.needs_formula_engine);
+        assert_eq!(a.api_names.get("Application.Calculation"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("automatic calculation mode"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("automatic calculation mode"))
             .all(|finding| finding.class.is_none()));
     }
 
