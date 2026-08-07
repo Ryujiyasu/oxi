@@ -1150,6 +1150,15 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Err.Raise") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "raises a VBA runtime error whose number, source, and description are observable"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2049,6 +2058,21 @@ mod tests {
             .iter()
             .filter(|finding| finding.reason.contains("reentrant execution"))
             .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn err_raise_is_reported_as_observable_error_semantics() {
+        let a = analyse_src(
+            "Public Sub FailWithContext()\n\
+             Err.Raise 513, \"Probe\", \"boom\"\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Err.Raise"), Some(&1));
+        assert!(a.findings.iter().any(|finding| {
+            finding.what.eq_ignore_ascii_case("Err.Raise")
+                && finding.reason.contains("number, source, and description")
+                && finding.class.is_none()
+        }));
     }
 
     #[test]
