@@ -124,6 +124,36 @@ pub const RULES: &[Rule] = &[
         class: Class::D,
         reason: "unloads a form",
     },
+    Rule {
+        pattern: "FileDialog",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "opens an Office file-selection user interface",
+    },
+    Rule {
+        pattern: "GetOpenFilename",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "opens Excel's file-open selection interface",
+    },
+    Rule {
+        pattern: "GetSaveAsFilename",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "opens Excel's save-as selection interface",
+    },
+    Rule {
+        pattern: "InputBox",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "prompts the user for interactive input",
+    },
+    Rule {
+        pattern: "MsgBox",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows an interactive message box",
+    },
     // -- C: leaves Excel ---------------------------------------------------
     Rule {
         pattern: "Shell",
@@ -1956,6 +1986,36 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.reason.contains("injects keystrokes")));
+    }
+
+    #[test]
+    fn office_dialog_apis_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub PromptUser()\n\
+             Set picker = Application.FileDialog(msoFileDialogFilePicker)\n\
+             path = Application.GetOpenFilename()\n\
+             savePath = Application.GetSaveAsFilename()\n\
+             answer = InputBox(\"Value?\")\n\
+             MsgBox \"Done\"\n\
+             End Sub\n",
+        );
+        assert_eq!(a.class, Some(Class::D));
+        for name in [
+            "Application.FileDialog",
+            "Application.GetOpenFilename",
+            "Application.GetSaveAsFilename",
+            "InputBox",
+            "MsgBox",
+        ] {
+            assert_eq!(a.api_names.get(name), Some(&1), "missing {name}");
+        }
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.class == Some(Class::D))
+                .count(),
+            5
+        );
     }
 
     #[test]
