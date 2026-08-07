@@ -1274,6 +1274,15 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.AskToUpdateLinks") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "changes Excel's process-global prompt policy for updating external links"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2353,6 +2362,29 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("screen redraw state"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn ask_to_update_links_is_reported_as_global_excel_state() {
+        let a = analyse_src(
+            "Public Sub ToggleLinkPrompts()\n\
+             Application.AskToUpdateLinks = False\n\
+             Application.AskToUpdateLinks = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Application.AskToUpdateLinks"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("prompt policy"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("prompt policy"))
             .all(|finding| finding.class.is_none()));
     }
 
