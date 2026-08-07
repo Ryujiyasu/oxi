@@ -1159,6 +1159,28 @@ impl Walker {
                 line,
             });
         }
+        if [
+            "Now",
+            "Date",
+            "Time",
+            "Timer",
+            "VBA.Now",
+            "VBA.Date",
+            "VBA.Time",
+            "VBA.Timer",
+        ]
+        .iter()
+        .any(|clock| name.eq_ignore_ascii_case(clock))
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason:
+                    "reads the system clock; results depend on execution time and local time zone"
+                        .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2073,6 +2095,30 @@ mod tests {
                 && finding.reason.contains("number, source, and description")
                 && finding.class.is_none()
         }));
+    }
+
+    #[test]
+    fn clock_functions_are_reported_as_time_dependent() {
+        let a = analyse_src(
+            "Public Function ClockSnapshot() As Variant\n\
+             ClockSnapshot = Array(Now, Date, Time, Timer, VBA.Now)\n\
+             End Function\n",
+        );
+        for name in ["Now", "Date", "Time", "Timer", "VBA.Now"] {
+            assert_eq!(a.api_names.get(name), Some(&1), "missing {name}");
+        }
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("local time zone"))
+                .count(),
+            5
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("local time zone"))
+            .all(|finding| finding.class.is_none()));
     }
 
     #[test]
