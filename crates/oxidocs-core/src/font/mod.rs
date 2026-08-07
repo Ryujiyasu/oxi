@@ -44,6 +44,20 @@ pub fn s892_nbsp_as_space() -> bool {
     *V.get_or_init(|| std::env::var("OXI_S892_DISABLE").is_err())
 }
 
+/// S1088 (2026-08-07): use the MEASURED U+2026 advance now present in the
+/// metric tables. The tables were extracted over an ASCII-ish codepoint set, so
+/// the ellipsis fell to `char_width_em`'s `is_fullwidth` 1.0em heuristic —
+/// right for Times/Arial (whose ellipsis really is 2048/2048) but far too wide
+/// for Calibri (1414 = 0.690em), Segoe UI (1501), Comic Sans (1383), Courier
+/// New (1229), Verdana (1676)… Word's own PDF draws forms__0020466f's dotted
+/// leader in Calibri 12pt at an 8.28pt advance = 1414/2048 x 12 EXACTLY.
+/// The opt-out makes the entry invisible again, which reproduces the 1.0em
+/// fallback bit-for-bit (is_fullwidth('…') is true).
+pub fn s1088_ellipsis_width() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_S1088_DISABLE").is_err())
+}
+
 /// Pixel-rounded multiplication matching Word's font metrics.
 /// All font metric values are pre-normalized to [0,1] range (÷UPM),
 /// so this is simply `round(value * ppem)`.
@@ -114,7 +128,12 @@ impl FontMetrics {
     /// Look up the advance width for a character (normalized to 1em).
     /// Falls back to fullwidth/halfwidth heuristics for unmeasured chars.
     pub fn char_width_em(&self, c: char) -> f32 {
-        self.char_widths.get(&c).copied().unwrap_or_else(|| {
+        self.char_widths
+            .get(&c)
+            .copied()
+            // S1088 opt-out: hide the measured U+2026 entry again.
+            .filter(|_| c != '\u{2026}' || s1088_ellipsis_width())
+            .unwrap_or_else(|| {
             // S888: U+2011 NON-BREAKING HYPHEN (the S747 noBreakHyphen
             // mapping) renders with the ordinary hyphen glyph in Word —
             // same advance as '-'. The metric tables lack U+2011, so it
