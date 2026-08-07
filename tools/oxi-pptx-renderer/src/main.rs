@@ -1396,8 +1396,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let sw = sh.width as f64;
                         let shh = sh.height as f64;
                         let has_auto_title = chart.series.len() == 1;
-                        let is_stacked = chart.grouping == "stacked";
-                        let plot_left = sx + 41.4;
+                        let is_100pct = chart.grouping == "percentStacked";
+                        let is_stacked = chart.grouping == "stacked" || is_100pct;
+                        let plot_left = if is_100pct { sx + 63.44 } else { sx + 41.4 };
                         let plot_top = if has_auto_title {
                             sy + 51.4
                         } else {
@@ -1420,7 +1421,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // Q2 sum 36.4 -> nice max 40) and draws one label
                         // per 5-step tick, i.e. (max_axis/5)+1 labels
                         // (0,5,...,40 = 9 labels, render-truth 2026-08-06).
-                        let max_val = if is_stacked {
+                        let max_val = if is_100pct {
+                            // percentStacked: fixed 0..100 scale (10-step %-axis).
+                            100.0
+                        } else if is_stacked {
                             // largest per-category sum over all series
                             (0..n_cat)
                                 .map(|ci| {
@@ -1441,15 +1445,30 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .fold(0.0f64, f64::max)
                         };
                         let max_axis = nice_axis_max(max_val);
-                        let axis_steps = if is_stacked {
+                        let axis_steps = if is_100pct {
+                            // percentStacked: 0%,10%,...,100% (11 labels).
+                            10usize
+                        } else if is_stacked {
                             (max_axis / 5.0).round().max(1.0) as usize
                         } else {
                             5usize
                         };
                         for i in 0..=axis_steps {
-                            let val = max_axis * i as f64 / axis_steps as f64;
+                            // percentStacked labels the fixed 0..100 scale
+                            // as "0%".."100%" (render-truth: '0%' x=96.77 /
+                            // '100%' x=78.50, right-aligned, baseline
+                            // tick_y + 5.2).
+                            let val = if is_100pct {
+                                100.0 * i as f64 / axis_steps as f64
+                            } else {
+                                max_axis * i as f64 / axis_steps as f64
+                            };
                             let tick_y = plot_bot - (val / max_axis) * plot_h;
-                            let label = format!("{}", val.round() as i64);
+                            let label = if is_100pct {
+                                format!("{:.0}%", val)
+                            } else {
+                                format!("{}", val.round() as i64)
+                            };
                             let lw = font_adv::line_hmtx_width_pt(&label, axis_fs, axis_family)
                                 .unwrap_or_else(|| {
                                     label.chars().count() as f32 * axis_fs * 0.5
@@ -1534,7 +1553,28 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         .get(ci)
                                         .copied()
                                         .unwrap_or(0.0);
-                                    let seg_h = if max_axis > 0.0 {
+                                    // percentStacked: each category is 100% of
+                                    // its series SUM (render-truth 2026-08-07:
+                                    // Q1 blue 19.2/29.7*plot_h, red
+                                    // 10.5/29.7*plot_h; the stack fills the
+                                    // plot height).
+                                    let seg_h = if is_100pct {
+                                        let sum_cat = chart
+                                            .series
+                                            .iter()
+                                            .map(|s| {
+                                                s.values
+                                                    .get(ci)
+                                                    .copied()
+                                                    .unwrap_or(0.0)
+                                            })
+                                            .sum::<f64>();
+                                        if sum_cat > 0.0 {
+                                            v / sum_cat * plot_h
+                                        } else {
+                                            0.0
+                                        }
+                                    } else if max_axis > 0.0 {
                                         v / max_axis * plot_h
                                     } else {
                                         0.0
@@ -1796,6 +1836,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // origin=(235.37/231.17,100.03), frame_cx = sh.x+sh.w/2
                         // = 270.0). A <c:legend> is drawn only when declared
                         // (none of the 4 probes carry one -> not drawn).
+                        // Gated on has_auto_title: a MULTI-series chart (e.g.
+                        // chart2 / chart3 / chart_stacked / percentStacked)
+                        // has NO automatic title (render-truth: only the
+                        // single-series chart1 / chart2b render one).
+                        if has_auto_title {
                         if let Some(first) = chart.series.first() {
                             let tfs = 21.62f32;
                             let lw = font_adv::line_hmtx_width_pt(
@@ -1818,6 +1863,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 scale,
                                 700,
                             );
+                        }
                         }
 
                         // Legend (when <c:legend> is declared): per-series
