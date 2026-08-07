@@ -9787,12 +9787,49 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         }
                     }
                     "pgMar" => {
-                        // Top/bottom margins: round to 10tw (0.5pt).
+                        // Top margin: rounded to a 10tw (0.5pt) multiple.
                         // COM-confirmed (0e7a P208 y=56.50 = round_10tw(1134)=1130tw).
-                        // Left/right margins: exact twips (no rounding).
+                        // Left/right/bottom margins: exact twips (no rounding).
                         // COM-confirmed (0e7a LeftMargin=53.85pt = 1077tw/20).
+                        //
+                        // S1097 (2026-08-07, HELD OPT-IN `OXI_S1097=1`, default
+                        // byte-identical): Word itself does NOT round the top
+                        // margin -- a controlled probe
+                        // (tools/metrics/_pb_topmargin_gen.py, 6 arms x Cambria
+                        // 12pt, box_top = baseline - A*fs with the S1047 constant)
+                        // lands every arm on its DECLARED margin within one
+                        // 600-DPI quantum, and all four arm pairs refute rounding
+                        // in BOTH directions:
+                        //
+                        //   1130tw 56.50 -> 56.518   t1134-t1130 +0.120 (round 0.00)
+                        //   1134tw 56.70 -> 56.638   t1134-t1140 -0.360 (round 0.00)
+                        //   1140tw 57.00 -> 56.998   t2376-t2370 +0.240 (round 0.00)
+                        //   2370tw 118.50 -> 118.578 t2376-t2380 -0.240 (round 0.00)
+                        //   2376tw 118.80 -> 118.818
+                        //   2380tw 119.00 -> 119.058
+                        //
+                        // But exact margins are net-NEGATIVE on the corpus:
+                        // ssim_ab = improved 19 / regressed 25, TOTAL -0.8324
+                        // (b837 -0.4642, 34140b -0.1758, ed025c -0.1003, and
+                        // 0e7a itself -0.0949 -- i.e. the original COM reading is
+                        // reproduced by the CURRENT rounding).  So the 0.25pt
+                        // round is COMPENSATING a separate error of the same size
+                        // elsewhere in the vertical stack (the S559 pattern); the
+                        // gains it exposes (3a4f +0.0814, 2ea81a +0.0415, e3c545
+                        // +0.0382) do not cover the losses.  Ships when that
+                        // counterpart is found.  Pagination is unaffected either
+                        // way: the JP corpus shows 0 real flips under exact
+                        // margins (a 0.25pt shift never moves a grid-snapped
+                        // page boundary).
                         let to_pt = |tw: f32| -> f32 { tw / 20.0 };
-                        let to_pt_round10 = |tw: f32| -> f32 { (tw / 10.0).round() * 10.0 / 20.0 };
+                        let s1097 = std::env::var("OXI_S1097").is_ok();
+                        let to_pt_round10 = move |tw: f32| -> f32 {
+                            if s1097 {
+                                tw / 20.0
+                            } else {
+                                (tw / 10.0).round() * 10.0 / 20.0
+                            }
+                        };
                         let mut gutter = 0.0f32;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
