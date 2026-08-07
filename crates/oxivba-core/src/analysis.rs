@@ -1220,6 +1220,16 @@ impl Walker {
                 line,
             });
         }
+        if name.eq_ignore_ascii_case("Application.AutomationSecurity") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason:
+                    "changes Excel's process-global macro policy for programmatically opened files"
+                        .to_string(),
+                class: None,
+                line,
+            });
+        }
 
         if counts_as_call {
             if let Some(root) = name.split('.').next() {
@@ -2253,6 +2263,29 @@ mod tests {
             .findings
             .iter()
             .filter(|finding| finding.reason.contains("automatic default responses"))
+            .all(|finding| finding.class.is_none()));
+    }
+
+    #[test]
+    fn automation_security_is_reported_as_global_excel_state() {
+        let a = analyse_src(
+            "Public Sub SetMacroPolicy()\n\
+             Application.AutomationSecurity = msoAutomationSecurityForceDisable\n\
+             Application.AutomationSecurity = msoAutomationSecurityLow\n\
+             End Sub\n",
+        );
+        assert_eq!(a.api_names.get("Application.AutomationSecurity"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("programmatically opened files"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .filter(|finding| finding.reason.contains("programmatically opened files"))
             .all(|finding| finding.class.is_none()));
     }
 
