@@ -144,6 +144,18 @@ pub const RULES: &[Rule] = &[
         reason: "attaches to an external COM object",
     },
     Rule {
+        pattern: "AppActivate",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "activates a desktop application window by title",
+    },
+    Rule {
+        pattern: "SendKeys",
+        how: Match::Exact,
+        class: Class::C,
+        reason: "injects keystrokes into the active desktop application",
+    },
+    Rule {
         pattern: "Scripting.FileSystemObject",
         how: Match::Exact,
         class: Class::C,
@@ -1923,6 +1935,27 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.reason.contains("formula dependencies")));
+    }
+
+    #[test]
+    fn desktop_activation_and_sendkeys_are_external_dependencies() {
+        let a = analyse_src(
+            "Public Sub DriveDesktop()\n\
+             AppActivate Application.Caption\n\
+             SendKeys \"{F15}\", True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.class, Some(Class::C));
+        assert_eq!(a.api_names.get("AppActivate"), Some(&1));
+        assert_eq!(a.api_names.get("SendKeys"), Some(&1));
+        assert!(a
+            .findings
+            .iter()
+            .any(|finding| finding.reason.contains("window by title")));
+        assert!(a
+            .findings
+            .iter()
+            .any(|finding| finding.reason.contains("injects keystrokes")));
     }
 
     #[test]
