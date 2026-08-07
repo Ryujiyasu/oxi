@@ -35902,6 +35902,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // char-by-char wrap as the cell renderer (mod.rs:4480+). break_into_lines
             // applies yakumono compression that the cell renderer does not, so it
             // under-counts lines → estimate < render → overflow cascade.
+            // S1099: does the leading run provably fit on line 0?  Filled inside
+            // the cell branch below, where the wrap widths are in scope.
+            let mut s1099_first_fits = false;
             let line_count = if in_cell {
                 // first line wrap width: same indent math as render (mod.rs:4461)
                 let first_line_wrap_w = if first_indent < 0.0 {
@@ -35980,6 +35983,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         (grid_char_pitch, grid_char_cw_ratio)
                     };
+                // S1099: a leading run only stays on line 0 if it actually FITS
+                // there.  forms__002fbe2c also has 2-line cells whose leading
+                // "run" is a 26pt rule of underscores that spans BOTH lines --
+                // treating that as a first-line-only run under-counted the row by
+                // 18.75pt.  Measure it with the same wrap width the line count
+                // uses.
+                s1099_first_fits = para.runs.first().map_or(false, |r| {
+                    let fs = self.resolve_font_size(&r.style, &para.style);
+                    let m = self.metrics_for_text(&r.text, &r.style, &para.style);
+                    let w: f32 = r
+                        .text
+                        .trim()
+                        .chars()
+                        .map(|c| self.registry.char_width_pt_with_fallback(c, fs, m))
+                        .sum();
+                    w > 0.0 && w < first_line_wrap_w
+                });
                 self.count_cell_lines(
                     para,
                     effective_width,
@@ -36037,7 +36057,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let s986_skip_anchor = in_cell
                 && std::env::var("OXI_S986_DISABLE").is_err()
                 && para.runs.iter().any(|r| !r.text.is_empty());
-            for run in &para.runs {
+            // S1099 (2026-08-08): per-run line heights, so the "max_lh x lines"
+            // model below can be corrected when the tallest run provably sits on
+            // the FIRST line only. See the fold at the `height +=` site.
+            let mut s1099_lhs: Vec<(usize, f32)> = Vec::new();
+            for (s1099_ri, run) in para.runs.iter().enumerate() {
                 if s986_skip_anchor && run.bookmark_name.is_some() && run.text.is_empty() {
                     continue;
                 }
@@ -36100,6 +36124,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     self.line_height_inner(font_size, eff_ls, eff_lr, metrics, false, None, true)
                 };
+                s1099_lhs.push((s1099_ri, lh));
                 if lh > max_line_height {
                     max_line_height = lh;
                 }
@@ -36174,6 +36199,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 }
             }
+            // S1099 (2026-08-08, HELD OPT-IN `OXI_S1099=1`, default OFF): the "max_lh x
+            // line_count" model over-counts when the TALLEST run is a single
+            // LEADING word -- Word takes the max PER LINE, so such a run only
+            // raises line 0.  forms__002fbe2c p2's last row: the runs are
+            // ['Procedural' (12pt, inherited sz)] + sz=22 (11pt) body text;
+            // Word's own baselines give 13.50 + 12.42x5 = 75.6 (its table
+            // bottom rule sits at 333.89) where the estimate said 13.50x6 =
+            // 81.00, and since row_height = max(estimate, actual) that 5.6pt
+            // surplus was permanent (the S648 correction only grows).
+            // SCOPE: a leading run holding a single word necessarily sits on
+            // line 0 (it starts at the line head), so no wrap arithmetic is
+            // needed; every other shape keeps the legacy model, and a
+            // paragraph whose runs share one lh is byte-identical by
+            // construction.  in_cell per the S944/S946 lesson (this estimator
+            // also drives the body keepNext lookahead + footnote reserves).
+            let s1099_rest = s1099_lhs
+                .iter()
+                .filter(|(i, _)| *i > 0)
+                .map(|(_, l)| *l)
+                .fold(0.0_f32, f32::max);
+            let s1099 = in_cell
+                && s1099_first_fits
+                && !self.doc_body_has_real_cjk
+                && line_count >= 2
+                && s1099_rest > 0.0
+                && s1099_rest < max_line_height - 0.01
+                && std::env::var("OXI_S1099").is_ok()
+                && para.runs.first().map_or(false, |r| {
+                    let t = r.text.trim();
+                    !t.is_empty() && !t.contains(char::is_whitespace)
+                })
+                && s1099_lhs
+                    .iter()
+                    .all(|(i, l)| *i == 0 || *l < max_line_height - 0.01);
+            let s1099_h = if s1099 {
+                max_line_height + s1099_rest * (line_count - 1) as f32
+            } else {
+                max_line_height * line_count as f32
+            };
             if std::env::var("OXI_DUMP_TABLE").is_ok() {
                 let first_run_fs = self.resolve_font_size(
                     para.runs
@@ -36190,10 +36254,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     .collect();
                 eprintln!(
                     "[TBL_DUMP]   estimate_runs_para first_run_fs={} max_lh={:.3} lines={} h_added={:.3} text={:?}",
-                    first_run_fs, max_line_height, line_count, max_line_height * line_count as f32, preview
+                    first_run_fs, max_line_height, line_count, s1099_h, preview
                 );
             }
-            height += max_line_height * line_count as f32;
+            height += s1099_h;
 
             // Ruby paragraph-tail expansion (§18 spec, V3/V6/V9 measurement).
             // Greenfield: 0/177 baseline docs use w:ruby, so this branch is
