@@ -16091,6 +16091,43 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // MEASUREMENT ARTIFACT (compared against a STALE ssim_baseline.json from
             // an older binary). natural (not ink) is the structural keep/push measure.
             let s608 = std::env::var("OXI_S608_DISABLE").is_err();
+            // S1096 (2026-08-08, default ON, opt-out OXI_S1096_DISABLE): a
+            // 2-line paragraph's ORPHAN look-ahead measures its last line with
+            // the FULL box, not S608's natural height, when the line is
+            // single/atLeast spaced.  A 2-line paragraph cannot be split under
+            // widowControl, so "does the last line fit" is exactly the per-line
+            // break question and must use the same height.
+            // S608 was derived on ×2.0 paragraphs (Calibri 14 natural 17.25 vs
+            // full box 34.5; MS Gothic 14 natural 18.125) — the leading Word
+            // lets hang into the margin IS the multiplier's extra leading.  On a
+            // single/atLeast line there is no such leading: legal__0019967c's
+            // Indenta style is `line=260 atLeast` where full = effective_lh
+            // 13.799 (the hhea line the per-line threshold uses) but
+            // natural_line_height_for_line returns 13.500, so the orphan
+            // look-ahead measured the last line 0.30pt SHORTER than the
+            // per-line break test would — an internal inconsistency, not a
+            // Word rule.  wp167 «(b) an account of the insurer» (2 lines,
+            // cursor 605.166, cbot 632.5): 605.166+13.799+13.500 = 632.465
+            // "fits" → Oxi split it 1+1, while the per-line test rejects line 1
+            // (632.764 > 632.5) so only line 0 stayed = an orphan Word never
+            // leaves.  Word's own PDF puts BOTH lines on p167, and its content
+            // bottom is bracketed to [631.66, 632.90) by the deepest body
+            // baseline in the document (629.02 + descent) and by this very
+            // push — i.e. Oxi's 632.5 is right and only the look-ahead height
+            // was wrong.  Latin scope (the CJK corpus has widowControl=0, so
+            // this arm never fires there anyway).
+            // SCOPE = the ORPHAN arm only.  Applying it to the WIDOW arm
+            // (line_idx == len-2 of a 3+-line paragraph) regressed
+            // legal__0014c86f: its 5-line «(1) At any time» ends at box bottom
+            // 639.37 vs cbot 639.30, and Word keeps all five (its own last
+            // baseline 636.58 → bottom 639.22).  That 0.15pt is this document's
+            // recorded TOP-MARGIN 10tw rounding (Oxi 119.00 vs Word 118.80),
+            // not a look-ahead error — S608's natural height was absorbing it.
+            // A splittable paragraph also has a real choice about where to
+            // break, which the 2-line case does not.
+            let s1096_full_box = !is_multiple_spacing
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1096_DISABLE").is_err();
             // The widow/orphan STRUCTURAL look-ahead (keep a 2-line para together
             // or push it whole) measures the last line by its NATURAL height
             // (ascent+descent) — NOT the full multiplied box, and NOT the glyph ink.
@@ -16130,7 +16167,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // The next line is the LAST line only for a 2-line para; use the
                     // page-bottom fit height for it (S608), full box otherwise.
                     let next_h = if lines.len() == 2 {
-                        last_line_fit_h(1)
+                        if s1096_full_box {
+                            line_heights.get(1).copied().unwrap_or(0.0)
+                        } else {
+                            last_line_fit_h(1)
+                        }
                     } else if std::env::var("OXI_S1074").is_ok()
                         && is_multiple_spacing
                         && !self.doc_body_has_real_cjk
