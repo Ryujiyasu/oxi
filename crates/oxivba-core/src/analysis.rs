@@ -227,6 +227,18 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides the vertical scroll bar in an Excel window",
     },
     Rule {
+        pattern: "ActiveWindow.Zoom",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes the zoom level of Excel's active window",
+    },
+    Rule {
+        pattern: "Application.ActiveWindow.Zoom",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes the zoom level of Excel's active window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2864,6 +2876,34 @@ mod tests {
                 .filter(|finding| finding.reason.contains("scroll bar in an Excel window"))
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn active_window_zoom_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseZoom()\n\
+             ActiveWindow.Zoom = 75\n\
+             Application.ActiveWindow.Zoom = 100\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.Zoom"), Some(&1));
+        assert_eq!(a.api_names.get("Application.ActiveWindow.Zoom"), Some(&1));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("zoom level"))
+                .count(),
+            2
         );
     }
 
