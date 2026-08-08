@@ -251,6 +251,24 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's active-window worksheet view mode",
     },
     Rule {
+        pattern: "SplitRow",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the pane layout of an Excel window",
+    },
+    Rule {
+        pattern: "SplitColumn",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the pane layout of an Excel window",
+    },
+    Rule {
+        pattern: "FreezePanes",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the pane layout of an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2944,6 +2962,46 @@ mod tests {
                 .filter(|finding| finding.reason.contains("worksheet view mode"))
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn active_window_frozen_panes_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseFrozenPanes()\n\
+             ActiveWindow.SplitRow = 1\n\
+             ActiveWindow.SplitColumn = 1\n\
+             ActiveWindow.FreezePanes = True\n\
+             Application.ActiveWindow.FreezePanes = False\n\
+             Application.ActiveWindow.SplitRow = 0\n\
+             Application.ActiveWindow.SplitColumn = 0\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        for name in [
+            "ActiveWindow.SplitRow",
+            "ActiveWindow.SplitColumn",
+            "ActiveWindow.FreezePanes",
+            "Application.ActiveWindow.FreezePanes",
+            "Application.ActiveWindow.SplitRow",
+            "Application.ActiveWindow.SplitColumn",
+        ] {
+            assert_eq!(a.api_names.get(name), Some(&1), "{name}");
+        }
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            6
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("pane layout"))
+                .count(),
+            6
         );
     }
 
