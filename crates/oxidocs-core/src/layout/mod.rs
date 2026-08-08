@@ -9668,7 +9668,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             };
             if !hdr_blocks.is_empty() {
                 let mut cy = LayoutCursor::new(header_y);
+                // S1105: the previous block was a TEXT-bearing paragraph, so any
+                // inline image that follows was already merged into that
+                // paragraph's lines by S1HDR (s755_header_bottom) — do not give
+                // it a line of its own here.
+                let mut s1105_prev_text = false;
                 for block in hdr_blocks {
+                    if let Block::Paragraph(para) = block {
+                        s1105_prev_text = para.runs.iter().any(|r| !r.text.is_empty());
+                    }
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_hdr = std::collections::HashMap::new();
                         let (hdr_elements, _, _) = self.layout_paragraph(
@@ -9718,7 +9726,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // its absolute page position on every page. Inline header
                         // images (position None) keep the existing height-only
                         // behavior (s755_header_bottom). Opt-out OXI_HDRFLOAT_DISABLE.
-                        if img.position.is_some() && std::env::var("OXI_HDRFLOAT_DISABLE").is_err()
+                        if img.position.is_none()
+                            && !s1105_prev_text
+                            && std::env::var("OXI_S1105_DISABLE").is_err()
+                        {
+                            // S1105 (2026-08-08, opt-out OXI_S1105_DISABLE): an
+                            // INLINE header image is PAINTED, not just measured.
+                            // S742 taught s755_header_bottom to add `img.height`
+                            // (probeqhdrimg 0.7818 → PASS) but nothing ever drew
+                            // it: the probe's 113×85pt crest is absent from the
+                            // dump, and only the text paragraph below it renders.
+                            // S759's arm handles the FLOATING case; this is the
+                            // inline one. Images that FOLLOW a text-bearing
+                            // paragraph are skipped — S1HDR already folded them
+                            // into that paragraph's line height, so drawing them
+                            // here would double-count the advance.
+                            lp.elements.push(LayoutElement::new(
+                                hdr_x,
+                                cy.cursor_y,
+                                img.width,
+                                img.height,
+                                LayoutContent::Image {
+                                    data: img.data.clone(),
+                                    content_type: img.content_type.clone(),
+                                    crop: img
+                                        .crop
+                                        .as_ref()
+                                        .map(|c| (c.top, c.right, c.bottom, c.left)),
+                                },
+                            ));
+                            cy.advance(img.height);
+                        } else if img.position.is_some()
+                            && std::env::var("OXI_HDRFLOAT_DISABLE").is_err()
                         {
                             let (ax, ay) = self.resolve_floating_image_position(img, page, &[]);
                             lp.elements.push(LayoutElement::new(
