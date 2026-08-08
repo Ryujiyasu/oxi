@@ -9736,6 +9736,45 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 },
                             ));
                         }
+                    } else if let Block::Table(tbl) = block {
+                        // S1104: the header's paint loop gets the same Table arm as
+                        // the footer's (S731 taught s755_header_bottom to MEASURE a
+                        // header table; nothing painted it). Render-only.
+                        // ★FLOATING tables (tblpPr) are EXCLUDED: they do not advance
+                        // the header/footer cursor — Word floats them beside the text
+                        // (ja/reference/071997db's header stamp is
+                        // `vertAnchor=text horzAnchor=margin tblpXSpec=right`, drawn at
+                        // x=402 with the title still on the first line at x=70.9).
+                        // Painting one through the inline path would push every
+                        // following header paragraph down by the table's height.
+                        if std::env::var("OXI_S1104_DISABLE").is_err() && tbl.style.position.is_none() {
+                            let mut dummy_pages = Vec::new();
+                            let mut dummy_elems = Vec::new();
+                            let tbl_elements = self.layout_table(
+                                tbl,
+                                hdr_x,
+                                &mut cy,
+                                hdr_width,
+                                grid_pitch,
+                                None,
+                                None,
+                                header_y,
+                                99999.0,
+                                page.size.width,
+                                99999.0,
+                                &mut dummy_pages,
+                                &mut dummy_elems,
+                                None,
+                                page,
+                                false,
+                                None,
+                                None,
+                                0.0,
+                                0.0,
+                                false,
+                            );
+                            lp.elements.extend(tbl_elements);
+                        }
                     }
                 }
             }
@@ -9755,7 +9794,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         );
                     }
                 }
-                let footer_top = page.size.height - footer_dist - footer_h;
+                // S1104: this paint-side `footer_h` is Paragraph-only, so a footer
+                // holding a TABLE placed its content far too low (the table's height
+                // never entered footer_top). S868 already computes the full stack —
+                // including the ROWBOX2 table term — inside s755_footer_geom, so take
+                // the top from that reservation instead of re-deriving it here.
+                // Scoped to footers that actually contain a table: a paragraph-only
+                // footer keeps the historical expression byte-for-byte.
+                let s1104_has_tbl = std::env::var("OXI_S1104_DISABLE").is_err()
+                    && ftr_blocks
+                    .iter()
+                    .any(|b| matches!(b, Block::Table(t) if t.style.position.is_none()));
+                let footer_top = if s1104_has_tbl {
+                    let (fr, _) = self.s755_footer_geom(ftr_blocks, page);
+                    page.size.height - fr
+                } else {
+                    page.size.height - footer_dist - footer_h
+                };
                 let mut cy = LayoutCursor::new(footer_top);
                 for block in ftr_blocks {
                     if let Block::Paragraph(para) = block {
@@ -9801,6 +9856,47 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S916
                         );
                         lp.elements.extend(ftr_elements);
+                    } else if let Block::Table(tbl) = block {
+                        // S1104 (2026-08-08, default ON, opt-out OXI_S1104_DISABLE):
+                        // a TABLE in the footer is PAINTED, not just measured. S868
+                        // taught `s755_footer_geom` to count a footer table's height
+                        // (and S731 did the same for headers), but BOTH paint loops
+                        // stayed `if let Block::Paragraph` — so a footer whose text
+                        // lives in a table rendered COMPLETELY EMPTY.
+                        // reference__0061531a: every one of its 67 pages lost the
+                        // whole footer (Word draws 5 spans/page, Oxi drew 0).
+                        // Render-only: the height is already reserved by S868, so
+                        // cursor_y / pagination are untouched. A huge content_height
+                        // keeps the table from trying to split inside the footer.
+                        if std::env::var("OXI_S1104_DISABLE").is_err() && tbl.style.position.is_none()
+                        {
+                            let mut dummy_pages = Vec::new();
+                            let mut dummy_elems = Vec::new();
+                            let tbl_elements = self.layout_table(
+                                tbl,
+                                hdr_x,
+                                &mut cy,
+                                hdr_width,
+                                grid_pitch,
+                                None,
+                                None,
+                                footer_top,
+                                99999.0,
+                                page.size.width,
+                                99999.0,
+                                &mut dummy_pages,
+                                &mut dummy_elems,
+                                None,
+                                page,
+                                false,
+                                None,
+                                None,
+                                0.0,
+                                0.0,
+                                false,
+                            );
+                            lp.elements.extend(tbl_elements);
+                        }
                     }
                 }
             }
