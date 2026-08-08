@@ -11643,7 +11643,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let metrics = if let Some(run) = visible_run {
                         self.metrics_for(&run.style, &para.style)
                     } else if let Some(mark) = para.style.ppr_rpr.as_ref().filter(|_| s862) {
-                        self.metrics_for_para_mark(mark, &para.style)
+                        // S1106 (2026-08-08, opt-out OXI_S1106_DISABLE): in a LATIN
+                        // document an EMPTY header paragraph's ¶ mark is governed by
+                        // the ASCII font, exactly like the body (S583/S707/S876/S949),
+                        // the cell (S989) and the FOOTER (S1057). This site was the
+                        // last one still resolving through the eastAsia chain: in
+                        // reference__0061531a the header's three empty paragraphs
+                        // resolve to "MS Mincho" and take the CJK 83/64 box
+                        // (12pt -> 15.500 where the hhea line is 12.000), inflating
+                        // the header stack by ~6pt per page.
+                        let s1106_ascii = !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S1106_DISABLE").is_err();
+                        self.metrics_for_para_mark_g(mark, &para.style, s1106_ascii)
                     } else {
                         self.doc_default_metrics()
                     };
