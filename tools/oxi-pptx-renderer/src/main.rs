@@ -1772,12 +1772,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .fold(0.0f64, f64::max);
                         let plot_left = sx + 6.50 + cat_label_w + 16.70;
                         let plot_top = if has_explicit_title {
-                            // UNMEASURED for the horizontal layout: in the column
-                            // chart an explicit <c:title> sits 5.71pt above the
-                            // auto title (45.69 vs 51.4); the same delta is applied
-                            // here. Replace when a horizontal explicit-title probe
-                            // exists.
-                            sy + 40.66
+                            // MEASURED 2026-08-09 (chart_bar_resid slides 1/2/5,
+                            // Word PDF category-tick tops): 112.70 on a frame at
+                            // sy=72.  The earlier value was 40.66, adopted by
+                            // analogy with the column chart; the probe puts it at
+                            // 40.70, so the analogy was right to 0.04pt.
+                            sy + 40.70
                         } else if has_auto_title {
                             sy + 46.37
                         } else {
@@ -1969,8 +1969,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- data labels ----
                         // chart_bar page 5 render-truth: OUTSIDE_END puts the label
                         // 6.06pt right of the bar end, baseline cat_center + 6.22.
-                        // A stacked chart centres them (unmeasured here; mirrors the
-                        // measured column-stacked "ctr" default).
+                        // STACKED centres each label in its own segment, baseline
+                        // cat_center + 6.22 -- MEASURED 2026-08-09 on
+                        // chart_bar_resid slides 3/4: all 6 segment/label centre
+                        // pairs agree within 0.1pt and the baseline offset reads
+                        // 6.19/6.23/6.26 across the three rows.
                         if chart.has_data_labels && chart.show_val {
                             let num_fmt = chart.number_format.clone();
                             let fmt = |v: f64| -> String {
@@ -2099,7 +2102,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             }
                         }
 
-                        // ---- legend (rows bottom-up: series 0 lowest) ----
+                        // ---- legend ----
+                        // MEASURED 2026-08-09: the row order follows the visual
+                        // stacking direction.  CLUSTERED bars grow bottom-up
+                        // inside a cluster, so the legend mirrors (series 0 at the
+                        // BOTTOM: chart_bar p4 puts Cost above Revenue); STACKED
+                        // segments grow left-to-right, so the legend stays natural
+                        // (series 0 on TOP: chart_bar_resid p4 puts Revenue above
+                        // Cost).  Both pages share the same swatch x/y, so only the
+                        // row index differs.
                         if chart.has_legend {
                             let legend_total_h =
                                 (n_ser as f64 - 1.0) * legend_row_pitch
@@ -2107,7 +2118,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let legend_y0 =
                                 (sy + shh / 2.0) - legend_total_h / 2.0;
                             for (si, series) in chart.series.iter().enumerate() {
-                                let row = n_ser - 1 - si;
+                                let row = if is_stacked { si } else { n_ser - 1 - si };
                                 let sw_y =
                                     legend_y0 + row as f64 * legend_row_pitch;
                                 let col_hex = pres
@@ -3186,27 +3197,28 @@ fn fmt_axis_value(v: f64, step: f64) -> String {
 /// DERIVED 2026-08-09 from a 14-arm Word sweep (chart_bar_axis: data range
 /// 2.2..480 at a fixed frame, plus 196/342/546pt plot widths at range 34) plus
 /// the 5 chart_bar pages. Word picks the FINEST 1/2/5x10^k step whose resulting
-/// tick spacing along the axis is at least ~53pt; the axis maximum is that step
-/// rounded up past the data. The sweep proves the rule is axis-LENGTH dependent
-/// (range 34 gives 2 / 4 / 8 divisions at 196 / 342 / 546pt).
+/// tick spacing along the axis is at least ~57pt; the axis maximum is that step
+/// rounded up past the data PLUS 5% headroom. The sweep proves the rule is
+/// axis-LENGTH dependent (range 34 gives 2 / 4 / 8 divisions at 196/342/546pt).
 ///
-/// The threshold window measured is (49.07, 57.76] -- 49.07pt was rejected
-/// (sweep arm 13) and 57.76pt accepted (chart_bar page 1); 53.0 is its middle.
-/// The model reproduces all 5 chart_bar pages and 11 of the 14 sweep arms; the
-/// three misses (data max 78 / 240 / 480) are cases where Word's own axis
-/// maximum does not equal ceil(max/step)*step, i.e. a separate rule this probe
-/// did not isolate. Recorded rather than guessed.
+/// The 5% headroom is what makes the axis maximum come out at Word's value in
+/// the arms a plain ceil(max/step)*step misses: data max 78 with a 20 step is
+/// 100 in Word (ceil(78*1.05/20)*20), not 80.  With it, the threshold window
+/// closes to (56.28, 57.76] over all 19 measured points and 57.0 sits inside;
+/// the model then reproduces 19 of 19 (the earlier headroom-free model with a
+/// 53pt threshold reproduced 15).
 fn horiz_value_axis(max_val: f64, plot_w: f64) -> (f64, usize) {
     if max_val <= 0.0 || plot_w <= 0.0 {
         return (1.0, 1);
     }
-    const MIN_SPACING: f64 = 53.0;
+    const MIN_SPACING: f64 = 57.0;
+    const HEADROOM: f64 = 1.05;
     let mut best: Option<(f64, f64, usize)> = None; // (step, axis_max, div)
     for k in -6i32..=9 {
         let mag = 10f64.powi(k);
         for m in [1.0f64, 2.0, 5.0] {
             let step = m * mag;
-            let axis_max = (max_val / step).ceil() * step;
+            let axis_max = (max_val * HEADROOM / step - 1e-9).ceil() * step;
             if !axis_max.is_finite() || axis_max <= 0.0 {
                 continue;
             }
