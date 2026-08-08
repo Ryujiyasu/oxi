@@ -191,6 +191,12 @@ pub const RULES: &[Rule] = &[
         reason: "requests showing or hiding Excel workbook windows in the Windows taskbar; modern Excel may ignore it",
     },
     Rule {
+        pattern: "Application.WindowState",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's application-window minimized, normal, or maximized UI state",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2671,6 +2677,29 @@ mod tests {
                         .what
                         .eq_ignore_ascii_case("Application.ShowWindowsInTaskbar")
                         && finding.reason.contains("Windows taskbar")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn application_window_state_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseWindowState()\n\
+             Application.WindowState = xlMaximized\n\
+             Application.WindowState = xlNormal\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.WindowState"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| {
+                    finding.what.eq_ignore_ascii_case("Application.WindowState")
+                        && finding.reason.contains("application-window")
                 })
                 .count(),
             2
