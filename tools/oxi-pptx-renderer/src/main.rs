@@ -1420,10 +1420,16 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             }
                         }
 
-                        // Category names centred on each category centre,
-                        // ONE line (Word renders the labels as stroke-outline
-                        // glyphs on a single row; baseline = plot_bot+28.67
-                        // normal / +29.7 crowded, measured).
+                        // Category names centred on each category centre.
+                        // In the CROWDED 78.62pt band Word wraps a label that
+                        // does not fit its pitch into TWO centred lines
+                        // (chart_line 'Midwest' -> "Mid"/"west", render-truth
+                        // 2026-08-08: line1 ink y=299.57..326.37 -> baseline
+                        // plot_bot+44.99, line2 y=322.09..348.93 -> baseline
+                        // plot_bot+67.55, baseline gap 22.56; a single-line
+                        // label sits at plot_bot+43.82 = East bottom 325.20).
+                        // Split point = the index that best balances the two
+                        // halves' Calibri hmtx widths.
                         for (ci, name) in chart.categories.iter().enumerate() {
                             let cat_center = plot_left + pitch * (ci as f64 + 0.5);
                             let lw = font_adv::line_hmtx_width_pt(name, 18.0, axis_family)
@@ -1431,10 +1437,73 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     name.chars().count() as f32 * 18.0 * 0.5
                                 }) as f64;
                             let lx = cat_center - lw / 2.0;
+                            let single_bl = if crowded { 43.8 } else { 28.67 };
+                            // two-line wrap: crowded AND the whole label is
+                            // wider than its pitch
+                            if crowded && lw > pitch {
+                                let chars: Vec<char> = name.chars().collect();
+                                let n = chars.len();
+                                if n >= 2 {
+                                    let mut best: Option<(usize, f64)> = None;
+                                    for i in 1..n {
+                                        let a: String = chars[..i].iter().collect();
+                                        let b: String = chars[i..].iter().collect();
+                                        let wa =
+                                            font_adv::line_hmtx_width_pt(&a, 18.0, axis_family)
+                                                .unwrap_or_else(|| {
+                                                    a.chars().count() as f32 * 18.0 * 0.5
+                                                }) as f64;
+                                        let wb =
+                                            font_adv::line_hmtx_width_pt(&b, 18.0, axis_family)
+                                                .unwrap_or_else(|| {
+                                                    b.chars().count() as f32 * 18.0 * 0.5
+                                                }) as f64;
+                                        let d = (wa - wb).abs();
+                                        if best.map_or(true, |(_, bd)| d < bd) {
+                                            best = Some((i, d));
+                                        }
+                                    }
+                                    if let Some((i, _)) = best {
+                                        let a: String = chars[..i].iter().collect();
+                                        let b: String = chars[i..].iter().collect();
+                                        let wa =
+                                            font_adv::line_hmtx_width_pt(&a, 18.0, axis_family)
+                                                .unwrap_or_else(|| {
+                                                    a.chars().count() as f32 * 18.0 * 0.5
+                                                }) as f64;
+                                        let wb =
+                                            font_adv::line_hmtx_width_pt(&b, 18.0, axis_family)
+                                                .unwrap_or_else(|| {
+                                                    b.chars().count() as f32 * 18.0 * 0.5
+                                                }) as f64;
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            ((cat_center - wa / 2.0) * scale).round() as i32,
+                                            (plot_bot + 45.0) as f32,
+                                            &a,
+                                            18.0,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            ((cat_center - wb / 2.0) * scale).round() as i32,
+                                            (plot_bot + 67.55) as f32,
+                                            &b,
+                                            18.0,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
                             draw_text_baseline(
                                 mem_dc,
                                 (lx * scale).round() as i32,
-                                (plot_bot + if crowded { 29.7 } else { 28.67 }) as f32,
+                                (plot_bot + single_bl) as f32,
                                 name,
                                 18.0,
                                 axis_family,
