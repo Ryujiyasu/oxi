@@ -293,6 +293,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides zero values in an Excel window",
     },
     Rule {
+        pattern: "DisplayRightToLeft",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the worksheet display direction of an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -3101,6 +3107,38 @@ mod tests {
                 })
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn active_window_display_direction_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseDisplayDirection()\n\
+             ActiveWindow.DisplayRightToLeft = True\n\
+             Application.ActiveWindow.DisplayRightToLeft = False\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.DisplayRightToLeft"), Some(&1));
+        assert_eq!(
+            a.api_names
+                .get("Application.ActiveWindow.DisplayRightToLeft"),
+            Some(&1)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("worksheet display direction"))
+                .count(),
+            2
         );
     }
 
