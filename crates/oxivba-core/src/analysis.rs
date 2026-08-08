@@ -179,6 +179,12 @@ pub const RULES: &[Rule] = &[
         reason: "switches Excel's application window into or out of full-screen mode",
     },
     Rule {
+        pattern: "Application.Cursor",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global mouse-pointer user interface",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2608,6 +2614,29 @@ mod tests {
                         .what
                         .eq_ignore_ascii_case("Application.DisplayFullScreen")
                         && finding.reason.contains("full-screen mode")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn application_cursor_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseCursor()\n\
+             Application.Cursor = xlWait\n\
+             Application.Cursor = xlDefault\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.Cursor"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| {
+                    finding.what.eq_ignore_ascii_case("Application.Cursor")
+                        && finding.reason.contains("mouse-pointer user interface")
                 })
                 .count(),
             2
