@@ -197,6 +197,12 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's application-window minimized, normal, or maximized UI state",
     },
     Rule {
+        pattern: "DisplayGridlines",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides worksheet gridlines in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -1235,10 +1241,12 @@ impl Walker {
             "ActiveWorkbook",
             "ActiveSheet",
             "ActiveCell",
+            "ActiveWindow",
             "Selection",
             "Application.ActiveWorkbook",
             "Application.ActiveSheet",
             "Application.ActiveCell",
+            "Application.ActiveWindow",
             "Application.Selection",
         ]
         .iter()
@@ -1251,7 +1259,7 @@ impl Walker {
         }) {
             self.findings.push(Finding {
                 what: name.to_string(),
-                reason: "reads Excel's active UI context; result depends on the current workbook, sheet, cell, or selection"
+                reason: "reads Excel's active UI context; result depends on the current window, workbook, sheet, cell, or selection"
                     .to_string(),
                 class: None,
                 line,
@@ -2701,6 +2709,36 @@ mod tests {
                     finding.what.eq_ignore_ascii_case("Application.WindowState")
                         && finding.reason.contains("application-window")
                 })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_gridlines_are_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseGridlines()\n\
+             Application.ActiveWindow.DisplayGridlines = False\n\
+             Application.ActiveWindow.DisplayGridlines = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names.get("Application.ActiveWindow.DisplayGridlines"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("worksheet gridlines"))
                 .count(),
             2
         );
