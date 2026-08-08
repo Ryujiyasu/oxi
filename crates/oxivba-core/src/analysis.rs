@@ -209,6 +209,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides worksheet row and column headings in an Excel window",
     },
     Rule {
+        pattern: "DisplayWorkbookTabs",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides workbook sheet tabs in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2775,6 +2781,37 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("row and column headings"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_workbook_tabs_are_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseWorkbookTabs()\n\
+             Application.ActiveWindow.DisplayWorkbookTabs = False\n\
+             Application.ActiveWindow.DisplayWorkbookTabs = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names
+                .get("Application.ActiveWindow.DisplayWorkbookTabs"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("workbook sheet tabs"))
                 .count(),
             2
         );
