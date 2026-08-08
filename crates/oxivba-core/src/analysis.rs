@@ -281,6 +281,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes the first visible column in an Excel window",
     },
     Rule {
+        pattern: "DisplayFormulas",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "switches an Excel window between formula and calculated-value display",
+    },
+    Rule {
+        pattern: "DisplayZeros",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides zero values in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -3048,6 +3060,45 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("first visible"))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn active_window_formula_and_zero_display_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseValueDisplay()\n\
+             ActiveWindow.DisplayFormulas = True\n\
+             ActiveWindow.DisplayZeros = False\n\
+             Application.ActiveWindow.DisplayFormulas = False\n\
+             Application.ActiveWindow.DisplayZeros = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        for name in [
+            "ActiveWindow.DisplayFormulas",
+            "ActiveWindow.DisplayZeros",
+            "Application.ActiveWindow.DisplayFormulas",
+            "Application.ActiveWindow.DisplayZeros",
+        ] {
+            assert_eq!(a.api_names.get(name), Some(&1), "{name}");
+        }
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| {
+                    finding.reason.contains("calculated-value display")
+                        || finding.reason.contains("zero values")
+                })
                 .count(),
             4
         );
