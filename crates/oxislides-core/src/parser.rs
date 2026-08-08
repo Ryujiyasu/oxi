@@ -13,7 +13,8 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    default_chart_bar_dir, default_chart_grouping, default_chart_type, Chart, ChartSeries,
+    default_chart_bar_dir, default_chart_grouping, default_chart_hole_size,
+    default_chart_type, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
 };
@@ -1690,6 +1691,9 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut chart_type: Option<String> = None;
     let mut bar_dir: Option<String> = None;
     let mut grouping: Option<String> = None;
+    let mut hole_size: Option<f64> = None;
+    let mut legend_overlay = true;
+    let mut in_legend = false;
     let mut series: Vec<ChartSeries> = Vec::new();
     let mut categories: Vec<String> = Vec::new();
     let mut has_legend = false;
@@ -1734,6 +1738,12 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "lineChart" => {
                         chart_type = Some("line".to_string());
                     }
+                    // A doughnut is a pie with a hole: the same clockwise
+                    // slice geometry, one ring per series (Word draws the
+                    // first series only, like the pie).
+                    "doughnutChart" => {
+                        chart_type = Some("doughnut".to_string());
+                    }
                     "barChart" => {
                         in_bar_chart = true;
                         chart_type = Some("bar".to_string());
@@ -1741,7 +1751,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
-                            || chart_type.as_deref() == Some("line") =>
+                            || chart_type.as_deref() == Some("line")
+                            || chart_type.as_deref() == Some("doughnut") =>
                     {
                         in_ser = true;
                         ser_target = "";
@@ -1770,7 +1781,10 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     // draws a legend whenever a <c:legend> element exists
                     // (regardless of position/overlay attrs), so catch BOTH
                     // the Start form here and the self-closing form below.
-                    "legend" => has_legend = true,
+                    "legend" => {
+                        has_legend = true;
+                        in_legend = true;
+                    }
                     // <c:title> is a REAL START tag carrying the explicit
                     // chart-title text: <c:title><c:tx><c:rich><a:p><a:r>
                     // <a:t>Quarterly Revenue</a:t></a:r></a:p>...</c:title>.
@@ -1809,10 +1823,34 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             grouping = Some(v);
                         }
                     }
+                    // <c:holeSize val="50"/> — self-closing child of
+                    // <c:doughnutChart>, the hole diameter as a percent of
+                    // the outer diameter (same Event::Empty trap as barDir).
+                    "holeSize" => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(n) = v.parse::<f64>() {
+                                hole_size = Some(n);
+                            }
+                        }
+                    }
                     // python-pptx writes a bare self-closing <c:legend/> to
                     // enable a legend (no overlay/position attrs). Any legend
                     // declaration -> has_legend.
                     "legend" => has_legend = true,
+                    // <c:overlay val="0"/> inside <c:legend>: the
+                    // legend is NOT overlaid, so it takes a band on
+                    // the right and the plot area shrinks. A bare
+                    // <c:legend/> (no overlay child) IS an overlay
+                    // and leaves the plot alone — chart_pie2 p2/p3
+                    // (bare) keep the circle on the frame centre and
+                    // the legend overlaps it, while chart_doughnut
+                    // (overlay=0) shifts the ring left. <c:overlay>
+                    // also occurs inside <c:title>, hence in_legend.
+                    "overlay" if in_legend => {
+                        if get_attr(&e, "val").as_deref() == Some("0") {
+                            legend_overlay = false;
+                        }
+                    }
                     // Self-closing <c:autoTitleDeleted val="1"/> — python-pptx
                     // writes it when the auto title is explicitly removed
                     // (chart.has_title=False). When absent (or val=0) Word
@@ -1882,6 +1920,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
             Ok(Event::End(e)) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "legend" => in_legend = false,
                     "v" => {
                         if in_v {
                             in_v = false;
@@ -1949,6 +1988,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         chart_type: chart_type.unwrap_or_else(default_chart_type),
         bar_dir: bar_dir.unwrap_or_else(default_chart_bar_dir),
         grouping: grouping.unwrap_or_else(default_chart_grouping),
+        hole_size: hole_size.unwrap_or_else(default_chart_hole_size),
+        legend_overlay,
         series,
         categories,
         has_legend,

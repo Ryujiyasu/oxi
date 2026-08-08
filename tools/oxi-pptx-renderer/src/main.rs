@@ -440,6 +440,7 @@ fn shape_json(sh: &Shape) -> Value {
                 "chart_type": chart.chart_type,
                 "bar_dir": chart.bar_dir,
                 "grouping": chart.grouping,
+                "hole_size": chart.hole_size,
                 "series": chart
                     .series
                     .iter()
@@ -782,7 +783,29 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //     baseline = sh.y+28.03); >=2 series -> none.
                         //     A legend is drawn only when the chart XML
                         //     declares <c:legend> (none of the 4 probes do).
-                        if chart.chart_type == "pie" {
+                        if chart.chart_type == "pie"
+                            || chart.chart_type == "doughnut"
+                        {
+                            // A DOUGHNUT is a pie with a hole: identical
+                            // titles, slice sweep, legend and vertical
+                            // geometry, so it shares this branch and differs
+                            // only where marked `is_doughnut`. Word
+                            // render-truth 2026-08-09 (chart_doughnut, 8 arms;
+                            // 600dpi pixel scan of the ring + fitz
+                            // get_drawings/rawdict for the legend):
+                            //   r_in = r_out * holeSize/100 — measured
+                            //     0.5010/0.5011/0.5013/0.5014 at holeSize 50
+                            //     and 0.2510 at holeSize 25.
+                            //   vertical geometry == the pie's within 0.16pt:
+                            //     bottom sy+shh-11 (measured -11.16), top
+                            //     sy+46.37 auto-title (46.44) / sy+40.7
+                            //     explicit (40.80), and data labels shrink
+                            //     both sides by 15.78 (measured 15.72/15.84).
+                            //   data labels sit on the MIDDLE of the ring
+                            //     band, i.e. at (r_in+r_out)/2 along the
+                            //     slice's mid-angle: measured 74.66 against
+                            //     (49.92+99.42)/2 = 74.67.
+                            let is_doughnut = chart.chart_type == "doughnut";
                             // Pie chart (Word render-truth 2026-08-06, fitz
                             // get_drawings on chart_pie / chart_pie3 + the
                             // XML autoTitleDeleted census):
@@ -887,7 +910,49 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     400,
                                 );
                             }
-                            let circle_cx = sx + sw / 2.0;
+                            // A NON-OVERLAY legend (<c:overlay val="0"/>)
+                            // takes a band on the right and the circle is
+                            // centred in what remains; an overlay legend (a
+                            // bare <c:legend/>) leaves the frame centre alone.
+                            // chart_doughnut 2026-08-09, ring centre vs the
+                            // legend swatch x0 over three label widths
+                            // (10.42 / 63.81 / 102.28pt): plot_right =
+                            // swatch_x0 - 7.32 (measured 7.36/7.31/7.30), and
+                            // with no legend at all the centre lands on the
+                            // frame centre (269.94 vs 270.00). The swatch x0
+                            // itself uses the same formula as the legend
+                            // block drawn further down.
+                            let banded_right = if chart.has_legend
+                                && !chart.legend_overlay
+                            {
+                                let lfs = 18.0f32;
+                                let max_label_w = chart
+                                    .categories
+                                    .iter()
+                                    .map(|name| {
+                                        font_adv::line_hmtx_width_pt(
+                                            name,
+                                            lfs,
+                                            axis_family,
+                                        )
+                                        .unwrap_or_else(|| {
+                                            name.chars().count() as f32
+                                                * lfs
+                                                * 0.5
+                                        })
+                                            as f64
+                                    })
+                                    .fold(0.0f64, f64::max);
+                                let swatch_x0 =
+                                    (sx + sw) - 10.0 - max_label_w - 4.62 - 9.89;
+                                Some(swatch_x0 - 7.32)
+                            } else {
+                                None
+                            };
+                            let circle_cx = match banded_right {
+                                Some(right) => (sx + right) / 2.0,
+                                None => sx + sw / 2.0,
+                            };
                             // Data labels (c:dLbls) may shrink the pie circle
                             // (see the OUTSIDE_END rule below) — top/bottom
                             // must be mutable.
@@ -924,8 +989,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 circle_top += 15.78;
                                 circle_bot -= 15.78;
                             }
-                            let r = (circle_bot - circle_top) / 2.0;
+                            // The circle is bound by whichever of the plot
+                            // area's height and width is smaller (in every
+                            // measured arm the height binds).
+                            let r = match banded_right {
+                                Some(right) => ((circle_bot - circle_top) / 2.0)
+                                    .min((right - sx) / 2.0),
+                                None => (circle_bot - circle_top) / 2.0,
+                            };
                             let circle_cy = (circle_top + circle_bot) / 2.0;
+                            // Doughnut hole: r_in = r_out * holeSize/100.
+                            let r_in = if is_doughnut {
+                                r * (chart.hole_size / 100.0).clamp(0.0, 0.95)
+                            } else {
+                                0.0
+                            };
                             let bx0 = ((circle_cx - r) * scale).round() as i32;
                             let by0 = ((circle_cy - r) * scale).round() as i32;
                             let bx1 = ((circle_cx + r) * scale).round() as i32;
@@ -977,22 +1055,80 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         ));
                                         let old_brush =
                                             SelectObject(mem_dc, brush);
-                                        // GDI Pie() sweeps COUNTER-CLOCKWISE from
-                                        // (xr1,yr1) to (xr2,yr2). Word's slices
-                                        // sweep CLOCKWISE from -90 deg, so pass
-                                        // the endpoints in reverse order (p2 =
-                                        // the clockwise END of the slice).
-                                        let _ = Pie(
-                                            mem_dc,
-                                            bx0,
-                                            by0,
-                                            bx1,
-                                            by1,
-                                            (p2.0 * scale).round() as i32,
-                                            (p2.1 * scale).round() as i32,
-                                            (p1.0 * scale).round() as i32,
-                                            (p1.1 * scale).round() as i32,
-                                        );
+                                        if is_doughnut {
+                                            // GDI has no annular-sector
+                                            // primitive, so flatten the band
+                                            // into a polygon: the outer arc
+                                            // start->end, then the inner arc
+                                            // back. 1-degree steps are well
+                                            // under a pixel at 150dpi and the
+                                            // fill stays background-agnostic
+                                            // (punching the hole with a
+                                            // background-coloured circle
+                                            // would not be).
+                                            let steps = (sweep.abs().ceil()
+                                                as usize)
+                                                .clamp(2, 720);
+                                            let mut pts: Vec<POINT> =
+                                                Vec::with_capacity(
+                                                    (steps + 1) * 2,
+                                                );
+                                            let at = |rad: f64, deg: f64| {
+                                                POINT {
+                                                    x: ((circle_cx
+                                                        + rad
+                                                            * to_rad(deg).cos())
+                                                        * scale)
+                                                        .round()
+                                                        as i32,
+                                                    y: ((circle_cy
+                                                        + rad
+                                                            * to_rad(deg).sin())
+                                                        * scale)
+                                                        .round()
+                                                        as i32,
+                                                }
+                                            };
+                                            for i in 0..=steps {
+                                                let t = i as f64
+                                                    / steps as f64;
+                                                pts.push(at(
+                                                    r,
+                                                    start_deg + sweep * t,
+                                                ));
+                                            }
+                                            for i in (0..=steps).rev() {
+                                                let t = i as f64
+                                                    / steps as f64;
+                                                pts.push(at(
+                                                    r_in,
+                                                    start_deg + sweep * t,
+                                                ));
+                                            }
+                                            let old_pen = SelectObject(
+                                                mem_dc,
+                                                GetStockObject(NULL_PEN),
+                                            );
+                                            let _ = Polygon(mem_dc, &pts);
+                                            SelectObject(mem_dc, old_pen);
+                                        } else {
+                                            // GDI Pie() sweeps COUNTER-CLOCKWISE from
+                                            // (xr1,yr1) to (xr2,yr2). Word's slices
+                                            // sweep CLOCKWISE from -90 deg, so pass
+                                            // the endpoints in reverse order (p2 =
+                                            // the clockwise END of the slice).
+                                            let _ = Pie(
+                                                mem_dc,
+                                                bx0,
+                                                by0,
+                                                bx1,
+                                                by1,
+                                                (p2.0 * scale).round() as i32,
+                                                (p2.1 * scale).round() as i32,
+                                                (p1.0 * scale).round() as i32,
+                                                (p1.1 * scale).round() as i32,
+                                            );
+                                        }
                                         SelectObject(mem_dc, old_brush);
                                         let _ = DeleteObject(brush);
                                     }
@@ -1047,7 +1183,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 * dlfs
                                                 * 0.5
                                         }) as f64;
-                                        let label_r = if pie_labels_outside {
+                                        let label_r = if is_doughnut {
+                                            // A doughnut has no room outside
+                                            // its band, so Word centres the
+                                            // label ON the band: measured
+                                            // 74.66 against (r_in+r_out)/2 =
+                                            // (49.92+99.42)/2 = 74.67 on all
+                                            // three slices of chart_doughnut
+                                            // slide 3 (the ring still shrinks
+                                            // by 15.78 per side as a pie's
+                                            // would).
+                                            (r_in + r) / 2.0
+                                        } else if pie_labels_outside {
                                             // OUTSIDE_END: Word places the
                                             // label CENTRE at 0.78 * the
                                             // PRE-shrink radius minus

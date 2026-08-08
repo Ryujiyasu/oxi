@@ -210,6 +210,12 @@ pub struct Chart {
     /// c:barChart/c:grouping@val — "clustered", "stacked", "percentStacked".
     #[serde(default = "default_chart_grouping")]
     pub grouping: String,
+    /// c:doughnutChart/c:holeSize@val — the hole diameter as a percent of the
+    /// outer diameter. Word render-truth (chart_doughnut 2026-08-09, 600dpi
+    /// pixel scan of the ring): r_in / r_out == holeSize/100 exactly —
+    /// 0.5010/0.5011/0.5013/0.5014 at holeSize 50 and 0.2510 at holeSize 25.
+    #[serde(default = "default_chart_hole_size")]
+    pub hole_size: f64,
     /// Series in document order (c:ser/c:idx). Series i renders with theme
     /// accent(i+1).
     pub series: Vec<ChartSeries>,
@@ -222,6 +228,15 @@ pub struct Chart {
     /// drawn at all. None of the 4 chart1-4 probes declare one.
     #[serde(default)]
     pub has_legend: bool,
+    /// False only when the legend declares `<c:overlay val="0"/>`: the legend
+    /// is NOT overlaid, so it takes a band on the right and the plot area
+    /// shrinks into what remains. A bare `<c:legend/>` (python-pptx's default,
+    /// no overlay child) is an OVERLAY — chart_pie2 p2/p3 keep the circle on
+    /// the frame centre and the legend swatches (x0 379.55) sit ON TOP of the
+    /// circle (right edge 402.84 / 388.23), while chart_doughnut (overlay=0)
+    /// shifts the ring left. Measured 2026-08-09.
+    #[serde(default = "default_chart_legend_overlay")]
+    pub legend_overlay: bool,
     /// True when the chart XML declares `<c:autoTitleDeleted val="1"/>`
     /// (self-closing). Word derives the chart's plot geometry AND whether the
     /// automatic series-name title is drawn from this flag: a pie with
@@ -299,6 +314,15 @@ pub fn default_chart_grouping() -> String {
 }
 pub fn default_datalabel_position() -> String {
     "outEnd".to_string()
+}
+/// c:doughnutChart/c:holeSize@val — the hole diameter as a PERCENT of the
+/// outer diameter. OOXML's implied default is 10; python-pptx writes 50.
+pub fn default_chart_hole_size() -> f64 {
+    50.0
+}
+/// A legend with no `<c:overlay val="0"/>` child is an overlay.
+pub fn default_chart_legend_overlay() -> bool {
+    true
 }
 
 /// One c:ser element: a named series of values (per category).
