@@ -922,29 +922,51 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // frame centre (269.94 vs 270.00). The swatch x0
                             // itself uses the same formula as the legend
                             // block drawn further down.
+                            //
+                            // A label wider than the legend's share of the
+                            // frame wraps first (see `legend_label_cap`), and
+                            // the block then takes the WRAPPED width.
+                            let legend_fs = 18.0f32;
+                            let legend_cap = legend_label_cap(sw);
+                            let legend_lines: Vec<Vec<String>> = chart
+                                .categories
+                                .iter()
+                                .map(|name| {
+                                    wrap_legend_label(
+                                        name,
+                                        legend_fs,
+                                        axis_family,
+                                        legend_cap,
+                                    )
+                                })
+                                .collect();
+                            let legend_label_w = legend_lines
+                                .iter()
+                                .flat_map(|ls| ls.iter())
+                                .map(|s| {
+                                    font_adv::line_hmtx_width_pt(
+                                        s,
+                                        legend_fs,
+                                        axis_family,
+                                    )
+                                    .unwrap_or_else(|| {
+                                        s.chars().count() as f32 * legend_fs * 0.5
+                                    }) as f64
+                                })
+                                .fold(0.0f64, f64::max);
+                            let legend_max_lines = legend_lines
+                                .iter()
+                                .map(|ls| ls.len())
+                                .max()
+                                .unwrap_or(1);
                             let banded_right = if chart.has_legend
                                 && !chart.legend_overlay
                             {
-                                let lfs = 18.0f32;
-                                let max_label_w = chart
-                                    .categories
-                                    .iter()
-                                    .map(|name| {
-                                        font_adv::line_hmtx_width_pt(
-                                            name,
-                                            lfs,
-                                            axis_family,
-                                        )
-                                        .unwrap_or_else(|| {
-                                            name.chars().count() as f32
-                                                * lfs
-                                                * 0.5
-                                        })
-                                            as f64
-                                    })
-                                    .fold(0.0f64, f64::max);
-                                let swatch_x0 =
-                                    (sx + sw) - 10.0 - max_label_w - 4.62 - 9.89;
+                                let swatch_x0 = (sx + sw)
+                                    - 10.0
+                                    - legend_label_w
+                                    - 4.62
+                                    - 9.89;
                                 Some(swatch_x0 - 7.32)
                             } else {
                                 None
@@ -1014,16 +1036,36 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // series[0].values/their sum, the 2nd <c:ser> is
                             // ignored), so summing across ALL series would
                             // shrink every slice.
-                            let total: f64 = chart
-                                .series
-                                .first()
-                                .map(|s| s.values.iter().copied().sum())
-                                .unwrap_or(0.0);
+                            //
+                            // A multi-series DOUGHNUT is the exception: Word
+                            // draws one CONCENTRIC RING PER SERIES, splitting
+                            // the [r_in, r] annulus into n equal-width bands
+                            // with series 0 INNERMOST.  chart_doughnut_resid
+                            // S2 (2026-08-09, 600dpi scan along +x): the band
+                            // edges go 66.72 / 99.84 | 99.96 / 133.08 for one
+                            // hole and two series -- two equal 33.12 bands --
+                            // and a colour sample at 122 deg (where the two
+                            // series disagree on which category owns the ray)
+                            // puts series1 (West/accent2) INSIDE and series2
+                            // (East/accent1) outside.  Each ring's angles come
+                            // from its OWN series total.
+                            let ring_count = if is_doughnut {
+                                chart.series.len().max(1)
+                            } else {
+                                1
+                            };
+                            let ring_w = (r - r_in) / ring_count as f64;
                             let _ =
                                 SelectObject(mem_dc, GetStockObject(NULL_PEN));
-                            let mut start_deg = -90.0f64;
-                            if let Some(first) = chart.series.first() {
-                                for (ci, v) in first.values.iter().enumerate() {
+                            for (si, ser) in
+                                chart.series.iter().enumerate().take(ring_count)
+                            {
+                                let ring_in = r_in + ring_w * si as f64;
+                                let ring_out = r_in + ring_w * (si + 1) as f64;
+                                let total: f64 =
+                                    ser.values.iter().copied().sum();
+                                let mut start_deg = -90.0f64;
+                                for (ci, v) in ser.values.iter().enumerate() {
                                     if total <= 0.0 || *v <= 0.0 {
                                         continue;
                                     }
@@ -1034,13 +1076,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     };
                                     let p1 = (
                                         circle_cx
-                                            + r * (to_rad(start_deg)).cos(),
+                                            + ring_out
+                                                * (to_rad(start_deg)).cos(),
                                         circle_cy
-                                            + r * (to_rad(start_deg)).sin(),
+                                            + ring_out
+                                                * (to_rad(start_deg)).sin(),
                                     );
                                     let p2 = (
-                                        circle_cx + r * (to_rad(end_deg)).cos(),
-                                        circle_cy + r * (to_rad(end_deg)).sin(),
+                                        circle_cx
+                                            + ring_out * (to_rad(end_deg)).cos(),
+                                        circle_cy
+                                            + ring_out * (to_rad(end_deg)).sin(),
                                     );
                                     let col_hex = pres
                                         .theme_colors
@@ -1093,7 +1139,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 let t = i as f64
                                                     / steps as f64;
                                                 pts.push(at(
-                                                    r,
+                                                    ring_out,
                                                     start_deg + sweep * t,
                                                 ));
                                             }
@@ -1101,7 +1147,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 let t = i as f64
                                                     / steps as f64;
                                                 pts.push(at(
-                                                    r_in,
+                                                    ring_in,
                                                     start_deg + sweep * t,
                                                 ));
                                             }
@@ -1160,9 +1206,23 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         format!("{}", v)
                                     }
                                 };
-                                let mut lab_deg = -90.0f64;
-                                if let Some(first) = chart.series.first() {
-                                    for v in first.values.iter() {
+                                // One label pass per RING (a pie has exactly
+                                // one).  Multi-series doughnut labels are not
+                                // measured; each ring reuses the measured
+                                // single-ring rule on its own band.
+                                for (si, ser) in chart
+                                    .series
+                                    .iter()
+                                    .enumerate()
+                                    .take(ring_count)
+                                {
+                                    let ring_in = r_in + ring_w * si as f64;
+                                    let ring_out =
+                                        r_in + ring_w * (si + 1) as f64;
+                                    let total: f64 =
+                                        ser.values.iter().copied().sum();
+                                    let mut lab_deg = -90.0f64;
+                                    for v in ser.values.iter() {
                                         if total <= 0.0 || *v <= 0.0 {
                                             continue;
                                         }
@@ -1193,7 +1253,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             // slide 3 (the ring still shrinks
                                             // by 15.78 per side as a pie's
                                             // would).
-                                            (r_in + r) / 2.0
+                                            (ring_in + ring_out) / 2.0
                                         } else if pie_labels_outside {
                                             // OUTSIDE_END: Word places the
                                             // label CENTRE at 0.78 * the
@@ -1237,25 +1297,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // swatch + category name, right-aligned overlay,
                             // vertically centred on the CIRCLE centre.
                             if chart.has_legend {
-                                let lfs = 18.0f32;
+                                let lfs = legend_fs;
                                 let n_cat = chart.categories.len().max(1);
-                                let max_label_w = chart
-                                    .categories
-                                    .iter()
-                                    .map(|name| {
-                                        font_adv::line_hmtx_width_pt(
-                                            name,
-                                            lfs,
-                                            axis_family,
-                                        )
-                                        .unwrap_or_else(|| {
-                                            name.chars().count() as f32 * lfs * 0.5
-                                        }) as f64
-                                    })
-                                    .fold(0.0f64, f64::max);
+                                let max_label_w = legend_label_w;
                                 let swatch_w = 9.89f64;
                                 let gap = 4.62f64;
-                                let row_pitch = 27.75f64;
+                                // Every row grows by the extra text lines of
+                                // the TALLEST entry: chart_doughnut_resid
+                                // measures a uniform 27.75 for all-single-line
+                                // legends, 49.51 when one entry wraps to two
+                                // lines and 93.02 when one wraps to four, i.e.
+                                // 27.75 + (lines-1) * 21.76.  Text lines
+                                // inside an entry sit 21.99 apart.
+                                let text_line_pitch = 21.99f64;
+                                let row_pitch = 27.75
+                                    + (legend_max_lines as f64 - 1.0) * 21.76;
                                 let legend_right = (sx + sw) - 10.0;
                                 let swatch_x1 = legend_right - max_label_w - gap;
                                 let swatch_x0 = swatch_x1 - swatch_w;
@@ -1296,16 +1352,26 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     }
                                     let label_baseline =
                                         sw_y + swatch_w + 0.28;
-                                    draw_text_baseline(
-                                        mem_dc,
-                                        (label_x0 * scale).round() as i32,
-                                        label_baseline as f32,
-                                        name,
-                                        lfs,
-                                        axis_family,
-                                        None,
-                                        scale,
-                                    );
+                                    let lines = legend_lines
+                                        .get(ci)
+                                        .cloned()
+                                        .unwrap_or_else(|| {
+                                            vec![name.to_string()]
+                                        });
+                                    for (li, line) in lines.iter().enumerate() {
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            (label_x0 * scale).round() as i32,
+                                            (label_baseline
+                                                + li as f64 * text_line_pitch)
+                                                as f32,
+                                            line,
+                                            lfs,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                    }
                                 }
                             }
                         } else if chart.chart_type == "line" {
@@ -3313,6 +3379,73 @@ fn draw_line_marker(
                 let _ = Polygon(dc, &pts);
             }
         }
+    }
+}
+
+/// The legend's share of the chart width: a label wider than this wraps.
+///
+/// DERIVED (chart_legendwrap 2026-08-09): a category label made of one very
+/// long word cannot break at a space, so Word force-breaks it at the last
+/// character that fits -- the widest resulting line IS the cap.  Sweeping the
+/// frame width over 200/240/280/320/360/396/440/500/560/600pt with a 4.12pt
+/// glyph quantum leaves exactly one linear law, `cap = a*sw + b` with a in
+/// [0.3321, 0.3436]; a = 1/3 lies inside it, and at a = 1/3 the intercept
+/// window is [-21.74, -21.03), so:
+///
+///     cap = frame_width / 3 - 21.4pt
+///
+/// It is HEIGHT-independent (same cap at frame heights 180 / 288 / 400) and it
+/// reproduces the six independent chart_doughnut_resid arms.  After wrapping,
+/// the legend block shrinks to the WRAPPED width: the measured label x0 is
+/// (sx+sw) - 10 - widest_line on every arm.
+fn legend_label_cap(frame_w: f64) -> f64 {
+    frame_w / 3.0 - 21.4
+}
+
+/// Wrap one legend label to `cap`: greedy at spaces, and a single word wider
+/// than the cap is force-broken at the last character that fits (Word
+/// 2026-08-09: 'Abcdefghijklmnop' -> 'Abcdefghijklm' + 'nop').
+fn wrap_legend_label(text: &str, fs: f32, family: &str, cap: f64) -> Vec<String> {
+    let width = |s: &str| {
+        font_adv::line_hmtx_width_pt(s, fs, family)
+            .unwrap_or_else(|| s.chars().count() as f32 * fs * 0.5) as f64
+    };
+    if cap <= 0.0 || width(text) <= cap {
+        return vec![text.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ') {
+        if !line.is_empty() {
+            let cand = format!("{} {}", line, word);
+            if width(&cand) <= cap {
+                line = cand;
+                continue;
+            }
+            out.push(std::mem::take(&mut line));
+        }
+        if width(word) <= cap {
+            line = word.to_string();
+            continue;
+        }
+        let mut cur = String::new();
+        for ch in word.chars() {
+            let mut probe = cur.clone();
+            probe.push(ch);
+            if !cur.is_empty() && width(&probe) > cap {
+                out.push(std::mem::take(&mut cur));
+            }
+            cur.push(ch);
+        }
+        line = cur;
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    if out.is_empty() {
+        vec![text.to_string()]
+    } else {
+        out
     }
 }
 
