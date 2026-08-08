@@ -167,6 +167,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides Excel's status-bar user interface",
     },
     Rule {
+        pattern: "DisplayFormulaBar",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides Excel's formula-bar user interface",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2546,6 +2552,31 @@ mod tests {
                         .what
                         .eq_ignore_ascii_case("Application.DisplayStatusBar")
                         && finding.class == Some(Class::D)
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn display_formula_bar_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseFormulaBar()\n\
+             Application.DisplayFormulaBar = False\n\
+             Application.DisplayFormulaBar = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.DisplayFormulaBar"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| {
+                    finding
+                        .what
+                        .eq_ignore_ascii_case("Application.DisplayFormulaBar")
+                        && finding.reason.contains("formula-bar user interface")
                 })
                 .count(),
             2
