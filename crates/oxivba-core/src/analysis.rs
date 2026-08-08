@@ -215,6 +215,18 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides workbook sheet tabs in an Excel window",
     },
     Rule {
+        pattern: "DisplayHorizontalScrollBar",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides the horizontal scroll bar in an Excel window",
+    },
+    Rule {
+        pattern: "DisplayVerticalScrollBar",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides the vertical scroll bar in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2814,6 +2826,44 @@ mod tests {
                 .filter(|finding| finding.reason.contains("workbook sheet tabs"))
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn active_window_scroll_bars_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseScrollBars()\n\
+             Application.ActiveWindow.DisplayHorizontalScrollBar = False\n\
+             Application.ActiveWindow.DisplayVerticalScrollBar = False\n\
+             Application.ActiveWindow.DisplayHorizontalScrollBar = True\n\
+             Application.ActiveWindow.DisplayVerticalScrollBar = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names
+                .get("Application.ActiveWindow.DisplayHorizontalScrollBar"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.api_names
+                .get("Application.ActiveWindow.DisplayVerticalScrollBar"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("scroll bar in an Excel window"))
+                .count(),
+            4
         );
     }
 
