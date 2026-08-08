@@ -27320,7 +27320,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let s754_min_fit = if row.cells.len() == 1 {
                 match table_grid_pitch {
                     Some(p) => p * 2.2,
-                    // S999 (probe _pb_s754, opt-in OXI_S999): Word SPLITS a
+                    // S999 (probe _pb_s754, default ON, opt-out OXI_S999_DISABLE): Word SPLITS a
                     // no-TYPE-docGrid / no-grid single-column row line-by-line
                     // (keep-all-that-fit, NO widow-keep) — measured sz24 keeps
                     // 5/4/3/2 lines as R=78/64/51/37, sz28 5..1 as R=87..23,
@@ -27330,7 +27330,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // lines) that does NOT apply to a no-type row. technical__
                     // 0061c884 p5 (R=41.1) Word keeps 2 lines; Oxi's 58.0
                     // whole-pushed it (+1). Use the multi-cell ~1-line floor.
-                    None if std::env::var("OXI_S999").is_ok() => 14.0,
+                    // 0061c884 p5 (R=41.1) Word keeps 2 lines; Oxi's 58.0
+                    // whole-pushed it (+1).  The S559 exposure recorded when
+                    // this was first derived (-1x3 on the same doc) is GONE —
+                    // the p6/p7 under-reservation it needed was closed by the
+                    // S1093-S1095 inline-object work.
+                    None if std::env::var("OXI_S999_DISABLE").is_err() => 14.0,
                     None => 58.0,
                 }
             } else {
