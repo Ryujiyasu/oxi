@@ -823,9 +823,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // Auto title (single series, NOT autoTitleDeleted,
                             // AND no explicit <c:title> — an explicit title
                             // suppresses the auto series-name title, same as
-                            // the bar/line branches).
-                            let has_title_draw = chart.series.len() == 1
-                                && !chart.auto_title_deleted
+                            // the bar/line branches.  NOTE: unlike bar/line,
+                            // the pie draws its auto title for ANY series
+                            // count -- Word renders a multi-series pie with
+                            // ONLY the first series (the second <c:ser> is
+                            // ignored, measured chart_pie_multi 2026-08-08:
+                            // slice angles == series[0].values/their sum, so
+                            // 'Rev' 19.2/21.4/16.7 -> 120.6/134.4/104.9 deg)
+                            // and titles it with series[0].name ('Rev').
+                            let has_title_draw = !chart.auto_title_deleted
                                 && !has_explicit_title;
                             if let Some(first) = chart.series.first() {
                                 if has_title_draw {
@@ -924,11 +930,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let by0 = ((circle_cy - r) * scale).round() as i32;
                             let bx1 = ((circle_cx + r) * scale).round() as i32;
                             let by1 = ((circle_cy + r) * scale).round() as i32;
+                            // total = the FIRST series' values only.  Word
+                            // renders a multi-series pie with ONLY series[0]
+                            // (chart_pie_multi 2026-08-08: slice angles ==
+                            // series[0].values/their sum, the 2nd <c:ser> is
+                            // ignored), so summing across ALL series would
+                            // shrink every slice.
                             let total: f64 = chart
                                 .series
-                                .iter()
-                                .flat_map(|s| s.values.iter().copied())
-                                .sum();
+                                .first()
+                                .map(|s| s.values.iter().copied().sum())
+                                .unwrap_or(0.0);
                             let _ =
                                 SelectObject(mem_dc, GetStockObject(NULL_PEN));
                             let mut start_deg = -90.0f64;
