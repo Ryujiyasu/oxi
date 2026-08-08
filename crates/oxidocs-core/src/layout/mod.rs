@@ -2820,6 +2820,24 @@ impl LayoutEngine {
         // two ship together as a compensating pair — either alone leaves
         // administrative__0001ce58 at 0.9583, both together restore 1.0.
         let s966 = !self.doc_body_has_real_cjk && std::env::var("OXI_S966_DISABLE").is_err();
+        // S1103 (2026-08-08, opt-out OXI_S1103_DISABLE): U+2015 HORIZONTAL BAR
+        // joins the ambiguous class (the seventh member after S801 dashes,
+        // S830 ellipsis, S888 hyphens, S951 arrows/math, S966 bullet, S1081's
+        // glued-quote rule). S801 covers only U+2013/U+2014, so the SCC-style
+        // catchword separator «Pensions ― Pension plans ― Surplus ―» fell to
+        // is_cjk → the eastAsia chain → 83/64 × 12 = 15.5625 where Word draws
+        // the whole span in TimesNewRomanPS-ItalicMT (Word PDF span font,
+        // verified) at hhea 13.799.  legal__000ad039's 12-line catchword block
+        // is ×2.0 auto spacing, so the error is +3.40/LINE (Oxi 31.00 vs Word
+        // 27.60 = 2 × 13.799) = +40.75 by the end of the block, spilling the
+        // page and cascading to 8 isolated +1s.
+        // ★WIDTH IS UNAFFECTED: U+2015 is absent from every metric table, so
+        // char_width_em falls to is_fullwidth (which lists U+2015 explicitly,
+        // COM-confirmed 2026-04-07) = 1.0em → 12.0pt at 12pt under BOTH the
+        // Latin (upm 2048, GDI px round) and the CJK (upm 256) paths — and
+        // Word's own advance measures 12.0.  Only the LINE HEIGHT moves.
+        // Doc-level Latin gate like S801/S888/S951/S966 → JP byte-identical.
+        let s1103 = !self.doc_body_has_real_cjk && std::env::var("OXI_S1103_DISABLE").is_err();
         let is_q = move |c: char| {
             matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                 || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
@@ -2827,6 +2845,7 @@ impl LayoutEngine {
                 || (s888 && matches!(c, '\u{2011}' | '\u{2010}'))
                 || (s951 && matches!(c, '\u{2190}'..='\u{22FF}'))
                 || (s966 && c == '\u{2022}')
+                || (s1103 && c == '\u{2015}')
         };
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
@@ -3103,7 +3122,13 @@ impl LayoutEngine {
             // see the break-site comment (reference__0029c1c «AHI ≥ 30»).
             || (!self.doc_body_has_real_cjk
                 && std::env::var("OXI_S951_DISABLE").is_err()
-                && matches!(ch, '\u{2190}'..='\u{22FF}'));
+                && matches!(ch, '\u{2190}'..='\u{22FF}'))
+            // S1103: U+2015 HORIZONTAL BAR, same ambiguous class — Word draws
+            // legal__000ad039's catchword separators in TNR Italic.  The width
+            // is unchanged either way (is_fullwidth lists U+2015 → 1.0em).
+            || (!self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1103_DISABLE").is_err()
+                && ch == '\u{2015}');
         let cjk_class = kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk);
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
@@ -20684,10 +20709,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let s966_latin_bullet = ch == '\u{2022}'
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S966_DISABLE").is_err();
+                // S1103 (2026-08-08): U+2015 HORIZONTAL BAR joins the ambiguous
+                // class — see resolve_font_family_for_text_g.  Deliberately NOT
+                // added to `s1100_dash_break`: this only fixes the LINE HEIGHT,
+                // and legal__000ad039's catchword block already wraps into the
+                // same 12 lines as Word (its drift is a flat +3.40/line), so
+                // introducing a new break opportunity could only move them.
+                let s1103_latin_hbar = ch == '\u{2015}'
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S1103_DISABLE").is_err();
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
                     || s951_latin_mathop
                     || s966_latin_bullet
+                    || s1103_latin_hbar
                     || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                         && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
                         && {
