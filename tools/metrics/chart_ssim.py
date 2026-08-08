@@ -40,6 +40,7 @@ DOCS = {
     "chart_doughnut": r"pipeline_data\pptx_probes\chart_doughnut\chart_doughnut.pdf",
     "chart_doughnut_resid": r"pipeline_data\pptx_probes\chart_doughnut_resid\chart_doughnut_resid.pdf",
     "chart_bar_resid": r"pipeline_data\pptx_probes\chart_bar_resid\chart_bar_resid.pdf",
+    "chart_legendvert": r"pipeline_data\pptx_probes\chart_legendvert\chart_legendvert.pdf",
 }
 DPI = 150
 

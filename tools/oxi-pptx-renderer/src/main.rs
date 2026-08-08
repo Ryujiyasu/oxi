@@ -1316,12 +1316,66 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 let swatch_x1 = legend_right - max_label_w - gap;
                                 let swatch_x0 = swatch_x1 - swatch_w;
                                 let label_x0 = swatch_x1 + gap;
-                                let legend_total_h =
-                                    (n_cat as f64 - 1.0) * row_pitch + swatch_w;
+                                // Block height + placement, from the 8-arm
+                                // chart_legendvert sweep (L = 1..5 x n = 2..4):
+                                // the block is n * row_pitch tall, is centred
+                                // on the CIRCLE centre, and the first swatch
+                                // sits 8.97 below the block top.  WHICH entry
+                                // wraps is irrelevant -- first / middle / last /
+                                // all-wrap render byte-identically (B1/B3/B4/B7
+                                // all put the swatches at 168.35/217.86/267.37);
+                                // only the tallest entry's line count matters.
+                                // n moves the first swatch by exactly
+                                // row_pitch/2 per entry (193.10 / 168.35 /
+                                // 143.59 for n = 2/3/4).
+                                //
+                                // When the block would leave the frame Word
+                                // re-measures it with the LAST row shrunk to
+                                // its own lines (chart_doughnut_resid S8,
+                                // L=4 n=3: natural 279.06 overflows, tight
+                                // 213.79 fits -> first swatch 135.72), and if
+                                // that still does not fit it DROPS trailing
+                                // entries (B8, L=5 n=3: renders only two
+                                // swatches, at 127.84 = the n=2 natural block).
+                                let swatch_off = 8.97f64;
+                                let mut n_shown = n_cat;
+                                let mut legend_h =
+                                    n_shown as f64 * row_pitch;
+                                loop {
+                                    let top = circle_cy - legend_h / 2.0;
+                                    if top >= sy - 0.01
+                                        && top + legend_h <= sy + shh + 0.01
+                                    {
+                                        break;
+                                    }
+                                    let last_lines = legend_lines
+                                        .get(n_shown.saturating_sub(1))
+                                        .map(|l| l.len().max(1))
+                                        .unwrap_or(1);
+                                    let tight = (n_shown as f64 - 1.0)
+                                        * row_pitch
+                                        + (last_lines as f64 * 21.76 + 5.99);
+                                    let ttop = circle_cy - tight / 2.0;
+                                    if tight < legend_h
+                                        && ttop >= sy - 0.01
+                                        && ttop + tight <= sy + shh + 0.01
+                                    {
+                                        legend_h = tight;
+                                        break;
+                                    }
+                                    if n_shown <= 1 {
+                                        break;
+                                    }
+                                    n_shown -= 1;
+                                    legend_h = n_shown as f64 * row_pitch;
+                                }
                                 let legend_y0 =
-                                    circle_cy - legend_total_h / 2.0;
-                                for (ci, name) in
-                                    chart.categories.iter().enumerate()
+                                    circle_cy - legend_h / 2.0 + swatch_off;
+                                for (ci, name) in chart
+                                    .categories
+                                    .iter()
+                                    .enumerate()
+                                    .take(n_shown)
                                 {
                                     let sw_y =
                                         legend_y0 + ci as f64 * row_pitch;
