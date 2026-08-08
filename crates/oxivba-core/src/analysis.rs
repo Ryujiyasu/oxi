@@ -269,6 +269,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes the pane layout of an Excel window",
     },
     Rule {
+        pattern: "ScrollRow",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the first visible row in an Excel window",
+    },
+    Rule {
+        pattern: "ScrollColumn",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the first visible column in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -3002,6 +3014,42 @@ mod tests {
                 .filter(|finding| finding.reason.contains("pane layout"))
                 .count(),
             6
+        );
+    }
+
+    #[test]
+    fn active_window_scroll_position_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseScrollPosition()\n\
+             ActiveWindow.ScrollRow = 10\n\
+             ActiveWindow.ScrollColumn = 5\n\
+             Application.ActiveWindow.ScrollRow = 1\n\
+             Application.ActiveWindow.ScrollColumn = 1\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        for name in [
+            "ActiveWindow.ScrollRow",
+            "ActiveWindow.ScrollColumn",
+            "Application.ActiveWindow.ScrollRow",
+            "Application.ActiveWindow.ScrollColumn",
+        ] {
+            assert_eq!(a.api_names.get(name), Some(&1), "{name}");
+        }
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("first visible"))
+                .count(),
+            4
         );
     }
 
