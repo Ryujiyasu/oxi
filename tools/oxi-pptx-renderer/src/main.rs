@@ -1428,6 +1428,465 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     }
                                 }
                             }
+                        } else if chart.chart_type == "area"
+                            && std::env::var("OXI_AREA_DISABLE").is_err()
+                        {
+                        // ================= AREA chart (<c:areaChart>) =================
+                        // Word render-truth measured 2026-08-09 with fitz
+                        // get_drawings/rawdict on pipeline_data/pptx_probes/
+                        // chart_area (8 arms: standard / stacked /
+                        // percentStacked x 1..3 series x auto / no title) and
+                        // chart_area_leg (6 arms isolating the legend band,
+                        // the label width and an explicit title).
+                        //
+                        //   plot_left  = sx + 6.50 + widest VALUE label + 16.70
+                        //     -- the same axis inset the horizontal bar uses
+                        //     for its category labels.  113.45 with "0".."25"
+                        //     labels, 135.44 with "0%".."100%": both EXACT,
+                        //     and it reproduces the line chart's hardcoded
+                        //     sx+41.4 and the percentStacked column's sx+63.44.
+                        //   plot_top   = sy + 45.69 explicit title / sy + 51.40
+                        //     auto title / sy + 16.00 none   (== the line chart)
+                        //   plot_bot   = sy + shh - 39.90
+                        //   band_right = legend ? swatch_x0 - 18.15
+                        //                      : sx + sw - 11.0
+                        //   plot_right = band_right - w(LAST category label)/2
+                        //     ★ area categories sit AT the plot edges, so the
+                        //     outermost label overhangs by half its width.
+                        //     chart_area_leg G1/G2/G3/G6 (legend label widths
+                        //     18.23 / 32.63 / 77.47 / 90.99) and G4 (no legend)
+                        //     all reproduce plot_right to 0.04pt.
+                        //   ★ data points sit at the CATEGORY BOUNDARIES, not
+                        //     at band centres like the line/column charts:
+                        //     x_i = plot_left + i * plot_w/(n_cat-1)
+                        //     (113.45 / 202.92 / 292.44 / 381.98 for n=4).
+                        //   value scale: standard -> nice_axis_max(max value)
+                        //     in 5 steps; stacked -> nice_axis_max(max category
+                        //     SUM) in (max/5).round() steps; percentStacked ->
+                        //     0..100% in 10 steps  (== the column chart).
+                        //   draw order (PDF): frame, gridlines, area fills,
+                        //     axis lines + ticks, legend.  A gridline crossing
+                        //     a filled band is covered by the accent colour,
+                        //     so the gridlines go down BEFORE the fills.
+                        //   fills: standard -> every series is its own polygon
+                        //     closed down to the X axis, painted in series
+                        //     order (later series cover earlier ones); stacked
+                        //     -> the band between the running cumulative
+                        //     curves.  The paths are fill-only (no outline).
+                        //   category ticks sit at the DATA x (n ticks, not
+                        //     n+1); labels are centred there with baseline
+                        //     plot_bot + 28.67.
+                        //   legend rows are the SERIES, and ★ a STACKED area
+                        //     REVERSES them (chart_area S4/S5/S6 put Ser2 on
+                        //     top; the standard arms keep Ser1 on top).  The
+                        //     block is n_ser * row_pitch centred on
+                        //     sy + shh/2 + the title offset (0 / 14.85 with an
+                        //     explicit title / 17.68 with the auto title --
+                        //     S7 pins the no-title case at 0, which the line
+                        //     chart could not separate because its auto title
+                        //     only ever fires at n==1), with the first swatch
+                        //     8.97 below the block top: the doughnut rule.
+                        let axis_family = "Calibri";
+                        let axis_fs = 18.0f32;
+                        let sx = sh.x as f64;
+                        let sy = sh.y as f64;
+                        let sw = sh.width as f64;
+                        let shh = sh.height as f64;
+                        let text_w = |t: &str, fs: f32| -> f64 {
+                            font_adv::line_hmtx_width_pt(t, fs, axis_family)
+                                .unwrap_or_else(|| {
+                                    t.chars().count() as f32 * fs * 0.5
+                                }) as f64
+                        };
+                        let n_cat = chart.categories.len().max(1);
+                        let n_ser = chart.series.len().max(1);
+                        let is_100pct = chart.grouping == "percentStacked";
+                        let is_stacked = chart.grouping == "stacked" || is_100pct;
+                        let has_explicit_title = chart.explicit_title.is_some();
+                        let has_auto_title = chart.series.len() == 1
+                            && !chart.auto_title_deleted
+                            && !has_explicit_title;
+
+                        // ---- value axis ----
+                        let raw_max = if is_stacked {
+                            (0..n_cat)
+                                .map(|ci| {
+                                    chart
+                                        .series
+                                        .iter()
+                                        .map(|s| {
+                                            s.values.get(ci).copied().unwrap_or(0.0)
+                                        })
+                                        .sum::<f64>()
+                                })
+                                .fold(0.0f64, f64::max)
+                        } else {
+                            chart
+                                .series
+                                .iter()
+                                .flat_map(|s| s.values.iter().copied())
+                                .fold(0.0f64, f64::max)
+                        };
+                        let max_axis = if is_100pct {
+                            100.0
+                        } else {
+                            nice_axis_max(raw_max)
+                        };
+                        let axis_steps = if is_100pct {
+                            10usize
+                        } else if is_stacked {
+                            ((max_axis / 5.0).round() as usize).max(1)
+                        } else {
+                            5usize
+                        };
+                        let axis_label = |i: usize| -> String {
+                            let v = max_axis * i as f64 / axis_steps as f64;
+                            if is_100pct {
+                                format!("{:.0}%", v)
+                            } else {
+                                format!("{}", v.round() as i64)
+                            }
+                        };
+                        let val_label_w = (0..=axis_steps)
+                            .map(|i| text_w(&axis_label(i), axis_fs))
+                            .fold(0.0f64, f64::max);
+
+                        let plot_left = sx + 6.50 + val_label_w + 16.70;
+                        let plot_top = if has_explicit_title {
+                            sy + 45.69
+                        } else if has_auto_title {
+                            sy + 51.40
+                        } else {
+                            sy + 16.0
+                        };
+                        let plot_bot = sy + shh - 39.9;
+                        let plot_h = plot_bot - plot_top;
+
+                        // ---- legend block geometry (rows = series) ----
+                        let legend_fs = 18.0f32;
+                        let legend_cap = legend_label_cap(sw);
+                        let legend_lines: Vec<Vec<String>> = chart
+                            .series
+                            .iter()
+                            .map(|s| {
+                                wrap_legend_label(
+                                    &s.name,
+                                    legend_fs,
+                                    axis_family,
+                                    legend_cap,
+                                )
+                            })
+                            .collect();
+                        let legend_label_w = legend_lines
+                            .iter()
+                            .flat_map(|ls| ls.iter())
+                            .map(|s| text_w(s, legend_fs))
+                            .fold(0.0f64, f64::max);
+                        let legend_max_lines = legend_lines
+                            .iter()
+                            .map(|ls| ls.len())
+                            .max()
+                            .unwrap_or(1);
+                        let swatch_w = 9.89f64;
+                        let legend_gap = 4.62f64;
+                        let legend_right = (sx + sw) - 10.0;
+                        let swatch_x1 = legend_right - legend_label_w - legend_gap;
+                        let swatch_x0 = swatch_x1 - swatch_w;
+                        let label_x0 = swatch_x1 + legend_gap;
+                        let band_right = if chart.has_legend {
+                            swatch_x0 - 18.15
+                        } else {
+                            sx + sw - 11.0
+                        };
+                        let last_cat_w = chart
+                            .categories
+                            .last()
+                            .map(|c| text_w(c, axis_fs))
+                            .unwrap_or(0.0);
+                        let plot_right = band_right - last_cat_w / 2.0;
+                        let plot_w = (plot_right - plot_left).max(1.0);
+                        let step_x = if n_cat > 1 {
+                            plot_w / (n_cat - 1) as f64
+                        } else {
+                            0.0
+                        };
+                        let cat_x = |ci: usize| plot_left + step_x * ci as f64;
+                        let val_y = |v: f64| {
+                            if max_axis > 0.0 {
+                                plot_bot - (v / max_axis) * plot_h
+                            } else {
+                                plot_bot
+                            }
+                        };
+
+                        // ---- value-axis labels (right-aligned to
+                        // plot_left-16.70, baseline tick_y+5.24) ----
+                        for i in 0..=axis_steps {
+                            let tick_y =
+                                plot_bot - plot_h * i as f64 / axis_steps as f64;
+                            let label = axis_label(i);
+                            let lx = plot_left - 16.70 - text_w(&label, axis_fs);
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (tick_y + 5.24) as f32,
+                                &label,
+                                axis_fs,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // ---- major gridlines (behind the fills) ----
+                        {
+                            let grid_pen =
+                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            let old_pen = SelectObject(mem_dc, grid_pen);
+                            let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                            let gl = (plot_left * scale).round() as i32;
+                            let gr = (plot_right * scale).round() as i32;
+                            for i in 1..=axis_steps {
+                                let gy = ((plot_bot
+                                    - plot_h * i as f64 / axis_steps as f64)
+                                    * scale)
+                                    .round() as i32;
+                                let _ = MoveToEx(mem_dc, gl, gy, None);
+                                let _ = LineTo(mem_dc, gr, gy);
+                            }
+                            SelectObject(mem_dc, old_pen);
+                            let _ = DeleteObject(grid_pen);
+                        }
+
+                        // ---- area fills ----
+                        let mut cum = vec![0.0f64; n_cat];
+                        for (si, ser) in chart.series.iter().enumerate() {
+                            let col_hex = pres
+                                .theme_colors
+                                .get(&format!("accent{}", si + 1))
+                                .map(|s| s.as_str())
+                                .or_else(|| DEFAULT_ACCENT.get(si % 6).copied());
+                            let rgb = match col_hex.and_then(parse_hex_rgb) {
+                                Some(v) => v,
+                                None => continue,
+                            };
+                            // Upper boundary (cumulative when stacked) and the
+                            // lower boundary the polygon closes back along.
+                            let mut upper: Vec<f64> = Vec::with_capacity(n_cat);
+                            let mut lower: Vec<f64> = Vec::with_capacity(n_cat);
+                            for ci in 0..n_cat {
+                                let v = ser.values.get(ci).copied().unwrap_or(0.0);
+                                if is_stacked {
+                                    let base = cum[ci];
+                                    let total: f64 = if is_100pct {
+                                        chart
+                                            .series
+                                            .iter()
+                                            .map(|s| {
+                                                s.values
+                                                    .get(ci)
+                                                    .copied()
+                                                    .unwrap_or(0.0)
+                                            })
+                                            .sum()
+                                    } else {
+                                        1.0
+                                    };
+                                    let vv = if is_100pct {
+                                        if total > 0.0 {
+                                            v / total * 100.0
+                                        } else {
+                                            0.0
+                                        }
+                                    } else {
+                                        v
+                                    };
+                                    lower.push(base);
+                                    cum[ci] = base + vv;
+                                    upper.push(cum[ci]);
+                                } else {
+                                    lower.push(0.0);
+                                    upper.push(v);
+                                }
+                            }
+                            let mut pts: Vec<POINT> =
+                                Vec::with_capacity(n_cat * 2);
+                            for ci in 0..n_cat {
+                                pts.push(POINT {
+                                    x: (cat_x(ci) * scale).round() as i32,
+                                    y: (val_y(upper[ci]) * scale).round() as i32,
+                                });
+                            }
+                            for ci in (0..n_cat).rev() {
+                                pts.push(POINT {
+                                    x: (cat_x(ci) * scale).round() as i32,
+                                    y: (val_y(lower[ci]) * scale).round() as i32,
+                                });
+                            }
+                            if pts.len() >= 3 {
+                                let brush = CreateSolidBrush(COLORREF(colorref(
+                                    rgb.0, rgb.1, rgb.2,
+                                )));
+                                let old_brush = SelectObject(mem_dc, brush);
+                                let old_pen =
+                                    SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                let _ = Polygon(mem_dc, &pts);
+                                SelectObject(mem_dc, old_pen);
+                                SelectObject(mem_dc, old_brush);
+                                let _ = DeleteObject(brush);
+                            }
+                        }
+
+                        // ---- axis lines + ticks (on top of the fills) ----
+                        {
+                            let axis_pen =
+                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            let old_pen = SelectObject(mem_dc, axis_pen);
+                            let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                            let pl = (plot_left * scale).round() as i32;
+                            let pr = (plot_right * scale).round() as i32;
+                            let pb = (plot_bot * scale).round() as i32;
+                            let pt_i = (plot_top * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, pl, pt_i, None);
+                            let _ = LineTo(mem_dc, pl, pb);
+                            let _ = MoveToEx(mem_dc, pl, pb, None);
+                            let _ = LineTo(mem_dc, pr, pb);
+                            for i in 0..=axis_steps {
+                                let ty = ((plot_bot
+                                    - plot_h * i as f64 / axis_steps as f64)
+                                    * scale)
+                                    .round() as i32;
+                                let _ = MoveToEx(
+                                    mem_dc,
+                                    ((plot_left - 5.71) * scale).round() as i32,
+                                    ty,
+                                    None,
+                                );
+                                let _ = LineTo(mem_dc, pl, ty);
+                            }
+                            for ci in 0..n_cat {
+                                let tx = (cat_x(ci) * scale).round() as i32;
+                                let _ = MoveToEx(mem_dc, tx, pb, None);
+                                let _ = LineTo(
+                                    mem_dc,
+                                    tx,
+                                    ((plot_bot + 5.71) * scale).round() as i32,
+                                );
+                            }
+                            SelectObject(mem_dc, old_pen);
+                            let _ = DeleteObject(axis_pen);
+                        }
+
+                        // ---- category labels (centred on the data x) ----
+                        for (ci, name) in chart.categories.iter().enumerate() {
+                            let lw = text_w(name, axis_fs);
+                            draw_text_baseline(
+                                mem_dc,
+                                ((cat_x(ci) - lw / 2.0) * scale).round() as i32,
+                                (plot_bot + 28.67) as f32,
+                                name,
+                                axis_fs,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // ---- titles ----
+                        if let Some(title) = &chart.explicit_title {
+                            let tfs = 18.0f32;
+                            let lw = font_adv::line_hmtx_width_pt(title, tfs, "Arial")
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((sx + sw / 2.0 - lw / 2.0) * scale).round() as i32,
+                                (sy + 24.43) as f32,
+                                title,
+                                tfs,
+                                "Arial",
+                                None,
+                                scale,
+                                400,
+                            );
+                        } else if has_auto_title {
+                            let first = &chart.series[0];
+                            let tfs = 21.62f32;
+                            let lw = text_w(&first.name, tfs);
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((sx + sw / 2.0 - lw / 2.0) * scale).round() as i32,
+                                (sy + 28.03) as f32,
+                                &first.name,
+                                tfs,
+                                axis_family,
+                                None,
+                                scale,
+                                700,
+                            );
+                        }
+
+                        // ---- legend ----
+                        if chart.has_legend {
+                            let text_line_pitch = 21.99f64;
+                            let row_pitch =
+                                27.75 + (legend_max_lines as f64 - 1.0) * 21.76;
+                            let title_off = if has_explicit_title {
+                                14.85
+                            } else if has_auto_title {
+                                17.68
+                            } else {
+                                0.0
+                            };
+                            let block_h = n_ser as f64 * row_pitch;
+                            let legend_y0 =
+                                sy + shh / 2.0 + title_off - block_h / 2.0 + 8.97;
+                            for row in 0..n_ser {
+                                // A stacked area paints series 0 at the BOTTOM,
+                                // and its legend follows: Ser2 on top.
+                                let si = if is_stacked { n_ser - 1 - row } else { row };
+                                let sw_y = legend_y0 + row as f64 * row_pitch;
+                                let col_hex = pres
+                                    .theme_colors
+                                    .get(&format!("accent{}", si + 1))
+                                    .map(|s| s.as_str())
+                                    .or_else(|| DEFAULT_ACCENT.get(si % 6).copied());
+                                if let Some(rgb) = col_hex.and_then(parse_hex_rgb) {
+                                    let brush = CreateSolidBrush(COLORREF(colorref(
+                                        rgb.0, rgb.1, rgb.2,
+                                    )));
+                                    let old_brush = SelectObject(mem_dc, brush);
+                                    let r = RECT {
+                                        left: (swatch_x0 * scale).round() as i32,
+                                        top: (sw_y * scale).round() as i32,
+                                        right: (swatch_x1 * scale).round() as i32,
+                                        bottom: ((sw_y + swatch_w) * scale).round()
+                                            as i32,
+                                    };
+                                    let _ = FillRect(mem_dc, &r, brush);
+                                    SelectObject(mem_dc, old_brush);
+                                    let _ = DeleteObject(brush);
+                                }
+                                let label_baseline = sw_y + swatch_w + 0.28;
+                                if let Some(lines) = legend_lines.get(si) {
+                                    for (li, line) in lines.iter().enumerate() {
+                                        draw_text_baseline(
+                                            mem_dc,
+                                            (label_x0 * scale).round() as i32,
+                                            (label_baseline
+                                                + li as f64 * text_line_pitch)
+                                                as f32,
+                                            line,
+                                            legend_fs,
+                                            axis_family,
+                                            None,
+                                            scale,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         } else if chart.chart_type == "line" {
                         // Line chart (Word render-truth 2026-08-06, fitz
                         // get_drawings + rawdict on the 7-variant probe
@@ -2532,7 +2991,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .flat_map(|s| s.values.iter().copied())
                                 .fold(0.0f64, f64::max)
                         };
-                        let max_axis = nice_axis_max(max_val);
+                        // percentStacked's axis is FIXED at 100, so it must not
+                        // go through nice_axis_max (whose 5% headroom would
+                        // round 100 up to 120).
+                        let max_axis = if is_100pct {
+                            100.0
+                        } else {
+                            nice_axis_max(max_val)
+                        };
                         let axis_steps = if is_100pct {
                             // percentStacked: 0%,10%,...,100% (11 labels).
                             10usize
@@ -3575,10 +4041,25 @@ fn horiz_value_axis(max_val: f64, plot_w: f64) -> (f64, usize) {
     }
 }
 
+/// VERTICAL value-axis maximum.
+///
+/// Word gives the value axis 5% headroom above the data, exactly as the
+/// horizontal axis does (see `horiz_value_axis`).  The separating specimen is
+/// the stacked AREA probe chart_area S4/S5: category sums peak at 34.3, and
+/// Word's axis is 40 -- `ceil(34.3/5)*5 = 35` without the headroom, but
+/// `34.3*1.05 = 36.015` pushes the step from 5 to 10 and lands on 40, which the
+/// render-truth confirms (the red band's top at x=150pt sits at y=140.9, i.e.
+/// 30.884/40 of the plot height; the headroom-free 35 put it at 115.3).
+/// Every previously measured vertical-axis probe is insensitive to it
+/// (chart1 21.4 -> 25, chart_stacked 36.4 -> 40, chart_line 22.0 -> 25 with and
+/// without), so this only ever changes charts that were wrong.
+const AXIS_HEADROOM: f64 = 1.05;
+
 fn nice_axis_max(max_val: f64) -> f64 {
     if max_val <= 0.0 {
         return 1.0;
     }
+    let max_val = max_val * AXIS_HEADROOM;
     let n_ticks = 5.0;
     let raw = max_val / n_ticks;
     let mag = 10f64.powf(raw.log10().floor());

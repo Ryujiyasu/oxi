@@ -1748,11 +1748,18 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                         in_bar_chart = true;
                         chart_type = Some("bar".to_string());
                     }
+                    // <c:areaChart> — the grouping child (standard / stacked /
+                    // percentStacked) drives the same three regimes the bar
+                    // chart uses; the series carry the same strCache/numCache.
+                    "areaChart" => {
+                        chart_type = Some("area".to_string());
+                    }
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
                             || chart_type.as_deref() == Some("line")
-                            || chart_type.as_deref() == Some("doughnut") =>
+                            || chart_type.as_deref() == Some("doughnut")
+                            || chart_type.as_deref() == Some("area") =>
                     {
                         in_ser = true;
                         ser_target = "";

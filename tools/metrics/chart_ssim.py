@@ -41,6 +41,9 @@ DOCS = {
     "chart_doughnut_resid": r"pipeline_data\pptx_probes\chart_doughnut_resid\chart_doughnut_resid.pdf",
     "chart_bar_resid": r"pipeline_data\pptx_probes\chart_bar_resid\chart_bar_resid.pdf",
     "chart_legendvert": r"pipeline_data\pptx_probes\chart_legendvert\chart_legendvert.pdf",
+    "chart_doughnut_wrap": r"pipeline_data\pptx_probes\chart_doughnut_wrap\chart_doughnut_wrap.pdf",
+    "chart_area": r"pipeline_data\pptx_probes\chart_area\chart_area.pdf",
+    "chart_area_leg": r"pipeline_data\pptx_probes\chart_area_leg\chart_area_leg.pdf",
 }
 DPI = 150
 
