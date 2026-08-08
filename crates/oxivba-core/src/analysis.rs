@@ -1286,6 +1286,27 @@ impl Walker {
                 });
             }
         }
+        if name.eq_ignore_ascii_case("Application.CutCopyMode") {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "reads or changes Excel's process-global clipboard and cut/copy mode"
+                    .to_string(),
+                class: None,
+                line,
+            });
+        }
+        if segments(name).any(|segment| segment.eq_ignore_ascii_case("Range"))
+            && ["Copy", "Cut"]
+                .iter()
+                .any(|member| terminal.eq_ignore_ascii_case(member))
+        {
+            self.findings.push(Finding {
+                what: name.to_string(),
+                reason: "changes Excel's process-global clipboard and cut/copy mode".to_string(),
+                class: None,
+                line,
+            });
+        }
         if name.eq_ignore_ascii_case("Application.CalculateFull") {
             self.findings.push(Finding {
                 what: name.to_string(),
@@ -2360,6 +2381,32 @@ mod tests {
                 .filter(|finding| finding.reason.contains("replace-format criteria"))
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn cut_copy_operations_are_global_clipboard_state() {
+        let a = analyse_src(
+            "Public Function ExerciseCutCopyMode() As String\n\
+             Sheet1.Range(\"A1\").Value2 = \"copied\"\n\
+             Sheet1.Range(\"A1\").Copy\n\
+             ExerciseCutCopyMode = CStr(CLng(Application.CutCopyMode))\n\
+             Application.CutCopyMode = False\n\
+             ExerciseCutCopyMode = ExerciseCutCopyMode & \"|\" & CStr(CLng(Application.CutCopyMode))\n\
+             Sheet1.Range(\"A1\").Cut Destination:=Sheet1.Range(\"B1\")\n\
+             End Function\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::B));
+        assert_eq!(a.api_names.get("Application.CutCopyMode"), Some(&3));
+        assert_eq!(a.api_names.get("Sheet1.Range.Copy"), Some(&1));
+        assert_eq!(a.api_names.get("Sheet1.Range.Cut"), Some(&1));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("clipboard and cut/copy mode"))
+                .count(),
+            5
         );
     }
 
