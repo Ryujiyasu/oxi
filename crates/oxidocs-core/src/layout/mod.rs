@@ -36495,7 +36495,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 }
             }
-            // S1099 (2026-08-08, HELD OPT-IN `OXI_S1099=1`, default OFF): the "max_lh x
+            // S1099 (2026-08-08, default ON, opt-out `OXI_S1099_DISABLE`): the "max_lh x
             // line_count" model over-counts when the TALLEST run is a single
             // LEADING word -- Word takes the max PER LINE, so such a run only
             // raises line 0.  forms__002fbe2c p2's last row: the runs are
@@ -36518,10 +36518,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let s1099 = in_cell
                 && s1099_first_fits
                 && !self.doc_body_has_real_cjk
-                && line_count >= 2
+                // >= 3 lines: at 2 lines the "leading word" and the rest are the
+                // SAME single split, and a 2-line cell whose own line COUNT
+                // already disagrees with Word (the 26pt signature underscores,
+                // Word 1 line / Oxi 2) would have its estimate lowered by the
+                // full difference.  Three or more lines is where the per-line
+                // max provably differs from max x n.
+                && line_count >= 3
                 && s1099_rest > 0.0
                 && s1099_rest < max_line_height - 0.01
-                && std::env::var("OXI_S1099").is_ok()
+                && std::env::var("OXI_S1099_DISABLE").is_err()
                 && para.runs.first().map_or(false, |r| {
                     let t = r.text.trim();
                     !t.is_empty() && !t.contains(char::is_whitespace)
