@@ -1024,11 +1024,6 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         format!("{}", v)
                                     }
                                 };
-                                let label_r = if pie_labels_outside {
-                                    r * 0.78
-                                } else {
-                                    r * 0.5
-                                };
                                 let mut lab_deg = -90.0f64;
                                 if let Some(first) = chart.series.first() {
                                     for v in first.values.iter() {
@@ -1041,12 +1036,6 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         let to_rad = |deg: f64| {
                                             deg * std::f64::consts::PI / 180.0
                                         };
-                                        let anchor = (
-                                            circle_cx
-                                                + label_r * to_rad(mid_deg).cos(),
-                                            circle_cy
-                                                + label_r * to_rad(mid_deg).sin(),
-                                        );
                                         let text = format_label(*v);
                                         let lw = font_adv::line_hmtx_width_pt(
                                             &text,
@@ -1058,6 +1047,29 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 * dlfs
                                                 * 0.5
                                         }) as f64;
+                                        let label_r = if pie_labels_outside {
+                                            // OUTSIDE_END: Word places the
+                                            // label CENTRE at 0.78 * the
+                                            // PRE-shrink radius minus
+                                            // 0.37 * label width (width-ramp
+                                            // probe 2026-08-08: constant-outer-
+                                            // edge model disproven; this linear
+                                            // fit matches all widths within
+                                            // ~1pt). The 15.78pt shrink moved
+                                            // circle_top/bot inward, so the
+                                            // pre-shrink radius = r + 15.78.
+                                            (r + 15.78) * 0.78 - 0.37 * lw
+                                        } else {
+                                            // CENTER: anchor at 0.5*r (no
+                                            // circle shrink).
+                                            r * 0.5
+                                        };
+                                        let anchor = (
+                                            circle_cx
+                                                + label_r * to_rad(mid_deg).cos(),
+                                            circle_cy
+                                                + label_r * to_rad(mid_deg).sin(),
+                                        );
                                         let lx = anchor.0 - lw / 2.0;
                                         draw_text_baseline(
                                             mem_dc,
