@@ -34768,9 +34768,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // margins; apply the same discriminator to col-width resolution here.
             let is_dxa_fixed = std::env::var("OXI_S593_DISABLE").is_err()
                 && table.style.width_type.as_deref() == Some("dxa");
+            // S1107 (2026-08-08, default ON, opt-out OXI_S1107_DISABLE): a tblW=pct
+            // table keeps its declared tblGrid too — the R7.24 last-column shrink is
+            // for tblW=auto. reference__0042471c's descriptive-statistics table is
+            // tblW=5211 pct (104.22%) with a 489.55pt grid on a 470.25pt content
+            // area; Oxi clipped its last column 68.15 -> 48.85 so every row's last
+            // value ("0.470000") lost one glyph to a second line (+12.24pt x 6 rows)
+            // and the table overflowed to the next page (+1 x 84). WORD RENDER-TRUTH:
+            // that table's rules run x=85.1..575.26, i.e. Word draws it at the FULL
+            // declared width (85.05 + 489.55 = 574.60) and lets it overflow the
+            // content area, exactly as S593 established for dxa.
+            let is_pct_overwide = std::env::var("OXI_S1107_DISABLE").is_err()
+                && table.style.width_type.as_deref() == Some("pct");
             if !is_floating
                 && !is_fixed
                 && !is_dxa_fixed
+                && !is_pct_overwide
                 && total > available
                 && table_grid_columns.len() > 1
             {
