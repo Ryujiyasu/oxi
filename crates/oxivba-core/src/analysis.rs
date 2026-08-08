@@ -239,6 +239,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes the zoom level of Excel's active window",
     },
     Rule {
+        pattern: "ActiveWindow.View",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's active-window worksheet view mode",
+    },
+    Rule {
+        pattern: "Application.ActiveWindow.View",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's active-window worksheet view mode",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2902,6 +2914,34 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("zoom level"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_view_mode_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseViewMode()\n\
+             ActiveWindow.View = xlPageBreakPreview\n\
+             Application.ActiveWindow.View = xlNormalView\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.View"), Some(&1));
+        assert_eq!(a.api_names.get("Application.ActiveWindow.View"), Some(&1));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("worksheet view mode"))
                 .count(),
             2
         );
