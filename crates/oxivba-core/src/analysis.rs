@@ -203,6 +203,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides worksheet gridlines in an Excel window",
     },
     Rule {
+        pattern: "DisplayHeadings",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides worksheet row and column headings in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -2739,6 +2745,36 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("worksheet gridlines"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_headings_are_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseHeadings()\n\
+             Application.ActiveWindow.DisplayHeadings = False\n\
+             Application.ActiveWindow.DisplayHeadings = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names.get("Application.ActiveWindow.DisplayHeadings"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("row and column headings"))
                 .count(),
             2
         );
