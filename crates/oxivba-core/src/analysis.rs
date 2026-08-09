@@ -179,6 +179,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's process-global cell drag-and-drop interaction state",
     },
     Rule {
+        pattern: "Application.MoveAfterReturn",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes whether Excel moves the active selection after Enter",
+    },
+    Rule {
+        pattern: "Application.MoveAfterReturnDirection",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global selection direction after Enter",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2767,6 +2779,39 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("drag-and-drop interaction"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn move_after_return_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseMoveAfterReturn()\n\
+             Application.MoveAfterReturn = False\n\
+             Application.MoveAfterReturn = True\n\
+             Application.MoveAfterReturnDirection = xlDown\n\
+             Application.MoveAfterReturnDirection = xlToRight\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.MoveAfterReturn"), Some(&2));
+        assert_eq!(
+            a.api_names.get("Application.MoveAfterReturnDirection"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active selection after Enter"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("selection direction after Enter"))
                 .count(),
             2
         );
