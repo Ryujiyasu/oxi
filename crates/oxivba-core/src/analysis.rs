@@ -227,6 +227,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides the vertical scroll bar in an Excel window",
     },
     Rule {
+        pattern: "TabRatio",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the width allocation between workbook tabs and the horizontal scroll bar",
+    },
+    Rule {
         pattern: "ActiveWindow.Zoom",
         how: Match::Exact,
         class: Class::D,
@@ -2948,6 +2954,37 @@ mod tests {
                 .filter(|finding| finding.reason.contains("scroll bar in an Excel window"))
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn active_window_tab_ratio_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseTabRatio()\n\
+             ActiveWindow.TabRatio = 0.25\n\
+             Application.ActiveWindow.TabRatio = 0.75\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.TabRatio"), Some(&1));
+        assert_eq!(
+            a.api_names.get("Application.ActiveWindow.TabRatio"),
+            Some(&1)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("width allocation"))
+                .count(),
+            2
         );
     }
 
