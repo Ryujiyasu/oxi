@@ -209,6 +209,12 @@ pub const RULES: &[Rule] = &[
         reason: "changes the worksheet gridline colour in an Excel window",
     },
     Rule {
+        pattern: "GridlineColor",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the worksheet gridline colour using the workbook colour palette in an Excel window",
+    },
+    Rule {
         pattern: "DisplayHeadings",
         how: Match::Segment,
         class: Class::D,
@@ -2891,6 +2897,37 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("gridline colour"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_gridline_rgb_colour_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseGridlineRgbColour()\n\
+             ActiveWindow.GridlineColor = RGB(255, 0, 0)\n\
+             Application.ActiveWindow.GridlineColor = RGB(0, 0, 255)\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.GridlineColor"), Some(&1));
+        assert_eq!(
+            a.api_names.get("Application.ActiveWindow.GridlineColor"),
+            Some(&1)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("workbook colour palette"))
                 .count(),
             2
         );
