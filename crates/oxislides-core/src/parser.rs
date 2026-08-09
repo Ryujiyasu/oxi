@@ -1723,6 +1723,13 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut ser_target = "";
     let mut ser_name: Option<String> = None;
     let mut ser_values: Vec<f64> = Vec::new();
+    let mut ser_x_values: Vec<f64> = Vec::new();
+    // Scatter per-series draw flags. Word's render-truth discriminators
+    // (chart_scatter probe): <c:spPr><a:ln><a:noFill/> = no connecting line
+    // (markers only), <c:marker><c:symbol val="none"/> = no markers.
+    let mut ser_line_none = false;
+    let mut ser_marker_none = false;
+    let mut in_ser_ln = false;
     let mut in_v = false;
     let mut cur_v = String::new();
     let mut ser_categories: Vec<String> = Vec::new();
@@ -1754,22 +1761,37 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "areaChart" => {
                         chart_type = Some("area".to_string());
                     }
+                    // <c:scatterChart> — the XY chart. Its series carry
+                    // c:xVal/c:yVal (numeric on BOTH axes) instead of
+                    // c:cat/c:val, so there is no category band at all.
+                    "scatterChart" => {
+                        chart_type = Some("scatter".to_string());
+                    }
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
                             || chart_type.as_deref() == Some("line")
                             || chart_type.as_deref() == Some("doughnut")
-                            || chart_type.as_deref() == Some("area") =>
+                            || chart_type.as_deref() == Some("area")
+                            || chart_type.as_deref() == Some("scatter") =>
                     {
                         in_ser = true;
                         ser_target = "";
                         ser_name = None;
                         ser_values.clear();
+                        ser_x_values.clear();
                         ser_categories.clear();
+                        ser_line_none = false;
+                        ser_marker_none = false;
+                        in_ser_ln = false;
                     }
+                    "ln" if in_ser && !in_dlbls => in_ser_ln = true,
+                    "noFill" if in_ser_ln => ser_line_none = true,
                     "tx" if in_ser => ser_target = "tx",
                     "cat" if in_ser => ser_target = "cat",
                     "val" if in_ser => ser_target = "val",
+                    "xVal" if in_ser => ser_target = "xval",
+                    "yVal" if in_ser => ser_target = "yval",
                     "v" => {
                         in_v = true;
                         cur_v.clear();
@@ -1814,6 +1836,15 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                 match name.as_str() {
                     "v" => {
                         // empty value — nothing to collect
+                    }
+                    // Scatter per-series draw flags. Both discriminators are
+                    // SELF-CLOSING (<a:noFill/>, <c:symbol val="none"/>) so
+                    // they arrive as Event::Empty, never Start.
+                    "noFill" if in_ser_ln => ser_line_none = true,
+                    "symbol" if in_ser && !in_dlbls => {
+                        if get_attr(&e, "val").as_deref() == Some("none") {
+                            ser_marker_none = true;
+                        }
                     }
                     // <c:barDir val="col"/> and <c:grouping val="stacked"/>
                     // are SELF-CLOSING CHILD elements of <c:barChart> (NOT
@@ -1928,6 +1959,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "legend" => in_legend = false,
+                    "ln" => in_ser_ln = false,
                     "v" => {
                         if in_v {
                             in_v = false;
@@ -1942,9 +1974,17 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                                         ser_categories.push(cur_v.trim().to_string());
                                     }
                                 }
-                                "val" => {
+                                // A scatter series' y values live in c:yVal;
+                                // c:val never appears, so both feed the same
+                                // `values` vec and stay mutually exclusive.
+                                "val" | "yval" => {
                                     if let Ok(v) = cur_v.trim().parse::<f64>() {
                                         ser_values.push(v);
+                                    }
+                                }
+                                "xval" => {
+                                    if let Ok(v) = cur_v.trim().parse::<f64>() {
+                                        ser_x_values.push(v);
                                     }
                                 }
                                 _ => {}
@@ -1964,7 +2004,11 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             series.push(ChartSeries {
                                 name,
                                 values: std::mem::take(&mut ser_values),
+                                x_values: std::mem::take(&mut ser_x_values),
+                                line_none: ser_line_none,
+                                marker_none: ser_marker_none,
                             });
+                            in_ser_ln = false;
                         }
                     }
                     "barChart" => {

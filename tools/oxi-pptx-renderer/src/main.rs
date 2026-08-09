@@ -444,7 +444,13 @@ fn shape_json(sh: &Shape) -> Value {
                 "series": chart
                     .series
                     .iter()
-                    .map(|s| json!({ "name": s.name, "values": s.values }))
+                    .map(|s| json!({
+                        "name": s.name,
+                        "values": s.values,
+                        "x_values": s.x_values,
+                        "line_none": s.line_none,
+                        "marker_none": s.marker_none,
+                    }))
                     .collect::<Vec<_>>(),
                 "categories": chart.categories,
                 "has_legend": chart.has_legend,
@@ -1948,6 +1954,420 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 }
                             }
                         }
+                        } else if chart.chart_type == "scatter"
+                            && std::env::var("OXI_SCATTER_DISABLE").is_err()
+                        {
+                        // XY SCATTER chart (Word render-truth 2026-08-09,
+                        // fitz get_drawings + rawdict over the 8-arm probe
+                        // chart_scatter S1..S8 -- markers / markers 2ser /
+                        // lines+markers / smooth / lines-only / legend /
+                        // data labels / no-title):
+                        //   plot_left  = sx + 6.50 + w(widest Y label) + 16.70
+                        //     (all 8 arms 113.45 = 72 + 6.50 + 18.25 + 16.70;
+                        //      the same rule the area and horizontal-bar
+                        //      branches use)
+                        //   plot_top   = sy + 16.0  (measured 87.99 on EVERY
+                        //     arm -- scatter draws NO automatic title even at
+                        //     one series, unlike line/pie/bar)
+                        //   plot_bot   = sy + shh - 39.9   (320.10)
+                        //   band_right = legend ? swatch_x0 - 18.15
+                        //                       : sx + sw - 11.0
+                        //   plot_right = band_right - w(last X label)/2
+                        //     (S1 452.44 = 457.0 - 9.13/2; S6 388.03)
+                        //   X axis is NUMERIC and follows horiz_value_axis
+                        //     (5% headroom, >=57pt tick spacing): S1 x-max 4
+                        //     -> 0..5 in 5 (spacing 67.8), S6's narrower plot
+                        //     -> 0..6 in 3 (spacing 91.5; step 1 would give
+                        //     54.9 < 57).  plot_right depends on the last
+                        //     label's width and the axis depends on plot_w,
+                        //     so the two converge in 2 passes.
+                        //   point = (plot_left + xv/x_axis*plot_w,
+                        //            plot_bot  - yv/y_axis*plot_h)   [x from 0]
+                        //   Y axis = nice_axis_max in 5 steps (22.0 -> 25).
+                        //   markers: 9.9pt when the series draws NO line
+                        //     (S1/S2/S6/S7/S8 measured 9.84 diamond / 9.96
+                        //     square) and 6.96pt when it does (S3/S4), per
+                        //     series shape+fill exactly like the line branch.
+                        //   polyline: border colour w=2.25 through the points
+                        //     when the series does not declare <a:noFill>;
+                        //     a SMOOTH series (S4) is drawn with the same
+                        //     straight segments as S3 in the PDF.
+                        //   data labels: LEFT-aligned at point_x + 11.09,
+                        //     baseline point_y + 6.22 (S7: widths 18.25 and
+                        //     31.96 share the same dx0 -> left edge, not
+                        //     centred), Calibri 18pt, raw value.
+                        //   legend: per-series MARKER swatch (no line swatch)
+                        //     centred at label_x0 - 9.68, rows pitched 27.75
+                        //     with the block frame-vertically centred
+                        //     (S6 n=2: centres 202.08/229.74 about 216 =
+                        //     sy+shh/2), label baseline = swatch_cy + 5.28.
+                        let axis_family = "Calibri";
+                        let axis_fs = 18.0f32;
+                        let sx = sh.x as f64;
+                        let sy = sh.y as f64;
+                        let sw = sh.width as f64;
+                        let shh = sh.height as f64;
+                        let label_w = |s: &str| {
+                            font_adv::line_hmtx_width_pt(s, 18.0, axis_family)
+                                .unwrap_or_else(|| {
+                                    s.chars().count() as f32 * 18.0 * 0.5
+                                }) as f64
+                        };
+
+                        let y_max_data = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold(0.0f64, f64::max);
+                        let y_axis = nice_axis_max(y_max_data);
+                        let y_steps = 5usize;
+                        let y_step = y_axis / y_steps as f64;
+                        let y_lab_w = (0..=y_steps)
+                            .map(|i| {
+                                label_w(&fmt_axis_value(
+                                    y_axis * i as f64 / y_steps as f64,
+                                    y_step,
+                                ))
+                            })
+                            .fold(0.0f64, f64::max);
+                        let plot_left = sx + 6.50 + y_lab_w + 16.70;
+                        let plot_top = sy + 16.0;
+                        let plot_bot = sy + shh - 39.9;
+                        let plot_h = plot_bot - plot_top;
+
+                        // Legend band (only a legend that declares
+                        // <c:overlay val="0"/> takes a band; a bare
+                        // <c:legend/> overlays the plot -- the pie/doughnut
+                        // and area discriminator).
+                        let legend_active = chart.has_legend && !chart.legend_overlay;
+                        let cap = legend_label_cap(sw);
+                        let mut legend_lines: Vec<Vec<String>> = Vec::new();
+                        let mut max_label_w = 0.0f64;
+                        if legend_active {
+                            for s in chart.series.iter() {
+                                let lines =
+                                    wrap_legend_label(&s.name, 18.0, axis_family, cap);
+                                for l in lines.iter() {
+                                    max_label_w = max_label_w.max(label_w(l));
+                                }
+                                legend_lines.push(lines);
+                            }
+                        }
+                        let legend_label_x0 = sx + sw - 10.0 - max_label_w;
+                        let legend_swatch_cx = legend_label_x0 - 9.68;
+                        let band_right = if legend_active {
+                            (legend_swatch_cx - 9.9 / 2.0) - 18.15
+                        } else {
+                            sx + sw - 11.0
+                        };
+
+                        // Numeric X axis: plot_right depends on the width of
+                        // the last tick label, which depends on the axis,
+                        // which depends on plot_w -> converge in 2 passes.
+                        let x_max_data = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.x_values.iter().copied())
+                            .fold(0.0f64, f64::max);
+                        let mut plot_right = band_right;
+                        let mut x_axis = 1.0f64;
+                        let mut x_div = 1usize;
+                        for _ in 0..2 {
+                            let pw = (plot_right - plot_left).max(1.0);
+                            let (ax, dv) = horiz_value_axis(x_max_data, pw);
+                            x_axis = ax;
+                            x_div = dv;
+                            let last = fmt_axis_value(ax, ax / dv as f64);
+                            plot_right = band_right - label_w(&last) / 2.0;
+                        }
+                        let plot_w = plot_right - plot_left;
+                        let x_step = x_axis / x_div as f64;
+
+                        // Y axis labels (right edge plot_left-16.70,
+                        // baseline tick_y+5.20).
+                        for i in 0..=y_steps {
+                            let val = y_axis * i as f64 / y_steps as f64;
+                            let tick_y = plot_bot - plot_h * i as f64 / y_steps as f64;
+                            let label = fmt_axis_value(val, y_step);
+                            let lx = plot_left - 16.70 - label_w(&label);
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (tick_y + 5.20) as f32,
+                                &label,
+                                18.0,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Horizontal major gridlines at the value ticks
+                        // i=1..=y_steps, BEFORE the series.
+                        let grid_pen =
+                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                        let old_grid_pen = SelectObject(mem_dc, grid_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let gl = (plot_left * scale).round() as i32;
+                        let gr = (plot_right * scale).round() as i32;
+                        for i in 1..=y_steps {
+                            let grid_y = plot_bot - plot_h * i as f64 / y_steps as f64;
+                            let gy = (grid_y * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, gl, gy, None);
+                            let _ = LineTo(mem_dc, gr, gy);
+                        }
+                        SelectObject(mem_dc, old_grid_pen);
+                        let _ = DeleteObject(grid_pen);
+
+                        // Points per series: x from the series' OWN xVal.
+                        let series_pts: Vec<Vec<(f64, f64)>> = chart
+                            .series
+                            .iter()
+                            .map(|s| {
+                                s.values
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, v)| {
+                                        let xv =
+                                            s.x_values.get(i).copied().unwrap_or(i as f64);
+                                        let x = if x_axis > 0.0 {
+                                            plot_left + (xv / x_axis) * plot_w
+                                        } else {
+                                            plot_left
+                                        };
+                                        let y = if y_axis > 0.0 {
+                                            plot_bot - (v / y_axis) * plot_h
+                                        } else {
+                                            plot_bot
+                                        };
+                                        (x, y)
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+
+                        // Connecting lines (series without <a:ln><a:noFill/>).
+                        for (si, pts) in series_pts.iter().enumerate() {
+                            if chart.series.get(si).map_or(false, |s| s.line_none) {
+                                continue;
+                            }
+                            let (_, border_hex) = line_series_colors(si);
+                            if let Some(rgb) = parse_hex_rgb(&border_hex) {
+                                let line_pen = CreatePen(
+                                    PS_SOLID,
+                                    (2.25 * scale).round().max(1.0) as i32,
+                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                                );
+                                let old_line_pen = SelectObject(mem_dc, line_pen);
+                                let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                for w in pts.windows(2) {
+                                    let _ = MoveToEx(
+                                        mem_dc,
+                                        (w[0].0 * scale).round() as i32,
+                                        (w[0].1 * scale).round() as i32,
+                                        None,
+                                    );
+                                    let _ = LineTo(
+                                        mem_dc,
+                                        (w[1].0 * scale).round() as i32,
+                                        (w[1].1 * scale).round() as i32,
+                                    );
+                                }
+                                SelectObject(mem_dc, old_line_pen);
+                                let _ = DeleteObject(line_pen);
+                            }
+                        }
+
+                        // Markers (series without <c:symbol val="none"/>):
+                        // 9.9pt when the series has no connecting line,
+                        // 6.96pt when it does.
+                        for (si, pts) in series_pts.iter().enumerate() {
+                            let ser = match chart.series.get(si) {
+                                Some(s) => s,
+                                None => continue,
+                            };
+                            if ser.marker_none {
+                                continue;
+                            }
+                            let (fill_hex, _) = line_series_colors(si);
+                            if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                let m_brush =
+                                    CreateSolidBrush(COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
+                                let old_m_brush = SelectObject(mem_dc, m_brush);
+                                let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                let mr = if ser.line_none { 9.9 / 2.0 } else { 6.96 / 2.0 };
+                                for (px, py) in pts.iter() {
+                                    draw_line_marker(
+                                        mem_dc,
+                                        line_marker_shape(si),
+                                        *px,
+                                        *py,
+                                        mr,
+                                        scale,
+                                    );
+                                }
+                                SelectObject(mem_dc, old_m_brush);
+                                let _ = DeleteObject(m_brush);
+                            }
+                        }
+
+                        // Data labels: LEFT-aligned at point_x + 11.09,
+                        // baseline point_y + 6.22.
+                        if chart.has_data_labels && chart.show_val {
+                            let num_fmt = chart.number_format.clone();
+                            for (si, pts) in series_pts.iter().enumerate() {
+                                let vals = match chart.series.get(si) {
+                                    Some(s) => &s.values,
+                                    None => continue,
+                                };
+                                for (pt, v) in pts.iter().zip(vals.iter()) {
+                                    let text = if num_fmt == "0.0%" {
+                                        format!("{:.1}%", v * 100.0)
+                                    } else {
+                                        format!("{}", v)
+                                    };
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        ((pt.0 + 11.09) * scale).round() as i32,
+                                        (pt.1 + 6.22) as f32,
+                                        &text,
+                                        axis_fs,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                    );
+                                }
+                            }
+                        }
+
+                        // X axis tick labels, centred on the tick.
+                        for i in 0..=x_div {
+                            let val = x_axis * i as f64 / x_div as f64;
+                            let tick_x = plot_left + plot_w * i as f64 / x_div as f64;
+                            let label = fmt_axis_value(val, x_step);
+                            draw_text_baseline(
+                                mem_dc,
+                                ((tick_x - label_w(&label) / 2.0) * scale).round() as i32,
+                                (plot_bot + 28.67) as f32,
+                                &label,
+                                18.0,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // EXPLICIT <c:title>: Arial 18pt centred, baseline
+                        // sy+24.43 (same as every other chart type; scatter
+                        // never draws an AUTOMATIC title).
+                        if let Some(title) = &chart.explicit_title {
+                            let tfs = 18.0f32;
+                            let lw = font_adv::line_hmtx_width_pt(title, tfs, "Arial")
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            let frame_cx = sx + sw / 2.0;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((frame_cx - lw / 2.0) * scale).round() as i32,
+                                (sy + 24.43) as f32,
+                                title,
+                                tfs,
+                                "Arial",
+                                None,
+                                scale,
+                                400,
+                            );
+                        }
+
+                        // Legend: marker swatch + label, rows pitched 27.75,
+                        // block frame-vertically centred.
+                        if legend_active {
+                            let n = chart.series.len().max(1);
+                            let row_pitch = 27.75
+                                + (legend_lines
+                                    .iter()
+                                    .map(|l| l.len())
+                                    .max()
+                                    .unwrap_or(1)
+                                    .saturating_sub(1)) as f64
+                                    * 21.76;
+                            let block_top = sy + shh / 2.0 - n as f64 * row_pitch / 2.0;
+                            for (si, lines) in legend_lines.iter().enumerate() {
+                                let cy = block_top + row_pitch / 2.0 + si as f64 * row_pitch;
+                                let (fill_hex, _) = line_series_colors(si);
+                                if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                    let m_brush = CreateSolidBrush(COLORREF(colorref(
+                                        rgb.0, rgb.1, rgb.2,
+                                    )));
+                                    let old_m_brush = SelectObject(mem_dc, m_brush);
+                                    let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                    draw_line_marker(
+                                        mem_dc,
+                                        line_marker_shape(si),
+                                        legend_swatch_cx,
+                                        cy,
+                                        9.9 / 2.0,
+                                        scale,
+                                    );
+                                    SelectObject(mem_dc, old_m_brush);
+                                    let _ = DeleteObject(m_brush);
+                                }
+                                for (li, line) in lines.iter().enumerate() {
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        (legend_label_x0 * scale).round() as i32,
+                                        (cy + 5.28 + li as f64 * 21.99) as f32,
+                                        line,
+                                        18.0,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Axis lines + ticks: Y axis at plot_left, X axis at
+                        // plot_bot, plot top edge, Y ticks 0..=y_steps at
+                        // plot_left-5.71, X ticks 0..=x_div at plot_bot+5.71.
+                        let axis_pen =
+                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                        let old_axis_pen = SelectObject(mem_dc, axis_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let pl = (plot_left * scale).round() as i32;
+                        let pt = (plot_top * scale).round() as i32;
+                        let pr = (plot_right * scale).round() as i32;
+                        let pb = (plot_bot * scale).round() as i32;
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pl, pb);
+                        let _ = MoveToEx(mem_dc, pl, pb, None);
+                        let _ = LineTo(mem_dc, pr, pb);
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pr, pt);
+                        for i in 0..=y_steps {
+                            let tick_y = plot_bot - plot_h * i as f64 / y_steps as f64;
+                            let ty = (tick_y * scale).round() as i32;
+                            let _ = MoveToEx(
+                                mem_dc,
+                                ((plot_left - 5.71) * scale).round() as i32,
+                                ty,
+                                None,
+                            );
+                            let _ = LineTo(mem_dc, pl, ty);
+                        }
+                        for i in 0..=x_div {
+                            let tick_x = plot_left + plot_w * i as f64 / x_div as f64;
+                            let tx = (tick_x * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, tx, pb, None);
+                            let _ = LineTo(
+                                mem_dc,
+                                tx,
+                                ((plot_bot + 5.71) * scale).round() as i32,
+                            );
+                        }
+                        SelectObject(mem_dc, old_axis_pen);
+                        let _ = DeleteObject(axis_pen);
                         } else if chart.chart_type == "line" {
                         // Line chart (Word render-truth 2026-08-06, fitz
                         // get_drawings + rawdict on the 7-variant probe

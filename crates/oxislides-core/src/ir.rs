@@ -332,6 +332,19 @@ pub struct ChartSeries {
     pub name: String,
     /// c:val -> numCache, one value per category.
     pub values: Vec<f64>,
+    /// c:xVal -> numCache. Scatter (XY) series carry a NUMERIC x for every
+    /// point instead of sharing the chart's categories; `values` then holds
+    /// c:yVal. Empty for every category-based chart type.
+    #[serde(default)]
+    pub x_values: Vec<f64>,
+    /// This series declares `<c:spPr><a:ln><a:noFill/>` — draw no connecting
+    /// line. python-pptx writes it for XY_SCATTER (markers only).
+    #[serde(default)]
+    pub line_none: bool,
+    /// This series declares `<c:marker><c:symbol val="none"/>` — draw no
+    /// markers. python-pptx writes it for XY_SCATTER_LINES_NO_MARKERS.
+    #[serde(default)]
+    pub marker_none: bool,
 }
 
 /// A DrawingML table (a:tbl). Cell text is stored as paragraphs per cell so
