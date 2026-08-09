@@ -305,6 +305,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides worksheet outline symbols in an Excel window",
     },
     Rule {
+        pattern: "DisplayPageBreaks",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides automatic and manual page-break indicators on a worksheet",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -3174,6 +3180,37 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("worksheet outline symbols"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn worksheet_page_break_display_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExercisePageBreakDisplay()\n\
+             Sheet1.DisplayPageBreaks = False\n\
+             Application.ActiveSheet.DisplayPageBreaks = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Sheet1.DisplayPageBreaks"), Some(&1));
+        assert_eq!(
+            a.api_names.get("Application.ActiveSheet.DisplayPageBreaks"),
+            Some(&1)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("page-break indicators"))
                 .count(),
             2
         );
