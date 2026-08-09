@@ -191,6 +191,12 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's process-global selection direction after Enter",
     },
     Rule {
+        pattern: "Application.EnableAutoComplete",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global cell-entry AutoComplete user interface",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2812,6 +2818,26 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("selection direction after Enter"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn cell_entry_auto_complete_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseAutoComplete()\n\
+             Application.EnableAutoComplete = False\n\
+             Application.EnableAutoComplete = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.EnableAutoComplete"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("cell-entry AutoComplete"))
                 .count(),
             2
         );
