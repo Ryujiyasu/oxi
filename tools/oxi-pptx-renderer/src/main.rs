@@ -2200,7 +2200,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 if num_fmt == "0.0%" {
                                     format!("{:.1}%", v * 100.0)
                                 } else {
-                                    format!("{}", v.round() as i64)
+                                    // Word prints the RAW value, no rounding:
+                                    // chart_datalabel_line p1 reads
+                                    // "19.2 21.4 16.7" (not "19 21 17").
+                                    format!("{}", v)
                                 }
                             };
                             for (si, pts) in series_pts.iter().enumerate() {
@@ -2208,15 +2211,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     chart.series.get(si).map(|s| &s.values).into_iter().flatten(),
                                 ) {
                                     let text = format_label(*s);
-                                    let lw = font_adv::line_hmtx_width_pt(
-                                        &text,
-                                        axis_fs,
-                                        axis_family,
-                                    )
-                                    .unwrap_or_else(|| {
-                                        text.chars().count() as f32 * axis_fs * 0.5
-                                    }) as f64;
-                                    let lx = pt.0 - lw / 2.0;
+                                    // LEFT-aligned 9.50pt to the RIGHT of the
+                                    // point -- NOT centred on it.  Word
+                                    // render-truth chart_datalabel_line: all 12
+                                    // labels across p1/p2/p3 sit at dx0 +9.46
+                                    // ..+9.55 while their widths range 18.25
+                                    // ("19") .. 63.07 ("1920.0%"), so the
+                                    // offset is to the label's LEFT EDGE.
+                                    let lx = pt.0 + 9.50;
                                     draw_text_baseline(
                                         mem_dc,
                                         (lx * scale).round() as i32,
@@ -3295,7 +3297,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         (v * 100.0).round() as i64
                                     )
                                 } else {
-                                    format!("{}", v.round() as i64)
+                                    // Word prints the RAW value, no rounding:
+                                    // chart_bar p5 reads "19.2 21.4 16.7" and
+                                    // chart_stacked100_dlbls p1 "…10.5 15 12.3"
+                                    // (15.0 loses its trailing zero).
+                                    format!("{}", v)
                                 }
                             };
                             // Default data-label position: STACKED charts
@@ -3670,52 +3676,73 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let _ = DeleteObject(axis_pen);
                         }
                     }
-                    ShapeContent::Image { data, content_type: _ } => {
+                    ShapeContent::Image { data, content_type } => {
+                        // TEMP-DIAG: report decode/draw state for the smoke deck
+                        eprintln!(
+                            "[IMG-DIAG] content_type={:?} data_len={} rect=({},{},{},{})",
+                            content_type,
+                            data.len(),
+                            x,
+                            y,
+                            ew,
+                            eh
+                        );
                         // Decode the embedded image (PNG/JPEG media part) and
                         // draw it scaled into the shape rect. rotation=0 only
                         // for now (a rotation-aware path is left for a later
                         // step; deck background images are typically unrotated).
-                        if let Ok(dyn_img) = image::load_from_memory(data) {
-                            let rgba = dyn_img.to_rgba8();
-                            let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
-                            if iw <= 0 || ih <= 0 {
-                                continue;
-                            }
-                            // RGBA -> BGRA for the 32-bpp DIB
-                            let mut bgra = Vec::with_capacity((iw * ih * 4) as usize);
-                            for p in rgba.pixels() {
-                                bgra.push(p[2]);
-                                bgra.push(p[1]);
-                                bgra.push(p[0]);
-                                bgra.push(p[3]);
-                            }
-                            let bmi = BITMAPINFO {
-                                bmiHeader: BITMAPINFOHEADER {
-                                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                                    biWidth: iw,
-                                    biHeight: -ih, // top-down
-                                    biPlanes: 1,
-                                    biBitCount: 32,
-                                    biCompression: 0, // BI_RGB
+                        match image::load_from_memory(data) {
+                            Ok(dyn_img) => {
+                                let rgba = dyn_img.to_rgba8();
+                                let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
+                                if iw <= 0 || ih <= 0 {
+                                    eprintln!("[IMG-DIAG] zero dims iw={} ih={}", iw, ih);
+                                    continue;
+                                }
+                                eprintln!("[IMG-DIAG] decoded iw={} ih={}", iw, ih);
+                                // RGBA -> BGRA for the 32-bpp DIB
+                                let mut bgra = Vec::with_capacity((iw * ih * 4) as usize);
+                                for p in rgba.pixels() {
+                                    bgra.push(p[2]);
+                                    bgra.push(p[1]);
+                                    bgra.push(p[0]);
+                                    bgra.push(p[3]);
+                                }
+                                let bmi = BITMAPINFO {
+                                    bmiHeader: BITMAPINFOHEADER {
+                                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                                        biWidth: iw,
+                                        biHeight: -ih, // top-down
+                                        biPlanes: 1,
+                                        biBitCount: 32,
+                                        biCompression: 0, // BI_RGB
+                                        ..Default::default()
+                                    },
                                     ..Default::default()
-                                },
-                                ..Default::default()
-                            };
-                            let _ = StretchDIBits(
-                                mem_dc,
-                                x,
-                                y,
-                                ew,
-                                eh,
-                                0,
-                                0,
-                                iw,
-                                ih,
-                                Some(bgra.as_ptr() as *const _),
-                                &bmi,
-                                DIB_RGB_COLORS,
-                                SRCCOPY,
-                            );
+                                };
+                                let sr = StretchDIBits(
+                                    mem_dc,
+                                    x,
+                                    y,
+                                    ew,
+                                    eh,
+                                    0,
+                                    0,
+                                    iw,
+                                    ih,
+                                    Some(bgra.as_ptr() as *const _),
+                                    &bmi,
+                                    DIB_RGB_COLORS,
+                                    SRCCOPY,
+                                );
+                                eprintln!(
+                                    "[IMG-DIAG] StretchDIBits ret={} (0=GDI_ERROR) dst={}x{}",
+                                    sr, ew, eh
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("[IMG-DIAG] decode FAILED: {:?}", e);
+                            }
                         }
                     }
                     _ => {}
