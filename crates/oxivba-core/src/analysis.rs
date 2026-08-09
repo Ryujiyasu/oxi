@@ -203,6 +203,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides worksheet gridlines in an Excel window",
     },
     Rule {
+        pattern: "GridlineColorIndex",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "changes the worksheet gridline colour in an Excel window",
+    },
+    Rule {
         pattern: "DisplayHeadings",
         how: Match::Segment,
         class: Class::D,
@@ -2853,6 +2859,38 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("worksheet gridlines"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_gridline_colour_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseGridlineColour()\n\
+             ActiveWindow.GridlineColorIndex = 3\n\
+             Application.ActiveWindow.GridlineColorIndex = 5\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.GridlineColorIndex"), Some(&1));
+        assert_eq!(
+            a.api_names
+                .get("Application.ActiveWindow.GridlineColorIndex"),
+            Some(&1)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("gridline colour"))
                 .count(),
             2
         );
