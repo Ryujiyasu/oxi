@@ -173,6 +173,12 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's process-global cell-note indicator and comment display user interface",
     },
     Rule {
+        pattern: "Application.CellDragAndDrop",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global cell drag-and-drop interaction state",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2743,6 +2749,26 @@ mod tests {
                 .filter(|finding| finding.reason.contains("cell-note indicator"))
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn cell_drag_and_drop_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseCellDragAndDrop()\n\
+             Application.CellDragAndDrop = False\n\
+             Application.CellDragAndDrop = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.CellDragAndDrop"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("drag-and-drop interaction"))
+                .count(),
+            2
         );
     }
 
