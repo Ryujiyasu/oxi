@@ -167,6 +167,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides Excel's status-bar user interface",
     },
     Rule {
+        pattern: "Application.DisplayCommentIndicator",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global cell-note indicator and comment display user interface",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2713,6 +2719,30 @@ mod tests {
                 })
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn display_comment_indicator_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseCommentDisplay()\n\
+             Application.DisplayCommentIndicator = xlNoIndicator\n\
+             Application.DisplayCommentIndicator = xlCommentIndicatorOnly\n\
+             Application.DisplayCommentIndicator = xlCommentAndIndicator\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names.get("Application.DisplayCommentIndicator"),
+            Some(&3)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("cell-note indicator"))
+                .count(),
+            3
         );
     }
 
