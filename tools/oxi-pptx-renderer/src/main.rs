@@ -1533,20 +1533,61 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .flat_map(|s| s.values.iter().copied())
                                 .fold(0.0f64, f64::max)
                         };
-                        let max_axis = if is_100pct {
-                            100.0
+                        // NEGATIVE data (chart_negative N6, 2026-08-10): the
+                        // axis spans zero, the area closes on the ZERO line
+                        // and the category names hang off it, so the 39.9pt
+                        // bottom band collapses to the plain 16.0 margin.
+                        let raw_min = if is_stacked {
+                            (0..n_cat)
+                                .map(|ci| {
+                                    chart
+                                        .series
+                                        .iter()
+                                        .map(|s| {
+                                            s.values.get(ci).copied().unwrap_or(0.0)
+                                        })
+                                        .filter(|v| *v < 0.0)
+                                        .sum::<f64>()
+                                })
+                                .fold(0.0f64, f64::min)
                         } else {
-                            nice_axis_max(raw_max)
+                            chart
+                                .series
+                                .iter()
+                                .flat_map(|s| s.values.iter().copied())
+                                .fold(0.0f64, f64::min)
                         };
-                        let axis_steps = if is_100pct {
-                            10usize
-                        } else if is_stacked {
-                            ((max_axis / 5.0).round() as usize).max(1)
+                        let has_neg = raw_min < 0.0;
+                        let plot_bot_pre =
+                            sy + shh - if has_neg { 16.0 } else { 39.9 };
+                        let plot_top_pre = if has_explicit_title {
+                            sy + 45.69
+                        } else if has_auto_title {
+                            sy + 51.40
                         } else {
-                            5usize
+                            sy + 16.0
                         };
+                        let (axis_min, max_axis, axis_steps) = if is_100pct {
+                            (0.0, 100.0, 10usize)
+                        } else if has_neg {
+                            nice_axis_range(
+                                raw_min,
+                                raw_max,
+                                plot_bot_pre - plot_top_pre,
+                                VERT_MIN_SPACING,
+                            )
+                        } else {
+                            let m = nice_axis_max(raw_max);
+                            let steps = if is_stacked {
+                                ((m / 5.0).round() as usize).max(1)
+                            } else {
+                                5usize
+                            };
+                            (0.0, m, steps)
+                        };
+                        let axis_span = (max_axis - axis_min).max(1e-9);
                         let axis_label = |i: usize| -> String {
-                            let v = max_axis * i as f64 / axis_steps as f64;
+                            let v = axis_min + axis_span * i as f64 / axis_steps as f64;
                             if is_100pct {
                                 format!("{:.0}%", v)
                             } else {
@@ -1558,15 +1599,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .fold(0.0f64, f64::max);
 
                         let plot_left = sx + 6.50 + val_label_w + 16.70;
-                        let plot_top = if has_explicit_title {
-                            sy + 45.69
-                        } else if has_auto_title {
-                            sy + 51.40
-                        } else {
-                            sy + 16.0
-                        };
-                        let plot_bot = sy + shh - 39.9;
+                        let plot_top = plot_top_pre;
+                        let plot_bot = plot_bot_pre;
                         let plot_h = plot_bot - plot_top;
+                        let val_y =
+                            |v: f64| plot_bot - ((v - axis_min) / axis_span) * plot_h;
+                        let zero_y = val_y(0.0);
 
                         // ---- legend block geometry (rows = series) ----
                         let legend_fs = 18.0f32;
@@ -1624,13 +1662,6 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             0.0
                         };
                         let cat_x = |ci: usize| plot_left + step_x * ci as f64;
-                        let val_y = |v: f64| {
-                            if max_axis > 0.0 {
-                                plot_bot - (v / max_axis) * plot_h
-                            } else {
-                                plot_bot
-                            }
-                        };
 
                         // ---- value-axis labels (right-aligned to
                         // plot_left-16.70, baseline tick_y+5.24) ----
@@ -1659,7 +1690,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                             let gl = (plot_left * scale).round() as i32;
                             let gr = (plot_right * scale).round() as i32;
-                            for i in 1..=axis_steps {
+                            // With negatives Word also rules the bottom tick
+                            // (the axis line has moved up to zero).
+                            let grid_from = if has_neg { 0 } else { 1 };
+                            for i in grid_from..=axis_steps {
                                 let gy = ((plot_bot
                                     - plot_h * i as f64 / axis_steps as f64)
                                     * scale)
@@ -1781,11 +1815,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let pl = (plot_left * scale).round() as i32;
                             let pr = (plot_right * scale).round() as i32;
                             let pb = (plot_bot * scale).round() as i32;
+                            let pz = (zero_y * scale).round() as i32;
                             let pt_i = (plot_top * scale).round() as i32;
                             let _ = MoveToEx(mem_dc, pl, pt_i, None);
                             let _ = LineTo(mem_dc, pl, pb);
-                            let _ = MoveToEx(mem_dc, pl, pb, None);
-                            let _ = LineTo(mem_dc, pr, pb);
+                            let _ = MoveToEx(mem_dc, pl, pz, None);
+                            let _ = LineTo(mem_dc, pr, pz);
                             for i in 0..=axis_steps {
                                 let ty = ((plot_bot
                                     - plot_h * i as f64 / axis_steps as f64)
@@ -1801,11 +1836,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             }
                             for ci in 0..n_cat {
                                 let tx = (cat_x(ci) * scale).round() as i32;
-                                let _ = MoveToEx(mem_dc, tx, pb, None);
+                                let _ = MoveToEx(mem_dc, tx, pz, None);
                                 let _ = LineTo(
                                     mem_dc,
                                     tx,
-                                    ((plot_bot + 5.71) * scale).round() as i32,
+                                    ((zero_y + 5.71) * scale).round() as i32,
                                 );
                             }
                             SelectObject(mem_dc, old_pen);
@@ -1850,7 +1885,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             draw_text_baseline(
                                 mem_dc,
                                 ((cat_x(ci) - lw / 2.0) * scale).round() as i32,
-                                (plot_bot + 28.67) as f32,
+                                (zero_y + 28.67) as f32,
                                 name,
                                 axis_fs,
                                 axis_family,
@@ -2014,26 +2049,54 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 }) as f64
                         };
 
-                        let y_max_data = chart
+                        // NEGATIVE data (chart_negative N4/N5, 2026-08-10):
+                        // each axis spans zero and the OTHER axis' line, ticks
+                        // and labels ride the zero crossing -- the Y labels
+                        // right-align 16.64pt left of zero_x (N5: 222.53 for
+                        // zero_x 239.18) and the X labels hang zero_y + 28.68
+                        // (N4/N5: 299.54 for zero_y 270.86).  The 39.9pt bottom
+                        // band collapses to 16.0 because the X labels are no
+                        // longer under the plot.
+                        let (y_min_data, y_max_data) = chart
                             .series
                             .iter()
                             .flat_map(|s| s.values.iter().copied())
-                            .fold(0.0f64, f64::max);
-                        let y_axis = nice_axis_max(y_max_data);
-                        let y_steps = 5usize;
-                        let y_step = y_axis / y_steps as f64;
+                            .fold((0.0f64, 0.0f64), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            });
+                        let y_has_neg = y_min_data < 0.0;
+                        let plot_top = sy + 16.0;
+                        let plot_bot = sy + shh - if y_has_neg { 16.0 } else { 39.9 };
+                        let plot_h = plot_bot - plot_top;
+                        let (y_min, y_axis, y_steps) = if y_has_neg {
+                            nice_axis_range(
+                                y_min_data,
+                                y_max_data,
+                                plot_h,
+                                VERT_MIN_SPACING,
+                            )
+                        } else {
+                            (0.0, nice_axis_max(y_max_data), 5usize)
+                        };
+                        let y_span = (y_axis - y_min).max(1e-9);
+                        let y_step = y_span / y_steps as f64;
                         let y_lab_w = (0..=y_steps)
                             .map(|i| {
                                 label_w(&fmt_axis_value(
-                                    y_axis * i as f64 / y_steps as f64,
+                                    y_min + y_span * i as f64 / y_steps as f64,
                                     y_step,
                                 ))
                             })
                             .fold(0.0f64, f64::max);
-                        let plot_left = sx + 6.50 + y_lab_w + 16.70;
-                        let plot_top = sy + 16.0;
-                        let plot_bot = sy + shh - 39.9;
-                        let plot_h = plot_bot - plot_top;
+                        let x_min_data = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.x_values.iter().copied())
+                            .fold(0.0f64, f64::min);
+                        let x_has_neg = x_min_data < 0.0;
+                        let val_y =
+                            |v: f64| plot_bot - ((v - y_min) / y_span) * plot_h;
+                        let zero_y = val_y(0.0);
 
                         // Legend band (only a legend that declares
                         // <c:overlay val="0"/> takes a band; a bare
@@ -2069,27 +2132,60 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .iter()
                             .flat_map(|s| s.x_values.iter().copied())
                             .fold(0.0f64, f64::max);
+                        let plot_left_pos = sx + 6.50 + y_lab_w + 16.70;
+                        let mut plot_left = plot_left_pos;
                         let mut plot_right = band_right;
+                        let mut x_min = 0.0f64;
                         let mut x_axis = 1.0f64;
                         let mut x_div = 1usize;
                         for _ in 0..2 {
                             let pw = (plot_right - plot_left).max(1.0);
-                            let (ax, dv) = horiz_value_axis(x_max_data, pw);
-                            x_axis = ax;
-                            x_div = dv;
-                            let last = fmt_axis_value(ax, ax / dv as f64);
-                            plot_right = band_right - label_w(&last) / 2.0;
+                            if x_has_neg {
+                                let (lo, hi, dv) = nice_axis_range(
+                                    x_min_data,
+                                    x_max_data,
+                                    pw,
+                                    HORIZ_MIN_SPACING,
+                                );
+                                x_min = lo;
+                                x_axis = hi;
+                                x_div = dv.max(1);
+                            } else {
+                                let (ax, dv) = horiz_value_axis(x_max_data, pw);
+                                x_min = 0.0;
+                                x_axis = ax;
+                                x_div = dv;
+                            }
+                            let step = (x_axis - x_min) / x_div as f64;
+                            if x_has_neg {
+                                // Both edges leave half the outermost label
+                                // (N5: 90.32 = 72 + 11.0 + w("-4")/2).
+                                plot_left = sx
+                                    + 11.0
+                                    + label_w(&fmt_axis_value(x_min, step)) / 2.0;
+                            }
+                            plot_right = band_right
+                                - label_w(&fmt_axis_value(x_axis, step)) / 2.0;
                         }
+                        let plot_left = plot_left;
                         let plot_w = plot_right - plot_left;
-                        let x_step = x_axis / x_div as f64;
+                        let x_span = (x_axis - x_min).max(1e-9);
+                        let x_step = x_span / x_div as f64;
+                        let val_x =
+                            |v: f64| plot_left + ((v - x_min) / x_span) * plot_w;
+                        let zero_x = val_x(0.0);
 
-                        // Y axis labels (right edge plot_left-16.70,
+                        // Each axis line rides the OTHER axis' zero crossing.
+                        let y_axis_x = if x_has_neg { zero_x } else { plot_left };
+                        let x_axis_y = if y_has_neg { zero_y } else { plot_bot };
+
+                        // Y axis labels (right edge y_axis_x-16.70,
                         // baseline tick_y+5.20).
                         for i in 0..=y_steps {
-                            let val = y_axis * i as f64 / y_steps as f64;
+                            let val = y_min + y_span * i as f64 / y_steps as f64;
                             let tick_y = plot_bot - plot_h * i as f64 / y_steps as f64;
                             let label = fmt_axis_value(val, y_step);
-                            let lx = plot_left - 16.70 - label_w(&label);
+                            let lx = y_axis_x - 16.70 - label_w(&label);
                             draw_text_baseline(
                                 mem_dc,
                                 (lx * scale).round() as i32,
@@ -2110,7 +2206,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let gl = (plot_left * scale).round() as i32;
                         let gr = (plot_right * scale).round() as i32;
-                        for i in 1..=y_steps {
+                        let grid_from = if y_has_neg { 0 } else { 1 };
+                        for i in grid_from..=y_steps {
                             let grid_y = plot_bot - plot_h * i as f64 / y_steps as f64;
                             let gy = (grid_y * scale).round() as i32;
                             let _ = MoveToEx(mem_dc, gl, gy, None);
@@ -2130,17 +2227,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .map(|(i, v)| {
                                         let xv =
                                             s.x_values.get(i).copied().unwrap_or(i as f64);
-                                        let x = if x_axis > 0.0 {
-                                            plot_left + (xv / x_axis) * plot_w
-                                        } else {
-                                            plot_left
-                                        };
-                                        let y = if y_axis > 0.0 {
-                                            plot_bot - (v / y_axis) * plot_h
-                                        } else {
-                                            plot_bot
-                                        };
-                                        (x, y)
+                                        (val_x(xv), val_y(*v))
                                     })
                                     .collect()
                             })
@@ -2242,13 +2329,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                         // X axis tick labels, centred on the tick.
                         for i in 0..=x_div {
-                            let val = x_axis * i as f64 / x_div as f64;
+                            let val = x_min + x_span * i as f64 / x_div as f64;
                             let tick_x = plot_left + plot_w * i as f64 / x_div as f64;
                             let label = fmt_axis_value(val, x_step);
                             draw_text_baseline(
                                 mem_dc,
                                 ((tick_x - label_w(&label) / 2.0) * scale).round() as i32,
-                                (plot_bot + 28.67) as f32,
+                                (x_axis_y + 28.67) as f32,
                                 &label,
                                 18.0,
                                 axis_family,
@@ -2339,10 +2426,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let pt = (plot_top * scale).round() as i32;
                         let pr = (plot_right * scale).round() as i32;
                         let pb = (plot_bot * scale).round() as i32;
-                        let _ = MoveToEx(mem_dc, pl, pt, None);
-                        let _ = LineTo(mem_dc, pl, pb);
-                        let _ = MoveToEx(mem_dc, pl, pb, None);
-                        let _ = LineTo(mem_dc, pr, pb);
+                        let ax_x = (y_axis_x * scale).round() as i32;
+                        let ax_y = (x_axis_y * scale).round() as i32;
+                        let _ = MoveToEx(mem_dc, ax_x, pt, None);
+                        let _ = LineTo(mem_dc, ax_x, pb);
+                        let _ = MoveToEx(mem_dc, pl, ax_y, None);
+                        let _ = LineTo(mem_dc, pr, ax_y);
                         let _ = MoveToEx(mem_dc, pl, pt, None);
                         let _ = LineTo(mem_dc, pr, pt);
                         for i in 0..=y_steps {
@@ -2350,20 +2439,20 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let ty = (tick_y * scale).round() as i32;
                             let _ = MoveToEx(
                                 mem_dc,
-                                ((plot_left - 5.71) * scale).round() as i32,
+                                ((y_axis_x - 5.71) * scale).round() as i32,
                                 ty,
                                 None,
                             );
-                            let _ = LineTo(mem_dc, pl, ty);
+                            let _ = LineTo(mem_dc, ax_x, ty);
                         }
                         for i in 0..=x_div {
                             let tick_x = plot_left + plot_w * i as f64 / x_div as f64;
                             let tx = (tick_x * scale).round() as i32;
-                            let _ = MoveToEx(mem_dc, tx, pb, None);
+                            let _ = MoveToEx(mem_dc, tx, ax_y, None);
                             let _ = LineTo(
                                 mem_dc,
                                 tx,
-                                ((plot_bot + 5.71) * scale).round() as i32,
+                                ((x_axis_y + 5.71) * scale).round() as i32,
                             );
                         }
                         SelectObject(mem_dc, old_axis_pen);
@@ -2410,7 +2499,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let shh = sh.height as f64;
                         let has_auto_title = chart.series.len() == 1;
                         let has_explicit_title = chart.explicit_title.is_some();
-                        let plot_left = sx + 41.4;
+                        // NEGATIVE data (chart_negative N3, 2026-08-10): the
+                        // value axis spans zero, the category names hang off
+                        // the ZERO line instead of the plot bottom, and the
+                        // value gutter grows by the minus sign.
+                        let (min_val, max_val) = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold((0.0f64, 0.0f64), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            });
+                        let has_neg = min_val < 0.0;
+                        let plot_left_0 = sx + 41.4;
                         let plot_top = if has_explicit_title {
                             // An explicit <c:title> shifts the plot down by
                             // the title line: plot_top = sy+45.69
@@ -2430,13 +2531,33 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // plot_right = plot_left + plot_w (P3 no-legend 396w
                         // -> 457.00 = 113.45 + 343.6; do NOT subtract the
                         // 41.4 left inset a second time).
-                        let plot_w = if chart.has_legend {
-                            sw - 41.4 - 103.82
+                        // The right band is 103.82 = 15.65 (swatch gap) + 19.20
+                        // (swatch) + 2.09 + w("Series 1") + 10.0 (frame inset);
+                        // with a different series name it must be computed
+                        // (N3's "Ser1" gives 79.61, plot_right 388.38 = Word
+                        // 388.37).  The positive path keeps the measured
+                        // constant so every existing line probe is unchanged.
+                        let legend_band = if !chart.has_legend {
+                            11.0
+                        } else if has_neg {
+                            let w = chart
+                                .series
+                                .iter()
+                                .map(|s| {
+                                    font_adv::line_hmtx_width_pt(
+                                        &s.name, axis_fs, axis_family,
+                                    )
+                                    .unwrap_or_else(|| {
+                                        s.name.chars().count() as f32 * axis_fs * 0.5
+                                    }) as f64
+                                })
+                                .fold(0.0f64, f64::max);
+                            15.65 + 21.29 + w + 10.0
                         } else {
-                            sw - 41.4 - 11.0
+                            103.82
                         };
-                        let plot_right = plot_left + plot_w;
-                        let plot_w = plot_right - plot_left;
+                        let plot_right = sx + sw - legend_band;
+                        let plot_w = plot_right - plot_left_0;
                         let n_cat = chart.categories.len().max(1);
                         // Crowded category labels -> the 78.62pt bottom band
                         // (measured P0/P4): when the widest category label
@@ -2460,27 +2581,56 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             })
                             .fold(0.0f64, f64::max);
                         let crowded = widest_label / (plot_w / n_cat as f64) > 1.0;
-                        let plot_bot = if crowded {
+                        // With negatives the category names sit ON the zero
+                        // line, so the label band collapses to the plain
+                        // 16.0pt margin (N3: plot_bot 344.01 = sy+shh-16).
+                        let plot_bot = if has_neg {
+                            sy + shh - 16.0
+                        } else if crowded {
                             sy + shh - 78.62
                         } else {
                             sy + shh - 39.9
                         };
                         let plot_h = plot_bot - plot_top;
+                        // A positive-only line chart always uses 5 divisions
+                        // (measured); a signed one needs the general
+                        // zero-spanning search (N3: 25..-10 = 7 divisions).
+                        let (axis_min, max_axis, axis_steps) = if has_neg {
+                            nice_axis_range(min_val, max_val, plot_h, VERT_MIN_SPACING)
+                        } else {
+                            (0.0, nice_axis_max(max_val), 5usize)
+                        };
+                        let axis_span = (max_axis - axis_min).max(1e-9);
+                        let val_y =
+                            |v: f64| plot_bot - ((v - axis_min) / axis_span) * plot_h;
+                        let zero_y = val_y(0.0);
+                        let plot_left = if has_neg {
+                            let mut widest = 0.0f64;
+                            for i in 0..=axis_steps {
+                                let val =
+                                    axis_min + axis_span * i as f64 / axis_steps as f64;
+                                let label = format!("{}", val.round() as i64);
+                                let lw = font_adv::line_hmtx_width_pt(
+                                    &label, axis_fs, axis_family,
+                                )
+                                .unwrap_or_else(|| {
+                                    label.chars().count() as f32 * axis_fs * 0.5
+                                }) as f64;
+                                widest = widest.max(lw);
+                            }
+                            sx + 6.5 + widest + 16.7
+                        } else {
+                            plot_left_0
+                        };
+                        let plot_w = plot_right - plot_left;
                         let pitch = plot_w / n_cat as f64;
-                        let max_val = chart
-                            .series
-                            .iter()
-                            .flat_map(|s| s.values.iter().copied())
-                            .fold(0.0f64, f64::max);
-                        let max_axis = nice_axis_max(max_val);
-                        let axis_steps = 5usize;
 
                         // Value axis labels (Calibri 18pt, right edge =
                         // plot_left-16.64, baseline = tick_y+5.22; same
                         // rule as the bars).
                         for i in 0..=axis_steps {
-                            let val = max_axis * i as f64 / axis_steps as f64;
-                            let tick_y = plot_bot - (val / max_axis) * plot_h;
+                            let val = axis_min + axis_span * i as f64 / axis_steps as f64;
+                            let tick_y = val_y(val);
                             let label = format!("{}", val.round() as i64);
                             let lw = font_adv::line_hmtx_width_pt(&label, 18.0, axis_family)
                                 .unwrap_or_else(|| {
@@ -2532,12 +2682,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .enumerate()
                                     .map(|(ci, v)| {
                                         let x = plot_left + pitch * (ci as f64 + 0.5);
-                                        let y = if max_axis > 0.0 {
-                                            plot_bot - (v / max_axis) * plot_h
-                                        } else {
-                                            plot_bot
-                                        };
-                                        (x, y)
+                                        (x, val_y(*v))
                                     })
                                     .collect()
                             })
@@ -2712,7 +2857,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         draw_text_baseline(
                                             mem_dc,
                                             ((cat_center - wa / 2.0) * scale).round() as i32,
-                                            (plot_bot + 45.0) as f32,
+                                            (zero_y + 45.0) as f32,
                                             &a,
                                             18.0,
                                             axis_family,
@@ -2722,7 +2867,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         draw_text_baseline(
                                             mem_dc,
                                             ((cat_center - wb / 2.0) * scale).round() as i32,
-                                            (plot_bot + 67.55) as f32,
+                                            (zero_y + 67.55) as f32,
                                             &b,
                                             18.0,
                                             axis_family,
@@ -2736,7 +2881,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             draw_text_baseline(
                                 mem_dc,
                                 (lx * scale).round() as i32,
-                                (plot_bot + single_bl) as f32,
+                                (zero_y + single_bl) as f32,
                                 name,
                                 18.0,
                                 axis_family,
@@ -2917,11 +3062,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let _ = MoveToEx(mem_dc, ((plot_left - 5.7) * scale).round() as i32, ty, None);
                             let _ = LineTo(mem_dc, pl, ty);
                         }
+                        // Category ticks hang off the ZERO line (N3: the four
+                        // ticks run 280.97 -> 286.68 while plot_bot is 344.01).
+                        let zt = (zero_y * scale).round() as i32;
                         for i in 0..=n_cat {
                             let tick_x = plot_left + pitch * i as f64;
                             let tx = (tick_x * scale).round() as i32;
-                            let _ = MoveToEx(mem_dc, tx, pb, None);
-                            let _ = LineTo(mem_dc, tx, ((plot_bot + 5.7) * scale).round() as i32);
+                            let _ = MoveToEx(mem_dc, tx, zt, None);
+                            let _ = LineTo(mem_dc, tx, ((zero_y + 5.7) * scale).round() as i32);
                         }
                         SelectObject(mem_dc, old_axis_pen);
                         let _ = DeleteObject(axis_pen);
@@ -2979,7 +3127,34 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .iter()
                             .map(|c| text_w(c, axis_fs))
                             .fold(0.0f64, f64::max);
-                        let plot_left = sx + 6.50 + cat_label_w + 16.70;
+                        // NEGATIVE data (chart_negative N7, 2026-08-10): the
+                        // category names move INSIDE, right-aligned to the zero
+                        // line, so the left gutter now only has to hold half of
+                        // the leftmost VALUE label (94.88 measured = sx + 11.0 +
+                        // w("-10")/2); plot_bot keeps the 39.9 band because the
+                        // value labels are still underneath.
+                        let raw_min_h = if is_stacked {
+                            (0..n_cat)
+                                .map(|ci| {
+                                    chart
+                                        .series
+                                        .iter()
+                                        .map(|s| {
+                                            s.values.get(ci).copied().unwrap_or(0.0)
+                                        })
+                                        .filter(|v| *v < 0.0)
+                                        .sum::<f64>()
+                                })
+                                .fold(0.0f64, f64::min)
+                        } else {
+                            chart
+                                .series
+                                .iter()
+                                .flat_map(|s| s.values.iter().copied())
+                                .fold(0.0f64, f64::min)
+                        };
+                        let has_neg = raw_min_h < 0.0;
+                        let plot_left_pos = sx + 6.50 + cat_label_w + 16.70;
                         let plot_top = if has_explicit_title {
                             // MEASURED 2026-08-09 (chart_bar_resid slides 1/2/5,
                             // Word PDF category-tick tops): 112.70 on a frame at
@@ -3040,21 +3215,54 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // plot_right depends on the axis-max label width while the
                         // axis choice depends on plot_w -> settle with one refine
                         // pass (the half-label moves plot_w by under 10pt).
+                        let mut axis_min = 0.0f64;
                         let mut axis_max = nice_axis_max(raw_max);
                         let mut axis_steps = 5usize;
+                        let mut plot_left = plot_left_pos;
                         let mut plot_right = band_right - 9.13;
                         for _ in 0..2 {
-                            let (m, d) =
-                                horiz_value_axis(raw_max, plot_right - plot_left);
-                            axis_max = m;
-                            axis_steps = d.max(1);
-                            let step = m / axis_steps as f64;
+                            if has_neg {
+                                let (lo, hi, d) = nice_axis_range(
+                                    raw_min_h,
+                                    raw_max,
+                                    plot_right - plot_left,
+                                    HORIZ_MIN_SPACING,
+                                );
+                                axis_min = lo;
+                                axis_max = hi;
+                                axis_steps = d.max(1);
+                            } else {
+                                let (m, d) = horiz_value_axis(
+                                    raw_max,
+                                    plot_right - plot_left,
+                                );
+                                axis_min = 0.0;
+                                axis_max = m;
+                                axis_steps = d.max(1);
+                            }
+                            let step =
+                                (axis_max - axis_min) / axis_steps as f64;
+                            if has_neg {
+                                // Both edges leave half of the OUTERMOST label.
+                                plot_left = sx
+                                    + 11.0
+                                    + text_w(
+                                        &fmt_axis_value(axis_min, step),
+                                        axis_fs,
+                                    ) / 2.0;
+                            }
                             plot_right = band_right
-                                - text_w(&fmt_axis_value(m, step), axis_fs) / 2.0;
+                                - text_w(&fmt_axis_value(axis_max, step), axis_fs)
+                                    / 2.0;
                         }
+                        let plot_left = plot_left;
                         let plot_w = plot_right - plot_left;
                         let pitch = plot_h / n_cat as f64;
-                        let axis_step = axis_max / axis_steps as f64;
+                        let axis_span = (axis_max - axis_min).max(1e-9);
+                        let axis_step = axis_span / axis_steps as f64;
+                        let val_x =
+                            |v: f64| plot_left + ((v - axis_min) / axis_span) * plot_w;
+                        let zero_x = val_x(0.0);
 
                         // ---- value-axis gridlines (vertical, behind the bars) ----
                         {
@@ -3090,45 +3298,57 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             if is_stacked {
                                 let bar_h = pitch * 0.4;
                                 let by0 = cat_center - bar_h / 2.0;
-                                let mut cum = 0.0f64;
+                                let mut cum_pos = 0.0f64;
+                                let mut cum_neg = 0.0f64;
                                 for (si, series) in chart.series.iter().enumerate() {
                                     let v =
                                         series.values.get(ci).copied().unwrap_or(0.0);
-                                    if v <= 0.0 {
+                                    if v == 0.0 {
                                         continue;
                                     }
-                                    let seg_w = if axis_max > 0.0 {
-                                        v / axis_max * plot_w
+                                    let seg_w = (v / axis_span * plot_w).abs();
+                                    let (bx0, bx1) = if v > 0.0 {
+                                        let a = zero_x + cum_pos;
+                                        cum_pos += seg_w;
+                                        (a, a + seg_w)
                                     } else {
-                                        0.0
+                                        let b = zero_x - cum_neg;
+                                        cum_neg += seg_w;
+                                        (b - seg_w, b)
                                     };
+                                    let neg = v < 0.0;
                                     let col_hex = pres
                                         .theme_colors
                                         .get(&format!("accent{}", si + 1))
                                         .map(|s| s.as_str())
                                         .or_else(|| DEFAULT_ACCENT.get(si).copied());
-                                    if let Some(rgb) =
+                                    if let Some(rgb0) =
                                         col_hex.and_then(parse_hex_rgb)
                                     {
+                                        // invertIfNegative defaults to TRUE.
+                                        let rgb = if neg {
+                                            (255u8, 255u8, 255u8)
+                                        } else {
+                                            rgb0
+                                        };
                                         let brush = CreateSolidBrush(COLORREF(
                                             colorref(rgb.0, rgb.1, rgb.2),
                                         ));
                                         let old_brush = SelectObject(mem_dc, brush);
                                         let r = RECT {
-                                            left: ((plot_left + cum) * scale).round()
-                                                as i32,
+                                            left: (bx0 * scale).round() as i32,
                                             top: (by0 * scale).round() as i32,
-                                            right: ((plot_left + cum + seg_w) * scale)
-                                                .round()
-                                                as i32,
+                                            right: (bx1 * scale).round() as i32,
                                             bottom: ((by0 + bar_h) * scale).round()
                                                 as i32,
                                         };
                                         let _ = FillRect(mem_dc, &r, brush);
                                         SelectObject(mem_dc, old_brush);
                                         let _ = DeleteObject(brush);
+                                        if neg {
+                                            draw_neg_bar_outline(mem_dc, &r, scale);
+                                        }
                                     }
-                                    cum += seg_w;
                                 }
                             } else {
                                 let bar_h = pitch / (n_ser as f64 + 1.5);
@@ -3144,9 +3364,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         .or_else(|| {
                                             DEFAULT_ACCENT.get(accent_idx).copied()
                                         });
-                                    if let Some(rgb) =
+                                    if let Some(rgb0) =
                                         col_hex.and_then(parse_hex_rgb)
                                     {
+                                        // invertIfNegative defaults to TRUE.
+                                        let rgb = if v < 0.0 {
+                                            (255u8, 255u8, 255u8)
+                                        } else {
+                                            rgb0
+                                        };
                                         let brush = CreateSolidBrush(COLORREF(
                                             colorref(rgb.0, rgb.1, rgb.2),
                                         ));
@@ -3154,22 +3380,25 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         // series 0 is the BOTTOM bar of the cluster
                                         let by0 = cat_center + cluster_h / 2.0
                                             - (si as f64 + 1.0) * bar_h;
-                                        let bw = if axis_max > 0.0 {
-                                            v / axis_max * plot_w
+                                        let vx = val_x(v);
+                                        let (bx0, bx1) = if v >= 0.0 {
+                                            (zero_x, vx)
                                         } else {
-                                            0.0
+                                            (vx, zero_x)
                                         };
                                         let r = RECT {
-                                            left: (plot_left * scale).round() as i32,
+                                            left: (bx0 * scale).round() as i32,
                                             top: (by0 * scale).round() as i32,
-                                            right: ((plot_left + bw) * scale).round()
-                                                as i32,
+                                            right: (bx1 * scale).round() as i32,
                                             bottom: ((by0 + bar_h) * scale).round()
                                                 as i32,
                                         };
                                         let _ = FillRect(mem_dc, &r, brush);
                                         SelectObject(mem_dc, old_brush);
                                         let _ = DeleteObject(brush);
+                                        if v < 0.0 {
+                                            draw_neg_bar_outline(mem_dc, &r, scale);
+                                        }
                                     }
                                 }
                             }
@@ -3244,7 +3473,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                         // ---- value-axis labels (below the axis, centred) ----
                         for i in 0..=axis_steps {
-                            let v = axis_step * i as f64;
+                            let v = axis_min + axis_step * i as f64;
                             let label = fmt_axis_value(v, axis_step);
                             let lw = text_w(&label, axis_fs);
                             let tick_x =
@@ -3262,12 +3491,16 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         }
 
                         // ---- category labels (left of the axis, right-aligned) ----
+                        // With negatives the category axis IS the zero line, and
+                        // the names right-align 16.64pt to its left (N7: 'Q3'
+                        // ends at 166.46, zero_x 183.13).
+                        let cat_axis_x = if has_neg { zero_x } else { plot_left };
                         for (ci, cat) in chart.categories.iter().enumerate() {
                             let cat_center = plot_bot - pitch * (ci as f64 + 0.5);
                             let lw = text_w(cat, axis_fs);
                             draw_text_baseline(
                                 mem_dc,
-                                ((plot_left - 16.70 - lw) * scale).round() as i32,
+                                ((cat_axis_x - 16.70 - lw) * scale).round() as i32,
                                 (cat_center + 5.22) as f32,
                                 cat,
                                 axis_fs,
@@ -3380,8 +3613,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let pr = (plot_right * scale).round() as i32;
                             let pb = (plot_bot * scale).round() as i32;
                             // category axis (vertical) + value axis (horizontal)
-                            let _ = MoveToEx(mem_dc, pl, pt, None);
-                            let _ = LineTo(mem_dc, pl, pb);
+                            // -- the category axis rides the ZERO line when the
+                            // value axis has negatives (N7: 183.13).
+                            let pz = (cat_axis_x * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, pz, pt, None);
+                            let _ = LineTo(mem_dc, pz, pb);
                             let _ = MoveToEx(mem_dc, pl, pb, None);
                             let _ = LineTo(mem_dc, pr, pb);
                             // value ticks below the axis
@@ -3403,11 +3639,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .round() as i32;
                                 let _ = MoveToEx(
                                     mem_dc,
-                                    ((plot_left - 5.72) * scale).round() as i32,
+                                    ((cat_axis_x - 5.72) * scale).round() as i32,
                                     ty,
                                     None,
                                 );
-                                let _ = LineTo(mem_dc, pl, ty);
+                                let _ = LineTo(mem_dc, pz, ty);
                             }
                             SelectObject(mem_dc, old_pen);
                             let _ = DeleteObject(axis_pen);
@@ -3421,7 +3657,54 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let has_explicit_title = chart.explicit_title.is_some();
                         let is_100pct = chart.grouping == "percentStacked";
                         let is_stacked = chart.grouping == "stacked" || is_100pct;
-                        let plot_left = if is_100pct { sx + 63.44 } else { sx + 41.4 };
+                        let n_cat = chart.categories.len().max(1);
+                        let n_ser = chart.series.len().max(1);
+                        let axis_fs = 18.0f32;
+                        let axis_family = "Calibri";
+                        // NEGATIVE data (chart_negative probe, 2026-08-10):
+                        // the axis spans zero, so both ends of the data range
+                        // matter.  A STACKED chart accumulates each SIGN away
+                        // from zero independently, so its range is the largest
+                        // per-category POSITIVE sum and the smallest per-category
+                        // NEGATIVE sum (N8: +29.7 / -19.7 -> axis -30..40).
+                        let (min_val, max_val) = if is_100pct {
+                            // percentStacked: fixed 0..100 scale (10-step %-axis).
+                            (0.0, 100.0)
+                        } else if is_stacked {
+                            let mut lo = 0.0f64;
+                            let mut hi = 0.0f64;
+                            for ci in 0..n_cat {
+                                let mut pos = 0.0f64;
+                                let mut neg = 0.0f64;
+                                for s in &chart.series {
+                                    let v = s.values.get(ci).copied().unwrap_or(0.0);
+                                    if v >= 0.0 {
+                                        pos += v;
+                                    } else {
+                                        neg += v;
+                                    }
+                                }
+                                hi = hi.max(pos);
+                                lo = lo.min(neg);
+                            }
+                            (lo, hi)
+                        } else {
+                            let mut lo = 0.0f64;
+                            let mut hi = 0.0f64;
+                            for s in &chart.series {
+                                for v in s.values.iter().copied() {
+                                    hi = hi.max(v);
+                                    lo = lo.min(v);
+                                }
+                            }
+                            (lo, hi)
+                        };
+                        // With negatives the category names move INSIDE the
+                        // plot (they hang off the zero line), so the 39.9pt
+                        // bottom band that normally holds them collapses to
+                        // the plain 16.0pt margin: N1/N2/N8 all put plot_bot
+                        // at sy+shh-16.0 (344.01) instead of 320.10.
+                        let has_neg = min_val < 0.0;
                         let plot_top = if has_explicit_title {
                             // An explicit <c:title> shifts the plot down by
                             // the title line: plot_top = sy+45.69
@@ -3434,14 +3717,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         } else {
                             sy + 16.0
                         };
-                        let plot_right = sx + sw - 11.0;
-                        let plot_bot = sy + shh - 39.9;
-                        let plot_w = plot_right - plot_left;
+                        let plot_bot = sy + shh - if has_neg { 16.0 } else { 39.9 };
                         let plot_h = plot_bot - plot_top;
-                        let n_cat = chart.categories.len().max(1);
-                        let n_ser = chart.series.len().max(1);
-                        let axis_fs = 18.0f32;
-                        let axis_family = "Calibri";
 
                         // Value axis labels (0..max_axis in even steps),
                         // right-aligned to a fixed gutter. For a CLUSTERED
@@ -3451,56 +3728,66 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // Q2 sum 36.4 -> nice max 40) and draws one label
                         // per 5-step tick, i.e. (max_axis/5)+1 labels
                         // (0,5,...,40 = 9 labels, render-truth 2026-08-06).
-                        let max_val = if is_100pct {
-                            // percentStacked: fixed 0..100 scale (10-step %-axis).
-                            100.0
-                        } else if is_stacked {
-                            // largest per-category sum over all series
-                            (0..n_cat)
-                                .map(|ci| {
-                                    chart
-                                        .series
-                                        .iter()
-                                        .map(|s| {
-                                            s.values.get(ci).copied().unwrap_or(0.0)
-                                        })
-                                        .sum::<f64>()
-                                })
-                                .fold(0.0f64, f64::max)
-                        } else {
-                            chart
-                                .series
-                                .iter()
-                                .flat_map(|s| s.values.iter().copied())
-                                .fold(0.0f64, f64::max)
-                        };
+                        //
                         // percentStacked's axis is FIXED at 100, so it must not
-                        // go through nice_axis_max (whose 5% headroom would
-                        // round 100 up to 120).
-                        let max_axis = if is_100pct {
-                            100.0
-                        } else {
-                            nice_axis_max(max_val)
-                        };
-                        let axis_steps = if is_100pct {
+                        // go through the nice-range search (whose 5% headroom
+                        // would round 100 up to 120).
+                        let (axis_min, max_axis, axis_steps) = if is_100pct {
                             // percentStacked: 0%,10%,...,100% (11 labels).
-                            10usize
-                        } else if is_stacked {
-                            (max_axis / 5.0).round().max(1.0) as usize
+                            (0.0, 100.0, 10usize)
                         } else {
-                            5usize
+                            nice_axis_range(min_val, max_val, plot_h, VERT_MIN_SPACING)
                         };
+                        let axis_span = (max_axis - axis_min).max(1e-9);
+                        // The value gutter is measured from the WIDEST value
+                        // label: plot_left = sx + 6.50 + w + 16.70 (the same
+                        // rule the horizontal-bar and area branches use, and
+                        // the rule the 41.4 / 63.44 constants below are the
+                        // 2-digit / "100%" evaluations of).  A negative axis
+                        // grows the labels by the minus sign, so it must be
+                        // computed: N1/N2/N8 all put plot_left at 118.96 =
+                        // 72 + 6.50 + w("-10") 23.76 + 16.70.
+                        let plot_left = if has_neg {
+                            let mut widest = 0.0f64;
+                            for i in 0..=axis_steps {
+                                let val = axis_min
+                                    + (max_axis - axis_min) * i as f64
+                                        / axis_steps as f64;
+                                let label = format!("{}", val.round() as i64);
+                                let lw = font_adv::line_hmtx_width_pt(
+                                    &label, axis_fs, axis_family,
+                                )
+                                .unwrap_or_else(|| {
+                                    label.chars().count() as f32 * axis_fs * 0.5
+                                }) as f64;
+                                widest = widest.max(lw);
+                            }
+                            sx + 6.5 + widest + 16.7
+                        } else if is_100pct {
+                            sx + 63.44
+                        } else {
+                            sx + 41.4
+                        };
+                        let plot_right = sx + sw - 11.0;
+                        let plot_w = plot_right - plot_left;
+                        // Value -> y.  With axis_min == 0 (the positive-only
+                        // case) this is exactly the previous `plot_bot -
+                        // v/max_axis*plot_h`, so every existing probe is
+                        // unchanged.
+                        let val_y =
+                            |v: f64| plot_bot - ((v - axis_min) / axis_span) * plot_h;
+                        // The category axis sits at the value 0, NOT at the
+                        // bottom of the plot (N1: bars grow from y=280.97 and
+                        // the category names sit at 280.97+28.68).
+                        let zero_y = val_y(0.0);
                         for i in 0..=axis_steps {
                             // percentStacked labels the fixed 0..100 scale
                             // as "0%".."100%" (render-truth: '0%' x=96.77 /
                             // '100%' x=78.50, right-aligned, baseline
                             // tick_y + 5.2).
-                            let val = if is_100pct {
-                                100.0 * i as f64 / axis_steps as f64
-                            } else {
-                                max_axis * i as f64 / axis_steps as f64
-                            };
-                            let tick_y = plot_bot - (val / max_axis) * plot_h;
+                            let val =
+                                axis_min + axis_span * i as f64 / axis_steps as f64;
+                            let tick_y = val_y(val);
                             let label = if is_100pct {
                                 format!("{:.0}%", val)
                             } else {
@@ -3581,7 +3868,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 let cat_center =
                                     plot_left + pitch * (ci as f64 + 0.5);
                                 let bx0 = cat_center - bar_w / 2.0;
-                                let mut cum_h = 0.0;
+                                let mut cum_pos = 0.0f64;
+                                let mut cum_neg = 0.0f64;
                                 for (si, series) in
                                     chart.series.iter().enumerate()
                                 {
@@ -3611,13 +3899,25 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         } else {
                                             0.0
                                         }
-                                    } else if max_axis > 0.0 {
-                                        v / max_axis * plot_h
                                     } else {
-                                        0.0
+                                        (v / axis_span * plot_h).abs()
                                     };
-                                    let by1 = plot_bot - cum_h;
-                                    let by0 = by1 - seg_h;
+                                    // Each SIGN stacks away from zero
+                                    // independently (N8 render-truth: Q2's two
+                                    // negative segments run 234.29->265.38 and
+                                    // 265.38->306.34, i.e. downward from the
+                                    // zero line, not upward from plot_bot).
+                                    let (by0, by1) = if v >= 0.0 {
+                                        let b1 = zero_y - cum_pos;
+                                        let b0 = b1 - seg_h;
+                                        cum_pos += seg_h;
+                                        (b0, b1)
+                                    } else {
+                                        let b0 = zero_y + cum_neg;
+                                        let b1 = b0 + seg_h;
+                                        cum_neg += seg_h;
+                                        (b0, b1)
+                                    };
                                     let accent_idx =
                                         if vary_points { ci } else { si };
                                     let col_hex = pres
@@ -3635,6 +3935,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     if let Some(rgb) =
                                         col_hex.and_then(parse_hex_rgb)
                                     {
+                                        // Negative segments invert to white
+                                        // here too (N8: both of Q2's segments
+                                        // are #FFFFFF, not accent).
+                                        let neg = v < 0.0;
+                                        let rgb = if neg {
+                                            (255u8, 255u8, 255u8)
+                                        } else {
+                                            rgb
+                                        };
                                         let brush = CreateSolidBrush(
                                             COLORREF(colorref(
                                                 rgb.0, rgb.1, rgb.2,
@@ -3652,8 +3961,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         let _ = FillRect(mem_dc, &r, brush);
                                         SelectObject(mem_dc, old_brush);
                                         let _ = DeleteObject(brush);
+                                        if neg {
+                                            draw_neg_bar_outline(
+                                                mem_dc, &r, scale,
+                                            );
+                                        }
                                     }
-                                    cum_h += seg_h;
                                 }
                             }
                         } else {
@@ -3669,6 +3982,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .map(|s| s.as_str())
                                     .or_else(|| DEFAULT_ACCENT.get(accent_idx).copied());
                                 if let Some(rgb) = col_hex.and_then(parse_hex_rgb) {
+                                    // "Invert if negative" is ON by default in
+                                    // Word: a negative bar is painted WHITE and
+                                    // keeps only its outline (N1 Q2 / all of N2
+                                    // render as #FFFFFF with a thin dark edge).
+                                    let neg = *v < 0.0;
+                                    let rgb = if neg { (255u8, 255u8, 255u8) } else { rgb };
                                     let brush = CreateSolidBrush(COLORREF(colorref(
                                         rgb.0, rgb.1, rgb.2,
                                     )));
@@ -3678,21 +3997,27 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     let bx0 = cat_center
                                         - cluster_w / 2.0
                                         + si as f64 * bar_w;
-                                    let bar_h = if max_axis > 0.0 {
-                                        v / max_axis * plot_h
+                                    // Bars grow from the ZERO line, downward
+                                    // when the value is negative (N1: Q2's -8.5
+                                    // runs 280.97..334.56, i.e. below zero).
+                                    let vy = val_y(*v);
+                                    let (by0, by1) = if *v >= 0.0 {
+                                        (vy, zero_y)
                                     } else {
-                                        0.0
+                                        (zero_y, vy)
                                     };
-                                    let by0 = plot_bot - bar_h;
                                     let r = RECT {
                                         left: (bx0 * scale).round() as i32,
                                         top: (by0 * scale).round() as i32,
                                         right: ((bx0 + bar_w) * scale).round() as i32,
-                                        bottom: (plot_bot * scale).round() as i32,
+                                        bottom: (by1 * scale).round() as i32,
                                     };
                                     let _ = FillRect(mem_dc, &r, brush);
                                     SelectObject(mem_dc, old_brush);
                                     let _ = DeleteObject(brush);
+                                    if neg {
+                                        draw_neg_bar_outline(mem_dc, &r, scale);
+                                    }
                                 }
                             }
                         }
@@ -3744,14 +4069,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         plot_left + pitch * (ci as f64 + 0.5);
                                     let bx0 = cat_center - bar_w / 2.0;
                                     let bar_center = bx0 + bar_w / 2.0;
-                                    let mut cum_h = 0.0f64;
+                                    // Mirror the drawing block: each sign
+                                    // stacks away from the zero line.  With
+                                    // no negatives cum_neg stays 0 and this is
+                                    // the previous plot_bot-anchored geometry.
+                                    let mut cum_pos = 0.0f64;
+                                    let mut cum_neg = 0.0f64;
                                     for s in chart.series.iter() {
                                         let v = s
                                             .values
                                             .get(ci)
                                             .copied()
                                             .unwrap_or(0.0);
-                                        if v <= 0.0 {
+                                        if v == 0.0 {
                                             continue;
                                         }
                                         let seg_h = if is_100pct {
@@ -3770,13 +4100,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             } else {
                                                 0.0
                                             }
-                                        } else if max_axis > 0.0 {
-                                            v / max_axis * plot_h
                                         } else {
-                                            0.0
+                                            (v / axis_span * plot_h).abs()
                                         };
-                                        let by1 = plot_bot - cum_h;
-                                        let by0 = by1 - seg_h;
+                                        let (by0, by1) = if v > 0.0 {
+                                            let b1 = zero_y - cum_pos;
+                                            let b0 = b1 - seg_h;
+                                            cum_pos += seg_h;
+                                            (b0, b1)
+                                        } else {
+                                            let b0 = zero_y + cum_neg;
+                                            let b1 = b0 + seg_h;
+                                            cum_neg += seg_h;
+                                            (b0, b1)
+                                        };
+                                        let _ = by1;
                                         let text = format_label(v);
                                         let lw = font_adv::line_hmtx_width_pt(
                                             &text,
@@ -3806,7 +4144,6 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             None,
                                             scale,
                                         );
-                                        cum_h += seg_h;
                                     }
                                 }
                             } else {
@@ -3822,19 +4159,20 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             .get(ci)
                                             .copied()
                                             .unwrap_or(0.0);
-                                        if v <= 0.0 {
+                                        if v == 0.0 {
                                             continue;
                                         }
                                         let bx0 = cat_center
                                             - cluster_w / 2.0
                                             + si as f64 * bar_w;
                                         let bar_center = bx0 + bar_w / 2.0;
-                                        let bar_h = if max_axis > 0.0 {
-                                            v / max_axis * plot_h
+                                        let vy = val_y(v);
+                                        let (by0, by1) = if v > 0.0 {
+                                            (vy, zero_y)
                                         } else {
-                                            0.0
+                                            (zero_y, vy)
                                         };
-                                        let by0 = plot_bot - bar_h;
+                                        let bar_h = by1 - by0;
                                         let text = format_label(v);
                                         let lw = font_adv::line_hmtx_width_pt(
                                             &text,
@@ -3847,12 +4185,30 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 * 0.5
                                         }) as f64;
                                         let lx = bar_center - lw / 2.0;
-                                        let baseline = match dlbl_pos {
-                                            "inEnd" => by0 + 21.70,
-                                            "ctr" => {
-                                                by0 + bar_h / 2.0 + 6.2
+                                        // The measured offsets are for a bar
+                                        // that grows UP.  A negative bar's
+                                        // "outer end" is its BOTTOM edge, so
+                                        // the label mirrors: the measured 9.28
+                                        // leaves an ink gap of 9.28 - descent
+                                        // (0.211*fs) above the edge, and the
+                                        // mirror puts the same gap below it
+                                        // (baseline = edge + gap + ascent).
+                                        // UNMEASURED - no probe arm pairs a
+                                        // negative bar with c:dLbls.
+                                        let baseline = if v > 0.0 {
+                                            match dlbl_pos {
+                                                "inEnd" => by0 + 21.70,
+                                                "ctr" => by0 + bar_h / 2.0 + 6.2,
+                                                _ => by0 - 9.28, // outEnd
                                             }
-                                            _ => by0 - 9.28, // outEnd
+                                        } else {
+                                            let fs = axis_fs as f64;
+                                            let gap = 9.28 - 0.211 * fs;
+                                            match dlbl_pos {
+                                                "inEnd" => by1 - 21.70 + 12.4,
+                                                "ctr" => by0 + bar_h / 2.0 + 6.2,
+                                                _ => by1 + gap + 0.75 * fs,
+                                            }
                                         };
                                         draw_text_baseline(
                                             mem_dc,
@@ -3878,10 +4234,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     name.chars().count() as f32 * axis_fs * 0.5
                                 }) as f64;
                             let lx = cat_center - lw / 2.0;
+                            // Category names hang off the ZERO line (N1: bars
+                            // start at 280.97 and the names sit at 309.65;
+                            // N8: zero 234.29, names 262.94).  zero_y ==
+                            // plot_bot whenever the data has no negatives.
                             draw_text_baseline(
                                 mem_dc,
                                 (lx * scale).round() as i32,
-                                (plot_bot + 28.67) as f32,
+                                (zero_y + 28.67) as f32,
                                 name,
                                 axis_fs,
                                 axis_family,
@@ -4085,11 +4445,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let _ = MoveToEx(mem_dc, ((plot_left - 5.7) * scale).round() as i32, ty, None);
                             let _ = LineTo(mem_dc, pl, ty);
                         }
+                        // Category ticks hang from the CATEGORY AXIS, which sits
+                        // at value 0 (crosses=autoZero) - not at the bottom of
+                        // the plot.  N8 render-truth: the four ticks run
+                        // 234.29 -> 240.00 = zero_y -> zero_y+5.71, while the
+                        // plot bottom is 344.01.  With no negatives zero_y ==
+                        // plot_bot, so this is the previous geometry.
+                        let zt = (zero_y * scale).round() as i32;
                         for i in 0..=n_cat {
                             let tick_x = plot_left + pitch * i as f64;
                             let tx = (tick_x * scale).round() as i32;
-                            let _ = MoveToEx(mem_dc, tx, pb, None);
-                            let _ = LineTo(mem_dc, tx, ((plot_bot + 5.7) * scale).round() as i32);
+                            let _ = MoveToEx(mem_dc, tx, zt, None);
+                            let _ = LineTo(mem_dc, tx, ((zero_y + 5.7) * scale).round() as i32);
                         }
 
                         SelectObject(mem_dc, old_axis_pen);
@@ -4563,38 +4930,87 @@ fn fmt_axis_value(v: f64, step: f64) -> String {
 /// closes to (56.28, 57.76] over all 19 measured points and 57.0 sits inside;
 /// the model then reproduces 19 of 19 (the earlier headroom-free model with a
 /// 53pt threshold reproduced 15).
-fn horiz_value_axis(max_val: f64, plot_w: f64) -> (f64, usize) {
-    if max_val <= 0.0 || plot_w <= 0.0 {
-        return (1.0, 1);
+/// Value axis for data that may contain NEGATIVE values (both orientations).
+///
+/// DERIVED from the 8-arm `chart_negative` probe (Word render-truth, 2026-08-10):
+///
+///  * the axis always spans zero -- the modelled data range is
+///    `[min(data_min,0), max(data_max,0)]`, each end given the same 5%
+///    headroom the positive-only axis already uses (`AXIS_HEADROOM`).
+///    N2 (all data negative, -19.2..-8.5) has axis_max exactly 0, and N4/N5
+///    (scatter X starting at 1) have axis_min exactly 0.
+///  * `axis_max = ceil(hi/step)*step`, `axis_min = floor(lo/step)*step`.
+///  * `step` is the FINEST 1/2/5 x 10^k whose tick spacing
+///    (`plot_len / div`) is at least `min_spacing` -- the same selection the
+///    horizontal axis already made, now shared by both orientations.
+///
+/// The four measured negative arms are reproduced exactly:
+///   N1 col   19.2/-8.5   span 29.085 -> step 5,  -10..25, 7 div (31.5pt)
+///   N2 col   all-neg     span 20.16  -> step 5,  -25..0,  5 div (44.1pt)
+///   N8 stack +29.7/-19.7 span 51.87  -> step 10, -30..40, 7 div (36.6pt)
+///   N7 bar   19.2/-8.5   span 29.085 -> step 10, -10..30, 4 div (88.2pt)
+///   N5 sc-X  2/-2        span 4.2    -> step 2,  -4..4,   4 div (74.4pt)
+/// and every positive-only probe is bit-identical because `data_min >= 0`
+/// forces `axis_min = 0`, which reduces this to the previous formula.
+fn nice_axis_range(
+    data_min: f64,
+    data_max: f64,
+    plot_len: f64,
+    min_spacing: f64,
+) -> (f64, f64, usize) {
+    let lo = data_min.min(0.0) * AXIS_HEADROOM;
+    let hi = data_max.max(0.0) * AXIS_HEADROOM;
+    if plot_len <= 0.0 || !(hi - lo).is_finite() || hi - lo <= 0.0 {
+        return (0.0, 1.0, 1);
     }
-    const MIN_SPACING: f64 = 57.0;
-    const HEADROOM: f64 = 1.05;
-    let mut best: Option<(f64, f64, usize)> = None; // (step, axis_max, div)
+    let mut best: Option<(f64, f64, f64, usize)> = None; // (step, amin, amax, div)
     for k in -6i32..=9 {
         let mag = 10f64.powi(k);
         for m in [1.0f64, 2.0, 5.0] {
             let step = m * mag;
-            let axis_max = (max_val * HEADROOM / step - 1e-9).ceil() * step;
-            if !axis_max.is_finite() || axis_max <= 0.0 {
+            let amax = (hi / step - 1e-9).ceil() * step;
+            let amin = (lo / step + 1e-9).floor() * step;
+            if !amax.is_finite() || !amin.is_finite() || amax - amin <= 0.0 {
                 continue;
             }
-            let div = (axis_max / step).round() as usize;
+            let div = ((amax - amin) / step).round() as usize;
             if div == 0 || div > 200 {
                 continue;
             }
-            if plot_w / div as f64 >= MIN_SPACING {
+            if plot_len / div as f64 >= min_spacing {
                 match best {
-                    Some((bs, _, _)) if bs <= step => {}
-                    _ => best = Some((step, axis_max, div)),
+                    Some((bs, _, _, _)) if bs <= step => {}
+                    _ => best = Some((step, amin, amax, div)),
                 }
             }
         }
     }
     match best {
-        Some((_, axis_max, div)) => (axis_max, div),
-        // Plot too narrow for any nice step: fall back to a single division.
-        None => (nice_axis_max(max_val), 1),
+        Some((_, amin, amax, div)) => (amin, amax, div),
+        // Plot too small for any nice step: fall back to a single division.
+        None => {
+            let amax = if data_max <= 0.0 {
+                0.0
+            } else {
+                nice_axis_max(data_max)
+            };
+            let amin = if data_min >= 0.0 {
+                0.0
+            } else {
+                -nice_axis_max(-data_min)
+            };
+            (amin, amax, 1)
+        }
     }
+}
+
+fn horiz_value_axis(max_val: f64, plot_w: f64) -> (f64, usize) {
+    if max_val <= 0.0 || plot_w <= 0.0 {
+        return (1.0, 1);
+    }
+    let (_, axis_max, div) =
+        nice_axis_range(0.0, max_val, plot_w, HORIZ_MIN_SPACING);
+    (axis_max, div)
 }
 
 /// VERTICAL value-axis maximum.
@@ -4610,6 +5026,54 @@ fn horiz_value_axis(max_val: f64, plot_w: f64) -> (f64, usize) {
 /// (chart1 21.4 -> 25, chart_stacked 36.4 -> 40, chart_line 22.0 -> 25 with and
 /// without), so this only ever changes charts that were wrong.
 const AXIS_HEADROOM: f64 = 1.05;
+
+/// Minimum tick spacing for a VERTICAL value axis, in points.
+///
+/// DERIVED as a window from the negative-value probe plus the whole recorded
+/// battery: the step that Word CHOSE and the next finer one it REJECTED bracket
+/// it from both sides.
+///   rejected: chart_stacked step 2 (11.6pt), N1 step 2 (13.8), N2 step 2
+///             (20.1), N8 step 5 (21.3), chart_scatter Y step 2 (21.3)
+///   accepted: chart_stacked step 5 (29.0), N1 step 5 (31.5), chart1 step 5
+///             (39.35), N2 step 5 (44.1)
+/// so the window is (21.3, 29.0]; 25.0 sits mid-window.  Every positive-only
+/// probe picks the same step it did under the old fixed 5-division rule.
+/// Outline for an INVERTED (negative) bar.
+///
+/// `invertIfNegative` defaults to TRUE, so Word paints a negative bar white and
+/// keeps a thin dark edge -- without the edge the bar would be invisible
+/// (chart_negative N1/N2/N7 render-truth, 2026-08-10).
+unsafe fn draw_neg_bar_outline(
+    mem_dc: windows::Win32::Graphics::Gdi::HDC,
+    r: &windows::Win32::Foundation::RECT,
+    scale: f64,
+) {
+    // The GDI imports in this file are function-local, so a top-level helper
+    // needs its own `use` (same as the LINE marker helper).
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::{
+        CreatePen, DeleteObject, GetStockObject, Rectangle, SelectObject,
+        NULL_BRUSH, PS_SOLID,
+    };
+    let pen = CreatePen(
+        PS_SOLID,
+        (0.75 * scale).round().max(1.0) as i32,
+        COLORREF(colorref(0x3b, 0x3b, 0x3b)),
+    );
+    let old_pen = SelectObject(mem_dc, pen);
+    let nb = GetStockObject(NULL_BRUSH);
+    let ob2 = SelectObject(mem_dc, nb);
+    let _ = Rectangle(mem_dc, r.left, r.top, r.right, r.bottom);
+    SelectObject(mem_dc, ob2);
+    SelectObject(mem_dc, old_pen);
+    let _ = DeleteObject(pen);
+}
+
+const VERT_MIN_SPACING: f64 = 25.0;
+
+/// Minimum tick spacing for a HORIZONTAL value axis, in points (2026-08-09
+/// 14-arm sweep: the window closed to (56.28, 57.76]).
+const HORIZ_MIN_SPACING: f64 = 57.0;
 
 fn nice_axis_max(max_val: f64) -> f64 {
     if max_val <= 0.0 {

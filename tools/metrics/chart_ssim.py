@@ -47,6 +47,7 @@ DOCS = {
     "chart_area_leg": r"pipeline_data\pptx_probes\chart_area_leg\chart_area_leg.pdf",
     "chart_area_dlbls": r"pipeline_data\pptx_probes\chart_area_dlbls\chart_area_dlbls.pdf",
     "chart_scatter": r"pipeline_data\pptx_probes\chart_scatter\chart_scatter.pdf",
+    "chart_negative": r"pipeline_data\pptx_probes\chart_negative\chart_negative.pdf",
 }
 DPI = 150
 
