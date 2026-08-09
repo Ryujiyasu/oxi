@@ -1593,7 +1593,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let swatch_x1 = legend_right - legend_label_w - legend_gap;
                         let swatch_x0 = swatch_x1 - swatch_w;
                         let label_x0 = swatch_x1 + legend_gap;
-                        let band_right = if chart.has_legend {
+                        // A legend that declares <c:overlay val="0"/> takes a
+                        // band off the plot; a bare <c:legend/> overlays it.
+                        // chart_area_dlbls D6 (band, plot_right 381.98) vs D7
+                        // (bare, plot_right 446.38 with the swatches sitting
+                        // INSIDE the plot at x 410.79) -- the same
+                        // discriminator pie/doughnut derived.
+                        let band_right = if chart.has_legend && !chart.legend_overlay
+                        {
                             swatch_x0 - 18.15
                         } else {
                             sx + sw - 11.0
@@ -1659,6 +1666,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         }
 
                         // ---- area fills ----
+                        // Data labels (<c:dLbls> + <c:showVal val="1"/>) sit at
+                        // the vertical CENTRE of the band that series paints,
+                        // horizontally centred on the data point, baseline at
+                        // centre + 6.22.  Word render-truth chart_area_dlbls
+                        // D1-D7 (24 labels, every one within 0.04pt):
+                        //   standard  band = [point, plot_bot]
+                        //   stacked   band = [own cumulative, previous
+                        //                     cumulative]  (D3 '12.3' baseline
+                        //                     162.96 = (121.06+192.44)/2+6.21)
+                        //   ★ 100% stacked still prints the RAW value, not the
+                        //     percentage (D4 shows '16.7'/'8.5', not '56%').
+                        let mut dlbl_slots: Vec<(f64, f64, f64)> = Vec::new();
                         let mut cum = vec![0.0f64; n_cat];
                         for (si, ser) in chart.series.iter().enumerate() {
                             let col_hex = pres
@@ -1707,6 +1726,16 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 } else {
                                     lower.push(0.0);
                                     upper.push(v);
+                                }
+                            }
+                            if chart.has_data_labels && chart.show_val {
+                                for ci in 0..n_cat {
+                                    let v =
+                                        ser.values.get(ci).copied().unwrap_or(0.0);
+                                    let mid = (val_y(upper[ci])
+                                        + val_y(lower[ci]))
+                                        / 2.0;
+                                    dlbl_slots.push((cat_x(ci), mid, v));
                                 }
                             }
                             let mut pts: Vec<POINT> =
@@ -1775,6 +1804,38 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             }
                             SelectObject(mem_dc, old_pen);
                             let _ = DeleteObject(axis_pen);
+                        }
+
+                        // ---- data labels (band centre, on top of the fills) ----
+                        if !dlbl_slots.is_empty() {
+                            let num_fmt = chart.number_format.clone();
+                            for (lx_c, mid, v) in &dlbl_slots {
+                                let text = if num_fmt == "0.0%" {
+                                    format!("{:.1}%", v * 100.0)
+                                } else if num_fmt == "0%" {
+                                    format!("{}%", (v * 100.0).round() as i64)
+                                } else {
+                                    // Word prints the raw value with no trailing
+                                    // zero: 22.0 -> "22", 21.4 -> "21.4".
+                                    format!("{}", v)
+                                };
+                                let lw = font_adv::line_hmtx_width_pt(
+                                    &text, axis_fs, axis_family,
+                                )
+                                .unwrap_or_else(|| {
+                                    text.chars().count() as f32 * axis_fs * 0.5
+                                }) as f64;
+                                draw_text_baseline(
+                                    mem_dc,
+                                    ((lx_c - lw / 2.0) * scale).round() as i32,
+                                    (mid + 6.22) as f32,
+                                    &text,
+                                    axis_fs,
+                                    axis_family,
+                                    None,
+                                    scale,
+                                );
+                            }
                         }
 
                         // ---- category labels (centred on the data x) ----
@@ -3607,6 +3668,54 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                         SelectObject(mem_dc, old_axis_pen);
                         let _ = DeleteObject(axis_pen);
+                        }
+                    }
+                    ShapeContent::Image { data, content_type: _ } => {
+                        // Decode the embedded image (PNG/JPEG media part) and
+                        // draw it scaled into the shape rect. rotation=0 only
+                        // for now (a rotation-aware path is left for a later
+                        // step; deck background images are typically unrotated).
+                        if let Ok(dyn_img) = image::load_from_memory(data) {
+                            let rgba = dyn_img.to_rgba8();
+                            let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
+                            if iw <= 0 || ih <= 0 {
+                                continue;
+                            }
+                            // RGBA -> BGRA for the 32-bpp DIB
+                            let mut bgra = Vec::with_capacity((iw * ih * 4) as usize);
+                            for p in rgba.pixels() {
+                                bgra.push(p[2]);
+                                bgra.push(p[1]);
+                                bgra.push(p[0]);
+                                bgra.push(p[3]);
+                            }
+                            let bmi = BITMAPINFO {
+                                bmiHeader: BITMAPINFOHEADER {
+                                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                                    biWidth: iw,
+                                    biHeight: -ih, // top-down
+                                    biPlanes: 1,
+                                    biBitCount: 32,
+                                    biCompression: 0, // BI_RGB
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            };
+                            let _ = StretchDIBits(
+                                mem_dc,
+                                x,
+                                y,
+                                ew,
+                                eh,
+                                0,
+                                0,
+                                iw,
+                                ih,
+                                Some(bgra.as_ptr() as *const _),
+                                &bmi,
+                                DIB_RGB_COLORS,
+                                SRCCOPY,
+                            );
                         }
                     }
                     _ => {}
