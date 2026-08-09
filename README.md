@@ -76,6 +76,16 @@ Two honest caveats about the two tables together: (1) the English and Japanese s
 
 *What the differences look like: the same Japanese government research-application form (rotated table-cell labels), rendered by Word, Oxi, LibreOffice and @silurus/ooxml. This document is from the **development** corpus and is shown for illustration only — the numbers above come from the blind sets.*
 
+### PowerPoint (PPTX) blind set — 50 HuggingFace documents
+
+The same measurement discipline, applied to real-world `.pptx` files. 50 files are sampled at random (seed `20260809`) from [noxneural/pptx_collection_templates](https://huggingface.co/datasets/noxneural/pptx_collection_templates) before any measurement, and each is scored against **Microsoft PowerPoint's own render** (Microsoft 365 16.0.20131.20154, 150 DPI, resize-to-match, structural similarity — the same pipeline as the Word tables above).
+
+| Engine | mean SSIM vs PowerPoint (per doc) | page count matches PowerPoint |
+|--------|----------------------------------|------------------------------|
+| LibreOffice 26.2.1.2 | **0.913** | **48 / 48** |
+
+Two of the 50 sampled files (corrupt zip containers, unopenable by either engine) are excluded, leaving **48** measured documents — page count matches PowerPoint on all 48. Oxi does not render `.pptx` yet (the presentation layout engine is on the roadmap), so this is a published LibreOffice-vs-PowerPoint **baseline to be beaten**: a fixed, frozen, never-anatomized target the PPTX engine can be measured against from day one, exactly like the Word blind sets above. Details and per-document scores: [REPORT_pptx_hf50_lo_v1.md](REPORT_pptx_hf50_lo_v1.md), raw results in `pipeline_data/pptx_benchmark/ssim_pptx/_result.json`.
+
 ### The internal gates (development corpus)
 
 The blind sets are the published claim; the development corpus is how regressions are caught before a change is committed. Every layout change must pass, in order:
