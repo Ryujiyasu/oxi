@@ -299,6 +299,12 @@ pub const RULES: &[Rule] = &[
         reason: "changes the worksheet display direction of an Excel window",
     },
     Rule {
+        pattern: "DisplayOutline",
+        how: Match::Segment,
+        class: Class::D,
+        reason: "shows or hides worksheet outline symbols in an Excel window",
+    },
+    Rule {
         pattern: "Activate",
         how: Match::Segment,
         class: Class::D,
@@ -3137,6 +3143,37 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("worksheet display direction"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn active_window_outline_display_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseOutlineDisplay()\n\
+             ActiveWindow.DisplayOutline = False\n\
+             Application.ActiveWindow.DisplayOutline = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("ActiveWindow.DisplayOutline"), Some(&1));
+        assert_eq!(
+            a.api_names.get("Application.ActiveWindow.DisplayOutline"),
+            Some(&1)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("active UI context"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("worksheet outline symbols"))
                 .count(),
             2
         );
