@@ -465,6 +465,17 @@ fn parse_slide(
     let mut shape_ph_type: Option<String> = None;
     let mut shape_ph_idx: Option<String> = None;
     let mut shape_has_xfrm = false;
+    // Group (p:grpSp) child-space transform stack.  Each entry is the
+    // cumulative (offset_x, offset_y, scale_x, scale_y) mapping a child's
+    // coordinates to slide points.  Empty = top level (identity).
+    let s_grp = std::env::var("OXI_GRPXFRM_DISABLE").is_err();
+    let mut grp_stack: Vec<(f32, f32, f32, f32)> = Vec::new();
+    let mut in_grp_sp_pr = false;
+    let mut in_grp_xfrm = false;
+    let mut g_off = (0.0f32, 0.0f32);
+    let mut g_ext = (0.0f32, 0.0f32);
+    let mut g_ch_off = (0.0f32, 0.0f32);
+    let mut g_ch_ext = (0.0f32, 0.0f32);
     // Spec #6: vertical text-anchor from the shape's own a:bodyPr/@anchor
     // (resolved through the placeholder chain at shape end).
     let mut shape_anchor: Option<String> = None;
@@ -542,6 +553,23 @@ fn parse_slide(
                     }
                     "spTree" => {
                         in_sp_tree = true;
+                    }
+                    "grpSp" if in_sp_tree => {
+                        // Inherit the parent transform until this group's
+                        // own a:xfrm is read (a group may omit it).
+                        let base =
+                            grp_stack.last().copied().unwrap_or((0.0, 0.0, 1.0, 1.0));
+                        grp_stack.push(base);
+                    }
+                    "grpSpPr" if !grp_stack.is_empty() => {
+                        in_grp_sp_pr = true;
+                    }
+                    "xfrm" if in_grp_sp_pr => {
+                        in_grp_xfrm = true;
+                        g_off = (0.0, 0.0);
+                        g_ext = (0.0, 0.0);
+                        g_ch_off = (0.0, 0.0);
+                        g_ch_ext = (0.0, 0.0);
                     }
                     "sp" | "pic" if in_sp_tree => {
                         in_shape = true;
@@ -695,12 +723,44 @@ fn parse_slide(
                             }
                         }
                     }
+                    "off" if in_grp_xfrm => {
+                        if let Some(x) = get_attr(&e, "x") {
+                            g_off.0 = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(y) = get_attr(&e, "y") {
+                            g_off.1 = y.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
+                    "chOff" if in_grp_xfrm => {
+                        if let Some(x) = get_attr(&e, "x") {
+                            g_ch_off.0 = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(y) = get_attr(&e, "y") {
+                            g_ch_off.1 = y.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
+                    "chExt" if in_grp_xfrm => {
+                        if let Some(cx) = get_attr(&e, "cx") {
+                            g_ch_ext.0 = cx.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(cy) = get_attr(&e, "cy") {
+                            g_ch_ext.1 = cy.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
                     "off" if in_shape => {
                         if let Some(x) = get_attr(&e, "x") {
                             shape_x = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
                         }
                         if let Some(y) = get_attr(&e, "y") {
                             shape_y = y.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
+                    "ext" if in_grp_xfrm => {
+                        if let Some(cx) = get_attr(&e, "cx") {
+                            g_ext.0 = cx.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(cy) = get_attr(&e, "cy") {
+                            g_ext.1 = cy.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
                         }
                     }
                     "ext" if in_shape => {
@@ -945,12 +1005,44 @@ fn parse_slide(
                         };
                         shape_ph_idx = get_attr(&e, "idx");
                     }
+                    "off" if in_grp_xfrm => {
+                        if let Some(x) = get_attr(&e, "x") {
+                            g_off.0 = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(y) = get_attr(&e, "y") {
+                            g_off.1 = y.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
+                    "chOff" if in_grp_xfrm => {
+                        if let Some(x) = get_attr(&e, "x") {
+                            g_ch_off.0 = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(y) = get_attr(&e, "y") {
+                            g_ch_off.1 = y.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
+                    "chExt" if in_grp_xfrm => {
+                        if let Some(cx) = get_attr(&e, "cx") {
+                            g_ch_ext.0 = cx.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(cy) = get_attr(&e, "cy") {
+                            g_ch_ext.1 = cy.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
                     "off" if in_shape => {
                         if let Some(x) = get_attr(&e, "x") {
                             shape_x = x.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
                         }
                         if let Some(y) = get_attr(&e, "y") {
                             shape_y = y.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                    }
+                    "ext" if in_grp_xfrm => {
+                        if let Some(cx) = get_attr(&e, "cx") {
+                            g_ext.0 = cx.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
+                        }
+                        if let Some(cy) = get_attr(&e, "cy") {
+                            g_ext.1 = cy.parse::<f32>().map(emu_to_pt).unwrap_or(0.0);
                         }
                     }
                     "ext" if in_shape => {
@@ -1177,6 +1269,31 @@ fn parse_slide(
                     "ln" if in_ln => {
                         in_ln = false;
                     }
+                    "xfrm" if in_grp_xfrm => {
+                        in_grp_xfrm = false;
+                        // Compose with the enclosing group's transform (this
+                        // group's own off/ext live in the PARENT's child space).
+                        let base = if grp_stack.len() >= 2 {
+                            grp_stack[grp_stack.len() - 2]
+                        } else {
+                            (0.0, 0.0, 1.0, 1.0)
+                        };
+                        let box_x = base.0 + g_off.0 * base.2;
+                        let box_y = base.1 + g_off.1 * base.3;
+                        let box_w = g_ext.0 * base.2;
+                        let box_h = g_ext.1 * base.3;
+                        let sx = if g_ch_ext.0 != 0.0 { box_w / g_ch_ext.0 } else { base.2 };
+                        let sy = if g_ch_ext.1 != 0.0 { box_h / g_ch_ext.1 } else { base.3 };
+                        if let Some(top) = grp_stack.last_mut() {
+                            *top = (box_x - g_ch_off.0 * sx, box_y - g_ch_off.1 * sy, sx, sy);
+                        }
+                    }
+                    "grpSpPr" if in_grp_sp_pr => {
+                        in_grp_sp_pr = false;
+                    }
+                    "grpSp" if !grp_stack.is_empty() => {
+                        grp_stack.pop();
+                    }
                     "sp" | "pic" if in_shape => {
                         let content = if shape_is_image {
                             if let Some(ref r_id) = shape_image_r_id {
@@ -1231,6 +1348,16 @@ fn parse_slide(
                             }
                         } else {
                             (shape_x, shape_y, shape_w, shape_h)
+                        };
+                        // A shape inside a p:grpSp expresses its geometry in
+                        // the group's child space.  A placeholder that fell
+                        // back to layout/master geometry is already in slide
+                        // space, so it is left alone.
+                        let (use_x, use_y, use_w, use_h) = match grp_stack.last() {
+                            Some(&(ox, oy, sx, sy)) if s_grp && shape_has_xfrm => {
+                                (ox + use_x * sx, oy + use_y * sy, use_w * sx, use_h * sy)
+                            }
+                            _ => (use_x, use_y, use_w, use_h),
                         };
 
                         // Spec #6: a:bodyPr/@anchor resolved through the placeholder
