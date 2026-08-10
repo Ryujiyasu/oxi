@@ -83,8 +83,10 @@ The same measurement discipline, applied to real-world `.pptx` files. 50 files a
 | Engine | mean SSIM vs PowerPoint (per doc) | page count matches PowerPoint |
 |--------|----------------------------------|------------------------------|
 | LibreOffice 26.2.1.2 | **0.913** | **48 / 48** |
+| ONLYOFFICE 9.3.1.8 | 0.908 | 48 / 48 |
+| **Oxi** (2026-08-13, first PPTX measurement) | **0.679** | **48 / 48** |
 
-Two of the 50 sampled files (corrupt zip containers, unopenable by either engine) are excluded, leaving **48** measured documents — page count matches PowerPoint on all 48. Oxi does not render `.pptx` yet (the presentation layout engine is on the roadmap), so this is a published LibreOffice-vs-PowerPoint **baseline to be beaten**: a fixed, frozen, never-anatomized target the PPTX engine can be measured against from day one, exactly like the Word blind sets above. Details and per-document scores: [REPORT_pptx_hf50_lo_v1.md](REPORT_pptx_hf50_lo_v1.md), raw results in `pipeline_data/pptx_benchmark/ssim_pptx/_result.json`.
+Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxi all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. LibreOffice and ONLYOFFICE are statistically tied on within-slide pixels (paired difference +0.005 ± 0.009, |t| = 0.6); Oxi's PPTX renderer is brand new and trails both on pixel fidelity (paired differences −0.234 vs LibreOffice, −0.229 vs ONLYOFFICE, |t| = 12 and 11) — with the caveat that Oxi is closest on image-heavy decks (0.85–0.86 on posters and image-first decks) and furthest behind on text-heavy decks — but it already **opens and lays out all 48 decks with exact slide counts**, which is the same first-sight baseline discipline as the Word tables and a fixed, frozen, never-anatomized target for the PPTX engine. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Details and per-document scores: [REPORT_pptx_hf50_3way_v1.md](REPORT_pptx_hf50_3way_v1.md), raw results in `pipeline_data/pptx_benchmark/ssim_pptx/_result.json`.
 
 ### The internal gates (development corpus)
 

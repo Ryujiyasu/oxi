@@ -15,7 +15,6 @@ use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 use crate::ir::{
     default_chart_bar_dir, default_chart_bubble_scale, default_chart_grouping,
     default_chart_hole_size, default_chart_size_represents,
-    default_chart_updown_gap,
     default_chart_type, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
@@ -449,6 +448,13 @@ fn parse_slide(
     let mut shape_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut shape_is_image = false;
     let mut shape_image_r_id: Option<String> = None;
+    // Image fill geometry (a:blipFill): source crop (a:srcRect l/t/r/b) and
+    // destination insets (a:stretch/a:fillRect l/t/r/b), normalized 0..1.
+    // Word render-truth (01__Biology deck, 2026-08): a full-bleed background
+    // PNG crops the SOURCE via srcRect; a photo expands the DESTINATION via a
+    // negative fillRect so the stretched image keeps its native aspect.
+    let mut shape_src_rect: Option<(f32, f32, f32, f32)> = None;
+    let mut shape_fill_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_fill_color: Option<String> = None;
     let mut shape_border_color: Option<String> = None;
     let mut shape_border_width: Option<f32> = None;
@@ -547,6 +553,8 @@ fn parse_slide(
                         shape_paragraphs.clear();
                         shape_is_image = name == "pic";
                         shape_image_r_id = None;
+                        shape_src_rect = None;
+                        shape_fill_rect = None;
                         shape_fill_color = None;
                         shape_border_color = None;
                         shape_border_width = None;
@@ -973,6 +981,36 @@ fn parse_slide(
                             }
                         }
                     }
+                    "srcRect" if in_shape && shape_is_image => {
+                        // a:srcRect is SELF-CLOSING (<a:srcRect .../>) — it
+                        // arrives as Event::Empty, never Start (the chart
+                        // r:id / c:legend / autoTitleDeleted trap).
+                        let pct = |v: Option<String>| -> f32 {
+                            v.and_then(|s| s.parse::<f32>().ok())
+                                .map(|x| x / 100000.0)
+                                .unwrap_or(0.0)
+                        };
+                        shape_src_rect = Some((
+                            pct(get_attr(&e, "l")),
+                            pct(get_attr(&e, "t")),
+                            pct(get_attr(&e, "r")),
+                            pct(get_attr(&e, "b")),
+                        ));
+                    }
+                    "fillRect" if in_shape && shape_is_image => {
+                        // a:fillRect inside a:stretch is SELF-CLOSING too.
+                        let pct = |v: Option<String>| -> f32 {
+                            v.and_then(|s| s.parse::<f32>().ok())
+                                .map(|x| x / 100000.0)
+                                .unwrap_or(0.0)
+                        };
+                        shape_fill_rect = Some((
+                            pct(get_attr(&e, "l")),
+                            pct(get_attr(&e, "t")),
+                            pct(get_attr(&e, "r")),
+                            pct(get_attr(&e, "b")),
+                        ));
+                    }
                     "rPr" if in_run => {
                         if let Some(b) = get_attr(&e, "b") {
                             run_bold = b == "1" || b == "true";
@@ -1232,6 +1270,8 @@ fn parse_slide(
                             t_ins: shape_t_ins,
                             b_ins: shape_b_ins,
                             anchor: resolved_anchor,
+                            src_rect: shape_src_rect.take(),
+                            fill_rect: shape_fill_rect.take(),
                         });
                         in_shape = false;
                     }
@@ -1344,6 +1384,8 @@ fn parse_slide(
                             t_ins: shape_t_ins,
                             b_ins: shape_b_ins,
                             anchor: None,
+                            src_rect: shape_src_rect.take(),
+                            fill_rect: shape_fill_rect.take(),
                         });
                     }
                     "r" if in_run => {
@@ -1696,10 +1738,6 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut hole_size: Option<f64> = None;
     let mut bubble_scale: Option<f64> = None;
     let mut size_represents: Option<String> = None;
-    let mut hi_low_lines = false;
-    let mut up_down_bars = false;
-    let mut up_down_gap: Option<f64> = None;
-    let mut in_up_down = false;
     let mut legend_overlay = true;
     let mut in_legend = false;
     let mut series: Vec<ChartSeries> = Vec::new();
@@ -1781,28 +1819,6 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "bubbleChart" => {
                         chart_type = Some("bubble".to_string());
                     }
-                    // <c:radarChart> — the categories become SPOKES of a
-                    // polar web instead of a horizontal band; the sub-style
-                    // rides in <c:radarStyle val="marker|filled|standard"/>
-                    // (a self-closing child, captured in the Empty arm and
-                    // parked in `grouping`, which no radar path reads).
-                    "radarChart" => {
-                        chart_type = Some("radar".to_string());
-                    }
-                    // <c:stockChart> — high/low/close (or open/high/low/
-                    // close) plotted on the LINE chart's geometry. The
-                    // series carry <a:ln><a:noFill/> so nothing connects
-                    // the points; the data is carried by <c:hiLowLines>
-                    // and <c:upDownBars>, both direct children here.
-                    "stockChart" => {
-                        chart_type = Some("stock".to_string());
-                    }
-                    // <c:upDownBars> is a Start element (its gapWidth is
-                    // a child); hiLowLines is self-closing (Empty arm).
-                    "upDownBars" => {
-                        up_down_bars = true;
-                        in_up_down = true;
-                    }
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
@@ -1810,9 +1826,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             || chart_type.as_deref() == Some("doughnut")
                             || chart_type.as_deref() == Some("area")
                             || chart_type.as_deref() == Some("scatter")
-                            || chart_type.as_deref() == Some("bubble")
-                            || chart_type.as_deref() == Some("radar")
-                            || chart_type.as_deref() == Some("stock") =>
+                            || chart_type.as_deref() == Some("bubble") =>
                     {
                         in_ser = true;
                         ser_target = "";
@@ -1927,30 +1941,6 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             size_represents = Some(v);
                         }
                     }
-                    // <c:radarStyle val="filled"/> — self-closing child of
-                    // <c:radarChart>. "filled" fills each series polygon;
-                    // "marker"/"standard" stroke it only (Word draws NO
-                    // markers in any measured arm, so the two are identical).
-                    // <c:hiLowLines/> — self-closing; its presence is the
-                    // whole switch (Word draws the rule with the default
-                    // black w=0.75 when there is no <c:spPr>).
-                    "hiLowLines" => {
-                        hi_low_lines = true;
-                    }
-                    // <c:gapWidth> inside <c:upDownBars> (the bar chart's
-                    // own gapWidth is handled by its own path).
-                    "gapWidth" if in_up_down => {
-                        if let Some(v) = get_attr(&e, "val") {
-                            if let Ok(n) = v.parse::<f64>() {
-                                up_down_gap = Some(n);
-                            }
-                        }
-                    }
-                    "radarStyle" => {
-                        if let Some(v) = get_attr(&e, "val") {
-                            grouping = Some(v);
-                        }
-                    }
                     // python-pptx writes a bare self-closing <c:legend/> to
                     // enable a legend (no overlay/position attrs). Any legend
                     // declaration -> has_legend.
@@ -2039,7 +2029,6 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "legend" => in_legend = false,
-                    "upDownBars" => in_up_down = false,
                     "ln" => in_ser_ln = false,
                     "v" => {
                         if in_v {
@@ -2130,9 +2119,6 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         bubble_scale: bubble_scale.unwrap_or_else(default_chart_bubble_scale),
         size_represents: size_represents
             .unwrap_or_else(default_chart_size_represents),
-        hi_low_lines,
-        up_down_bars,
-        up_down_gap: up_down_gap.unwrap_or_else(default_chart_updown_gap),
         legend_overlay,
         series,
         categories,
