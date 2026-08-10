@@ -233,6 +233,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides values in Excel's process-global chart tooltip user interface",
     },
     Rule {
+        pattern: "Application.DisplayClipboardWindow",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "requests showing or hiding Excel's Office Clipboard task-pane user interface; modern Excel may ignore it",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2984,6 +2990,33 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn clipboard_window_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseClipboardWindow()\n\
+             Application.DisplayClipboardWindow = False\n\
+             Application.DisplayClipboardWindow = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names.get("Application.DisplayClipboardWindow"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("Clipboard task-pane"))
+                .count(),
+            2
+        );
+        assert!(a
+            .findings
+            .iter()
+            .all(|finding| !finding.reason.contains("clipboard and cut/copy mode")));
     }
 
     #[test]
