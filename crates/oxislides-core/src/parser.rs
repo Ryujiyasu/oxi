@@ -445,6 +445,8 @@ fn parse_slide(
     let mut shape_w: f32 = 0.0;
     let mut shape_h: f32 = 0.0;
     let mut shape_rotation: f32 = 0.0;
+    let mut shape_flip_h = false;
+    let mut shape_flip_v = false;
     let mut shape_prst: Option<String> = None;
     let mut shape_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut shape_is_image = false;
@@ -571,13 +573,15 @@ fn parse_slide(
                         g_ch_off = (0.0, 0.0);
                         g_ch_ext = (0.0, 0.0);
                     }
-                    "sp" | "pic" if in_sp_tree => {
+                    "sp" | "pic" | "cxnSp" if in_sp_tree => {
                         in_shape = true;
                         shape_x = 0.0;
                         shape_y = 0.0;
                         shape_w = 0.0;
                         shape_h = 0.0;
                         shape_rotation = 0.0;
+                        shape_flip_h = false;
+                        shape_flip_v = false;
                         shape_prst = None;
                         shape_paragraphs.clear();
                         shape_is_image = name == "pic";
@@ -607,6 +611,8 @@ fn parse_slide(
                         shape_w = 0.0;
                         shape_h = 0.0;
                         shape_rotation = 0.0;
+                        shape_flip_h = false;
+                        shape_flip_v = false;
                         shape_prst = None;
                         shape_paragraphs.clear();
                         shape_is_image = false;
@@ -689,6 +695,8 @@ fn parse_slide(
                     "xfrm" if in_shape => {
                         // a:xfrm/@rot is in 60000ths of a degree; 60000 = 1 degree.
                         shape_has_xfrm = true;
+                        shape_flip_h = get_attr(&e, "flipH").as_deref() == Some("1");
+                        shape_flip_v = get_attr(&e, "flipV").as_deref() == Some("1");
                         if let Some(rot) = get_attr(&e, "rot") {
                             if let Ok(v) = rot.parse::<f32>() {
                                 shape_rotation = v / 60000.0;
@@ -1294,7 +1302,7 @@ fn parse_slide(
                     "grpSp" if !grp_stack.is_empty() => {
                         grp_stack.pop();
                     }
-                    "sp" | "pic" if in_shape => {
+                    "sp" | "pic" | "cxnSp" if in_shape => {
                         let content = if shape_is_image {
                             if let Some(ref r_id) = shape_image_r_id {
                                 if let Some(rel) = rels.get(r_id) {
@@ -1387,6 +1395,8 @@ fn parse_slide(
                             width: use_w,
                             height: use_h,
                             rotation: shape_rotation,
+                            flip_h: shape_flip_h,
+                            flip_v: shape_flip_v,
                             shape_type: shape_prst.take(),
                             ph_type: shape_ph_type.take(),
                             content,
@@ -1501,6 +1511,8 @@ fn parse_slide(
                             width: shape_w,
                             height: shape_h,
                             rotation: shape_rotation,
+                            flip_h: shape_flip_h,
+                            flip_v: shape_flip_v,
                             shape_type: shape_prst.take(),
                             ph_type: None,
                             content,

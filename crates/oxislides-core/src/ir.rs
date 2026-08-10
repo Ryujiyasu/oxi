@@ -108,6 +108,13 @@ pub struct Shape {
     pub width: f32,
     pub height: f32,
     pub rotation: f32, // rotation in degrees (0 = none), from a:xfrm/@rot (60000 = 1 deg)
+    /// a:xfrm/@flipH / @flipV. Mirrors the shape about its centre. For a
+    /// connector (which is only a segment) a flip just selects the other
+    /// diagonal of the box, so only flip_h != flip_v matters.
+    #[serde(default)]
+    pub flip_h: bool,
+    #[serde(default)]
+    pub flip_v: bool,
     /// PresentationML shape type (a:prstGeom/@prst e.g. "rect", "ellipse", "roundRect", "chevron").
     /// None for picture / graphicFrame / plain textbox without a preset geometry.
     pub shape_type: Option<String>,

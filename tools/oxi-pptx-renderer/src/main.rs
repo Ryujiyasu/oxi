@@ -545,6 +545,57 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 let ew = (sh.width as f64 * scale).round() as i32;
                 let eh = (sh.height as f64 * scale).round() as i32;
 
+                // A connector (p:cxnSp) is a LINE, not a box. PowerPoint
+                // render-truth (dev corpus vs the exported PDF): it runs
+                // from the xfrm box's top-left to its bottom-right, a flip
+                // selects the other diagonal, and @rot rotates both
+                // endpoints about the box centre -- verified to 0.01pt on
+                // plain, flipH+rot180 and rot=-90 connectors. No connector
+                // in the corpus carries text (0 of 1357), so the box draw
+                // and the text pass below are both skipped.
+                if sh
+                    .shape_type
+                    .as_deref()
+                    .is_some_and(|p| p.contains("Connector"))
+                {
+                    let bw = sh.border_width.unwrap_or(0.0);
+                    if bw > 0.0 {
+                        let col = sh
+                            .border_color
+                            .as_deref()
+                            .and_then(parse_hex_rgb)
+                            .unwrap_or((0, 0, 0));
+                        let (x0, y0, x1, y1) = if sh.flip_h != sh.flip_v {
+                            (sh.x + sh.width, sh.y, sh.x, sh.y + sh.height)
+                        } else {
+                            (sh.x, sh.y, sh.x + sh.width, sh.y + sh.height)
+                        };
+                        let cx = (sh.x + sh.width / 2.0) as f64;
+                        let cy = (sh.y + sh.height / 2.0) as f64;
+                        let (sn, cs) = (sh.rotation as f64).to_radians().sin_cos();
+                        let map = |px: f32, py: f32| {
+                            let (dx, dy) = (px as f64 - cx, py as f64 - cy);
+                            (
+                                ((cx + dx * cs - dy * sn) * scale).round() as i32,
+                                ((cy + dx * sn + dy * cs) * scale).round() as i32,
+                            )
+                        };
+                        let (ax, ay) = map(x0, y0);
+                        let (bx, by) = map(x1, y1);
+                        let pen = CreatePen(
+                            PS_SOLID,
+                            (bw as f64 * scale).round().max(1.0) as i32,
+                            COLORREF(colorref(col.0, col.1, col.2)),
+                        );
+                        let old_pen = SelectObject(mem_dc, pen);
+                        let _ = MoveToEx(mem_dc, ax, ay, None);
+                        let _ = LineTo(mem_dc, bx, by);
+                        SelectObject(mem_dc, old_pen);
+                        let _ = DeleteObject(pen);
+                    }
+                    continue;
+                }
+
                 // Fill
                 if let Some(fill) = &sh.fill_color {
                     if let Some((r, g, b)) = parse_hex_rgb(fill) {
