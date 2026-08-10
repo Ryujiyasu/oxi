@@ -1776,6 +1776,14 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "bubbleChart" => {
                         chart_type = Some("bubble".to_string());
                     }
+                    // <c:radarChart> — the categories become SPOKES of a
+                    // polar web instead of a horizontal band; the sub-style
+                    // rides in <c:radarStyle val="marker|filled|standard"/>
+                    // (a self-closing child, captured in the Empty arm and
+                    // parked in `grouping`, which no radar path reads).
+                    "radarChart" => {
+                        chart_type = Some("radar".to_string());
+                    }
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
@@ -1783,7 +1791,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             || chart_type.as_deref() == Some("doughnut")
                             || chart_type.as_deref() == Some("area")
                             || chart_type.as_deref() == Some("scatter")
-                            || chart_type.as_deref() == Some("bubble") =>
+                            || chart_type.as_deref() == Some("bubble")
+                            || chart_type.as_deref() == Some("radar") =>
                     {
                         in_ser = true;
                         ser_target = "";
@@ -1896,6 +1905,15 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "sizeRepresents" => {
                         if let Some(v) = get_attr(&e, "val") {
                             size_represents = Some(v);
+                        }
+                    }
+                    // <c:radarStyle val="filled"/> — self-closing child of
+                    // <c:radarChart>. "filled" fills each series polygon;
+                    // "marker"/"standard" stroke it only (Word draws NO
+                    // markers in any measured arm, so the two are identical).
+                    "radarStyle" => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            grouping = Some(v);
                         }
                     }
                     // python-pptx writes a bare self-closing <c:legend/> to
