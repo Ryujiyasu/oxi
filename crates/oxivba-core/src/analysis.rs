@@ -221,6 +221,18 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides Excel's process-global tooltips user interface",
     },
     Rule {
+        pattern: "Application.ShowChartTipNames",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "shows or hides series names in Excel's process-global chart tooltip user interface",
+    },
+    Rule {
+        pattern: "Application.ShowChartTipValues",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "shows or hides values in Excel's process-global chart tooltip user interface",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2939,6 +2951,36 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("tooltips user interface"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn chart_tooltips_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseChartToolTips()\n\
+             Application.ShowChartTipNames = False\n\
+             Application.ShowChartTipNames = True\n\
+             Application.ShowChartTipValues = False\n\
+             Application.ShowChartTipValues = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.ShowChartTipNames"), Some(&2));
+        assert_eq!(a.api_names.get("Application.ShowChartTipValues"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("series names"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("values in Excel"))
                 .count(),
             2
         );
