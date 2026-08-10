@@ -441,6 +441,8 @@ fn shape_json(sh: &Shape) -> Value {
                 "bar_dir": chart.bar_dir,
                 "grouping": chart.grouping,
                 "hole_size": chart.hole_size,
+                "bubble_scale": chart.bubble_scale,
+                "size_represents": chart.size_represents,
                 "series": chart
                     .series
                     .iter()
@@ -448,6 +450,7 @@ fn shape_json(sh: &Shape) -> Value {
                         "name": s.name,
                         "values": s.values,
                         "x_values": s.x_values,
+                        "sizes": s.sizes,
                         "line_none": s.line_none,
                         "marker_none": s.marker_none,
                     }))
@@ -1989,6 +1992,606 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 }
                             }
                         }
+                        } else if chart.chart_type == "bubble"
+                            && std::env::var("OXI_BUBBLE_DISABLE").is_err()
+                        {
+                        // BUBBLE chart (Word render-truth 2026-08-10: the 8-arm
+                        // probe chart_bubble U1..U8 plus a 10-arm frame-HEIGHT
+                        // sweep, an 8-arm frame-WIDTH sweep and a 6-arm
+                        // bubbleScale/sizeRepresents sweep = 20 measured arms,
+                        // residuals <= 0.004pt).
+                        //
+                        // The plot geometry is the SCATTER model (both axes
+                        // numeric, plot_left = sx + 6.50 + w(widest Y label) +
+                        // 16.70, plot_right = band_right - w(last X label)/2,
+                        // X through horiz_value_axis and Y through
+                        // nice_axis_max/nice_axis_range) -- but unlike scatter a
+                        // bubble chart DOES draw an automatic title for a single
+                        // series, so
+                        //   plot_top = sy + 51.35  (auto title;   U1 123.35)
+                        //            = sy + 45.69  (explicit tit; U8 117.69)
+                        //            = sy + 16.0   (no title;     U3  87.99)
+                        //
+                        // ---- the bubble SIZE law -------------------------
+                        //   avail_w = sw - 10.0
+                        //   avail_h = (sy + shh + 6.0) - plot_top
+                        //             ^ the FRAME bottom, NOT plot_bot: U7's
+                        //               negative data moves plot_bot to
+                        //               sy+shh-16 yet leaves r_max at 28.0,
+                        //               identical to U1.
+                        //   d_max   = min(avail_w, avail_h)
+                        //             * 3*scale / (3*scale + 1000)   [percent]
+                        //   r_i     = (d_max/2) * (size_i/size_max)        ["w"]
+                        //           = (d_max/2) * sqrt(size_i/size_max)  [area]
+                        // The bubbleScale response SATURATES; 50/100/200/300
+                        // measured r_max 15.82 / 28.00 / 45.49 / 57.47 against
+                        // 15.82 / 28.00 / 45.50 / 57.48 predicted (at scale 100
+                        // the factor reduces to the clean 3/13).  size_max is
+                        // GLOBAL across every series (U8's two series share it).
+                        //
+                        //   bubbles: accent(series) FILL, no stroke.
+                        //   data labels: left edge cx + r + 8.55, baseline
+                        //     cy + 6.20 (U6 measured 8.53/8.55/8.57 and
+                        //     6.20/6.21/6.20 over the three bubbles).
+                        //   legend: CIRCULAR swatch r=4.94 centred at
+                        //     label_x0 - 9.59, label baseline swatch_cy + 5.24,
+                        //     a block of n*27.75 centred on sy + shh/2 +
+                        //     title_off (0 / 14.85 explicit / 17.68 auto) --
+                        //     the same block model as line/area.  The band it
+                        //     takes is swatch_cx - 23.22 (U8).
+                        let axis_family = "Calibri";
+                        let axis_fs = 18.0f32;
+                        let sx = sh.x as f64;
+                        let sy = sh.y as f64;
+                        let sw = sh.width as f64;
+                        let shh = sh.height as f64;
+                        let label_w = |s: &str| {
+                            font_adv::line_hmtx_width_pt(s, 18.0, axis_family)
+                                .unwrap_or_else(|| {
+                                    s.chars().count() as f32 * 18.0 * 0.5
+                                }) as f64
+                        };
+                        let has_explicit_title = chart.explicit_title.is_some();
+                        let has_auto_title = chart.series.len() == 1
+                            && !chart.auto_title_deleted
+                            && !has_explicit_title;
+
+                        let (y_min_data, y_max_data) = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold((0.0f64, 0.0f64), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            });
+                        let y_has_neg = y_min_data < 0.0;
+                        // REAL extremes (the folds above are seeded with 0.0, so
+                        // they already carry the union with the origin).  The
+                        // bubble expansion has to grow from the data itself:
+                        // padding min(0, data) would drag a positive-only axis
+                        // below zero, which Word never does.
+                        let (y_lo_real, y_hi_real) = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            });
+                        let (y_lo_real, y_hi_real) = if y_lo_real.is_finite() {
+                            (y_lo_real, y_hi_real)
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        let plot_top = sy
+                            + if has_explicit_title {
+                                45.69
+                            } else if has_auto_title {
+                                51.35
+                            } else {
+                                16.0
+                            };
+                        let plot_bot = sy + shh - if y_has_neg { 16.0 } else { 39.9 };
+                        let plot_h = plot_bot - plot_top;
+
+                        // ---- bubble radii (the size law above) ----
+                        // r_max depends only on the frame and plot_top, so it is
+                        // known before either axis -- which matters because the
+                        // axes are expanded by it (below).
+                        let size_max = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.sizes.iter().copied())
+                            .fold(0.0f64, |a, v| a.max(v.abs()));
+                        let scale_pct = chart.bubble_scale.max(1.0);
+                        let avail_w = sw - 10.0;
+                        let avail_h = (sy + shh + 6.0) - plot_top;
+                        let r_max = avail_w.min(avail_h) * 3.0 * scale_pct
+                            / (3.0 * scale_pct + 1000.0)
+                            / 2.0;
+                        let by_width = chart.size_represents == "w";
+
+                        // ---- the bubble AXIS-EXTENT law ------------------
+                        // Word expands a bubble value axis by the LARGEST bubble
+                        // radius at BOTH ends (converted to data units through the
+                        // axis itself) INSTEAD of the ordinary 5% headroom, then
+                        // settles on the fixed point.  U7 is the discriminator:
+                        // y in [-8, 12], r_max 28, plot_h 220.70.  The plain rule
+                        // gives [-10, 15]; Word draws [-15, 20], and
+                        //   ppu = 220.70/35 = 6.306,  28/6.306 = 4.44
+                        //   eff = [-12.44, 16.44] -> step 5 -> [-15, 20]
+                        // reproduces it and is stable.  PER-POINT radii do NOT
+                        // (they leave [-10, 15]); r_max at both ends does.  Every
+                        // positive arm is unchanged because the expansion lands
+                        // where the headroom already did (U1 21.4 + 28/7.87 =
+                        // 24.96 -> 25, U3 24.86 -> 25, U8 24.94 -> 25).
+                        // Dividing by AXIS_HEADROOM cancels the 5% that
+                        // nice_axis_range / nice_axis_max apply internally.
+                        // The expansion is r_max less ~1pt.  The window is
+                        // pinned by two arms that straddle it: chart_bubble_scale
+                        // s3 (plot_h 148.75, r 22.46) keeps 25 -- so the pad must
+                        // be <= 21.42 = r - 1.04 -- while chart_bubble_size s4
+                        // (plot_h 196.75, r 57.47, axis 30) must exceed 30 -- so
+                        // the pad is > 56.40 = r - 1.07.  Hence r_max - c with
+                        // c in [1.04, 1.07); the ~1pt is probably the bubble
+                        // outline, and no pure multiple of r_max satisfies both.
+                        let pad_pt = (r_max - 1.05).max(0.0);
+                        // Word sizes the value axis with the ordinary ~5-tick
+                        // step (nice_axis_max's rule) and COARSENS it only when
+                        // the ticks would crowd below VERT_MIN_SPACING.  The
+                        // division count then falls out of the rounded max --
+                        // which is why chart_bubble_size s3/s4 show 6 and 7
+                        // divisions (0..30 / 0..35 by 5) while the tall frames
+                        // stay at 5, and the 160/200pt frames drop to 2 and 3.
+                        // Taking the FINEST step that clears the spacing instead
+                        // gives 11 divisions on a tall plot, which Word never does.
+                        let pick_y = |lo: f64, hi: f64, len: f64| -> (f64, f64, usize) {
+                            let span = (hi - lo).max(1e-9);
+                            let raw = span / 5.0;
+                            let mut mag = 10f64.powf(raw.log10().floor());
+                            let resid = raw / mag;
+                            let mut m = if resid < 1.5 {
+                                1.0
+                            } else if resid < 3.0 {
+                                2.0
+                            } else if resid < 7.0 {
+                                5.0
+                            } else {
+                                mag *= 10.0;
+                                1.0
+                            };
+                            let mut out = (lo, hi.max(1.0), 1usize);
+                            for _ in 0..24 {
+                                let step = m * mag;
+                                let amax = (hi / step - 1e-9).ceil() * step;
+                                let amin = (lo / step + 1e-9).floor() * step;
+                                let div = ((amax - amin) / step).round().max(1.0);
+                                out = (amin, amax, div as usize);
+                                if div <= 1.0 || len / div >= VERT_MIN_SPACING {
+                                    break;
+                                }
+                                if m == 1.0 {
+                                    m = 2.0;
+                                } else if m == 2.0 {
+                                    m = 5.0;
+                                } else {
+                                    m = 1.0;
+                                    mag *= 10.0;
+                                }
+                            }
+                            out
+                        };
+                        let (mut y_min, mut y_axis, mut y_steps) =
+                            pick_y(y_min_data, y_max_data, plot_h);
+                        for _ in 0..3 {
+                            let span = (y_axis - y_min).max(1e-9);
+                            let pad = if plot_h > 0.0 {
+                                pad_pt * span / plot_h
+                            } else {
+                                0.0
+                            };
+                            let elo = (y_lo_real - pad).min(0.0);
+                            let ehi = (y_hi_real + pad).max(0.0);
+                            let (lo, hi, dv) = pick_y(elo, ehi, plot_h);
+                            if (lo - y_min).abs() < 1e-9
+                                && (hi - y_axis).abs() < 1e-9
+                            {
+                                break;
+                            }
+                            y_min = lo;
+                            y_axis = hi;
+                            y_steps = dv.max(1);
+                        }
+                        let (y_min, y_axis, y_steps) = (y_min, y_axis, y_steps);
+                        let y_span = (y_axis - y_min).max(1e-9);
+                        let y_step = y_span / y_steps as f64;
+                        let y_lab_w = (0..=y_steps)
+                            .map(|i| {
+                                label_w(&fmt_axis_value(
+                                    y_min + y_span * i as f64 / y_steps as f64,
+                                    y_step,
+                                ))
+                            })
+                            .fold(0.0f64, f64::max);
+                        let x_min_data = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.x_values.iter().copied())
+                            .fold(0.0f64, f64::min);
+                        let x_has_neg = x_min_data < 0.0;
+                        let (x_lo_real, x_hi_real) = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.x_values.iter().copied())
+                            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            });
+                        let (x_lo_real, x_hi_real) = if x_lo_real.is_finite() {
+                            (x_lo_real, x_hi_real)
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        let val_y =
+                            |v: f64| plot_bot - ((v - y_min) / y_span) * plot_h;
+                        let zero_y = val_y(0.0);
+
+                        // Legend band (a bare <c:legend/> overlays the plot --
+                        // the pie/doughnut/area discriminator).
+                        let legend_active = chart.has_legend && !chart.legend_overlay;
+                        let cap = legend_label_cap(sw);
+                        let mut legend_lines: Vec<Vec<String>> = Vec::new();
+                        let mut max_label_w = 0.0f64;
+                        if legend_active {
+                            for s in chart.series.iter() {
+                                let lines =
+                                    wrap_legend_label(&s.name, 18.0, axis_family, cap);
+                                for l in lines.iter() {
+                                    max_label_w = max_label_w.max(label_w(l));
+                                }
+                                legend_lines.push(lines);
+                            }
+                        }
+                        let legend_label_x0 = sx + sw - 10.0 - max_label_w;
+                        let legend_swatch_cx = legend_label_x0 - 9.59;
+                        let band_right = if legend_active {
+                            legend_swatch_cx - 23.22
+                        } else {
+                            sx + sw - 11.0
+                        };
+
+                        // Numeric X axis: plot_right depends on the width of the
+                        // last tick label, which depends on the axis, which
+                        // depends on plot_w -> converge in 2 passes.
+                        let _x_max_data = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.x_values.iter().copied())
+                            .fold(0.0f64, f64::max);
+                        let plot_left_pos = sx + 6.50 + y_lab_w + 16.70;
+                        let mut plot_left = plot_left_pos;
+                        let mut plot_right = band_right;
+                        let mut x_min = 0.0f64;
+                        let mut x_axis = 1.0f64;
+                        let mut x_div = 1usize;
+                        // Same bubble expansion on X, inside the loop that
+                        // already resolved the label-width/axis circularity
+                        // (pass 0 seeds it without the expansion because the span
+                        // is not known yet).
+                        // Finest 1/2/5 step whose tick spacing clears
+                        // label_width + BUBBLE_LABEL_GAP (see the constant).
+                        let pick_x = |lo: f64, hi: f64, len: f64| -> (f64, f64, usize) {
+                            for k in -6i32..=9 {
+                                let mag = 10f64.powi(k);
+                                for m in [1.0f64, 2.0, 5.0] {
+                                    let step = m * mag;
+                                    let amax = (hi / step - 1e-9).ceil() * step;
+                                    let amin = (lo / step + 1e-9).floor() * step;
+                                    let div = ((amax - amin) / step).round();
+                                    if div < 1.0 || div > 1000.0 {
+                                        continue;
+                                    }
+                                    let wl = label_w(&fmt_axis_value(amin, step)).max(
+                                        label_w(&fmt_axis_value(amax, step)),
+                                    );
+                                    if len / div >= wl + BUBBLE_LABEL_GAP {
+                                        return (amin, amax, div as usize);
+                                    }
+                                }
+                            }
+                            (lo.min(0.0), hi.max(1.0), 1)
+                        };
+                        for pass in 0..4 {
+                            let pw = (plot_right - plot_left).max(1.0);
+                            let pad = if pass == 0 {
+                                0.0
+                            } else {
+                                pad_pt * (x_axis - x_min).max(1e-9) / pw
+                            };
+                            let elo = (x_lo_real - pad).min(0.0);
+                            let ehi = (x_hi_real + pad).max(0.0);
+                            let (lo, hi, dv) = pick_x(elo, ehi, pw);
+                            x_min = if x_has_neg { lo } else { 0.0 };
+                            x_axis = hi;
+                            x_div = dv.max(1);
+                            let step = (x_axis - x_min) / x_div as f64;
+                            if x_has_neg {
+                                plot_left = sx
+                                    + 11.0
+                                    + label_w(&fmt_axis_value(x_min, step)) / 2.0;
+                            }
+                            plot_right = band_right
+                                - label_w(&fmt_axis_value(x_axis, step)) / 2.0;
+                        }
+                        let plot_left = plot_left;
+                        let plot_w = plot_right - plot_left;
+                        let x_span = (x_axis - x_min).max(1e-9);
+                        let x_step = x_span / x_div as f64;
+                        let val_x =
+                            |v: f64| plot_left + ((v - x_min) / x_span) * plot_w;
+                        let zero_x = val_x(0.0);
+                        let y_axis_x = if x_has_neg { zero_x } else { plot_left };
+                        let x_axis_y = if y_has_neg { zero_y } else { plot_bot };
+
+                        let radius = |sz: f64| -> f64 {
+                            if size_max <= 0.0 {
+                                return 0.0;
+                            }
+                            let f = sz.abs() / size_max;
+                            if by_width {
+                                r_max * f
+                            } else {
+                                r_max * f.sqrt()
+                            }
+                        };
+
+                        // Y axis labels (right edge y_axis_x-16.70).
+                        for i in 0..=y_steps {
+                            let val = y_min + y_span * i as f64 / y_steps as f64;
+                            let tick_y = plot_bot - plot_h * i as f64 / y_steps as f64;
+                            let label = fmt_axis_value(val, y_step);
+                            let lx = y_axis_x - 16.70 - label_w(&label);
+                            draw_text_baseline(
+                                mem_dc,
+                                (lx * scale).round() as i32,
+                                (tick_y + 5.20) as f32,
+                                &label,
+                                18.0,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Horizontal major gridlines, BEFORE the bubbles.
+                        let grid_pen =
+                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                        let old_grid_pen = SelectObject(mem_dc, grid_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let gl = (plot_left * scale).round() as i32;
+                        let gr = (plot_right * scale).round() as i32;
+                        let grid_from = if y_has_neg { 0 } else { 1 };
+                        for i in grid_from..=y_steps {
+                            let grid_y = plot_bot - plot_h * i as f64 / y_steps as f64;
+                            let gy = (grid_y * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, gl, gy, None);
+                            let _ = LineTo(mem_dc, gr, gy);
+                        }
+                        SelectObject(mem_dc, old_grid_pen);
+                        let _ = DeleteObject(grid_pen);
+
+                        // Bubbles: accent fill, NO stroke.
+                        for (si, s) in chart.series.iter().enumerate() {
+                            let (fill_hex, _) = line_series_colors(si);
+                            if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                let brush = CreateSolidBrush(COLORREF(colorref(
+                                    rgb.0, rgb.1, rgb.2,
+                                )));
+                                let old_brush = SelectObject(mem_dc, brush);
+                                let _ = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                for (i, v) in s.values.iter().enumerate() {
+                                    let xv =
+                                        s.x_values.get(i).copied().unwrap_or(i as f64);
+                                    let r = radius(
+                                        s.sizes.get(i).copied().unwrap_or(0.0),
+                                    );
+                                    if r > 0.0 {
+                                        draw_bubble_circle(
+                                            mem_dc,
+                                            val_x(xv),
+                                            val_y(*v),
+                                            r,
+                                            scale,
+                                        );
+                                    }
+                                }
+                                SelectObject(mem_dc, old_brush);
+                                let _ = DeleteObject(brush);
+                            }
+                        }
+
+                        // Data labels: left edge cx + r + 8.55, baseline
+                        // cy + 6.20.
+                        if chart.has_data_labels && chart.show_val {
+                            let num_fmt = chart.number_format.clone();
+                            for s in chart.series.iter() {
+                                for (i, v) in s.values.iter().enumerate() {
+                                    let xv =
+                                        s.x_values.get(i).copied().unwrap_or(i as f64);
+                                    let r = radius(
+                                        s.sizes.get(i).copied().unwrap_or(0.0),
+                                    );
+                                    let text = if num_fmt == "0.0%" {
+                                        format!("{:.1}%", v * 100.0)
+                                    } else {
+                                        format!("{}", v)
+                                    };
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        ((val_x(xv) + r + 8.55) * scale).round() as i32,
+                                        (val_y(*v) + 6.20) as f32,
+                                        &text,
+                                        axis_fs,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                    );
+                                }
+                            }
+                        }
+
+                        // X axis tick labels, centred on the tick.
+                        for i in 0..=x_div {
+                            let val = x_min + x_span * i as f64 / x_div as f64;
+                            let tick_x = plot_left + plot_w * i as f64 / x_div as f64;
+                            let label = fmt_axis_value(val, x_step);
+                            draw_text_baseline(
+                                mem_dc,
+                                ((tick_x - label_w(&label) / 2.0) * scale).round() as i32,
+                                (x_axis_y + 28.67) as f32,
+                                &label,
+                                18.0,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Title: explicit <c:title> (Arial 18pt, baseline
+                        // sy+24.43) else the AUTOMATIC single-series title
+                        // (Calibri-Bold 21.62pt, baseline sy+28.03).
+                        if let Some(title) = &chart.explicit_title {
+                            let tfs = 18.0f32;
+                            let lw = font_adv::line_hmtx_width_pt(title, tfs, "Arial")
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((sx + sw / 2.0 - lw / 2.0) * scale).round() as i32,
+                                (sy + 24.43) as f32,
+                                title,
+                                tfs,
+                                "Arial",
+                                None,
+                                scale,
+                                400,
+                            );
+                        } else if has_auto_title {
+                            let tfs = 21.62f32;
+                            let name = chart.series[0].name.clone();
+                            let lw = font_adv::line_hmtx_width_pt(&name, tfs, axis_family)
+                                .unwrap_or_else(|| {
+                                    name.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((sx + sw / 2.0 - lw / 2.0) * scale).round() as i32,
+                                (sy + 28.03) as f32,
+                                &name,
+                                tfs,
+                                axis_family,
+                                None,
+                                scale,
+                                700,
+                            );
+                        }
+
+                        // Legend: circular swatch r=4.94 + label.
+                        if legend_active {
+                            let n = chart.series.len().max(1);
+                            let row_pitch = 27.75
+                                + (legend_lines
+                                    .iter()
+                                    .map(|l| l.len())
+                                    .max()
+                                    .unwrap_or(1)
+                                    .saturating_sub(1)) as f64
+                                    * 21.76;
+                            let title_off = if has_explicit_title {
+                                14.85
+                            } else if has_auto_title {
+                                17.68
+                            } else {
+                                0.0
+                            };
+                            let block_top = sy + shh / 2.0 + title_off
+                                - n as f64 * row_pitch / 2.0;
+                            for (si, lines) in legend_lines.iter().enumerate() {
+                                let cy = block_top
+                                    + row_pitch / 2.0
+                                    + si as f64 * row_pitch;
+                                let (fill_hex, _) = line_series_colors(si);
+                                if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                    let brush = CreateSolidBrush(COLORREF(colorref(
+                                        rgb.0, rgb.1, rgb.2,
+                                    )));
+                                    let old_brush = SelectObject(mem_dc, brush);
+                                    let _ =
+                                        SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                    draw_bubble_circle(
+                                        mem_dc,
+                                        legend_swatch_cx,
+                                        cy,
+                                        4.94,
+                                        scale,
+                                    );
+                                    SelectObject(mem_dc, old_brush);
+                                    let _ = DeleteObject(brush);
+                                }
+                                for (li, line) in lines.iter().enumerate() {
+                                    draw_text_baseline(
+                                        mem_dc,
+                                        (legend_label_x0 * scale).round() as i32,
+                                        (cy + 5.24 + li as f64 * 21.99) as f32,
+                                        line,
+                                        18.0,
+                                        axis_family,
+                                        None,
+                                        scale,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Axis lines + ticks (each axis rides the OTHER axis'
+                        // zero crossing when that axis spans zero).
+                        let axis_pen =
+                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                        let old_axis_pen = SelectObject(mem_dc, axis_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let pl = (plot_left * scale).round() as i32;
+                        let pt = (plot_top * scale).round() as i32;
+                        let pr = (plot_right * scale).round() as i32;
+                        let pb = (plot_bot * scale).round() as i32;
+                        let ax_x = (y_axis_x * scale).round() as i32;
+                        let ax_y = (x_axis_y * scale).round() as i32;
+                        let _ = MoveToEx(mem_dc, ax_x, pt, None);
+                        let _ = LineTo(mem_dc, ax_x, pb);
+                        let _ = MoveToEx(mem_dc, pl, ax_y, None);
+                        let _ = LineTo(mem_dc, pr, ax_y);
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pr, pt);
+                        for i in 0..=y_steps {
+                            let tick_y = plot_bot - plot_h * i as f64 / y_steps as f64;
+                            let ty = (tick_y * scale).round() as i32;
+                            let _ = MoveToEx(
+                                mem_dc,
+                                ((y_axis_x - 5.71) * scale).round() as i32,
+                                ty,
+                                None,
+                            );
+                            let _ = LineTo(mem_dc, ax_x, ty);
+                        }
+                        for i in 0..=x_div {
+                            let tick_x = plot_left + plot_w * i as f64 / x_div as f64;
+                            let tx = (tick_x * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, tx, ax_y, None);
+                            let _ = LineTo(
+                                mem_dc,
+                                tx,
+                                ((x_axis_y + 5.71) * scale).round() as i32,
+                            );
+                        }
+                        SelectObject(mem_dc, old_axis_pen);
+                        let _ = DeleteObject(axis_pen);
                         } else if chart.chart_type == "scatter"
                             && std::env::var("OXI_SCATTER_DISABLE").is_err()
                         {
@@ -5069,11 +5672,51 @@ unsafe fn draw_neg_bar_outline(
     let _ = DeleteObject(pen);
 }
 
+/// Filled circle for a BUBBLE chart datum.  The GDI imports in this file are
+/// function-local, so a top-level helper carries its own `use` (the same reason
+/// the negative-bar outline and LINE marker helpers do).
+unsafe fn draw_bubble_circle(
+    mem_dc: windows::Win32::Graphics::Gdi::HDC,
+    cx: f64,
+    cy: f64,
+    r: f64,
+    scale: f64,
+) {
+    use windows::Win32::Graphics::Gdi::Ellipse;
+    let _ = Ellipse(
+        mem_dc,
+        ((cx - r) * scale).round() as i32,
+        ((cy - r) * scale).round() as i32,
+        ((cx + r) * scale).round() as i32,
+        ((cy + r) * scale).round() as i32,
+    );
+}
+
 const VERT_MIN_SPACING: f64 = 25.0;
 
 /// Minimum tick spacing for a HORIZONTAL value axis, in points (2026-08-09
 /// 14-arm sweep: the window closed to (56.28, 57.76]).
 const HORIZ_MIN_SPACING: f64 = 57.0;
+
+/// Clear space Word keeps between two tick labels on a bubble/scatter numeric
+/// X axis, in points: a step is usable when its tick spacing is at least
+/// `label_width + BUBBLE_LABEL_GAP`.
+///
+/// Derived 2026-08-10 from every measured bubble/scatter X axis (24 sweep arms
+/// + the 8-arm probe).  Neither a constant spacing nor a multiple of the label
+/// width can separate them:
+///   accepted 61.50/9.13  60.75/9.13  110.75/9.13  60.35/14.63  90.53/14.63
+///            68.02/22.76 (spacing/label width)
+///   rejected 30.75/9.13  51.10/14.63 63.29/22.76  48.43/22.76
+/// -- 63.29 is rejected while 60.35 is accepted (kills a constant), and 3.49x
+/// is rejected while 2.99x is accepted (kills a ratio).  "width + gap" fits all
+/// ten with gap in (40.5, 45.3]; 43.0 is the midpoint.
+///
+/// The horizontal-BAR threshold is NOT this rule (bar accepts 48.34 with an
+/// 18.26pt label = gap 30.1, and its own sweep contradicts itself across
+/// chart_bar_axis pg13 / chart_bar_resid p4), so HORIZ_MIN_SPACING is left
+/// alone and this applies to the bubble branch only.
+const BUBBLE_LABEL_GAP: f64 = 43.0;
 
 fn nice_axis_max(max_val: f64) -> f64 {
     if max_val <= 0.0 {

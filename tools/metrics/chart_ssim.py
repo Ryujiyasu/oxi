@@ -48,6 +48,10 @@ DOCS = {
     "chart_area_dlbls": r"pipeline_data\pptx_probes\chart_area_dlbls\chart_area_dlbls.pdf",
     "chart_scatter": r"pipeline_data\pptx_probes\chart_scatter\chart_scatter.pdf",
     "chart_negative": r"pipeline_data\pptx_probes\chart_negative\chart_negative.pdf",
+    "chart_bubble": r"pipeline_data\pptx_probes\chart_bubble\chart_bubble.pdf",
+    "chart_bubble_scale": r"pipeline_data\pptx_probes\chart_bubble_scale\chart_bubble_scale.pdf",
+    "chart_bubble_size": r"pipeline_data\pptx_probes\chart_bubble_size\chart_bubble_size.pdf",
+    "chart_bubble_wide": r"pipeline_data\pptx_probes\chart_bubble_wide\chart_bubble_wide.pdf",
 }
 DPI = 150
 

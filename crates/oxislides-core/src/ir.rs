@@ -216,6 +216,19 @@ pub struct Chart {
     /// 0.5010/0.5011/0.5013/0.5014 at holeSize 50 and 0.2510 at holeSize 25.
     #[serde(default = "default_chart_hole_size")]
     pub hole_size: f64,
+    /// c:bubbleChart/c:bubbleScale@val — the bubble size as a PERCENT
+    /// (default 100). Word render-truth (chart_bubble_size probe, 2026-08-10):
+    /// the largest bubble's diameter saturates toward the available box,
+    /// `d_max = avail * 3*scale / (3*scale + 1000)` — exact at 50 / 100 / 200
+    /// / 300 (15.82 / 28.00 / 45.49 / 57.47 pt radius). At 100 that is the
+    /// clean 3/13 of `avail`.
+    #[serde(default = "default_chart_bubble_scale")]
+    pub bubble_scale: f64,
+    /// c:bubbleChart/c:sizeRepresents@val — "area" (default) or "w". Measured
+    /// on the same probe: "w" gives radii in the ratio of the raw sizes
+    /// (1:2:4), the default gives their square roots (1:1.414:2).
+    #[serde(default = "default_chart_size_represents")]
+    pub size_represents: String,
     /// Series in document order (c:ser/c:idx). Series i renders with theme
     /// accent(i+1).
     pub series: Vec<ChartSeries>,
@@ -320,6 +333,15 @@ pub fn default_datalabel_position() -> String {
 pub fn default_chart_hole_size() -> f64 {
     50.0
 }
+/// `<c:bubbleScale>` defaults to 100 percent.
+pub fn default_chart_bubble_scale() -> f64 {
+    100.0
+}
+/// `<c:sizeRepresents>` defaults to "area" (the value is the bubble's AREA,
+/// so the radius goes as its square root).
+pub fn default_chart_size_represents() -> String {
+    "area".to_string()
+}
 /// A legend with no `<c:overlay val="0"/>` child is an overlay.
 pub fn default_chart_legend_overlay() -> bool {
     true
@@ -345,6 +367,11 @@ pub struct ChartSeries {
     /// markers. python-pptx writes it for XY_SCATTER_LINES_NO_MARKERS.
     #[serde(default)]
     pub marker_none: bool,
+    /// c:bubbleSize -> numCache. A bubble series carries a third number per
+    /// point (x from c:xVal, y from c:yVal, size here). Empty for every other
+    /// chart type.
+    #[serde(default)]
+    pub sizes: Vec<f64>,
 }
 
 /// A DrawingML table (a:tbl). Cell text is stored as paragraphs per cell so

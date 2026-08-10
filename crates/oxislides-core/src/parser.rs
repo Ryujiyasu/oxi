@@ -13,7 +13,8 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    default_chart_bar_dir, default_chart_grouping, default_chart_hole_size,
+    default_chart_bar_dir, default_chart_bubble_scale, default_chart_grouping,
+    default_chart_hole_size, default_chart_size_represents,
     default_chart_type, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
@@ -1692,6 +1693,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut bar_dir: Option<String> = None;
     let mut grouping: Option<String> = None;
     let mut hole_size: Option<f64> = None;
+    let mut bubble_scale: Option<f64> = None;
+    let mut size_represents: Option<String> = None;
     let mut legend_overlay = true;
     let mut in_legend = false;
     let mut series: Vec<ChartSeries> = Vec::new();
@@ -1724,6 +1727,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut ser_name: Option<String> = None;
     let mut ser_values: Vec<f64> = Vec::new();
     let mut ser_x_values: Vec<f64> = Vec::new();
+    let mut ser_sizes: Vec<f64> = Vec::new();
     // Scatter per-series draw flags. Word's render-truth discriminators
     // (chart_scatter probe): <c:spPr><a:ln><a:noFill/> = no connecting line
     // (markers only), <c:marker><c:symbol val="none"/> = no markers.
@@ -1767,19 +1771,26 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "scatterChart" => {
                         chart_type = Some("scatter".to_string());
                     }
+                    // <c:bubbleChart> — an XY chart whose points carry a third
+                    // number (c:bubbleSize) drawn as the disc radius.
+                    "bubbleChart" => {
+                        chart_type = Some("bubble".to_string());
+                    }
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
                             || chart_type.as_deref() == Some("line")
                             || chart_type.as_deref() == Some("doughnut")
                             || chart_type.as_deref() == Some("area")
-                            || chart_type.as_deref() == Some("scatter") =>
+                            || chart_type.as_deref() == Some("scatter")
+                            || chart_type.as_deref() == Some("bubble") =>
                     {
                         in_ser = true;
                         ser_target = "";
                         ser_name = None;
                         ser_values.clear();
                         ser_x_values.clear();
+                        ser_sizes.clear();
                         ser_categories.clear();
                         ser_line_none = false;
                         ser_marker_none = false;
@@ -1792,6 +1803,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "val" if in_ser => ser_target = "val",
                     "xVal" if in_ser => ser_target = "xval",
                     "yVal" if in_ser => ser_target = "yval",
+                    "bubbleSize" if in_ser => ser_target = "bubsize",
                     "v" => {
                         in_v = true;
                         cur_v.clear();
@@ -1869,6 +1881,21 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             if let Ok(n) = v.parse::<f64>() {
                                 hole_size = Some(n);
                             }
+                        }
+                    }
+                    // <c:bubbleScale val="200"/> and <c:sizeRepresents
+                    // val="w"/> — self-closing children of <c:bubbleChart>
+                    // (the same Event::Empty trap as holeSize / barDir).
+                    "bubbleScale" => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(n) = v.parse::<f64>() {
+                                bubble_scale = Some(n);
+                            }
+                        }
+                    }
+                    "sizeRepresents" => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            size_represents = Some(v);
                         }
                     }
                     // python-pptx writes a bare self-closing <c:legend/> to
@@ -1987,6 +2014,11 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                                         ser_x_values.push(v);
                                     }
                                 }
+                                "bubsize" => {
+                                    if let Ok(v) = cur_v.trim().parse::<f64>() {
+                                        ser_sizes.push(v);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -2007,6 +2039,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                                 x_values: std::mem::take(&mut ser_x_values),
                                 line_none: ser_line_none,
                                 marker_none: ser_marker_none,
+                                sizes: std::mem::take(&mut ser_sizes),
                             });
                             in_ser_ln = false;
                         }
@@ -2040,6 +2073,9 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         bar_dir: bar_dir.unwrap_or_else(default_chart_bar_dir),
         grouping: grouping.unwrap_or_else(default_chart_grouping),
         hole_size: hole_size.unwrap_or_else(default_chart_hole_size),
+        bubble_scale: bubble_scale.unwrap_or_else(default_chart_bubble_scale),
+        size_represents: size_represents
+            .unwrap_or_else(default_chart_size_represents),
         legend_overlay,
         series,
         categories,
