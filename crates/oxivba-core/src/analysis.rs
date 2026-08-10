@@ -215,6 +215,12 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides Excel's process-global insert-options user interface",
     },
     Rule {
+        pattern: "Application.ShowToolTips",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "shows or hides Excel's process-global tooltips user interface",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2913,6 +2919,26 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("insert-options"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn tooltips_are_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseToolTips()\n\
+             Application.ShowToolTips = False\n\
+             Application.ShowToolTips = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.ShowToolTips"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("tooltips user interface"))
                 .count(),
             2
         );
