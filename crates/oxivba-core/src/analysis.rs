@@ -203,6 +203,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's process-global formula-entry AutoComplete user interface",
     },
     Rule {
+        pattern: "Application.DisplayPasteOptions",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "shows or hides Excel's process-global paste-options user interface",
+    },
+    Rule {
+        pattern: "Application.DisplayInsertOptions",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "shows or hides Excel's process-global insert-options user interface",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -2868,6 +2880,39 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("formula-entry AutoComplete"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn paste_and_insert_options_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseOperationOptions()\n\
+             Application.DisplayPasteOptions = False\n\
+             Application.DisplayPasteOptions = True\n\
+             Application.DisplayInsertOptions = False\n\
+             Application.DisplayInsertOptions = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.DisplayPasteOptions"), Some(&2));
+        assert_eq!(
+            a.api_names.get("Application.DisplayInsertOptions"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("paste-options"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("insert-options"))
                 .count(),
             2
         );
