@@ -14767,7 +14767,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 (Some("exact"), _) | (Some("atLeast"), _) => false,
                 _ => true,
             };
-        let use_cumulative_basis = is_multiple_spacing || is_single_lm0;
+        // S1111: a `<w:br w:type="page"/>`-only stub takes its font's RAW natural
+        // height (see line_height_for_line_inner) -- keep it off the cumulative
+        // multiple-spacing basis, which would re-apply the multiplier and the
+        // 0.5pt cumulative round on top (the probe's 14pt stub: 18.000 instead of
+        // the measured 16.099).
+        let s1111_stub = lines.first().is_some_and(|l| l.fragments.is_empty())
+            && para.style.page_break_after
+            && !self.doc_body_has_real_cjk
+            && matches!(
+                para.style.line_spacing_rule.as_deref(),
+                None | Some("auto")
+            )
+            && std::env::var("OXI_S1111_DISABLE").is_err();
+        let use_cumulative_basis = (is_multiple_spacing || is_single_lm0) && !s1111_stub;
         // REPORT_administrative__0010e437 (2026-07-26, opt-out OXI_NTMULT_DISABLE):
         // a NO-TYPE docGrid Latin AUTO-MULTIPLE-spacing paragraph decides its
         // page-bottom keep/push with the S576 INK box, NOT the win/hhea spacing
@@ -16437,14 +16450,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 false
             };
-            if std::env::var("OXI_DUMP_WIDOW").is_ok() && line_idx == 0 {
+            // Dump line 0 always, plus EVERY actual break — the widow arm fires
+            // at line_idx == lines.len()-2, which a line-0-only dump hides on a
+            // paragraph of 3+ lines.
+            if std::env::var("OXI_DUMP_WIDOW").is_ok() && (line_idx == 0 || widow_orphan_break) {
                 let txt: String = para
                     .runs
                     .iter()
                     .flat_map(|r| r.text.chars())
                     .take(15)
                     .collect();
-                eprintln!("[WIDOW] line0 lines={} wc={} cursor_y={:.2} lh={:.2} next_h={:.2} limit={:.2} curr_empty={} break={} text={:?}",
+                eprintln!("[WIDOW] line{} lines={} wc={} cursor_y={:.2} lh={:.2} next_h={:.2} limit={:.2} curr_empty={} break={} text={:?}",
+                    line_idx,
                     lines.len(), para.style.widow_control, cursor.cursor_y, line_height,
                     line_heights.get(1).copied().unwrap_or(0.0),
                     page_top + content_height, current_elements.is_empty(),
@@ -24685,6 +24702,35 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 para_style.default_run_style.as_ref().map(|r| (r.font_family.clone(), r.font_size)),
                 para_style.ppr_rpr.as_ref().map(|r| (r.font_family.clone(), r.font_size)),
                 t);
+        }
+        // S1111 (2026-08-09, opt-out OXI_S1111_DISABLE): the line of a paragraph
+        // whose ONLY content was `<w:br w:type="page"/>` (the parser lowers it to
+        // runs=[] + page_break_after) demands its font's RAW natural height — the
+        // paragraph's line-spacing MULTIPLIER does not apply to it.
+        // DERIVED (_pb_brstub_gen.py, Word, 75 arms: N fillers + an exact-height
+        // spacer walking the cursor in 0.5pt steps + the stub + a marker, read as
+        // marker_page - filler_page):
+        //   A  stub Arial 14, docDefaults line=259 (1.0792x)  flip cursor 753.63/754.13
+        //   B  stub Arial 14, explicit  line=240 (1.0x)       flip IDENTICAL
+        //   C  stub Arial 20, docDefaults line=259            flip cursor 746.63/747.13
+        // A == B at 0.5pt resolution settles the multiplier (it would put them
+        // 1.27pt apart), and the absolute windows pin the value with no tolerance
+        // left over: A demands (15.77, 16.27] ∋ hhea 16.099, C (22.77, 23.27] ∋
+        // hhea 22.998; the multiplied boxes 17.373 / 24.817 are outside both.
+        // This reconciles the two real specimens under ONE rule: policies__000f7115
+        // (Arial b 14 stub, cursor 752.97, cbot 769.90) KEEPs at 769.07 like Word,
+        // while legal__001a2c7f -- whose stub was already measured raw (11.499) and
+        // still overflowed by 1.805 -- keeps its blank page (the S1055 derivation).
+        // Latin scope: JP br-stubs still take the S1055 phantom-skip path.
+        if line.fragments.is_empty()
+            && para_style.page_break_after
+            && hhea_natural_max > 0.0
+            && !dominant_cjk_83_64
+            && !self.doc_body_has_real_cjk
+            && matches!(line_spacing_rule, None | Some("auto"))
+            && std::env::var("OXI_S1111_DISABLE").is_err()
+        {
+            return hhea_natural_max;
         }
         match (line_spacing_rule, line_spacing) {
             (Some("exact"), Some(val)) => val,
