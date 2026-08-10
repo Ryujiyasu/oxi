@@ -244,6 +244,25 @@ pub struct Chart {
     /// (1:2:4), the default gives their square roots (1:1.414:2).
     #[serde(default = "default_chart_size_represents")]
     pub size_represents: String,
+    /// c:stockChart/c:hiLowLines — when present Word draws one vertical
+    /// rule per category spanning the MIN..MAX of every series at that
+    /// category. Word render-truth (chart_stock K1, 2026-08-10): Q1
+    /// High 24.0 / Low 18.2 renders 134.40..179.28 under the plain value
+    /// mapping, black w=0.75, drawn UNDER the up/down bars.
+    #[serde(default)]
+    pub hi_low_lines: bool,
+    /// c:stockChart/c:upDownBars — when present Word draws a box between
+    /// the FIRST and LAST series' values (open..close). Measured on
+    /// chart_stock K6/K7: white #F9F9F9 when the last value is above the
+    /// first, dark #3F3F3F when below, both with a black w=0.75 outline.
+    #[serde(default)]
+    pub up_down_bars: bool,
+    /// c:upDownBars/c:gapWidth@val — the gap between adjacent bars as a
+    /// percent of the bar width. Word render-truth: the drawn width is
+    /// `pitch / (1 + gapWidth/100)` — 34.32 at pitch 85.89 and 27.20 at
+    /// pitch 68.00, both exact at the default 150.
+    #[serde(default = "default_chart_updown_gap")]
+    pub up_down_gap: f64,
     /// Series in document order (c:ser/c:idx). Series i renders with theme
     /// accent(i+1).
     pub series: Vec<ChartSeries>,
@@ -356,6 +375,10 @@ pub fn default_chart_bubble_scale() -> f64 {
 /// so the radius goes as its square root).
 pub fn default_chart_size_represents() -> String {
     "area".to_string()
+}
+/// ECMA-376 default for `c:upDownBars/c:gapWidth`.
+pub fn default_chart_updown_gap() -> f64 {
+    150.0
 }
 /// A legend with no `<c:overlay val="0"/>` child is an overlay.
 pub fn default_chart_legend_overlay() -> bool {
