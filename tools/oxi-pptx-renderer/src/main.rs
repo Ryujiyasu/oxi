@@ -25,6 +25,7 @@ mod font_adv;
 
 use oxislides_core::ir::{
     MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment, SlideBullet,
+    SlideGradient,
 };
 use serde_json::{json, Value};
 
@@ -502,6 +503,228 @@ fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
+fn srgb_to_linear(c: f64) -> f64 {
+    let c = c / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(c: f64) -> f64 {
+    let c = c.clamp(0.0, 1.0);
+    let s = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round().clamp(0.0, 255.0)
+}
+
+/// Colour of a gradient ramp at `t` (0..1).
+///
+/// Stops are interpolated in LINEAR RGB, not sRGB. Measured against three
+/// PowerPoint ramps -- the probe's RED->BLUE, d04's FFD966->FF9900 and d15's
+/// 572D7E->0F0B19 -- linear-RGB lerp beats plain sRGB lerp on every one of
+/// them (d04 max error 10.8 vs 24.2, d15 15.8 vs 20.0). A 10-16/255 residual
+/// remains: PowerPoint's ramp is not a plain lerp in any single space (d15
+/// favours cos-squared, the probe favours 1-t^2), so this is the measured best
+/// of the simple models rather than an exact match.
+fn gradient_color_at(g: &SlideGradient, t: f64) -> (u8, u8, u8) {
+    let stops = &g.stops;
+    if stops.is_empty() {
+        return (255, 255, 255);
+    }
+    let parse = |s: &str| parse_hex_rgb(s).unwrap_or((0, 0, 0));
+    let t = t.clamp(0.0, 1.0);
+    let last = stops.len() - 1;
+    if t <= stops[0].pos as f64 {
+        return parse(&stops[0].color);
+    }
+    if t >= stops[last].pos as f64 {
+        return parse(&stops[last].color);
+    }
+    // PowerPoint interpolates the two stop counts DIFFERENTLY, and its own PDF
+    // says so: a two-stop ramp is exported as a Size-256 sampled function whose
+    // midpoint is (186,0,187) for red->blue -- neither sRGB-linear (128,0,128)
+    // nor a plain linear-RGB blend -- while a three-stop ramp is exported as
+    // exact `FunctionType 2, N 1` segments over the raw sRGB values, and its
+    // pixels match sRGB-linear to within 1.  Measured over all 256 samples of
+    // every probe arm: two stops fit linear-RGB with a smoothstep ease
+    // (max 20 / avg 6.1, versus 37/23.9 for a plain linear-RGB blend and
+    // 59/43.2 for sRGB), three stops fit sRGB-linear exactly.  Both shapes are
+    // in the corpus (58 two-stop and 17 three-stop slides), so both are honoured.
+    let two_stop = stops.len() == 2;
+    for i in 0..last {
+        let (p0, p1) = (stops[i].pos as f64, stops[i + 1].pos as f64);
+        if t >= p0 && t <= p1 {
+            let f = if (p1 - p0).abs() < 1e-9 {
+                0.0
+            } else {
+                (t - p0) / (p1 - p0)
+            };
+            let a = parse(&stops[i].color);
+            let b = parse(&stops[i + 1].color);
+            if two_stop {
+                let e = f * f * (3.0 - 2.0 * f);
+                let mix = |x: u8, y: u8| {
+                    linear_to_srgb(
+                        srgb_to_linear(x as f64) * (1.0 - e) + srgb_to_linear(y as f64) * e,
+                    ) as u8
+                };
+                return (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2));
+            }
+            let mix = |x: u8, y: u8| (x as f64 * (1.0 - f) + y as f64 * f).round() as u8;
+            return (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2));
+        }
+    }
+    parse(&stops[last].color)
+}
+
+/// Paint a slide-background gradient over the whole page.
+///
+/// GDI has no primitive that covers both cases (`GradientFill` is a two-point
+/// linear ramp only), so the ramp is drawn as 256 bands -- the resolution
+/// PowerPoint itself uses, its PDF shading Function being a Size-256 sampled
+/// array.
+///
+/// Linear (`a:lin`): the axis is centred on the page, runs along the angle and
+/// spans the page, |w cos| + |h sin| -- probe B1's measured axis is exactly the
+/// page width (0,270)->(720,270), and B3's 45-degree axis is 890.9pt =
+/// (720+540)/sqrt(2). Each band is therefore a rotated quad. `scaled="1"` makes
+/// the angle 45 degrees in NORMALIZED space, i.e. the direction is
+/// proportional to (cos/w, sin/h): probe B6 measured a 3:4 direction on a 4:3
+/// page, with both off-axis corners landing on t=0.5.
+///
+/// Radial (`a:path path="circle"`): concentric bands about the focus, drawn
+/// outside-in after flooding the page with the end colour so rounding cannot
+/// leave the corners unpainted.
+#[cfg(windows)]
+unsafe fn paint_bg_gradient(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    w: i32,
+    h: i32,
+    g: &SlideGradient,
+) {
+    use windows::Win32::Foundation::{COLORREF, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::*;
+
+    const N: i32 = 256;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+
+    if let Some((fx, fy)) = g.focus {
+        let cx = fx as f64 * w as f64;
+        let cy = fy as f64 * h as f64;
+        // t=1 sits on the FARTHEST page corner: measured on d04 (centred focus,
+        // r=413.05 = the corner distance of a 720x405 page) and d15
+        // (bottom-right focus, r=826.09 = the distance to the opposite corner).
+        let r_max = [
+            (0.0, 0.0),
+            (w as f64, 0.0),
+            (0.0, h as f64),
+            (w as f64, h as f64),
+        ]
+        .iter()
+        .map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt())
+        .fold(0.0_f64, f64::max);
+
+        let end = gradient_color_at(g, 1.0);
+        let brush = CreateSolidBrush(COLORREF(colorref(end.0, end.1, end.2)));
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
+        FillRect(dc, &rect, brush);
+        let _ = DeleteObject(brush);
+
+        let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        for i in (0..N).rev() {
+            let r = r_max * (i + 1) as f64 / N as f64;
+            let c = gradient_color_at(g, (i as f64 + 0.5) / N as f64);
+            let b = CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2)));
+            let old = SelectObject(dc, b);
+            let _ = Ellipse(
+                dc,
+                (cx - r).round() as i32,
+                (cy - r).round() as i32,
+                (cx + r).round() as i32,
+                (cy + r).round() as i32,
+            );
+            SelectObject(dc, old);
+            let _ = DeleteObject(b);
+        }
+        SelectObject(dc, old_pen);
+        return;
+    }
+
+    let ang = g.angle_deg.unwrap_or(0.0) as f64;
+    let th = ang.to_radians();
+    let (mut dx, mut dy) = (th.cos(), th.sin());
+    if g.scaled {
+        dx /= w as f64;
+        dy /= h as f64;
+    }
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-12 {
+        dx = 1.0;
+        dy = 0.0;
+    } else {
+        dx /= len;
+        dy /= len;
+    }
+    let axis = (w as f64 * dx).abs() + (h as f64 * dy).abs();
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    // Perpendicular half-extent: the page diagonal covers any rotation.
+    let half = ((w as f64) * (w as f64) + (h as f64) * (h as f64)).sqrt();
+    let (nx, ny) = (-dy, dx);
+
+    let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    for i in 0..N {
+        let t0 = i as f64 / N as f64;
+        let t1 = (i + 1) as f64 / N as f64;
+        let c = gradient_color_at(g, (t0 + t1) / 2.0);
+        // Overlap adjacent bands by a pixel so integer rounding cannot leave a
+        // seam between the quads.
+        let a0 = (t0 - 0.5) * axis - 1.0;
+        let a1 = (t1 - 0.5) * axis + 1.0;
+        let pts = [
+            (cx + dx * a0 + nx * half, cy + dy * a0 + ny * half),
+            (cx + dx * a1 + nx * half, cy + dy * a1 + ny * half),
+            (cx + dx * a1 - nx * half, cy + dy * a1 - ny * half),
+            (cx + dx * a0 - nx * half, cy + dy * a0 - ny * half),
+        ];
+        let quad: [POINT; 4] = [
+            POINT {
+                x: pts[0].0.round() as i32,
+                y: pts[0].1.round() as i32,
+            },
+            POINT {
+                x: pts[1].0.round() as i32,
+                y: pts[1].1.round() as i32,
+            },
+            POINT {
+                x: pts[2].0.round() as i32,
+                y: pts[2].1.round() as i32,
+            },
+            POINT {
+                x: pts[3].0.round() as i32,
+                y: pts[3].1.round() as i32,
+            },
+        ];
+        let b = CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2)));
+        let old = SelectObject(dc, b);
+        let _ = Polygon(dc, &quad);
+        SelectObject(dc, old);
+        let _ = DeleteObject(b);
+    }
+    SelectObject(dc, old_pen);
+}
+
 #[cfg(windows)]
 fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u32) {
     use windows::Win32::Foundation::*;
@@ -522,21 +745,26 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
             let bitmap = CreateCompatibleBitmap(screen_dc, w, h);
             let old_bmp = SelectObject(mem_dc, bitmap);
 
-            // Background (slide background color if set, else white)
-            let bg = slide
-                .background_color
-                .as_deref()
-                .and_then(parse_hex_rgb)
-                .unwrap_or((255, 255, 255));
-            let bg_brush = CreateSolidBrush(COLORREF(colorref(bg.0, bg.1, bg.2)));
-            let rect = RECT {
-                left: 0,
-                top: 0,
-                right: w,
-                bottom: h,
-            };
-            FillRect(mem_dc, &rect, bg_brush);
-            let _ = DeleteObject(bg_brush);
+            // Background: a gradient when the slide (or its layout/master) has
+            // one, else the flat colour, else white.
+            if let Some(g) = slide.background_gradient.as_ref() {
+                paint_bg_gradient(mem_dc, w, h, g);
+            } else {
+                let bg = slide
+                    .background_color
+                    .as_deref()
+                    .and_then(parse_hex_rgb)
+                    .unwrap_or((255, 255, 255));
+                let bg_brush = CreateSolidBrush(COLORREF(colorref(bg.0, bg.1, bg.2)));
+                let rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: w,
+                    bottom: h,
+                };
+                FillRect(mem_dc, &rect, bg_brush);
+                let _ = DeleteObject(bg_brush);
+            }
             SetBkMode(mem_dc, TRANSPARENT);
 
             for sh in &slide.shapes {

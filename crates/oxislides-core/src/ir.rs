@@ -99,6 +99,46 @@ pub struct Slide {
     pub index: usize,
     pub shapes: Vec<Shape>,
     pub background_color: Option<String>, // hex color e.g. "FFFFFF"
+    /// Slide background gradient (`p:bg/p:bgPr/a:gradFill`), inherited from the
+    /// layout / master exactly like `background_color`. The two are mutually
+    /// exclusive: a gradFill has no single colour, so `background_color` stays
+    /// None for a gradient slide and a consumer that cannot paint a ramp leaves
+    /// the page as it was before gradients were parsed at all.
+    #[serde(default)]
+    pub background_gradient: Option<SlideGradient>,
+}
+
+/// One `a:gs` of a gradient ramp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlideGradientStop {
+    /// `a:gs/@pos` normalized to 0.0..1.0.
+    pub pos: f32,
+    /// RRGGBB, theme colours already resolved.
+    pub color: String,
+}
+
+/// A slide background gradient. Exactly one of `angle_deg` / `focus` is set:
+/// `a:lin` gives the angle, `a:path path="circle"` gives the focus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlideGradient {
+    /// Stops in document order (PowerPoint writes them ascending by `pos`).
+    pub stops: Vec<SlideGradientStop>,
+    /// `a:lin/@ang` in degrees clockwise from the +x axis: 0 = left->right,
+    /// 90 = top->bottom, 270 = bottom->top (PDF render-truth, probe B1/B2/B4).
+    #[serde(default)]
+    pub angle_deg: Option<f32>,
+    /// `a:lin/@scaled="1"` makes the ramp direction 45-degree in NORMALIZED
+    /// space, i.e. the axis vector is proportional to (1/width, 1/height)
+    /// rather than a physical angle (probe B6).
+    #[serde(default)]
+    pub scaled: bool,
+    /// `a:path path="circle"` focus as a fraction of the page (0..1 of width,
+    /// 0..1 of height), derived from `a:fillToRect`. The ramp runs from this
+    /// point (t=0) out to the FARTHEST page corner (t=1) -- measured on d04
+    /// (centre, r=413.05 = the corner distance) and d15 (bottom-right corner
+    /// focus, r=826.09 = the distance to the opposite corner).
+    #[serde(default)]
+    pub focus: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

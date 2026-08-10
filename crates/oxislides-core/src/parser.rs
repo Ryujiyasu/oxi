@@ -18,7 +18,8 @@ use crate::ir::{
     default_chart_updown_gap,
     default_chart_type, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
-    SlideAlignment, SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
+    SlideAlignment, SlideBullet, SlideGradient, SlideGradientStop, SlideParagraph,
+    SlideRun, Table, TableCell,
 };
 
 #[derive(Error, Debug)]
@@ -436,10 +437,15 @@ fn parse_slide(
     // slide and layout both have no <p:bg>, slideMaster1 carries
     // <a:srgbClr val="77588B">, and PowerPoint's own PDF is that colour to the
     // page corners.
-    let inherited_bg: Option<String> = if std::env::var("OXI_BGINHERIT_DISABLE").is_ok() {
-        None
+    let (inherited_bg, inherited_grad): (Option<String>, Option<SlideGradient>) = if std::env::var(
+        "OXI_BGINHERIT_DISABLE",
+    )
+    .is_ok()
+    {
+        (None, None)
     } else {
         let mut found: Option<String> = None;
+        let mut found_grad: Option<SlideGradient> = None;
         for rel in rels.values() {
             if !rel.rel_type.ends_with("/slideLayout") {
                 continue;
@@ -498,17 +504,22 @@ fn parse_slide(
                 }
                 let colors = master_colors.as_ref().unwrap_or(theme_colors);
                 found = parse_bg_solid_fill(&layout_xml, colors);
-                if found.is_none() {
+                found_grad = parse_bg_gradient(&layout_xml, colors);
+                // A layout that declares a gradient HAS supplied the
+                // background even though it yields no flat colour, so the
+                // walk must stop there rather than fall through to the master.
+                if found.is_none() && found_grad.is_none() {
                     if let Some(mp) = master_path {
                         if let Ok(Some(mx)) = archive.try_read_part(&mp) {
                             found = parse_bg_solid_fill(&mx, colors);
+                            found_grad = parse_bg_gradient(&mx, colors);
                         }
                     }
                 }
             }
             break;
         }
-        found
+        (found, found_grad)
     };
 
     let mut reader = Reader::from_str(xml);
@@ -1657,6 +1668,171 @@ fn parse_slide(
         } else {
             slide_background_color.or(inherited_bg)
         },
+        background_gradient: if std::env::var("OXI_BGGRAD_DISABLE").is_ok() {
+            None
+        } else if slide_has_own_bg {
+            // Same ownership rule as the flat colour: a slide that declares any
+            // <p:bg> of its own never reaches back to the layout/master.
+            parse_bg_gradient(xml, theme_colors)
+        } else {
+            inherited_grad
+        },
+    })
+}
+
+/// `a:fillToRect` / `a:tileRect` edge value -> fraction of the page.
+///
+/// Both notations occur in the corpus: `"50%"` (13 of the 52 background
+/// gradients) and the DrawingML integer 1000ths, e.g. `"100000"` (39).
+fn gradient_frac(v: &str) -> Option<f32> {
+    let v = v.trim();
+    if let Some(p) = v.strip_suffix('%') {
+        p.trim().parse::<f32>().ok().map(|x| x / 100.0)
+    } else {
+        v.parse::<f32>().ok().map(|x| x / 100_000.0)
+    }
+}
+
+/// Extract a GRADIENT background from a slide / layout / master part.
+///
+/// `p:cSld/p:bg/p:bgPr/a:gradFill` -> the `a:gsLst` stops plus either `a:lin`
+/// (an angle) or `a:path path="circle"` (a focus from `a:fillToRect`).
+///
+/// PowerPoint render-truth. PowerPoint exports a gradient background as a PDF
+/// *Pattern* (`/Pattern cs /Pn scn` over a full-page rectangle) whose Shading
+/// is axial (type 2) for `a:lin` and radial (type 3) for `a:path`, so the
+/// geometry is readable exactly:
+///   * `a:lin` ang=0 runs left->right, 90 top->bottom, 270 bottom->top. The
+///     axis is centred on the page and spans it: probe B1's axis is
+///     (0,270)->(720,270), i.e. the full page width.
+///   * `a:path path="circle"` puts t=0 at the point `a:fillToRect` describes
+///     and t=1 at the FARTHEST page corner. Measured twice on the dev corpus:
+///     d04 (`50%` on all four edges) gives centre (360,202.5) with r=413.05,
+///     the distance to every corner of a 720x405 page; d15 (`l=t=100000`,
+///     i.e. the bottom-right corner) gives centre (720,0) -- PDF y is up --
+///     with r=826.09, the distance to the opposite corner.
+///   * `path="rect"` is the one form PowerPoint rasterizes instead of emitting
+///     a shading, and no corpus background uses it, so it is left unpainted
+///     rather than guessed at.
+///   * An EMPTY `a:tileRect` overrides `a:fillToRect` and centres the ramp
+///     (probe arms B7/B8/B9 all render the same centred circle). The corpus
+///     pairs every bottom-right focus with a tileRect that carries attributes
+///     and every centred focus with an empty one, so the two readings agree on
+///     every corpus slide. No background gradFill carries a colour modifier,
+///     so the bare stop colour is exact.
+fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Option<SlideGradient> {
+    let mut reader = Reader::from_str(xml);
+    let mut in_bg = false;
+    let mut in_bg_pr = false;
+    let mut in_grad = false;
+    let mut in_gs = false;
+    let mut in_path = false;
+    let mut cur_pos: f32 = 0.0;
+    let mut cur_color: Option<String> = None;
+    let mut stops: Vec<SlideGradientStop> = Vec::new();
+    let mut angle_deg: Option<f32> = None;
+    let mut scaled = false;
+    let mut focus: Option<(f32, f32)> = None;
+    let mut empty_tile_rect = false;
+    loop {
+        let ev = match reader.read_event() {
+            Ok(ev) => ev,
+            Err(_) => break,
+        };
+        match ev {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "bg" => in_bg = true,
+                    "bgPr" if in_bg => in_bg_pr = true,
+                    "gradFill" if in_bg_pr => in_grad = true,
+                    "gs" if in_grad => {
+                        in_gs = true;
+                        cur_pos = get_attr(&e, "pos")
+                            .and_then(|v| gradient_frac(&v))
+                            .unwrap_or(0.0);
+                        cur_color = None;
+                    }
+                    "srgbClr" if in_gs && cur_color.is_none() => {
+                        cur_color = get_attr(&e, "val");
+                    }
+                    "schemeClr" if in_gs && cur_color.is_none() => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            cur_color = Some(
+                                theme_colors
+                                    .get(&v)
+                                    .cloned()
+                                    .unwrap_or_else(|| scheme_color_to_hex(&v)),
+                            );
+                        }
+                    }
+                    "lin" if in_grad => {
+                        angle_deg = get_attr(&e, "ang")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 60_000.0);
+                        scaled = get_attr(&e, "scaled").as_deref() == Some("1");
+                    }
+                    "path" if in_grad => {
+                        if get_attr(&e, "path").as_deref() == Some("circle") {
+                            in_path = true;
+                            focus = Some((0.5, 0.5));
+                        }
+                    }
+                    "fillToRect" if in_path => {
+                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        // The rect's centre is the focus: (1,1,0,0) collapses to
+                        // the bottom-right corner and 50% on all edges to the
+                        // page centre -- the only two shapes in the corpus.
+                        focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
+                    }
+                    "tileRect" if in_grad => {
+                        empty_tile_rect = e.attributes().next().is_none();
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => match local_name(e.name().as_ref()).as_str() {
+                "gs" => {
+                    if let Some(c) = cur_color.take() {
+                        stops.push(SlideGradientStop {
+                            pos: cur_pos,
+                            color: c,
+                        });
+                    }
+                    in_gs = false;
+                }
+                "path" => in_path = false,
+                "gradFill" => in_grad = false,
+                "bgPr" => in_bg_pr = false,
+                "bg" => break,
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    // An EMPTY `<a:tileRect/>` makes PowerPoint ignore `a:fillToRect` and
+    // centre the ramp: probe arms B7 (focus bottom-right), B8 (top-left) and
+    // B9 (centred) all render as the same centred circle.  The corpus never
+    // mixes the two -- all 38 bottom-right focuses carry a tileRect with
+    // attributes and all 14 centred ones an empty tileRect -- so this only
+    // decides hand-written combinations, and it leaves every corpus focus
+    // exactly where reading `fillToRect` alone would put it.
+    if empty_tile_rect && focus.is_some() {
+        focus = Some((0.5, 0.5));
+    }
+    if stops.len() < 2 || (angle_deg.is_none() && focus.is_none()) {
+        return None;
+    }
+    stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap_or(std::cmp::Ordering::Equal));
+    Some(SlideGradient {
+        stops,
+        angle_deg,
+        scaled,
+        focus,
     })
 }
 
