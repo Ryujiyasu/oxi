@@ -239,6 +239,12 @@ pub const RULES: &[Rule] = &[
         reason: "requests showing or hiding Excel's Office Clipboard task-pane user interface; modern Excel may ignore it",
     },
     Rule {
+        pattern: "Application.DisplayDocumentActionTaskPane",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "requests Excel's legacy document-action task-pane user interface; modern Excel accepts disabling but rejects enabling with error 1004",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -3017,6 +3023,29 @@ mod tests {
             .findings
             .iter()
             .all(|finding| !finding.reason.contains("clipboard and cut/copy mode")));
+    }
+
+    #[test]
+    fn document_action_task_pane_is_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseDocumentActionTaskPane()\n\
+             Application.DisplayDocumentActionTaskPane = False\n\
+             Application.DisplayDocumentActionTaskPane = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(
+            a.api_names.get("Application.DisplayDocumentActionTaskPane"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("document-action task-pane"))
+                .count(),
+            2
+        );
     }
 
     #[test]
