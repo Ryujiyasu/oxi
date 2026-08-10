@@ -15,6 +15,7 @@ use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 use crate::ir::{
     default_chart_bar_dir, default_chart_bubble_scale, default_chart_grouping,
     default_chart_hole_size, default_chart_size_represents,
+    default_chart_updown_gap,
     default_chart_type, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBullet, SlideParagraph, SlideRun, Table, TableCell,
@@ -1695,6 +1696,10 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut hole_size: Option<f64> = None;
     let mut bubble_scale: Option<f64> = None;
     let mut size_represents: Option<String> = None;
+    let mut hi_low_lines = false;
+    let mut up_down_bars = false;
+    let mut up_down_gap: Option<f64> = None;
+    let mut in_up_down = false;
     let mut legend_overlay = true;
     let mut in_legend = false;
     let mut series: Vec<ChartSeries> = Vec::new();
@@ -1784,6 +1789,20 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "radarChart" => {
                         chart_type = Some("radar".to_string());
                     }
+                    // <c:stockChart> — high/low/close (or open/high/low/
+                    // close) plotted on the LINE chart's geometry. The
+                    // series carry <a:ln><a:noFill/> so nothing connects
+                    // the points; the data is carried by <c:hiLowLines>
+                    // and <c:upDownBars>, both direct children here.
+                    "stockChart" => {
+                        chart_type = Some("stock".to_string());
+                    }
+                    // <c:upDownBars> is a Start element (its gapWidth is
+                    // a child); hiLowLines is self-closing (Empty arm).
+                    "upDownBars" => {
+                        up_down_bars = true;
+                        in_up_down = true;
+                    }
                     "ser"
                         if in_bar_chart
                             || chart_type.as_deref() == Some("pie")
@@ -1792,7 +1811,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             || chart_type.as_deref() == Some("area")
                             || chart_type.as_deref() == Some("scatter")
                             || chart_type.as_deref() == Some("bubble")
-                            || chart_type.as_deref() == Some("radar") =>
+                            || chart_type.as_deref() == Some("radar")
+                            || chart_type.as_deref() == Some("stock") =>
                     {
                         in_ser = true;
                         ser_target = "";
@@ -1911,6 +1931,21 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     // <c:radarChart>. "filled" fills each series polygon;
                     // "marker"/"standard" stroke it only (Word draws NO
                     // markers in any measured arm, so the two are identical).
+                    // <c:hiLowLines/> — self-closing; its presence is the
+                    // whole switch (Word draws the rule with the default
+                    // black w=0.75 when there is no <c:spPr>).
+                    "hiLowLines" => {
+                        hi_low_lines = true;
+                    }
+                    // <c:gapWidth> inside <c:upDownBars> (the bar chart's
+                    // own gapWidth is handled by its own path).
+                    "gapWidth" if in_up_down => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(n) = v.parse::<f64>() {
+                                up_down_gap = Some(n);
+                            }
+                        }
+                    }
                     "radarStyle" => {
                         if let Some(v) = get_attr(&e, "val") {
                             grouping = Some(v);
@@ -2004,6 +2039,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "legend" => in_legend = false,
+                    "upDownBars" => in_up_down = false,
                     "ln" => in_ser_ln = false,
                     "v" => {
                         if in_v {
@@ -2094,6 +2130,9 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         bubble_scale: bubble_scale.unwrap_or_else(default_chart_bubble_scale),
         size_represents: size_represents
             .unwrap_or_else(default_chart_size_represents),
+        hi_low_lines,
+        up_down_bars,
+        up_down_gap: up_down_gap.unwrap_or_else(default_chart_updown_gap),
         legend_overlay,
         series,
         categories,

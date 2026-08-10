@@ -54,6 +54,7 @@ DOCS = {
     "chart_bubble_wide": r"pipeline_data\pptx_probes\chart_bubble_wide\chart_bubble_wide.pdf",
     "chart_radar": r"pipeline_data\pptx_probes\chart_radar\chart_radar.pdf",
     "chart_radar_geo": r"pipeline_data\pptx_probes\chart_radar_geo\chart_radar_geo.pdf",
+    "chart_stock": r"pipeline_data\pptx_probes\chart_stock\chart_stock.pdf",
 }
 DPI = 150
 

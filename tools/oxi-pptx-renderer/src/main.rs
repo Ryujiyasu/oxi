@@ -3470,6 +3470,451 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 700,
                             );
                         }
+                        } else if chart.chart_type == "stock"
+                            && std::env::var("OXI_STOCK_DISABLE").is_err()
+                        {
+                        // Stock chart (Word render-truth 2026-08-10, the
+                        // 8-arm chart_stock probe K1..K8 read with fitz
+                        // get_drawings + rawdict).  <c:stockChart> reuses the
+                        // LINE chart's plot geometry; what is new is that the
+                        // series carry <a:ln><a:noFill/> (nothing joins the
+                        // points) and the data is carried by two decorations:
+                        //   <c:hiLowLines/>  one vertical rule per category
+                        //                    spanning min..max ACROSS ALL
+                        //                    SERIES  (K1 Q1: High 24.0 ->
+                        //                    134.40, Low 18.2 -> 179.28)
+                        //   <c:upDownBars>   a box between the FIRST and LAST
+                        //                    series (open..close), width
+                        //                    pitch/(1+gapWidth/100) centred on
+                        //                    the band centre (34.32 at pitch
+                        //                    85.89 and 27.20 at pitch 68.00,
+                        //                    both exact at the default 150)
+                        //
+                        //   plot_left  = sx + 6.50 + w(widest value label)
+                        //                + 16.70  (= 113.45 on every arm; the
+                        //                same gutter the area / horizontal-bar
+                        //                branches use, and the value the LINE
+                        //                branch hardcodes as sx+41.4 for its
+                        //                own two-digit labels)
+                        //   plot_right = legend ? label_x0 - 32.66
+                        //                       : sx + sw - 11.0
+                        //                (32.66 = swatch 9.89 + gap 4.62 +
+                        //                18.15, the doughnut/area legend band;
+                        //                K2 386.01 / K7 385.44 measured)
+                        //   plot_top   = sy + 16.0, or sy + 45.69 with an
+                        //                explicit <c:title>  (a stock chart
+                        //                always has >= 3 series so the
+                        //                single-series auto title never fires)
+                        //   plot_bot   = sy + shh - 39.9
+                        //   data x     = plot_left + pitch*(i+0.5)  (band
+                        //                centres, NOT category boundaries --
+                        //                so plot_right is NOT pulled in by
+                        //                half a label the way area/bar are)
+                        let axis_family = "Calibri";
+                        let axis_fs = 18.0f32;
+                        let sx = sh.x as f64;
+                        let sy = sh.y as f64;
+                        let sw = sh.width as f64;
+                        let shh = sh.height as f64;
+                        let has_explicit_title = chart.explicit_title.is_some();
+                        let tw = |s: &str, fs: f32| -> f64 {
+                            font_adv::line_hmtx_width_pt(s, fs, axis_family)
+                                .unwrap_or_else(|| {
+                                    s.chars().count() as f32 * fs * 0.5
+                                }) as f64
+                        };
+                        let max_val = chart
+                            .series
+                            .iter()
+                            .flat_map(|s| s.values.iter().copied())
+                            .fold(0.0f64, f64::max);
+                        let (max_axis, axis_steps) = nice_axis_max_div(max_val);
+                        let step = max_axis / axis_steps as f64;
+                        let mut widest_val = 0.0f64;
+                        for i in 0..=axis_steps {
+                            let w = tw(&fmt_axis_value(step * i as f64, step), axis_fs);
+                            if w > widest_val {
+                                widest_val = w;
+                            }
+                        }
+                        let plot_left = sx + 6.50 + widest_val + 16.70;
+                        let plot_top = if has_explicit_title {
+                            sy + 45.69
+                        } else {
+                            sy + 16.0
+                        };
+                        let plot_bot = sy + shh - 39.9;
+                        let plot_h = plot_bot - plot_top;
+                        let max_label_w = chart
+                            .series
+                            .iter()
+                            .map(|s| tw(&s.name, axis_fs))
+                            .fold(0.0f64, f64::max);
+                        let legend_label_x0 = sx + sw - 10.0 - max_label_w;
+                        let plot_right = if chart.has_legend {
+                            legend_label_x0 - 32.66
+                        } else {
+                            sx + sw - 11.0
+                        };
+                        let plot_w = plot_right - plot_left;
+                        let n_cat = chart.categories.len().max(1);
+                        let pitch = plot_w / n_cat as f64;
+                        let val_y =
+                            |v: f64| plot_bot - (v / max_axis.max(1e-9)) * plot_h;
+                        let pen_w = (0.75 * scale).round().max(1.0) as i32;
+
+                        // Major gridlines i=1..=axis_steps (i=0 is the X axis
+                        // line, i=axis_steps is the plot's top edge), drawn
+                        // UNDER the hi-low rules and the up/down boxes.
+                        let grid_pen =
+                            CreatePen(PS_SOLID, pen_w, COLORREF(colorref(0, 0, 0)));
+                        let old_grid_pen = SelectObject(mem_dc, grid_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let gl = (plot_left * scale).round() as i32;
+                        let gr = (plot_right * scale).round() as i32;
+                        for i in 1..=axis_steps {
+                            let gy = ((plot_bot - plot_h * i as f64
+                                / axis_steps as f64)
+                                * scale)
+                                .round() as i32;
+                            let _ = MoveToEx(mem_dc, gl, gy, None);
+                            let _ = LineTo(mem_dc, gr, gy);
+                        }
+                        SelectObject(mem_dc, old_grid_pen);
+                        let _ = DeleteObject(grid_pen);
+
+                        // <c:hiLowLines/>: one black w=0.75 vertical rule per
+                        // category, from the MAXIMUM to the MINIMUM of every
+                        // series at that category.
+                        if chart.hi_low_lines && !chart.series.is_empty() {
+                            let hl_pen = CreatePen(
+                                PS_SOLID,
+                                pen_w,
+                                COLORREF(colorref(0, 0, 0)),
+                            );
+                            let old_hl_pen = SelectObject(mem_dc, hl_pen);
+                            let _ =
+                                SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                            for ci in 0..n_cat {
+                                let mut lo = f64::INFINITY;
+                                let mut hi = f64::NEG_INFINITY;
+                                for s in chart.series.iter() {
+                                    if let Some(v) = s.values.get(ci) {
+                                        lo = lo.min(*v);
+                                        hi = hi.max(*v);
+                                    }
+                                }
+                                if !lo.is_finite() || !hi.is_finite() {
+                                    continue;
+                                }
+                                let cx = ((plot_left + pitch * (ci as f64 + 0.5))
+                                    * scale)
+                                    .round() as i32;
+                                let _ = MoveToEx(
+                                    mem_dc,
+                                    cx,
+                                    (val_y(hi) * scale).round() as i32,
+                                    None,
+                                );
+                                let _ = LineTo(
+                                    mem_dc,
+                                    cx,
+                                    (val_y(lo) * scale).round() as i32,
+                                );
+                            }
+                            SelectObject(mem_dc, old_hl_pen);
+                            let _ = DeleteObject(hl_pen);
+                        }
+
+                        // <c:upDownBars>: a box from the FIRST series' value
+                        // (open) to the LAST series' value (close).  Word
+                        // paints it #F9F9F9 when the close is ABOVE the open
+                        // and #3F3F3F when below, both with a black w=0.75
+                        // outline, and draws it OVER the hi-low rules.
+                        if chart.up_down_bars && chart.series.len() >= 2 {
+                            let bar_w = pitch / (1.0 + chart.up_down_gap / 100.0);
+                            let first = &chart.series[0];
+                            let last = &chart.series[chart.series.len() - 1];
+                            let ud_pen = CreatePen(
+                                PS_SOLID,
+                                pen_w,
+                                COLORREF(colorref(0, 0, 0)),
+                            );
+                            for ci in 0..n_cat {
+                                let (o, c) = match (
+                                    first.values.get(ci),
+                                    last.values.get(ci),
+                                ) {
+                                    (Some(a), Some(b)) => (*a, *b),
+                                    _ => continue,
+                                };
+                                let cx = plot_left + pitch * (ci as f64 + 0.5);
+                                let y0 = val_y(o.max(c));
+                                let y1 = val_y(o.min(c));
+                                let r = RECT {
+                                    left: ((cx - bar_w / 2.0) * scale).round() as i32,
+                                    top: (y0 * scale).round() as i32,
+                                    right: ((cx + bar_w / 2.0) * scale).round() as i32,
+                                    bottom: (y1 * scale).round() as i32,
+                                };
+                                let fill = if c >= o {
+                                    colorref(0xf9, 0xf9, 0xf9)
+                                } else {
+                                    colorref(0x3f, 0x3f, 0x3f)
+                                };
+                                let brush = CreateSolidBrush(COLORREF(fill));
+                                let _ = FillRect(mem_dc, &r, brush);
+                                let _ = DeleteObject(brush);
+                                let old_ud_pen = SelectObject(mem_dc, ud_pen);
+                                let _ = SelectObject(
+                                    mem_dc,
+                                    GetStockObject(NULL_BRUSH),
+                                );
+                                let _ = MoveToEx(mem_dc, r.left, r.top, None);
+                                let _ = LineTo(mem_dc, r.right, r.top);
+                                let _ = LineTo(mem_dc, r.right, r.bottom);
+                                let _ = LineTo(mem_dc, r.left, r.bottom);
+                                let _ = LineTo(mem_dc, r.left, r.top);
+                                SelectObject(mem_dc, old_ud_pen);
+                            }
+                            let _ = DeleteObject(ud_pen);
+                        }
+
+                        // Connecting polylines / markers: a stock chart's
+                        // series declare <a:ln><a:noFill/> and
+                        // <c:symbol val="none"/>, so nothing is drawn; the
+                        // per-series flags keep that honest rather than
+                        // hard-coding "stock never draws lines".
+                        let series_pts: Vec<Vec<(f64, f64)>> = chart
+                            .series
+                            .iter()
+                            .map(|s| {
+                                s.values
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(ci, v)| {
+                                        (
+                                            plot_left + pitch * (ci as f64 + 0.5),
+                                            val_y(*v),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+                        for (si, pts) in series_pts.iter().enumerate() {
+                            if chart.series[si].line_none {
+                                continue;
+                            }
+                            let (_, border_hex) = line_series_colors(si);
+                            if let Some(rgb) = parse_hex_rgb(&border_hex) {
+                                let line_pen = CreatePen(
+                                    PS_SOLID,
+                                    (2.25 * scale).round().max(1.0) as i32,
+                                    COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                                );
+                                let old_line_pen = SelectObject(mem_dc, line_pen);
+                                let _ =
+                                    SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                                for w in pts.windows(2) {
+                                    let _ = MoveToEx(
+                                        mem_dc,
+                                        (w[0].0 * scale).round() as i32,
+                                        (w[0].1 * scale).round() as i32,
+                                        None,
+                                    );
+                                    let _ = LineTo(
+                                        mem_dc,
+                                        (w[1].0 * scale).round() as i32,
+                                        (w[1].1 * scale).round() as i32,
+                                    );
+                                }
+                                SelectObject(mem_dc, old_line_pen);
+                                let _ = DeleteObject(line_pen);
+                            }
+                        }
+                        if chart.marker {
+                            for (si, pts) in series_pts.iter().enumerate() {
+                                if chart.series[si].marker_none {
+                                    continue;
+                                }
+                                let (fill_hex, _) = line_series_colors(si);
+                                if let Some(rgb) = parse_hex_rgb(&fill_hex) {
+                                    let m_brush = CreateSolidBrush(COLORREF(
+                                        colorref(rgb.0, rgb.1, rgb.2),
+                                    ));
+                                    let old_m_brush = SelectObject(mem_dc, m_brush);
+                                    let _ =
+                                        SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                                    for (px, py) in pts.iter() {
+                                        draw_line_marker(
+                                            mem_dc,
+                                            line_marker_shape(si),
+                                            *px,
+                                            *py,
+                                            6.96 / 2.0,
+                                            scale,
+                                        );
+                                    }
+                                    SelectObject(mem_dc, old_m_brush);
+                                    let _ = DeleteObject(m_brush);
+                                }
+                            }
+                        }
+
+                        // Value labels: Calibri 18pt, right edge =
+                        // plot_left-16.64, baseline = tick_y+5.22 (same rule
+                        // as the line/bar branches).
+                        for i in 0..=axis_steps {
+                            let val = step * i as f64;
+                            let label = fmt_axis_value(val, step);
+                            let lw = tw(&label, axis_fs);
+                            draw_text_baseline(
+                                mem_dc,
+                                ((plot_left - 16.64 - lw) * scale).round() as i32,
+                                (val_y(val) + 5.22) as f32,
+                                &label,
+                                axis_fs,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Category names centred under each band.
+                        for (ci, name) in chart.categories.iter().enumerate() {
+                            let cx = plot_left + pitch * (ci as f64 + 0.5);
+                            let lw = tw(name, axis_fs);
+                            draw_text_baseline(
+                                mem_dc,
+                                ((cx - lw / 2.0) * scale).round() as i32,
+                                (plot_bot + 28.67) as f32,
+                                name,
+                                axis_fs,
+                                axis_family,
+                                None,
+                                scale,
+                            );
+                        }
+
+                        // Axis lines + ticks: Y at plot_left, X at plot_bot,
+                        // Y ticks i=0..=axis_steps hanging 5.71 to the left,
+                        // X ticks i=0..=n_cat hanging 5.71 below.
+                        let axis_pen =
+                            CreatePen(PS_SOLID, pen_w, COLORREF(colorref(0, 0, 0)));
+                        let old_axis_pen = SelectObject(mem_dc, axis_pen);
+                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        let pl = (plot_left * scale).round() as i32;
+                        let pt = (plot_top * scale).round() as i32;
+                        let pr = (plot_right * scale).round() as i32;
+                        let pb = (plot_bot * scale).round() as i32;
+                        let _ = MoveToEx(mem_dc, pl, pt, None);
+                        let _ = LineTo(mem_dc, pl, pb);
+                        let _ = MoveToEx(mem_dc, pl, pb, None);
+                        let _ = LineTo(mem_dc, pr, pb);
+                        for i in 0..=axis_steps {
+                            let ty = ((plot_bot - plot_h * i as f64
+                                / axis_steps as f64)
+                                * scale)
+                                .round() as i32;
+                            let _ = MoveToEx(
+                                mem_dc,
+                                ((plot_left - 5.71) * scale).round() as i32,
+                                ty,
+                                None,
+                            );
+                            let _ = LineTo(mem_dc, pl, ty);
+                        }
+                        for i in 0..=n_cat {
+                            let tx =
+                                ((plot_left + pitch * i as f64) * scale).round() as i32;
+                            let _ = MoveToEx(mem_dc, tx, pb, None);
+                            let _ = LineTo(
+                                mem_dc,
+                                tx,
+                                ((plot_bot + 5.71) * scale).round() as i32,
+                            );
+                        }
+                        SelectObject(mem_dc, old_axis_pen);
+                        let _ = DeleteObject(axis_pen);
+
+                        // Legend: the doughnut/area block law -- n rows of
+                        // 27.75pt centred on sy + shh/2 (+14.85 with an
+                        // explicit title), first swatch top = block top +
+                        // 8.97, label baseline = swatch bottom + 0.28, all
+                        // labels left-aligned at
+                        // label_x0 = sx + sw - 10 - max_label_w.
+                        // (K2 predicted 193.52 vs measured 193.46; K7
+                        // 194.49 vs 194.45.)  No swatch is painted for a
+                        // stock series because its line is noFill and its
+                        // marker is none -- Word draws labels only.
+                        if chart.has_legend {
+                            let n = chart.series.len();
+                            let title_off = if has_explicit_title { 14.85 } else { 0.0 };
+                            let block_top = sy + shh / 2.0 + title_off
+                                - n as f64 * 27.75 / 2.0;
+                            for (si, s) in chart.series.iter().enumerate() {
+                                let sw_top = block_top + 8.97 + si as f64 * 27.75;
+                                if !s.line_none {
+                                    let (_, border_hex) = line_series_colors(si);
+                                    if let Some(rgb) = parse_hex_rgb(&border_hex) {
+                                        let lg_pen = CreatePen(
+                                            PS_SOLID,
+                                            (2.25 * scale).round().max(1.0) as i32,
+                                            COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+                                        );
+                                        let old_lg_pen = SelectObject(mem_dc, lg_pen);
+                                        let _ = SelectObject(
+                                            mem_dc,
+                                            GetStockObject(NULL_BRUSH),
+                                        );
+                                        let ly = ((sw_top + 9.89 / 2.0) * scale)
+                                            .round() as i32;
+                                        let lx0 = ((legend_label_x0 - 4.62 - 9.89)
+                                            * scale)
+                                            .round() as i32;
+                                        let lx1 =
+                                            ((legend_label_x0 - 4.62) * scale).round()
+                                                as i32;
+                                        let _ = MoveToEx(mem_dc, lx0, ly, None);
+                                        let _ = LineTo(mem_dc, lx1, ly);
+                                        SelectObject(mem_dc, old_lg_pen);
+                                        let _ = DeleteObject(lg_pen);
+                                    }
+                                }
+                                draw_text_baseline(
+                                    mem_dc,
+                                    (legend_label_x0 * scale).round() as i32,
+                                    (sw_top + 9.89 + 0.28) as f32,
+                                    &s.name,
+                                    axis_fs,
+                                    axis_family,
+                                    None,
+                                    scale,
+                                );
+                            }
+                        }
+
+                        // EXPLICIT <c:title>: Arial 18pt regular, centred on
+                        // the frame, baseline sy+24.43 (same as every other
+                        // chart type).
+                        if let Some(title) = &chart.explicit_title {
+                            let tfs = 18.0f32;
+                            let lw = font_adv::line_hmtx_width_pt(title, tfs, "Arial")
+                                .unwrap_or_else(|| {
+                                    title.chars().count() as f32 * tfs * 0.5
+                                }) as f64;
+                            draw_text_baseline_w(
+                                mem_dc,
+                                ((sx + sw / 2.0 - lw / 2.0) * scale).round() as i32,
+                                (sy + 24.43) as f32,
+                                title,
+                                tfs,
+                                "Arial",
+                                None,
+                                scale,
+                                400,
+                            );
+                        }
                         } else if chart.chart_type == "line" {
                         // Line chart (Word render-truth 2026-08-06, fitz
                         // get_drawings + rawdict on the 7-variant probe
@@ -6147,6 +6592,36 @@ fn nice_axis_max(max_val: f64) -> f64 {
         10.0
     } * mag;
     (max_val / step).ceil() * step
+}
+
+/// `nice_axis_max` plus the DIVISION COUNT Word draws.
+///
+/// `nice_axis_max` picks a step internally and then throws it away; the number
+/// of major divisions Word renders is `axis_max / step`, which is NOT always 5.
+/// Word render-truth (chart_stock K1/K3/K4/K5, 2026-08-10): max 27.2 -> 28.56
+/// after the 5% headroom -> raw 5.712 -> step 5 -> axis 30 -> SIX divisions,
+/// and the 400pt-tall K5 arm draws the same six, so the count is a property of
+/// the DATA, not of the plot height.
+fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
+    let axis_max = nice_axis_max(max_val);
+    if max_val <= 0.0 {
+        return (axis_max, 5);
+    }
+    let padded = max_val * AXIS_HEADROOM;
+    let raw = padded / 5.0;
+    let mag = 10f64.powf(raw.log10().floor());
+    let resid = raw / mag;
+    let step = if resid < 1.5 {
+        1.0
+    } else if resid < 3.0 {
+        2.0
+    } else if resid < 7.0 {
+        5.0
+    } else {
+        10.0
+    } * mag;
+    let div = (axis_max / step).round().max(1.0) as usize;
+    (axis_max, div)
 }
 
 /// Measure the width of `text` in device pixels (font must be selected).
