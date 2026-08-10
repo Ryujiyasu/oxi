@@ -428,6 +428,89 @@ fn parse_slide(
         (geoms, anchors)
     };
 
+    // A slide with no <p:bg> of its own inherits the layout's background, and
+    // the layout the master's -- PowerPoint paints that inherited fill edge to
+    // edge.  Measured on the dev corpus: 24.5% of slides take their background
+    // from the master and 6.2% from the layout, so without this 272 of 886
+    // slides (30.7%) rendered on plain white.  d06 slide 34 is the specimen:
+    // slide and layout both have no <p:bg>, slideMaster1 carries
+    // <a:srgbClr val="77588B">, and PowerPoint's own PDF is that colour to the
+    // page corners.
+    let inherited_bg: Option<String> = if std::env::var("OXI_BGINHERIT_DISABLE").is_ok() {
+        None
+    } else {
+        let mut found: Option<String> = None;
+        for rel in rels.values() {
+            if !rel.rel_type.ends_with("/slideLayout") {
+                continue;
+            }
+            let layout_path = resolve_slide_relative_path(slide_rels_path, &rel.target);
+            if let Ok(Some(layout_xml)) = archive.try_read_part(&layout_path) {
+                // layout -> master, and that master's THEME.  A schemeClr in a
+                // layout/master resolves against the theme of ITS master, not
+                // the deck-level theme1.xml: every dev deck ships one theme
+                // part per master.  Measured -- d19 slideLayout5 asks for dk1,
+                // which theme2.xml defines as 21355A but theme1.xml does not
+                // define at all, so the deck-level map fell through to the
+                // hardcoded black.  (d08 slides 6/10/13/26/27 are the same bug
+                // in miniature: lt1 is EDECED in theme2, FFFFFF in theme1.)
+                let cut = layout_path.rfind('/').map(|i| i + 1).unwrap_or(0);
+                let layout_rels = format!(
+                    "{}_rels/{}.rels",
+                    &layout_path[..cut],
+                    &layout_path[cut..]
+                );
+                let mut master_path: Option<String> = None;
+                let mut master_colors: Option<HashMap<String, String>> = None;
+                if let Ok(Some(lr_xml)) = archive.try_read_part(&layout_rels) {
+                    if let Ok(lr) = parse_relationships(&lr_xml) {
+                        for r in lr.values() {
+                            if !r.rel_type.ends_with("/slideMaster") {
+                                continue;
+                            }
+                            let mp = resolve_slide_relative_path(&layout_rels, &r.target);
+                            let mcut = mp.rfind('/').map(|i| i + 1).unwrap_or(0);
+                            let master_rels =
+                                format!("{}_rels/{}.rels", &mp[..mcut], &mp[mcut..]);
+                            if let Ok(Some(mr_xml)) = archive.try_read_part(&master_rels) {
+                                if let Ok(mr) = parse_relationships(&mr_xml) {
+                                    for t in mr.values() {
+                                        if !t.rel_type.ends_with("/theme") {
+                                            continue;
+                                        }
+                                        let tp = resolve_slide_relative_path(
+                                            &master_rels,
+                                            &t.target,
+                                        );
+                                        if let Ok(Some(tx)) = archive.try_read_part(&tp) {
+                                            if let Ok((_, _, c)) = parse_theme(&tx) {
+                                                master_colors = Some(c);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            master_path = Some(mp);
+                            break;
+                        }
+                    }
+                }
+                let colors = master_colors.as_ref().unwrap_or(theme_colors);
+                found = parse_bg_solid_fill(&layout_xml, colors);
+                if found.is_none() {
+                    if let Some(mp) = master_path {
+                        if let Ok(Some(mx)) = archive.try_read_part(&mp) {
+                            found = parse_bg_solid_fill(&mx, colors);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        found
+    };
+
     let mut reader = Reader::from_str(xml);
     let mut shapes = Vec::new();
     let mut _depth = 0u32;
@@ -1561,8 +1644,67 @@ fn parse_slide(
     Ok(Slide {
         index: slide_index,
         shapes,
-        background_color: slide_background_color,
+        background_color: slide_background_color.or(inherited_bg),
     })
+}
+
+/// Extract the SOLID background colour from a slide / layout / master part.
+///
+/// `p:cSld/p:bg/p:bgPr/a:solidFill` -> `a:srgbClr@val`, or `a:schemeClr@val`
+/// resolved through the theme colour scheme (Spec #10).  Returns None for
+/// `gradFill` / `blipFill` / `bgRef`, which are not a single colour.
+///
+/// Dev-corpus measurement (40 decks, 886 slides): 82.8% of effective slide
+/// backgrounds are a plain solidFill, and NONE of the 651 solidFill `<p:bg>`
+/// blocks carries a colour modifier (lumMod / lumOff / tint / shade / alpha),
+/// so reading the bare value is exact.
+fn parse_bg_solid_fill(xml: &str, theme_colors: &HashMap<String, String>) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut in_bg = false;
+    let mut in_bg_pr = false;
+    let mut in_solid = false;
+    let mut found: Option<String> = None;
+    loop {
+        let ev = match reader.read_event() {
+            Ok(ev) => ev,
+            Err(_) => break,
+        };
+        match ev {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "bg" => in_bg = true,
+                    "bgPr" if in_bg => in_bg_pr = true,
+                    "solidFill" if in_bg_pr => in_solid = true,
+                    "srgbClr" if in_solid && found.is_none() => {
+                        found = get_attr(&e, "val");
+                    }
+                    "schemeClr" if in_solid && found.is_none() => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            found = Some(
+                                theme_colors
+                                    .get(&v)
+                                    .cloned()
+                                    .unwrap_or_else(|| scheme_color_to_hex(&v)),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => match local_name(e.name().as_ref()).as_str() {
+                "solidFill" => in_solid = false,
+                "bgPr" => in_bg_pr = false,
+                // The background is the first thing in p:cSld, so stop as soon
+                // as it closes rather than walking the whole part.
+                "bg" => break,
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    found
 }
 
 /// Build a (ph_type, ph_idx) -> (x,y,w,h) geometry map from a slideLayout XML.
