@@ -520,6 +520,13 @@ fn parse_slide(
     let mut in_bg = false;
     let mut in_bg_pr = false;
     let mut slide_background_color: Option<String> = None;
+    // A slide that declares ANY <p:bg> owns its background outright -- it must
+    // not fall back to the layout/master even when we cannot resolve the fill.
+    // d19 slide 10 is the specimen: its own background is a blipFill (a paper
+    // texture PowerPoint paints at #F2F1ED) which yields no single colour, and
+    // inheriting instead put slideLayout5's dk1 (#21355A, near-black navy) over
+    // the whole page.  47 dev slides own a grad/blip background this way.
+    let mut slide_has_own_bg = false;
 
     // Shape state
     let mut in_shape = false;
@@ -632,6 +639,7 @@ fn parse_slide(
                 match name.as_str() {
                     "bg" => {
                         in_bg = true;
+                        slide_has_own_bg = true;
                     }
                     "bgPr" if in_bg => {
                         in_bg_pr = true;
@@ -1644,7 +1652,11 @@ fn parse_slide(
     Ok(Slide {
         index: slide_index,
         shapes,
-        background_color: slide_background_color.or(inherited_bg),
+        background_color: if slide_has_own_bg {
+            slide_background_color
+        } else {
+            slide_background_color.or(inherited_bg)
+        },
     })
 }
 
