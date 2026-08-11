@@ -13,10 +13,10 @@ use oxidocs_common::relationships::parse_relationships;
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
-    default_chart_bar_dir, default_chart_bubble_scale, default_chart_grouping,
+    default_b_ins, default_chart_bar_dir, default_chart_bubble_scale, default_chart_grouping,
     default_chart_hole_size, default_chart_size_represents,
     default_chart_updown_gap,
-    default_chart_type, Chart, ChartSeries,
+    default_chart_type, default_l_ins, default_r_ins, default_t_ins, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
     SlideParagraph,
@@ -439,6 +439,12 @@ fn parse_slide(
     // <a:srgbClr val="77588B">, and PowerPoint's own PDF is that colour to the
     // page corners.
     let bgimg_on = std::env::var("OXI_BGIMG_DISABLE").is_err();
+    // The shapes a layout/master draws for itself are inherited by the same
+    // walk, but they are a separate concern from the background, so they have
+    // their own switch. OXI_BGINHERIT_DISABLE turns the whole walk off, which
+    // keeps it usable as "inherit nothing from layout/master".
+    let lmshapes_on = std::env::var("OXI_LMSHAPES_DISABLE").is_err();
+    let mut inherited_shapes: Vec<Shape> = Vec::new();
     let (inherited_bg, inherited_grad, inherited_img): (
         Option<String>,
         Option<SlideGradient>,
@@ -449,6 +455,8 @@ fn parse_slide(
         let mut found: Option<String> = None;
         let mut found_grad: Option<SlideGradient> = None;
         let mut found_img: Option<SlideBackgroundImage> = None;
+        // `p:sld/@showMasterSp="0"` switches the master's own shapes off.
+        let slide_hides_master = show_master_sp_off(xml);
         for rel in rels.values() {
             if !rel.rel_type.ends_with("/slideLayout") {
                 continue;
@@ -506,6 +514,35 @@ fn parse_slide(
                     }
                 }
                 let colors = master_colors.as_ref().unwrap_or(theme_colors);
+
+                // The shapes a layout/master paints on its own account. Unlike
+                // the background these do NOT stop at the layout: PowerPoint
+                // draws the master's, then the layout's, then the slide's, so
+                // both parts contribute and the order is master-first.
+                if lmshapes_on {
+                    if !slide_hides_master && !show_master_sp_off(&layout_xml) {
+                        if let Some(mp) = master_path.as_ref() {
+                            if let Ok(Some(mx)) = archive.try_read_part(mp) {
+                                let mcut = mp.rfind('/').map(|i| i + 1).unwrap_or(0);
+                                let master_rels =
+                                    format!("{}_rels/{}.rels", &mp[..mcut], &mp[mcut..]);
+                                inherited_shapes.extend(parse_inherited_shapes(
+                                    &mx,
+                                    &master_rels,
+                                    archive,
+                                    colors,
+                                ));
+                            }
+                        }
+                    }
+                    inherited_shapes.extend(parse_inherited_shapes(
+                        &layout_xml,
+                        &layout_rels,
+                        archive,
+                        colors,
+                    ));
+                }
+
                 found = parse_bg_solid_fill(&layout_xml, colors);
                 found_grad = parse_bg_gradient(&layout_xml, colors);
                 // Gated here as well as at the construction site: a layout that
@@ -1681,6 +1718,16 @@ fn parse_slide(
         }
     }
 
+    // PowerPoint's draw order is background, master, layout, slide, and the
+    // renderer walks `shapes` in order, so PREPENDING the inherited ones (the
+    // master's first, as collected) reproduces it with no renderer change.
+    let shapes = if inherited_shapes.is_empty() {
+        shapes
+    } else {
+        inherited_shapes.extend(shapes);
+        inherited_shapes
+    };
+
     Ok(Slide {
         index: slide_index,
         shapes,
@@ -1950,6 +1997,440 @@ fn load_bg_image(
         data,
         content_type: detect_content_type(&rel.target),
     })
+}
+
+/// Does this slide / layout part switch OFF the master's own shapes?
+///
+/// OOXML gates a master's non-placeholder shapes behind `p:sld/@showMasterSp`
+/// and `p:sldLayout/@showMasterSp`, both defaulting to "1". Measured on the dev
+/// corpus the attribute is never 0, but honouring it costs one attribute read
+/// and a deck that sets it would otherwise gain ink PowerPoint does not draw.
+fn show_master_sp_off(xml: &str) -> bool {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let name = local_name(e.name().as_ref());
+                if name == "sld" || name == "sldLayout" {
+                    return get_attr(e, "showMasterSp").as_deref() == Some("0");
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// Does this image's container declare per-pixel transparency?
+///
+/// The renderer blits with a `BI_RGB` 32-bpp DIB, which discards the alpha
+/// channel, so a transparent picture would be painted as an opaque slab. This
+/// crate has no image decoder, so the test is on container bytes: for PNG the
+/// IHDR colour type (4 = grey+alpha, 6 = RGBA) or a `tRNS` chunk, which the
+/// spec requires to precede `IDAT`. JPEG and BMP carry no alpha. Anything else
+/// is treated as transparent rather than risk painting it wrong.
+///
+/// Checked against decoded pixels for every inherited picture in the dev
+/// corpus: 41 transparent / 2 opaque, with zero disagreements.
+fn media_has_alpha(data: &[u8]) -> bool {
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        if data.len() < 26 {
+            return true;
+        }
+        if matches!(data[25], 4 | 6) {
+            return true;
+        }
+        let end = data
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .unwrap_or(data.len());
+        return data[..end].windows(4).any(|w| w == b"tRNS");
+    }
+    if data.starts_with(&[0xff, 0xd8]) || data.starts_with(b"BM") {
+        return false;
+    }
+    true
+}
+
+/// The non-placeholder shapes a slideLayout / slideMaster draws for ITSELF.
+///
+/// The parser reads those parts only for placeholder geometry, the text styles
+/// and the background, so every shape a layout or master paints on its own
+/// account was dropped. Measured on the dev corpus that costs 70 slides their
+/// ink, and 20 of them a FULL-PAGE picture (d19 8, d37 7, d28 5).
+///
+/// Oxi paints nothing at all from these parts today, so whatever is emitted
+/// here can only ADD ink PowerPoint also has -- provided every shape is painted
+/// FAITHFULLY. That is what bounds the subset, and the bounds come from the IR
+/// and the renderer, not from taste:
+///
+///   * `fill_color` is a single OPAQUE hex -- no gradient, no alpha
+///   * the generic fill/border paint is AXIS-ALIGNED -- rot/flip are ignored
+///   * there are no prstGeom arms, so any preset would be drawn as a RECTANGLE
+///   * StretchDIBits cannot express translucency or recolouring
+///
+/// So the subset is `p:pic` with a plain opaque `r:embed`, and `p:sp` that is a
+/// plain-solidFill `rect`. Everything else is left out rather than painted
+/// wrong (the 2ea81a callout lesson: incorrect ink is worse than none).
+/// Measured rejects, by reason: 306 custGeom, 186 grpSp, 157 rot, 155 gradFill,
+/// 75 outerShdw, 61 cxnSp, 46 translucent pics, 15 ellipse, 11 flip.
+///
+/// The picture MEDIA is judged too, by `media_has_alpha`: 41 of the 43 distinct
+/// pictures that pass every XML test are transparent PNGs, and the blit would
+/// paint them opaque. They are therefore deferred, which leaves the full-page
+/// pictures out of this stage -- the background feature is unaffected because
+/// all 20 of its pictures are opaque, so alpha compositing cannot be gated
+/// there and has to ship with those pictures instead.
+///
+/// `a:alphaModFix` is judged by its `@amt`, not its presence: the attribute
+/// defaults to 100000 (fully opaque), and the bare `<a:alphaModFix/>` form --
+/// 86 of the 132 layout/master pics, the same degenerate spelling the
+/// background census found -- is a no-op. Only a real amt (25000/24000/60000)
+/// is translucency.
+///
+/// Redundant shapes are NOT filtered: an inherited picture that the slide also
+/// draws, with the same media and the same box, is simply covered by it, which
+/// is exactly what PowerPoint's own layout-then-slide draw order does.
+fn parse_inherited_shapes(
+    xml: &str,
+    rels_path: &str,
+    archive: &mut OoxmlArchive,
+    theme_colors: &HashMap<String, String>,
+) -> Vec<Shape> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut out: Vec<Shape> = Vec::new();
+
+    let mut in_tree = false;
+    // Nesting depth of shape-kind elements INSIDE p:spTree, so that a grpSp's
+    // children are never mistaken for top-level shapes.
+    let mut nest: u32 = 0;
+    let mut kind: Option<&'static str> = None;
+
+    // Per-candidate state.
+    let mut ok = false;
+    let mut x = 0.0f32;
+    let mut y = 0.0f32;
+    let mut w = 0.0f32;
+    let mut h = 0.0f32;
+    let mut have_off = false;
+    let mut have_ext = false;
+    let mut prst: Option<String> = None;
+    let mut fill: Option<String> = None;
+    let mut embed: Option<String> = None;
+    let mut src_rect: Option<(f32, f32, f32, f32)> = None;
+    let mut fill_rect: Option<(f32, f32, f32, f32)> = None;
+    let mut ln_color: Option<String> = None;
+    let mut ln_width: Option<f32> = None;
+    let mut ln_no_fill = false;
+    let mut in_sp_pr = false;
+    let mut in_pic_blip = false;
+    let mut ln_depth: u32 = 0;
+    let mut in_solid = false;
+
+    let pct = |v: Option<String>| -> f32 {
+        v.and_then(|s| s.parse::<f32>().ok())
+            .map(|x| x / 100000.0)
+            .unwrap_or(0.0)
+    };
+
+    loop {
+        let ev = reader.read_event_into(&mut buf);
+        let (e, empty) = match &ev {
+            Ok(Event::Start(e)) => (Some(e), false),
+            Ok(Event::Empty(e)) => (Some(e), true),
+            Ok(Event::End(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "spTree" => in_tree = false,
+                    "sp" | "pic" | "grpSp" | "cxnSp" | "graphicFrame" if in_tree => {
+                        nest = nest.saturating_sub(1);
+                        if nest == 0 {
+                            // Close the candidate.
+                            if ok && have_off && have_ext && w > 0.0 && h > 0.0 {
+                                let content = match kind {
+                                    Some("pic") => embed.take().and_then(|rid| {
+                                        let rx = archive.try_read_part(rels_path).ok()??;
+                                        let rels = parse_relationships(&rx).ok()?;
+                                        let rel = rels.get(&rid)?;
+                                        let p = resolve_slide_relative_path(rels_path, &rel.target);
+                                        let data = archive.read_binary_part(&p).ok()?;
+                                        if data.is_empty() {
+                                            return None;
+                                        }
+                                        // The blit discards alpha, so a
+                                        // transparent picture would be painted
+                                        // as an opaque slab.
+                                        if media_has_alpha(&data) {
+                                            return None;
+                                        }
+                                        Some(ShapeContent::Image {
+                                            data,
+                                            content_type: detect_content_type(&rel.target),
+                                        })
+                                    }),
+                                    _ => fill.as_ref().map(|_| ShapeContent::AutoShape {
+                                        paragraphs: Vec::new(),
+                                    }),
+                                };
+                                if let Some(content) = content {
+                                    // A line with <a:noFill/> paints nothing --
+                                    // 14 of the 17 accepted rects spell their
+                                    // outline that way. (The main shape walker
+                                    // sets border_width from a:ln@w regardless,
+                                    // a pre-existing bug this must not copy.)
+                                    let (bc, bw) = if ln_no_fill || ln_color.is_none() {
+                                        (None, None)
+                                    } else {
+                                        (ln_color.clone(), ln_width)
+                                    };
+                                    out.push(Shape {
+                                        x,
+                                        y,
+                                        width: w,
+                                        height: h,
+                                        rotation: 0.0,
+                                        flip_h: false,
+                                        flip_v: false,
+                                        shape_type: prst.clone(),
+                                        ph_type: None,
+                                        content,
+                                        fill_color: if kind == Some("pic") {
+                                            None
+                                        } else {
+                                            fill.clone()
+                                        },
+                                        border_color: bc,
+                                        border_width: bw,
+                                        l_ins: default_l_ins(),
+                                        r_ins: default_r_ins(),
+                                        t_ins: default_t_ins(),
+                                        b_ins: default_b_ins(),
+                                        anchor: None,
+                                        src_rect,
+                                        fill_rect,
+                                    });
+                                }
+                            }
+                            kind = None;
+                            ok = false;
+                        }
+                    }
+                    "spPr" if nest > 0 => in_sp_pr = false,
+                    "blipFill" if nest > 0 && !in_sp_pr => in_pic_blip = false,
+                    "ln" if nest > 0 => ln_depth = ln_depth.saturating_sub(1),
+                    "solidFill" if nest > 0 => in_solid = false,
+                    _ => {}
+                }
+                buf.clear();
+                continue;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {
+                buf.clear();
+                continue;
+            }
+        };
+        let e = match e {
+            Some(e) => e,
+            None => {
+                buf.clear();
+                continue;
+            }
+        };
+        let name = local_name(e.name().as_ref());
+
+        if name == "spTree" {
+            in_tree = true;
+            buf.clear();
+            continue;
+        }
+        if !in_tree {
+            buf.clear();
+            continue;
+        }
+
+        match name.as_str() {
+            "sp" | "pic" | "grpSp" | "cxnSp" | "graphicFrame" => {
+                if nest == 0 {
+                    // Only p:sp and p:pic can be faithful; a grpSp/cxnSp/
+                    // graphicFrame subtree is walked but never emitted.
+                    kind = match name.as_str() {
+                        "sp" => Some("sp"),
+                        "pic" => Some("pic"),
+                        _ => None,
+                    };
+                    ok = kind.is_some();
+                    x = 0.0;
+                    y = 0.0;
+                    w = 0.0;
+                    h = 0.0;
+                    have_off = false;
+                    have_ext = false;
+                    prst = None;
+                    fill = None;
+                    embed = None;
+                    src_rect = None;
+                    fill_rect = None;
+                    ln_color = None;
+                    ln_width = None;
+                    ln_no_fill = false;
+                    in_sp_pr = false;
+                    in_pic_blip = false;
+                    ln_depth = 0;
+                    in_solid = false;
+                }
+                if !empty {
+                    nest += 1;
+                }
+            }
+            _ if nest == 0 || kind.is_none() => {}
+            // A placeholder is positioned and filled by the placeholder chain,
+            // not by this walk.
+            "ph" => ok = false,
+            "spPr" => {
+                if !empty {
+                    in_sp_pr = true;
+                }
+            }
+            // p:blipFill (the picture) is a SIBLING of p:spPr; a:blipFill (a
+            // shape fill) is inside it, and is a disqualifier below.
+            "blipFill" => {
+                if in_sp_pr {
+                    ok = false;
+                } else if !empty {
+                    in_pic_blip = true;
+                }
+            }
+            "ln" => {
+                if let Some(v) = get_attr(e, "w") {
+                    ln_width = v.parse::<f32>().ok().map(emu_to_pt);
+                }
+                if !empty {
+                    ln_depth += 1;
+                }
+            }
+            "xfrm" => {
+                // Any rotation or mirror is dropped by the axis-aligned paint,
+                // so such a shape must not be emitted at all.
+                if get_attr(e, "rot").is_some_and(|r| r != "0")
+                    || get_attr(e, "flipH").as_deref() == Some("1")
+                    || get_attr(e, "flipV").as_deref() == Some("1")
+                {
+                    ok = false;
+                }
+            }
+            "off" if in_sp_pr && !have_off => {
+                x = get_attr(e, "x")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(emu_to_pt)
+                    .unwrap_or(0.0);
+                y = get_attr(e, "y")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(emu_to_pt)
+                    .unwrap_or(0.0);
+                have_off = true;
+            }
+            "ext" if in_sp_pr && !have_ext => {
+                w = get_attr(e, "cx")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(emu_to_pt)
+                    .unwrap_or(0.0);
+                h = get_attr(e, "cy")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(emu_to_pt)
+                    .unwrap_or(0.0);
+                have_ext = true;
+            }
+            // Measured: every accepted shape, picture included, is a "rect".
+            // Anything else would be drawn as a rectangle, so it is excluded.
+            "prstGeom" => match get_attr(e, "prst") {
+                Some(p) if p == "rect" => prst = Some(p),
+                _ => ok = false,
+            },
+            "custGeom" => ok = false,
+            "gradFill" | "pattFill" if in_sp_pr && ln_depth == 0 => ok = false,
+            "solidFill" if in_sp_pr && ln_depth == 0 => {
+                if !empty {
+                    in_solid = true;
+                }
+            }
+            "solidFill" if ln_depth > 0 => {
+                if !empty {
+                    in_solid = true;
+                }
+            }
+            "noFill" if ln_depth > 0 => ln_no_fill = true,
+            // Translucency and colour transforms cannot be expressed by a flat
+            // fill_color, so a shape carrying one is not emitted.
+            "alpha" | "lumMod" | "lumOff" | "tint" | "shade" | "satMod" | "hueMod"
+                if in_solid && ln_depth == 0 =>
+            {
+                ok = false;
+            }
+            "srgbClr" | "schemeClr" if in_solid => {
+                let hex = if name == "srgbClr" {
+                    get_attr(e, "val")
+                } else {
+                    get_attr(e, "val").map(|v| {
+                        theme_colors
+                            .get(&v)
+                            .cloned()
+                            .unwrap_or_else(|| scheme_color_to_hex(&v))
+                    })
+                };
+                if ln_depth > 0 {
+                    if ln_color.is_none() {
+                        ln_color = hex;
+                    }
+                } else if in_sp_pr && fill.is_none() {
+                    fill = hex;
+                }
+            }
+            "blip" if in_pic_blip => {
+                for attr in e.attributes().flatten() {
+                    let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                    if key == "r:embed" || key.ends_with(":embed") {
+                        embed = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    }
+                }
+            }
+            // @amt defaults to 100000 = fully opaque; only a real value is
+            // translucency the blit cannot reproduce.
+            "alphaModFix" if in_pic_blip => {
+                if get_attr(e, "amt").is_some_and(|a| a != "100000") {
+                    ok = false;
+                }
+            }
+            "duotone" | "clrChange" | "grayscl" | "biLevel" | "tile" if in_pic_blip => ok = false,
+            "srcRect" if in_pic_blip => {
+                src_rect = Some((
+                    pct(get_attr(e, "l")),
+                    pct(get_attr(e, "t")),
+                    pct(get_attr(e, "r")),
+                    pct(get_attr(e, "b")),
+                ));
+            }
+            "fillRect" if in_pic_blip => {
+                fill_rect = Some((
+                    pct(get_attr(e, "l")),
+                    pct(get_attr(e, "t")),
+                    pct(get_attr(e, "r")),
+                    pct(get_attr(e, "b")),
+                ));
+            }
+            // A shadow/glow changes what the shape looks like well beyond its
+            // box, so a shape carrying one is not emitted either.
+            "outerShdw" | "innerShdw" | "softEdge" | "reflection" | "glow" => ok = false,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    out
 }
 
 /// `p:cSld/p:bg/p:bgPr/a:blipFill/a:blip@r:embed` -> the relationship id of the
