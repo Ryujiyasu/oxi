@@ -2025,15 +2025,17 @@ fn show_master_sp_off(xml: &str) -> bool {
 
 /// Does this image's container declare per-pixel transparency?
 ///
-/// The renderer blits with a `BI_RGB` 32-bpp DIB, which discards the alpha
-/// channel, so a transparent picture would be painted as an opaque slab. This
-/// crate has no image decoder, so the test is on container bytes: for PNG the
-/// IHDR colour type (4 = grey+alpha, 6 = RGBA) or a `tRNS` chunk, which the
+/// This crate has no image decoder, so the test is on container bytes: for PNG
+/// the IHDR colour type (4 = grey+alpha, 6 = RGBA) or a `tRNS` chunk, which the
 /// spec requires to precede `IDAT`. JPEG and BMP carry no alpha. Anything else
 /// is treated as transparent rather than risk painting it wrong.
 ///
 /// Checked against decoded pixels for every inherited picture in the dev
 /// corpus: 41 transparent / 2 opaque, with zero disagreements.
+///
+/// The renderer composites per-pixel alpha now, so this no longer decides
+/// whether a picture may ship -- it only feeds the `OXI_LMPICALPHA_DISABLE`
+/// escape hatch, which restores the old reject-transparent behaviour.
 fn media_has_alpha(data: &[u8]) -> bool {
     if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
         if data.len() < 26 {
@@ -2069,7 +2071,8 @@ fn media_has_alpha(data: &[u8]) -> bool {
 ///   * `fill_color` is a single OPAQUE hex -- no gradient, no alpha
 ///   * the generic fill/border paint is AXIS-ALIGNED -- rot/flip are ignored
 ///   * there are no prstGeom arms, so any preset would be drawn as a RECTANGLE
-///   * StretchDIBits cannot express translucency or recolouring
+///   * the blit cannot express SHAPE-level translucency or recolouring
+///     (per-pixel alpha in the MEDIA is composited, since c4e92550)
 ///
 /// So the subset is `p:pic` with a plain opaque `r:embed`, and `p:sp` that is a
 /// plain-solidFill `rect`. Everything else is left out rather than painted
@@ -2077,12 +2080,11 @@ fn media_has_alpha(data: &[u8]) -> bool {
 /// Measured rejects, by reason: 306 custGeom, 186 grpSp, 157 rot, 155 gradFill,
 /// 75 outerShdw, 61 cxnSp, 46 translucent pics, 15 ellipse, 11 flip.
 ///
-/// The picture MEDIA is judged too, by `media_has_alpha`: 41 of the 43 distinct
-/// pictures that pass every XML test are transparent PNGs, and the blit would
-/// paint them opaque. They are therefore deferred, which leaves the full-page
-/// pictures out of this stage -- the background feature is unaffected because
-/// all 20 of its pictures are opaque, so alpha compositing cannot be gated
-/// there and has to ship with those pictures instead.
+/// The picture MEDIA used to be judged too, and a transparent PNG rejected,
+/// because the blit would have painted it as an opaque slab -- which held back
+/// most of the inherited pictures, the full-page ones among them. The renderer
+/// composites per-pixel alpha now, so transparency is no longer a reason to
+/// drop a picture. `OXI_LMPICALPHA_DISABLE` restores the old rejection.
 ///
 /// `a:alphaModFix` is judged by its `@amt`, not its presence: the attribute
 /// defaults to 100000 (fully opaque), and the bare `<a:alphaModFix/>` form --
@@ -2160,10 +2162,13 @@ fn parse_inherited_shapes(
                                         if data.is_empty() {
                                             return None;
                                         }
-                                        // The blit discards alpha, so a
-                                        // transparent picture would be painted
-                                        // as an opaque slab.
-                                        if media_has_alpha(&data) {
+                                        // The renderer composites per-pixel
+                                        // alpha, so a transparent picture is
+                                        // no longer held back. The flag
+                                        // restores the old rejection.
+                                        if std::env::var("OXI_LMPICALPHA_DISABLE").is_ok()
+                                            && media_has_alpha(&data)
+                                        {
                                             return None;
                                         }
                                         Some(ShapeContent::Image {
