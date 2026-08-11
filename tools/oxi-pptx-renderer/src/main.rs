@@ -653,6 +653,85 @@ unsafe fn paint_bg_image(
     true
 }
 
+/// Composite a picture that carries transparency.
+///
+/// `StretchDIBits` on a BI_RGB 32-bpp DIB throws the alpha byte away, so a PNG
+/// with transparency is painted as the raw RGB stored *under* its transparent
+/// pixels (usually black or white) instead of letting the page show through.
+/// PowerPoint composites it. `AlphaBlend` does that, but it needs a source *DC*
+/// rather than a DIB pointer, and PREMULTIPLIED source pixels, so the bitmap is
+/// built as a DIB section and selected into a scratch DC.
+///
+/// Returns false when any GDI step fails, so the caller can fall back to the
+/// opaque blit and never leave the picture unpainted.
+#[cfg(windows)]
+unsafe fn alpha_blit(
+    dst: windows::Win32::Graphics::Gdi::HDC,
+    dx: i32,
+    dy: i32,
+    dw: i32,
+    dh: i32,
+    sx0: i32,
+    sy0: i32,
+    sw: i32,
+    sh: i32,
+    iw: i32,
+    ih: i32,
+    rgba: &image::RgbaImage,
+) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || iw <= 0 || ih <= 0 {
+        return false;
+    }
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: iw,
+            biHeight: -ih, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0, // BI_RGB
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+    let hbm = match CreateDIBSection(dst, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+        Ok(b) if !bits.is_null() => b,
+        _ => return false,
+    };
+    {
+        // premultiplied BGRA, top-down (matches the negative biHeight)
+        let n = (iw as usize) * (ih as usize);
+        let out = std::slice::from_raw_parts_mut(bits as *mut u8, n * 4);
+        for (i, p) in rgba.pixels().enumerate().take(n) {
+            let a = p[3] as u32;
+            out[i * 4] = ((p[2] as u32 * a + 127) / 255) as u8;
+            out[i * 4 + 1] = ((p[1] as u32 * a + 127) / 255) as u8;
+            out[i * 4 + 2] = ((p[0] as u32 * a + 127) / 255) as u8;
+            out[i * 4 + 3] = p[3];
+        }
+    }
+    let src_dc = CreateCompatibleDC(dst);
+    if src_dc.0.is_null() {
+        let _ = DeleteObject(hbm);
+        return false;
+    }
+    let old = SelectObject(src_dc, hbm);
+    let bf = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let ok = AlphaBlend(dst, dx, dy, dw, dh, src_dc, sx0, sy0, sw, sh, bf).as_bool();
+    SelectObject(src_dc, old);
+    let _ = DeleteDC(src_dc);
+    let _ = DeleteObject(hbm);
+    ok
+}
+
 /// Paint a slide-background gradient over the whole page.
 ///
 /// GDI has no primitive that covers both cases (`GradientFill` is a two-point
@@ -6340,6 +6419,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .max(1);
                                 let dh = ((eh as f64 * (1.0 - dt - db)).round() as i32)
                                     .max(1);
+                                // A picture whose media carries transparency
+                                // has to be COMPOSITED over the page -- the
+                                // opaque blit below drops the alpha byte and
+                                // paints the RGB stored under the transparent
+                                // pixels. A fully opaque picture keeps the
+                                // exact SRCCOPY path (byte-identical), and a
+                                // failed AlphaBlend falls back to it too.
+                                let composited = std::env::var("OXI_ALPHABLEND_DISABLE")
+                                    .is_err()
+                                    && rgba.pixels().any(|p| p[3] != 255)
+                                    && alpha_blit(
+                                        mem_dc, dx, dy, dw, dh, sx0, sy0, sw, shh, iw, ih,
+                                        &rgba,
+                                    );
+                                if !composited {
                                 // RGBA -> BGRA for the 32-bpp DIB
                                 let mut bgra = Vec::with_capacity((iw * ih * 4) as usize);
                                 for p in rgba.pixels() {
@@ -6375,6 +6469,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     DIB_RGB_COLORS,
                                     SRCCOPY,
                                 );
+                                }
                             }
                             Err(_) => {}
                         }
