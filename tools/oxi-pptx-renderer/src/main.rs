@@ -24,8 +24,8 @@
 mod font_adv;
 
 use oxislides_core::ir::{
-    MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment, SlideBullet,
-    SlideGradient,
+    MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment,
+    SlideBackgroundImage, SlideBullet, SlideGradient,
 };
 use serde_json::{json, Value};
 
@@ -582,6 +582,77 @@ fn gradient_color_at(g: &SlideGradient, t: f64) -> (u8, u8, u8) {
     parse(&stops[last].color)
 }
 
+/// Paint a slide background picture. Returns false when the image could not be
+/// decoded, so the caller can fall back to the gradient/flat fill -- the
+/// compatible bitmap is UNINITIALISED, so something must always paint it.
+///
+/// PowerPoint render-truth (dev corpus, 2026-08): the exported PDF places the
+/// background image at exactly the page rect on every deck that has one -- d04
+/// slide10, d06 slide10/11, d16 slide1, d19 slide10 all give
+/// `Rect(0, ~0, 720, 405)` for a 1280x720 source -- and none of them carries a
+/// soft mask. So the fill is a plain full-page stretch at full opacity, which
+/// is what every one of the corpus's 22 background fills asks for anyway:
+/// they are all `<a:stretch><a:fillRect/></a:stretch>` with a bare
+/// `<a:alphaModFix/>` (no `amt`), i.e. no crop, no insets, no alpha, no tile.
+/// Those variants are therefore NOT modelled -- nothing measured to model from.
+#[cfg(windows)]
+unsafe fn paint_bg_image(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    w: i32,
+    h: i32,
+    img: &SlideBackgroundImage,
+) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    let dyn_img = match image::load_from_memory(&img.data) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let rgba = dyn_img.to_rgba8();
+    let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
+    if iw <= 0 || ih <= 0 {
+        return false;
+    }
+    let mut bgra = Vec::with_capacity((iw * ih * 4) as usize);
+    for px in rgba.pixels() {
+        bgra.push(px[2]);
+        bgra.push(px[1]);
+        bgra.push(px[0]);
+        bgra.push(px[3]);
+    }
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: iw,
+            biHeight: -ih, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0, // BI_RGB
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let _ = StretchDIBits(
+        dc,
+        0,
+        0,
+        w,
+        h,
+        0,
+        0,
+        iw,
+        ih,
+        Some(bgra.as_ptr() as *const _),
+        &bmi,
+        DIB_RGB_COLORS,
+        SRCCOPY,
+    );
+    true
+}
+
 /// Paint a slide-background gradient over the whole page.
 ///
 /// GDI has no primitive that covers both cases (`GradientFill` is a two-point
@@ -745,9 +816,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
             let bitmap = CreateCompatibleBitmap(screen_dc, w, h);
             let old_bmp = SelectObject(mem_dc, bitmap);
 
-            // Background: a gradient when the slide (or its layout/master) has
-            // one, else the flat colour, else white.
-            if let Some(g) = slide.background_gradient.as_ref() {
+            // Background, in PowerPoint's own precedence: the picture when the
+            // slide (or its layout/master) has one, else the gradient, else the
+            // flat colour, else white. The compatible bitmap starts
+            // UNINITIALISED, so exactly one of these must always run -- when a
+            // picture cannot be decoded paint_bg_image reports false and we
+            // fall through to the next fill rather than leave garbage pixels.
+            let painted = match slide.background_image.as_ref() {
+                Some(bi) => paint_bg_image(mem_dc, w, h, bi),
+                None => false,
+            };
+            if painted {
+                // the picture already covers the whole page
+            } else if let Some(g) = slide.background_gradient.as_ref() {
                 paint_bg_gradient(mem_dc, w, h, g);
             } else {
                 let bg = slide

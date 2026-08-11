@@ -18,7 +18,8 @@ use crate::ir::{
     default_chart_updown_gap,
     default_chart_type, Chart, ChartSeries,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
-    SlideAlignment, SlideBullet, SlideGradient, SlideGradientStop, SlideParagraph,
+    SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
+    SlideParagraph,
     SlideRun, Table, TableCell,
 };
 
@@ -437,15 +438,17 @@ fn parse_slide(
     // slide and layout both have no <p:bg>, slideMaster1 carries
     // <a:srgbClr val="77588B">, and PowerPoint's own PDF is that colour to the
     // page corners.
-    let (inherited_bg, inherited_grad): (Option<String>, Option<SlideGradient>) = if std::env::var(
-        "OXI_BGINHERIT_DISABLE",
-    )
-    .is_ok()
-    {
-        (None, None)
+    let bgimg_on = std::env::var("OXI_BGIMG_DISABLE").is_err();
+    let (inherited_bg, inherited_grad, inherited_img): (
+        Option<String>,
+        Option<SlideGradient>,
+        Option<SlideBackgroundImage>,
+    ) = if std::env::var("OXI_BGINHERIT_DISABLE").is_ok() {
+        (None, None, None)
     } else {
         let mut found: Option<String> = None;
         let mut found_grad: Option<SlideGradient> = None;
+        let mut found_img: Option<SlideBackgroundImage> = None;
         for rel in rels.values() {
             if !rel.rel_type.ends_with("/slideLayout") {
                 continue;
@@ -505,21 +508,39 @@ fn parse_slide(
                 let colors = master_colors.as_ref().unwrap_or(theme_colors);
                 found = parse_bg_solid_fill(&layout_xml, colors);
                 found_grad = parse_bg_gradient(&layout_xml, colors);
-                // A layout that declares a gradient HAS supplied the
-                // background even though it yields no flat colour, so the
+                // Gated here as well as at the construction site: a layout that
+                // declares ONLY a picture stops the walk below, so leaving this
+                // enabled while the feature is off would turn such a slide
+                // white instead of falling through to the master -- i.e. the
+                // A/B "off" arm would not reproduce the pre-feature behaviour.
+                found_img = if bgimg_on {
+                    load_bg_image(&layout_xml, &layout_rels, archive)
+                } else {
+                    None
+                };
+                // A layout that declares a gradient or a picture HAS supplied
+                // the background even though it yields no flat colour, so the
                 // walk must stop there rather than fall through to the master.
-                if found.is_none() && found_grad.is_none() {
+                if found.is_none() && found_grad.is_none() && found_img.is_none() {
                     if let Some(mp) = master_path {
                         if let Ok(Some(mx)) = archive.try_read_part(&mp) {
+                            let mcut = mp.rfind('/').map(|i| i + 1).unwrap_or(0);
+                            let master_rels =
+                                format!("{}_rels/{}.rels", &mp[..mcut], &mp[mcut..]);
                             found = parse_bg_solid_fill(&mx, colors);
                             found_grad = parse_bg_gradient(&mx, colors);
+                            found_img = if bgimg_on {
+                                load_bg_image(&mx, &master_rels, archive)
+                            } else {
+                                None
+                            };
                         }
                     }
                 }
             }
             break;
         }
-        (found, found_grad)
+        (found, found_grad, found_img)
     };
 
     let mut reader = Reader::from_str(xml);
@@ -1677,6 +1698,16 @@ fn parse_slide(
         } else {
             inherited_grad
         },
+        // Picture background. Same ownership rule again, and the same env gate
+        // shape as the gradient so the whole feature can be switched off for an
+        // A/B without touching the other two fills.
+        background_image: if !bgimg_on {
+            None
+        } else if slide_has_own_bg {
+            load_bg_image(xml, slide_rels_path, archive)
+        } else {
+            inherited_img
+        },
     })
 }
 
@@ -1885,6 +1916,77 @@ fn parse_bg_solid_fill(xml: &str, theme_colors: &HashMap<String, String>) -> Opt
                 "bgPr" => in_bg_pr = false,
                 // The background is the first thing in p:cSld, so stop as soon
                 // as it closes rather than walking the whole part.
+                "bg" => break,
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Resolve a background picture fill declared in `xml` against the rels of the
+/// part it came from, and load the media bytes.
+///
+/// `rels_path` is the `_rels/<part>.rels` of that same part -- a slide, layout
+/// and master each carry their own, and the same `rId3` means different images
+/// in each, so the caller must pass the matching one.
+fn load_bg_image(
+    xml: &str,
+    rels_path: &str,
+    archive: &mut OoxmlArchive,
+) -> Option<SlideBackgroundImage> {
+    let rid = parse_bg_blip_rid(xml)?;
+    let rels_xml = archive.try_read_part(rels_path).ok()??;
+    let rels = parse_relationships(&rels_xml).ok()?;
+    let rel = rels.get(&rid)?;
+    let image_path = resolve_slide_relative_path(rels_path, &rel.target);
+    let data = archive.read_binary_part(&image_path).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    Some(SlideBackgroundImage {
+        data,
+        content_type: detect_content_type(&rel.target),
+    })
+}
+
+/// `p:cSld/p:bg/p:bgPr/a:blipFill/a:blip@r:embed` -> the relationship id of the
+/// background picture, or None when the background is not a picture fill.
+///
+/// Only the id is returned: resolving it needs the rels of the part the `p:bg`
+/// was found in (slide, layout or master), which differ, so the caller does the
+/// lookup. `a:blip` also appears inside shape fills, hence the `in_bg_pr` gate;
+/// the walk stops at `</p:bg>` for the same reason.
+fn parse_bg_blip_rid(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut in_bg = false;
+    let mut in_bg_pr = false;
+    let mut found: Option<String> = None;
+    loop {
+        let ev = match reader.read_event() {
+            Ok(e) => e,
+            Err(_) => break,
+        };
+        match ev {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                match local_name(e.name().as_ref()).as_str() {
+                    "bg" => in_bg = true,
+                    "bgPr" if in_bg => in_bg_pr = true,
+                    "blip" if in_bg_pr && found.is_none() => {
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            if key == "r:embed" || key.ends_with(":embed") {
+                                found = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => match local_name(e.name().as_ref()).as_str() {
+                "bgPr" => in_bg_pr = false,
                 "bg" => break,
                 _ => {}
             },

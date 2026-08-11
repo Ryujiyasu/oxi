@@ -106,6 +106,30 @@ pub struct Slide {
     /// the page as it was before gradients were parsed at all.
     #[serde(default)]
     pub background_gradient: Option<SlideGradient>,
+    /// Slide background picture (`p:bg/p:bgPr/a:blipFill`), inherited from the
+    /// layout / master like the other two. Mutually exclusive with them for the
+    /// same reason: a picture fill has no single colour and no ramp.
+    #[serde(default)]
+    pub background_image: Option<SlideBackgroundImage>,
+}
+
+/// A slide background picture fill.
+///
+/// PowerPoint render-truth (dev corpus, 2026-08): the exported PDF places the
+/// image at exactly the page rect -- `Rect(0, 0, 720, 405)` on d04 / d06 / d16 /
+/// d19 -- with no soft mask, i.e. it is STRETCHED to the full page and fully
+/// opaque. All 22 background fills in the corpus are the same degenerate shape,
+/// `<a:blipFill><a:blip r:embed=".."><a:alphaModFix/></a:blip><a:stretch>
+/// <a:fillRect/></a:stretch></a:blipFill>`: no `a:tile`, no `a:srcRect`, no
+/// `alphaModFix/@amt`, no `a:fillRect` insets, no duotone. Those variants are
+/// therefore NOT modelled -- there is nothing measured to model them from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlideBackgroundImage {
+    /// Raw bytes of the media part (PNG or JPEG in the corpus: 37 / 40).
+    pub data: Vec<u8>,
+    /// Content type guessed from the target extension, as for picture shapes.
+    #[serde(default)]
+    pub content_type: Option<String>,
 }
 
 /// One `a:gs` of a gradient ramp.
