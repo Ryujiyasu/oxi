@@ -9,7 +9,7 @@ use quick_xml::reader::Reader;
 use thiserror::Error;
 
 use oxidocs_common::archive::OoxmlArchive;
-use oxidocs_common::relationships::parse_relationships;
+use oxidocs_common::relationships::{parse_relationships, Relationship};
 use oxidocs_common::xml_utils::{emu_to_pt, get_attr, local_name};
 
 use crate::ir::{
@@ -386,6 +386,41 @@ fn parse_alignment_attr(a: &str) -> SlideAlignment {
     }
 }
 
+/// Follow one relationship of `rel_type` out of `rels` and return the target
+/// path plus the `_rels` path of that target, so the walk can continue.
+fn follow_rel(
+    rels: &HashMap<String, Relationship>,
+    from_rels_path: &str,
+    rel_type: &str,
+) -> Option<(String, String)> {
+    let rel = rels.values().find(|r| r.rel_type.ends_with(rel_type))?;
+    let path = resolve_slide_relative_path(from_rels_path, &rel.target);
+    let cut = path.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let path_rels = format!("{}_rels/{}.rels", &path[..cut], &path[cut..]);
+    Some((path, path_rels))
+}
+
+/// The clrScheme a slide's own `schemeClr` values resolve against: the theme of
+/// the slideMaster its slideLayout points at, reached by relationship
+/// (slide -> layout -> master -> theme).  `None` when any link is missing, so
+/// the caller keeps the deck-level map.
+fn resolve_slide_theme_colors(
+    rels: &HashMap<String, Relationship>,
+    slide_rels_path: &str,
+    archive: &mut OoxmlArchive,
+) -> Option<HashMap<String, String>> {
+    let (_, layout_rels_path) = follow_rel(rels, slide_rels_path, "/slideLayout")?;
+    let layout_rels =
+        parse_relationships(&archive.try_read_part(&layout_rels_path).ok()??).ok()?;
+    let (_, master_rels_path) = follow_rel(&layout_rels, &layout_rels_path, "/slideMaster")?;
+    let master_rels =
+        parse_relationships(&archive.try_read_part(&master_rels_path).ok()??).ok()?;
+    let (theme_path, _) = follow_rel(&master_rels, &master_rels_path, "/theme")?;
+    let theme_xml = archive.try_read_part(&theme_path).ok()??;
+    let (_, _, colors) = parse_theme(&theme_xml).ok()?;
+    Some(colors)
+}
+
 /// Parse a single slide XML into shapes.
 fn parse_slide(
     xml: &str,
@@ -402,6 +437,32 @@ fn parse_slide(
     } else {
         Default::default()
     };
+
+    // A schemeClr on a SLIDE resolves against the clrScheme of the theme that
+    // the slide's master points at -- not the deck-level ppt/theme/theme1.xml.
+    // A deck may ship several theme parts and the master picks one by
+    // relationship: 17 of the 40 dev decks route their slides to theme2.xml, so
+    // every schemeClr on those 365 slides was resolved against a theme the
+    // slide does not use.  d10 slide 6 is the specimen: its <p:bg> asks for
+    // dk1, theme2 defines dk1 = A5BEFD and PowerPoint paints it (164,189,252 at
+    // all four corners of its own PDF export), while theme1 -- the part Oxi
+    // read -- has dk1 = 000000, so the whole page came out black.
+    //   Routing is per SLIDE, not per deck: d05 ships two masters and its slides
+    // all reach slideMaster2 -> theme1.xml, so it is not affected at all.
+    //   The colour MAP (p:clrMap / p:clrMapOvr) is a separate mechanism and is
+    // not involved here: all 886 dev slides carry <a:masterClrMapping/>, and of
+    // their 25160 schemeClr references not one names a mapped slot
+    // (bg1/tx1/bg2/tx2) -- the histogram is dk1/lt1/lt2/dk2/accent1..6/hlink.
+    //   Fonts stay on the deck-level theme: theme1 and the slide's own theme
+    // agree on major/minor latin+ea in all 17 rerouted decks, so there is no
+    // measurement to justify moving them.
+    let slide_theme_colors = if std::env::var("OXI_SLIDETHEME_DISABLE").is_err() {
+        resolve_slide_theme_colors(&rels, slide_rels_path, archive)
+    } else {
+        None
+    };
+    let theme_colors: &HashMap<String, String> =
+        slide_theme_colors.as_ref().unwrap_or(theme_colors);
 
     // Spec #3: build a (ph_type, ph_idx) -> (x,y,w,h) geometry map from the
     // referenced slideLayout's placeholders. A slide placeholder with NO explicit
