@@ -189,6 +189,17 @@ pub struct Shape {
     pub ph_type: Option<String>,
     pub content: ShapeContent,
     pub fill_color: Option<String>,   // hex color for solid fill
+    /// Opacity of `fill_color`, from `<a:alpha val="N"/>` inside the solidFill
+    /// (`N` is a percentage in thousandths, so 62010 = 62.01% opaque). `None`
+    /// means the fill is opaque, which is what an absent `a:alpha` means.
+    ///
+    /// PowerPoint composites this straight source-over on sRGB bytes: its PDF
+    /// carries `/ca .50196 /BM /Normal` in a `/DeviceRGB` transparency group
+    /// for `val="50000"`, and a 10-arm probe over white / red / green backdrops
+    /// (incl. stacked translucent rects) matches `a*src + (1-a)*dst` to within
+    /// 2/255 -- the residual is PowerPoint quantising alpha to 8 bits.
+    #[serde(default)]
+    pub fill_alpha: Option<f32>,
     pub border_color: Option<String>, // hex color for outline
     pub border_width: Option<f32>,    // border width in points
     /// Text-area insets from a:bodyPr (lIns/rIns/tIns/bIns) in points.

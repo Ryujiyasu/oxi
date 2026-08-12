@@ -475,6 +475,7 @@ fn shape_json(sh: &Shape) -> Value {
         "shape_type": sh.shape_type,
         "type": shape_type,
         "fill_color": sh.fill_color,
+        "fill_alpha": sh.fill_alpha,
         "border_color": sh.border_color,
         "border_width": sh.border_width,
         "anchor": sh.anchor,
@@ -726,6 +727,85 @@ unsafe fn alpha_blit(
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
     let ok = AlphaBlend(dst, dx, dy, dw, dh, src_dc, sx0, sy0, sw, sh, bf).as_bool();
+    SelectObject(src_dc, old);
+    let _ = DeleteDC(src_dc);
+    let _ = DeleteObject(hbm);
+    ok
+}
+
+/// `<a:alpha>` on a shape fill is composited unless this is set.
+fn fill_alpha_on() -> bool {
+    std::env::var("OXI_FILLALPHA_DISABLE").is_err()
+}
+
+/// Composite a solid fill at a constant opacity.
+///
+/// Derived from PowerPoint: `<a:alpha val="N"/>` inside a solidFill is a
+/// constant `a = N/100000` composited straight source-over on sRGB bytes,
+/// `out = a*src + (1-a)*dst`. Its PDF says the same thing at the operator
+/// level -- `/BM /Normal` with `/ca` in a `/DeviceRGB` transparency group --
+/// and a 10-arm probe over white / red / green backdrops (stacked translucent
+/// rects included) matches to within 2/255, the residual being PowerPoint
+/// quantising the alpha to 8 bits. `AlphaBlend` with `SourceConstantAlpha` and
+/// no per-pixel alpha is exactly that blend, so the source is a 1x1 solid
+/// stretched over the rect.
+///
+/// Returns false when any GDI step fails.
+#[cfg(windows)]
+unsafe fn alpha_fill(
+    dst: windows::Win32::Graphics::Gdi::HDC,
+    r: &windows::Win32::Foundation::RECT,
+    rgb: (u8, u8, u8),
+    alpha: f32,
+) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let (dw, dh) = (r.right - r.left, r.bottom - r.top);
+    if dw <= 0 || dh <= 0 {
+        return false;
+    }
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: 1,
+            biHeight: -1, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0, // BI_RGB
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+    let hbm = match CreateDIBSection(dst, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+        Ok(b) if !bits.is_null() => b,
+        _ => return false,
+    };
+    {
+        // BGRA. AlphaFormat is 0 below, so the source is taken as opaque and
+        // the alpha byte is ignored -- the opacity is SourceConstantAlpha.
+        let out = std::slice::from_raw_parts_mut(bits as *mut u8, 4);
+        out[0] = rgb.2;
+        out[1] = rgb.1;
+        out[2] = rgb.0;
+        out[3] = 255;
+    }
+    let src_dc = CreateCompatibleDC(dst);
+    if src_dc.0.is_null() {
+        let _ = DeleteObject(hbm);
+        return false;
+    }
+    let old = SelectObject(src_dc, hbm);
+    let bf = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        // PowerPoint quantises the alpha to 8 bits -- its PDF carries
+        // /ca .50196 = round(0.5*255)/255 for val="50000" -- and this rounding
+        // reproduces that.
+        SourceConstantAlpha: (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+        AlphaFormat: 0,
+    };
+    let ok = AlphaBlend(dst, r.left, r.top, dw, dh, src_dc, 0, 0, 1, 1, bf).as_bool();
     SelectObject(src_dc, old);
     let _ = DeleteDC(src_dc);
     let _ = DeleteObject(hbm);
@@ -987,15 +1067,37 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 // Fill
                 if let Some(fill) = &sh.fill_color {
                     if let Some((r, g, b)) = parse_hex_rgb(fill) {
-                        let brush = CreateSolidBrush(COLORREF(colorref(r, g, b)));
+                        // <a:alpha> makes the fill translucent; PowerPoint
+                        // composites it straight source-over on sRGB bytes
+                        // (S-FILLALPHA), which is what AlphaBlend's
+                        // SourceConstantAlpha does. An absent or full alpha
+                        // takes the plain opaque FillRect.
+                        //
+                        // A translucent fill NEVER falls back to the opaque
+                        // brush: painting a 0%-alpha shape solid is the very
+                        // bug this fixes -- d23 carries 15 of them, custGeom
+                        // frames whose only visible ink is a green outline,
+                        // and each was drawn as a black slab over a quarter of
+                        // the page. "Incorrect ink is worse than none."
                         let r2 = RECT {
                             left: x,
                             top: y,
                             right: x + ew,
                             bottom: y + eh,
                         };
-                        FillRect(mem_dc, &r2, brush);
-                        let _ = DeleteObject(brush);
+                        match sh.fill_alpha.filter(|_| fill_alpha_on()) {
+                            Some(a) if a < 1.0 => {
+                                if a > 0.0 {
+                                    alpha_fill(mem_dc, &r2, (r, g, b), a);
+                                }
+                            }
+                            _ => {
+                                let brush =
+                                    CreateSolidBrush(COLORREF(colorref(r, g, b)));
+                                FillRect(mem_dc, &r2, brush);
+                                let _ = DeleteObject(brush);
+                            }
+                        }
                     }
                 }
 

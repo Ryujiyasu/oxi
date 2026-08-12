@@ -618,6 +618,7 @@ fn parse_slide(
     let mut shape_src_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_fill_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_fill_color: Option<String> = None;
+    let mut shape_fill_alpha: Option<f32> = None;
     let mut shape_border_color: Option<String> = None;
     let mut shape_border_width: Option<f32> = None;
     // Placeholder identity (p:ph type/idx from nvPr) and whether spPr had an
@@ -644,6 +645,9 @@ fn parse_slide(
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
     let mut in_ln = false;    // inside <a:ln> (line/border properties)
+    // Inside <a:solidFill>. `a:alpha` also appears under a gradient stop and a
+    // line colour, and only a solid shape fill is composited (S-FILLALPHA).
+    let mut in_solid_fill = false;
 
     // Text-area insets (a:bodyPr lIns/rIns/tIns/bIns, EMU -> pt).
     // Placeholder defaults: 7.2 / 7.2 / 3.6 / 3.6 (Spec #8 measurement).
@@ -749,6 +753,7 @@ fn parse_slide(
                         shape_src_rect = None;
                         shape_fill_rect = None;
                         shape_fill_color = None;
+                        shape_fill_alpha = None;
                         shape_border_color = None;
                         shape_border_width = None;
                         shape_ph_type = None;
@@ -778,6 +783,7 @@ fn parse_slide(
                         shape_is_image = false;
                         shape_image_r_id = None;
                         shape_fill_color = None;
+                        shape_fill_alpha = None;
                         shape_border_color = None;
                         shape_border_width = None;
                         // Table state reset
@@ -1079,7 +1085,8 @@ fn parse_slide(
                             }
                         }
                     }
-                    "solidFill" => {} // container — context determines where color goes
+                    // container — context determines where color goes
+                    "solidFill" => in_solid_fill = true,
                     "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
                             if in_bg_pr {
@@ -1123,6 +1130,16 @@ fn parse_slide(
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    // <a:alpha> only ever arrives self-closing (the schema gives
+                    // it nothing but @val). Its parent colour has already been
+                    // routed to shape_fill_color under the same guard.
+                    "alpha" if in_solid_fill && in_sp_pr && !in_ln => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(p) = v.parse::<f32>() {
+                                shape_fill_alpha = Some((p / 100000.0).clamp(0.0, 1.0));
+                            }
+                        }
+                    }
                     "gridCol" if in_table => {
                         // a:gridCol is typically self-closing.
                         if let Some(w) = get_attr(&e, "w") {
@@ -1437,6 +1454,9 @@ fn parse_slide(
                     "ln" if in_ln => {
                         in_ln = false;
                     }
+                    "solidFill" if in_solid_fill => {
+                        in_solid_fill = false;
+                    }
                     "xfrm" if in_grp_xfrm => {
                         in_grp_xfrm = false;
                         // Compose with the enclosing group's transform (this
@@ -1561,6 +1581,7 @@ fn parse_slide(
                             ph_type: shape_ph_type.take(),
                             content,
                             fill_color: shape_fill_color.take(),
+                            fill_alpha: shape_fill_alpha.take(),
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
                             l_ins: shape_l_ins,
@@ -1677,6 +1698,7 @@ fn parse_slide(
                             ph_type: None,
                             content,
                             fill_color: shape_fill_color.take(),
+                            fill_alpha: shape_fill_alpha.take(),
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
                             l_ins: shape_l_ins,
@@ -2068,11 +2090,9 @@ fn media_has_alpha(data: &[u8]) -> bool {
 /// FAITHFULLY. That is what bounds the subset, and the bounds come from the IR
 /// and the renderer, not from taste:
 ///
-///   * `fill_color` is a single OPAQUE hex -- no gradient, no alpha
+///   * `fill_color` is a single hex -- no gradient, no colour transform
 ///   * the generic fill/border paint is AXIS-ALIGNED -- rot/flip are ignored
 ///   * there are no prstGeom arms, so any preset would be drawn as a RECTANGLE
-///   * the blit cannot express SHAPE-level translucency or recolouring
-///     (per-pixel alpha in the MEDIA is composited, since c4e92550)
 ///
 /// So the subset is `p:pic` with a plain opaque `r:embed`, and `p:sp` that is a
 /// plain-solidFill `rect`. Everything else is left out rather than painted
@@ -2085,6 +2105,15 @@ fn media_has_alpha(data: &[u8]) -> bool {
 /// most of the inherited pictures, the full-page ones among them. The renderer
 /// composites per-pixel alpha now, so transparency is no longer a reason to
 /// drop a picture. `OXI_LMPICALPHA_DISABLE` restores the old rejection.
+///
+/// A constant `a:alpha` on the shape's own fill is no longer a reason to drop
+/// it either: the renderer composites it (S-FILLALPHA), so the two full-page
+/// scrims -- d08 layout3 `000000` at 62.01%, d16 layout10 `CFD8DC` at 49.23% --
+/// are painted rather than skipped. `OXI_FILLALPHA_DISABLE` restores the old
+/// rejection, so that arm still drops them rather than painting them opaque.
+/// An alpha ELSEWHERE (a text colour) and the colour TRANSFORMS beside it
+/// (lumMod/lumOff/tint/shade/satMod/hueMod) are still rejected, since a flat
+/// hex cannot express them.
 ///
 /// `a:alphaModFix` is judged by its `@amt`, not its presence: the attribute
 /// defaults to 100000 (fully opaque), and the bare `<a:alphaModFix/>` form --
@@ -2121,6 +2150,7 @@ fn parse_inherited_shapes(
     let mut have_ext = false;
     let mut prst: Option<String> = None;
     let mut fill: Option<String> = None;
+    let mut fill_alpha: Option<f32> = None;
     let mut embed: Option<String> = None;
     let mut src_rect: Option<(f32, f32, f32, f32)> = None;
     let mut fill_rect: Option<(f32, f32, f32, f32)> = None;
@@ -2207,6 +2237,11 @@ fn parse_inherited_shapes(
                                         } else {
                                             fill.clone()
                                         },
+                                        fill_alpha: if kind == Some("pic") {
+                                            None
+                                        } else {
+                                            fill_alpha
+                                        },
                                         border_color: bc,
                                         border_width: bw,
                                         l_ins: default_l_ins(),
@@ -2277,6 +2312,7 @@ fn parse_inherited_shapes(
                     have_ext = false;
                     prst = None;
                     fill = None;
+                    fill_alpha = None;
                     embed = None;
                     src_rect = None;
                     fill_rect = None;
@@ -2369,9 +2405,23 @@ fn parse_inherited_shapes(
                 }
             }
             "noFill" if ln_depth > 0 => ln_no_fill = true,
-            // Translucency and colour transforms cannot be expressed by a flat
-            // fill_color, so a shape carrying one is not emitted.
-            "alpha" | "lumMod" | "lumOff" | "tint" | "shade" | "satMod" | "hueMod"
+            // A constant fill alpha IS reproducible now (S-FILLALPHA), so it is
+            // captured rather than rejected -- but only on the shape's OWN
+            // solidFill, and only while the renderer will composite it. An
+            // alpha anywhere else (a text colour, say) still has no
+            // representation, so the shape is still dropped, and so is one
+            // whose @val does not parse.
+            "alpha" if in_solid && ln_depth == 0 => {
+                match get_attr(e, "val")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .filter(|_| {
+                        in_sp_pr && std::env::var("OXI_FILLALPHA_DISABLE").is_err()
+                    }) {
+                    Some(p) => fill_alpha = Some((p / 100000.0).clamp(0.0, 1.0)),
+                    None => ok = false,
+                }
+            }
+            "lumMod" | "lumOff" | "tint" | "shade" | "satMod" | "hueMod"
                 if in_solid && ln_depth == 0 =>
             {
                 ok = false;
