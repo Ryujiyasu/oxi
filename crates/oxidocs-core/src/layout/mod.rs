@@ -15759,7 +15759,53 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // shift on p7 (two of six pre-figure empties spilling onto the page).
             // Without the clamp the residual is +0.013pt, inside S967's half-twip
             // tolerance, and the paragraph stays where Word puts it.
-            let break_threshold = if s736_empty_tol {
+            // S1113 (2026-08-13, DERIVED, opt-in OXI_S1113=1): S736's "keep
+            // tolerance" is not a constant. The page-bottom fit test for an
+            // EMPTY paragraph runs on the line height BEFORE the lineRule=auto
+            // multiplier is applied, so exactly the leading that multiplier
+            // added — and nothing else — may hang past the content bottom.
+            // DERIVED with _pb_emptytail_gen.py + _pb_emptytol_gen.py (Word COM;
+            // a shim paragraph of EXACT line height at the top of each arm walks
+            // the whole stack across the content bottom in 0.25pt steps):
+            //   * FIVE successor variants (nothing follows / 1-line / 4-line /
+            //     4-line with widowControl, whose successor always moves / a
+            //     second empty) flip at the SAME overflow ⇒ the successor plays
+            //     no part. That falsifies group-movement, page-terminal and
+            //     ink-vs-empty, which the four specimens had suggested.
+            //   * 14 combos, monotone throughout, every flip window containing
+            //     lh − natural and nothing else:
+            //       Calibri 11 x1.000  (-0.23, 0.02] ∋ 0.00
+            //       Calibri 11 x1.079  ( 0.98, 1.23] ∋ 1.06
+            //       Calibri 11 x1.150  ( 2.01, 2.26] ∋ 2.01
+            //       Calibri 11 x1.500  ( 6.51, 6.76] ∋ 6.71
+            //       Calibri 22 x1.000  (-0.23, 0.02] ∋ 0.00
+            //       Calibri 22 x1.150  ( 4.02, 4.27] ∋ 4.03
+            //       Arial   12 x1.150  ( 2.01, 2.26] ∋ 2.07
+            //       TNR     12 x1.500  ( 6.77, 7.02] ∋ 6.90
+            //     A constant is refuted by 6 of the 8 auto arms; k×size by the
+            //     x1.000 arms and by Times.
+            //   * atLeast 18pt, exact 18pt and exact 10pt all flip at
+            //     (0.00, 0.25] = the FULL box, no leniency at all — the
+            //     multiplier is the only source of hangable leading.
+            //   * the empty's own w:after is NOT part of the test (after=200
+            //     leaves the flip point untouched).
+            // Scope: no typed docGrid. The 2.5 constant was fitted to
+            // probexempty, whose grid is a different mechanism — its recorded
+            // flip (1.8, 2.1] brackets the S739 centered box (pitch+natural)/2
+            // = 1.875, not 2.5 — so the JP/grid side keeps the old path and is
+            // byte-identical here.
+            let s1113_pre_mult = s736_empty_tol
+                && std::env::var("OXI_S1113").ok().as_deref() == Some("1")
+                && (grid_pitch.is_none() || page.doc_grid_no_type);
+            let break_threshold = if s1113_pre_mult {
+                // auto carries a factor, atLeast/exact carry a length: only the
+                // former inflates the box, so only the former is divided out.
+                let factor = match para.style.line_spacing_rule.as_deref() {
+                    None | Some("auto") => para.style.line_spacing.unwrap_or(1.0).max(1.0),
+                    _ => 1.0,
+                };
+                (effective_lh / factor).max(0.0)
+            } else if s736_empty_tol {
                 if std::env::var("OXI_S1041_DISABLE").is_err() {
                     (effective_lh - s736_tol).max(0.0)
                 } else {
