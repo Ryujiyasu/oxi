@@ -2838,6 +2838,37 @@ impl LayoutEngine {
         // Word's own advance measures 12.0.  Only the LINE HEIGHT moves.
         // Doc-level Latin gate like S801/S888/S951/S966 → JP byte-identical.
         let s1103 = !self.doc_body_has_real_cjk && std::env::var("OXI_S1103_DISABLE").is_err();
+        // S1115 (2026-08-14, SHIPPED default-ON, opt-out OXI_S1115_DISABLE):
+        // the six rules above are six
+        // carve-outs from ONE class — East Asian Width = Ambiguous.  Each was
+        // derived from a single document and added a codepoint or a range;
+        // U+25A1 WHITE SQUARE would have been the seventh (reports__0020157f's
+        // «□Quarter 1» rows), so the class is derived instead of extended.
+        // `kinsoku::is_cjk` claims a symbol region that is NOT Wide:
+        //     2010-2044 General Punctuation   2190-21FF Arrows
+        //     2200-22FF Math Operators        2460-24FF Enclosed Alphanumerics
+        //     2500-257F Box Drawing           2580-259F Block Elements
+        //     25A0-25FF Geometric Shapes      2600-26FF Misc Symbols
+        //     2700-27BF Dingbats
+        // while the genuinely WIDE blocks it also claims (3000-303F, kana,
+        // 3200-33FF, FF00-FFEF, the ideographs) stay CJK.  S801/S830/S888/S951/
+        // S966/S1103 are all inside the first two ranges, so this subsumes them.
+        // ★Word truth (_pb_symline_gen.py, 18pt symbol + 10pt text, Latin doc):
+        //   Arial   U+25A0/25A1/25CB = 20.719 = the Arial line, like U+0041
+        //   Calibri U+25A1          = 22.125 = the Calibri line
+        // ★The mechanism is confirmed by the probe's `theme` variant, which
+        // differs from the plain one ONLY in taking its fonts from the theme
+        // (with an empty `<a:ea typeface=""/>`): there, EXACTLY the codepoints
+        // missing from the list above move (20.698 -> 11.499) and every member
+        // already covered (U+2022, U+2190, U+221A) does not budge.
+        // Doc-level Latin gate like S801..S1103, so JP is byte-identical.
+        // ★GATES: EN frozen sets 212 -> 213 with reports__0020157f 0.8065 ->
+        // 1.0000 the ONLY doc that moves in 248 (0 PASS->FAIL); JP corpus
+        // 92 -> 92 with 0 docs changed; SSIM sentinel 238 bases / 0 changed
+        // bytes; lib tests 152/0.  That closes the last PASS->FAIL of the
+        // 2026-08-13 {S1112,S1091,S1074,S1113,S1114} bundle.
+        let s1115 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1115_DISABLE").is_err();
         let is_q = move |c: char| {
             matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                 || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
@@ -2846,6 +2877,10 @@ impl LayoutEngine {
                 || (s951 && matches!(c, '\u{2190}'..='\u{22FF}'))
                 || (s966 && c == '\u{2022}')
                 || (s1103 && c == '\u{2015}')
+                || (s1115
+                    && matches!(c as u32,
+                        0x2010..=0x2044 | 0x2190..=0x22FF | 0x2460..=0x24FF
+                            | 0x2500..=0x27BF))
         };
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
