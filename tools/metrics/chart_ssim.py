@@ -55,6 +55,10 @@ DOCS = {
     "chart_radar": r"pipeline_data\pptx_probes\chart_radar\chart_radar.pdf",
     "chart_radar_geo": r"pipeline_data\pptx_probes\chart_radar_geo\chart_radar_geo.pdf",
     "chart_stock": r"pipeline_data\pptx_probes\chart_stock\chart_stock.pdf",
+    # preset geometry (a:prstGeom), not charts
+    "prst_ellipse": r"pipeline_data\pptx_probes\prst_ellipse\prst_ellipse.pdf",
+    "prst_aspect": r"pipeline_data\pptx_probes\prst_aspect\prst_aspect.pdf",
+    "prst_adj": r"pipeline_data\pptx_probes\prst_adj\prst_adj.pdf",
 }
 DPI = 150
 
