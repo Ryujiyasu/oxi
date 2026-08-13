@@ -32,8 +32,16 @@ DW=os.environ.get("OXI_DWRITE_EXE") or os.path.join(REPO,"tools","oxi-dwrite-ren
 DOCS=os.path.join(REPO,"tools","golden-test","documents","docx")
 ARG=sys.argv[1] if len(sys.argv)>1 else "OXI_S609_DISABLE"
 # "VAR" -> A sets VAR=1, B unsets. "VAR=VAL" -> A sets VAR=VAL, B unsets.
-if "=" in ARG: ENVVAR,AVAL=ARG.split("=",1)
-else: ENVVAR,AVAL=ARG,"1"
+# COMMA-SEPARATED -> A sets them all, B unsets them all; that is how a bundle
+# whose members only work together has to be gated (single-var callers are
+# unaffected: a lone name has no comma).
+AENV=[]
+for part in ARG.split(","):
+    if not part: continue
+    if "=" in part: k,v=part.split("=",1)
+    else: k,v=part,"1"
+    AENV.append((k,v))
+ENVVAR,AVAL=AENV[0]
 filt=sys.argv[2:]
 def ssim2(wpng,opng):
     w=_load_rgb(wpng); o=_resize_to_match(_load_rgb(opng),w)
@@ -47,8 +55,9 @@ def find(base):
     return os.path.abspath(str(c[0])) if c else None
 def render(docx,a,outdir):
     env=dict(os.environ)
-    if a: env[ENVVAR]=AVAL
-    else: env.pop(ENVVAR,None)
+    for k,v in AENV:
+        if a: env[k]=v
+        else: env.pop(k,None)
     Path(outdir).mkdir(parents=True,exist_ok=True)
     subprocess.run([DW,docx,str(Path(outdir)/"p"),str(RENDER_DPI)],capture_output=True,timeout=300,env=env)
     ps=[];i=1
@@ -65,7 +74,7 @@ with tempfile.TemporaryDirectory() as tmp:
         pa=render(d,True,ad); pb=render(d,False,bd)
         diff=(len(pa)!=len(pb)) or any(open(x,"rb").read()!=open(y,"rb").read() for x,y in zip(pa,pb))
         if diff: changed.append((base,ad,bd,len(pa),len(pb)))
-    print(f"A={ENVVAR}={AVAL} vs B=default | checked {checked}; {len(changed)} changed bytes")
+    print(f"A={','.join(k+'='+v for k,v in AENV)} vs B=default | checked {checked}; {len(changed)} changed bytes")
     tot=0.0; wins=losses=0; details=[]
     for base,ad,bd,na,nb in changed:
         wdir=Path(WORD_PNG_DIR)/base; i=1; net=0.0; npg=0
