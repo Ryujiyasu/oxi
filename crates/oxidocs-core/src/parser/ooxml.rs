@@ -3223,7 +3223,8 @@ fn parse_paragraph(
     // for a canvas / inline wps textbox) must keep the BLOCK path: it exists to
     // reserve a whole line-block, and the textbox itself renders as an overlay.
     // probeqwps regressed 1.0 → 0.925 when the placeholder was routed inline.
-    // S1114 (2026-08-13, opt-in OXI_S1114=1): a `<w:br/>` is a LINE BREAK, not
+    // S1114 (2026-08-13, SHIPPED default-ON, opt-out OXI_S1114_DISABLE): a
+    // `<w:br/>` is a LINE BREAK, not
     // visible text, and a paragraph written
     //     <w:r><w:br/></w:r><w:r><w:drawing>…wp:inline…</w:drawing></w:r>
     // satisfied NEITHER route out of here: S537's `image_only` wants every run's
@@ -3249,7 +3250,7 @@ fn parse_paragraph(
     // arms measure 32.855 where Word says 26.812), and routing THAT inline makes
     // it worse (13.428) because the run's text is consumed by the break — so the
     // same-run shapes are left exactly as they were and recorded as a residual.
-    let s1114_break_host = std::env::var("OXI_S1114").ok().as_deref() == Some("1")
+    let s1114_break_host = std::env::var("OXI_S1114_DISABLE").is_err()
         && runs.iter().any(|run| run.text.contains('\n'))
         && inline_img_runs
             .iter()

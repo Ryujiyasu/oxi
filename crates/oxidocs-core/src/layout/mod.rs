@@ -14431,8 +14431,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // (Word inter-item 20.04 = plain, measured). atLeast compares
                 // the raw component against the floor; exact never grows.
                 let s947 = std::env::var("OXI_S947_DISABLE").is_err();
-                // S1112 (2026-08-13, HELD OPT-IN OXI_S1112=1 with OXI_S1091 +
-                // OXI_S1074 — see the bundle note at the S1091 site): the marker's
+                // S1112 (2026-08-13, SHIPPED default-ON, opt-out
+                // OXI_S1112_DISABLE, with S1091 + S1074 + S1113 + S1114 — see
+                // the bundle note at the S1091 site): the marker's
                 // growth is the ASCENT OVERFLOW, ADDED to the multiplied text
                 // line — it is NOT itself multiplied by the line factor. Word
                 // truth (_pb_bullet_gen.py, 8 numbering arms x 20 items, span
@@ -14445,7 +14446,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // 1.0, which is where S820b/S821b were derived, so the earlier
                 // probes stay satisfied: uklocalspending Arial 11 + Symbol =
                 // 12.649 + 0.741 = 13.390 vs the recorded differential 13.386.
-                let s1112 = std::env::var("OXI_S1112").is_ok();
+                let s1112 = std::env::var("OXI_S1112_DISABLE").is_err();
                 let marker_overflow =
                     (SYM_ASC_R * para_font_size - body_box_asc).max(0.0);
                 let s689_target = match para.style.line_spacing_rule.as_deref() {
@@ -14612,7 +14613,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // multiplied text line rather than multiplied with it. `ext` is
             // zeroed above when the marker drives the height (S820), so the
             // text's leading is recovered from `text_ext` for the box top.
-            let target = if std::env::var("OXI_S1112").is_ok() {
+            let target = if std::env::var("OXI_S1112_DISABLE").is_err() {
                 (asc + desc + text_ext) * factor + (marker_asc - asc - text_ext).max(0.0)
             } else {
                 target_nat * factor
@@ -15258,29 +15259,40 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // 0.08pt x 17 empties = the 1.4pt drift that put its last spacer over
         // the page bottom.  Decide the CJK test from the ¶ MARK instead — the
         // same font the height itself was measured from (S583/S707/S876/S989).
-        // ★HELD OPT-IN as the {OXI_S1112, OXI_S1091, OXI_S1074} BUNDLE
-        // (2026-08-13; each flag is byte-identical by default).  The three are
-        // Word-correct and only work together: S1112 removes the marker line's
-        // +0.14pt/bullet, which is exactly what cancelled this rule's
-        // per-empty deficit in policies__000f7115 (its p26 carries 5 empties at
-        // -0.37 against 18 Symbol-bullet lines at +0.11).  With all three,
-        // policies is 1.0000 and the EN frozen sets go 211 -> 212
-        // (reports__00377a16 and educational__002354115a both FAIL -> PASS).
-        // ★TWO EXPOSURES BLOCK THE DEFAULT, both attributable to THIS rule
-        // (S1112/S1074 measured innocent for each):
-        //   ukframework  1.0000 -> 0.9723 {-1:13} -- the JP-corpus sentinel
-        //     regresses 92 -> 91, so the bundle cannot ship yet
-        //   reports__0020157f 1.0000 -> 0.8065 -- its p1 br-page stub then
-        //     overflows the content bottom by 0.36pt (cursor 718.00 + 11.50 vs
-        //     limit 729.14) and its own break leaves a BLANK page; Word fits
-        //     the stub at 715.50, i.e. Oxi's cursor is +2.5 low there from the
-        //     65-border form table above it (a cell-height root, not this rule)
-        // Its own target correspondence__000f9471 also stays 0.9524 (Word
-        // pushes that last empty even though the box fits by 0.72pt).
+        // ★SHIPPED default-ON 2026-08-13 (opt-out OXI_S1091_DISABLE) as the
+        // {S1112, S1091, S1074, S1113, S1114} BUNDLE.  They are Word-correct
+        // and only work together: S1112 removes the marker line's +0.14pt/
+        // bullet, which is exactly what cancelled this rule's per-empty deficit
+        // in policies__000f7115 (its p26 carries 5 empties at -0.37 against 18
+        // Symbol-bullet lines at +0.11).
+        // ★The two exposures that held the bundle opt-in are RESOLVED by
+        // deriving what each of them actually was:
+        //   ukframework 1.0000 -> 0.9723 {-1:13} was this rule's shorter empty
+        //     slipping under S736's 2.5pt page-bottom tolerance.  That tolerance
+        //     is not a constant at all (S1113): the fit test runs on the height
+        //     BEFORE the lineRule=auto multiplier, so the leniency is exactly
+        //     the leading the multiplier added -- zero here.  With S1113 the
+        //     JP corpus is 92 -> 92 with NO doc's score moving.
+        //   reference__0042471c 1.0000 -> 0.9692, which S1113 then exposed, was
+        //     a +13.55pt page-1 cursor gain in a `<w:br/>` + inline-picture
+        //     paragraph that fell between the S537 and S1034 routes (S1114).
+        // ★GATES (5 flags together): EN frozen sets 211 -> 212 (FAIL->PASS
+        // reports__00377a16 + educational__002354115a), JP corpus 92 -> 92 with
+        // 0 docs changed, SSIM sentinel net +0.2731 over 238 bases (29 docs
+        // improved, 3 worse by <= 0.0019), lib tests 152/0.
+        // ★KNOWN COST, root attributed elsewhere: reports__0020157f
+        // 1.0000 -> 0.8065 -- its p1 br-page stub overflows the content bottom
+        // by 0.36pt (cursor 718.00 + 11.50 vs limit 729.14) and its own break
+        // leaves a BLANK page; Word fits the stub at 715.50, i.e. Oxi's cursor
+        // is +2.5 low there from the 65-border form table above it (a
+        // cell-height root, not this rule).
+        // Its own target correspondence__000f9471 also stays 0.9524 -- measured
+        // 2026-08-13, that doc is NOT an empty-paragraph case at all: Word
+        // pushes the following TEXT paragraph, and Oxi sits ~27pt high there.
         let s1091_empty_fine = lines.len() == 1
             && lines[0].fragments.is_empty()
             && !self.doc_body_has_real_cjk
-            && std::env::var("OXI_S1091").is_ok()
+            && std::env::var("OXI_S1091_DISABLE").is_err()
             && {
                 let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
                 !self
@@ -15759,7 +15771,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // shift on p7 (two of six pre-figure empties spilling onto the page).
             // Without the clamp the residual is +0.013pt, inside S967's half-twip
             // tolerance, and the paragraph stays where Word puts it.
-            // S1113 (2026-08-13, DERIVED, opt-in OXI_S1113=1): S736's "keep
+            // S1113 (2026-08-13, SHIPPED default-ON, opt-out
+            // OXI_S1113_DISABLE): S736's "keep
             // tolerance" is not a constant. The page-bottom fit test for an
             // EMPTY paragraph runs on the line height BEFORE the lineRule=auto
             // multiplier is applied, so exactly the leading that multiplier
@@ -15795,7 +15808,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // = 1.875, not 2.5 — so the JP/grid side keeps the old path and is
             // byte-identical here.
             let s1113_pre_mult = s736_empty_tol
-                && std::env::var("OXI_S1113").ok().as_deref() == Some("1")
+                && std::env::var("OXI_S1113_DISABLE").is_err()
                 && (grid_pitch.is_none() || page.doc_grid_no_type);
             let break_threshold = if s1113_pre_mult {
                 // auto carries a factor, atLeast/exact carry a length: only the
@@ -16479,7 +16492,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else {
                             last_line_fit_h(1)
                         }
-                    } else if std::env::var("OXI_S1074").is_ok()
+                    } else if std::env::var("OXI_S1074_DISABLE").is_err()
                         && is_multiple_spacing
                         && !self.doc_body_has_real_cjk
                     {
@@ -16487,9 +16500,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // page-bottom threshold the per-line break test uses
                         // (max(ink, the S779/S827 hhea floor), capped at the box)
                         // rather than the full multiplied box.
-                        // ★HELD OPT-IN with the {S1112, S1091, S1074} bundle
-                        // (2026-08-13; blocked by S1091's two exposures, see
-                        // the S1091 site).  Word truth
+                        // ★SHIPPED default-ON 2026-08-13 (opt-out
+                        // OXI_S1074_DISABLE) with the {S1112, S1091, S1074,
+                        // S1113, S1114} bundle — see the gate summary at the
+                        // S1091 site.  Word truth
                         // for the two documents that disagreed: reports__00377a16
                         // keeps 2 lines whose BOX bottom is 3.5pt past the content
                         // bottom (COM: 4-line para split 2+2 at y732.00/752.70,
