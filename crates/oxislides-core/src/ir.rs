@@ -182,6 +182,12 @@ pub struct Shape {
     /// PresentationML shape type (a:prstGeom/@prst e.g. "rect", "ellipse", "roundRect", "chevron").
     /// None for picture / graphicFrame / plain textbox without a preset geometry.
     pub shape_type: Option<String>,
+    /// Explicit preset-geometry adjustment values from
+    /// `a:prstGeom/a:avLst/a:gd` (normally on the 0..100000 DrawingML scale).
+    /// Preset defaults are intentionally not materialized here; renderers apply
+    /// the default for the selected `shape_type` when an entry is absent.
+    #[serde(default)]
+    pub adjustments: std::collections::HashMap<String, f32>,
     /// Placeholder type (p:nvPr/p:ph/@type, "title" / "body" / "subTitle" / "obj"...).
     /// None for a plain (non-placeholder) shape. Title placeholders use the theme
     /// MAJOR font; everything else (incl. body placeholders) uses the MINOR font.

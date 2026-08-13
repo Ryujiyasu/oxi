@@ -473,6 +473,7 @@ fn shape_json(sh: &Shape) -> Value {
         "h": sh.height,
         "rotation": sh.rotation,
         "shape_type": sh.shape_type,
+        "adjustments": sh.adjustments,
         "type": shape_type,
         "fill_color": sh.fill_color,
         "fill_alpha": sh.fill_alpha,
@@ -502,6 +503,112 @@ fn parse_hex_rgb(s: &str) -> Option<(u8, u8, u8)> {
 
 fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
+
+/// Draw the highest-frequency non-rectangular DrawingML presets as their real
+/// geometry. Coordinates are built in the shape's local box, then flipped and
+/// rotated about its centre before conversion to device pixels.
+#[cfg(windows)]
+unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, scale: f64) -> bool {
+    use windows::Win32::Foundation::{COLORREF, POINT};
+    use windows::Win32::Graphics::Gdi::*;
+
+    let prst = match sh.shape_type.as_deref() {
+        Some(p @ ("ellipse" | "roundRect" | "homePlate" | "teardrop")) => p,
+        _ => return false,
+    };
+    // A translucent fill is composited by the caller's AlphaBlend path, which
+    // this solid-brush path cannot reproduce along a bezier. Decline the shape
+    // so it keeps the (rectangular) alpha-correct rendering: an opaque ellipse
+    // where a 0%-alpha one belongs is the "incorrect ink is worse than none"
+    // slab bug, and correct geometry does not buy back a wrong opacity.
+    if sh.fill_color.is_some()
+        && sh
+            .fill_alpha
+            .filter(|_| fill_alpha_on())
+            .is_some_and(|a| a < 1.0)
+    {
+        return false;
+    }
+    let w = sh.width.max(0.0);
+    let h = sh.height.max(0.0);
+    if w == 0.0 || h == 0.0 { return true; }
+
+    let map = |mut lx: f32, mut ly: f32| -> POINT {
+        if sh.flip_h { lx = w - lx; }
+        if sh.flip_v { ly = h - ly; }
+        let dx = lx - w / 2.0;
+        let dy = ly - h / 2.0;
+        let (sn, cs) = sh.rotation.to_radians().sin_cos();
+        let px = sh.x + w / 2.0 + dx * cs - dy * sn;
+        let py = sh.y + h / 2.0 + dx * sn + dy * cs;
+        POINT { x: (px as f64 * scale).round() as i32, y: (py as f64 * scale).round() as i32 }
+    };
+    let line = |p: POINT| { let _ = LineTo(dc, p.x, p.y); };
+    let bezier = |c1: POINT, c2: POINT, end: POINT| { let _ = PolyBezierTo(dc, &[c1, c2, end]); };
+
+    let fill_brush = sh.fill_color.as_deref().and_then(parse_hex_rgb)
+        .map(|c| CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2))));
+    let old_brush = if let Some(brush) = fill_brush { SelectObject(dc, brush) }
+        else { SelectObject(dc, GetStockObject(NULL_BRUSH)) };
+    let border_w = sh.border_width.unwrap_or(0.0);
+    let border_pen = if border_w > 0.0 {
+        let c = sh.border_color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
+        Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
+            COLORREF(colorref(c.0, c.1, c.2))))
+    } else { None };
+    let old_pen = if let Some(pen) = border_pen { SelectObject(dc, pen) }
+        else { SelectObject(dc, GetStockObject(NULL_PEN)) };
+
+    let _ = BeginPath(dc);
+    const K: f32 = 0.552_284_8;
+    match prst {
+        "ellipse" => {
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let p = map(rx, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            bezier(map(rx + K * rx, 0.0), map(w, ry - K * ry), map(w, ry));
+            bezier(map(w, ry + K * ry), map(rx + K * rx, h), map(rx, h));
+            bezier(map(rx - K * rx, h), map(0.0, ry + K * ry), map(0.0, ry));
+            bezier(map(0.0, ry - K * ry), map(rx - K * rx, 0.0), map(rx, 0.0));
+        }
+        "roundRect" => {
+            let adj = sh.adjustments.get("adj").copied().unwrap_or(16_667.0);
+            let r = (w.min(h) * (adj / 100_000.0)).clamp(0.0, w.min(h) / 2.0);
+            let p = map(r, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(w - r, 0.0));
+            bezier(map(w - r + K * r, 0.0), map(w, r - K * r), map(w, r));
+            line(map(w, h - r));
+            bezier(map(w, h - r + K * r), map(w - r + K * r, h), map(w - r, h));
+            line(map(r, h));
+            bezier(map(r - K * r, h), map(0.0, h - r + K * r), map(0.0, h - r));
+            line(map(0.0, r));
+            bezier(map(0.0, r - K * r), map(r - K * r, 0.0), map(r, 0.0));
+        }
+        "homePlate" => {
+            let adj = sh.adjustments.get("adj").copied().unwrap_or(50_000.0);
+            let d = (w.min(h) * (adj / 100_000.0)).clamp(0.0, w);
+            let p = map(0.0, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(w - d, 0.0)); line(map(w, h / 2.0));
+            line(map(w - d, h)); line(map(0.0, h));
+        }
+        "teardrop" => {
+            // Default adj=100000: an ellipse whose upper-right quadrant is
+            // pulled to the box corner. This is every corpus override too.
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let p = map(0.0, ry); let _ = MoveToEx(dc, p.x, p.y, None);
+            bezier(map(0.0, ry - K * ry), map(rx - K * rx, 0.0), map(rx, 0.0));
+            bezier(map(rx + w / 6.0, 0.0), map(rx + w / 3.0, 0.0), map(w, 0.0));
+            bezier(map(w, h / 6.0), map(w, h / 3.0), map(w, ry));
+            bezier(map(w, ry + K * ry), map(rx + K * rx, h), map(rx, h));
+            bezier(map(rx - K * rx, h), map(0.0, ry + K * ry), map(0.0, ry));
+        }
+        _ => unreachable!(),
+    }
+    let _ = CloseFigure(dc); let _ = EndPath(dc); let _ = StrokeAndFillPath(dc);
+    SelectObject(dc, old_pen); SelectObject(dc, old_brush);
+    if let Some(pen) = border_pen { let _ = DeleteObject(pen); }
+    if let Some(brush) = fill_brush { let _ = DeleteObject(brush); }
+    true
 }
 
 fn srgb_to_linear(c: f64) -> f64 {
@@ -1064,38 +1171,46 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                     continue;
                 }
 
-                // Fill
-                if let Some(fill) = &sh.fill_color {
-                    if let Some((r, g, b)) = parse_hex_rgb(fill) {
-                        // <a:alpha> makes the fill translucent; PowerPoint
-                        // composites it straight source-over on sRGB bytes
-                        // (S-FILLALPHA), which is what AlphaBlend's
-                        // SourceConstantAlpha does. An absent or full alpha
-                        // takes the plain opaque FillRect.
-                        //
-                        // A translucent fill NEVER falls back to the opaque
-                        // brush: painting a 0%-alpha shape solid is the very
-                        // bug this fixes -- d23 carries 15 of them, custGeom
-                        // frames whose only visible ink is a green outline,
-                        // and each was drawn as a black slab over a quarter of
-                        // the page. "Incorrect ink is worse than none."
-                        let r2 = RECT {
-                            left: x,
-                            top: y,
-                            right: x + ew,
-                            bottom: y + eh,
-                        };
-                        match sh.fill_alpha.filter(|_| fill_alpha_on()) {
-                            Some(a) if a < 1.0 => {
-                                if a > 0.0 {
-                                    alpha_fill(mem_dc, &r2, (r, g, b), a);
+                // DrawingML preset geometry. Unsupported presets retain the
+                // legacy rectangular fallback below.
+                let drew_preset = matches!(&sh.content, ShapeContent::AutoShape { .. })
+                    && draw_preset_shape_gdi(mem_dc, sh, scale);
+
+                // Fill. A preset path fills itself, so this rectangular
+                // fallback only runs for the shapes it declined.
+                if !drew_preset {
+                    if let Some(fill) = &sh.fill_color {
+                        if let Some((r, g, b)) = parse_hex_rgb(fill) {
+                            // <a:alpha> makes the fill translucent; PowerPoint
+                            // composites it straight source-over on sRGB bytes
+                            // (S-FILLALPHA), which is what AlphaBlend's
+                            // SourceConstantAlpha does. An absent or full alpha
+                            // takes the plain opaque FillRect.
+                            //
+                            // A translucent fill NEVER falls back to the opaque
+                            // brush: painting a 0%-alpha shape solid is the very
+                            // bug this fixes -- d23 carries 15 of them, custGeom
+                            // frames whose only visible ink is a green outline,
+                            // and each was drawn as a black slab over a quarter
+                            // of the page. "Incorrect ink is worse than none."
+                            let r2 = RECT {
+                                left: x,
+                                top: y,
+                                right: x + ew,
+                                bottom: y + eh,
+                            };
+                            match sh.fill_alpha.filter(|_| fill_alpha_on()) {
+                                Some(a) if a < 1.0 => {
+                                    if a > 0.0 {
+                                        alpha_fill(mem_dc, &r2, (r, g, b), a);
+                                    }
                                 }
-                            }
-                            _ => {
-                                let brush =
-                                    CreateSolidBrush(COLORREF(colorref(r, g, b)));
-                                FillRect(mem_dc, &r2, brush);
-                                let _ = DeleteObject(brush);
+                                _ => {
+                                    let brush =
+                                        CreateSolidBrush(COLORREF(colorref(r, g, b)));
+                                    FillRect(mem_dc, &r2, brush);
+                                    let _ = DeleteObject(brush);
+                                }
                             }
                         }
                     }
@@ -1103,7 +1218,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                 // Border
                 let border_w = sh.border_width.unwrap_or(0.0);
-                if border_w > 0.0 {
+                if !drew_preset && border_w > 0.0 {
                     let col = sh
                         .border_color
                         .as_deref()

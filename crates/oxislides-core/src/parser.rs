@@ -668,6 +668,8 @@ fn parse_slide(
     let mut shape_flip_h = false;
     let mut shape_flip_v = false;
     let mut shape_prst: Option<String> = None;
+    let mut in_prst_geom = false;
+    let mut shape_adjustments: HashMap<String, f32> = HashMap::new();
     let mut shape_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut shape_is_image = false;
     let mut shape_image_r_id: Option<String> = None;
@@ -808,6 +810,8 @@ fn parse_slide(
                         shape_flip_h = false;
                         shape_flip_v = false;
                         shape_prst = None;
+                        in_prst_geom = false;
+                        shape_adjustments.clear();
                         shape_paragraphs.clear();
                         shape_is_image = name == "pic";
                         shape_image_r_id = None;
@@ -840,6 +844,8 @@ fn parse_slide(
                         shape_flip_h = false;
                         shape_flip_v = false;
                         shape_prst = None;
+                        in_prst_geom = false;
+                        shape_adjustments.clear();
                         shape_paragraphs.clear();
                         shape_is_image = false;
                         shape_image_r_id = None;
@@ -935,6 +941,17 @@ fn parse_slide(
                         // "roundRect", "chevron".
                         if let Some(prst) = get_attr(&e, "prst") {
                             shape_prst = Some(prst);
+                        }
+                        in_prst_geom = true;
+                    }
+                    "gd" if in_prst_geom => {
+                        if let (Some(name), Some(fmla)) = (get_attr(&e, "name"), get_attr(&e, "fmla")) {
+                            if let Some(value) = fmla
+                                .strip_prefix("val ")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                            {
+                                shape_adjustments.insert(name, value);
+                            }
                         }
                     }
                     "ph" if in_shape => {
@@ -1244,6 +1261,16 @@ fn parse_slide(
                             shape_prst = Some(prst);
                         }
                     }
+                    "gd" if in_prst_geom => {
+                        if let (Some(name), Some(fmla)) = (get_attr(&e, "name"), get_attr(&e, "fmla")) {
+                            if let Some(value) = fmla
+                                .strip_prefix("val ")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                            {
+                                shape_adjustments.insert(name, value);
+                            }
+                        }
+                    }
                     "ph" if in_shape => {
                         shape_ph_type = match get_attr(&e, "type") {
                             Some(t) if !t.is_empty() => Some(t),
@@ -1515,6 +1542,9 @@ fn parse_slide(
                     "ln" if in_ln => {
                         in_ln = false;
                     }
+                    "prstGeom" if in_prst_geom => {
+                        in_prst_geom = false;
+                    }
                     "solidFill" if in_solid_fill => {
                         in_solid_fill = false;
                     }
@@ -1639,6 +1669,7 @@ fn parse_slide(
                             flip_h: shape_flip_h,
                             flip_v: shape_flip_v,
                             shape_type: shape_prst.take(),
+                            adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: shape_ph_type.take(),
                             content,
                             fill_color: shape_fill_color.take(),
@@ -1756,6 +1787,7 @@ fn parse_slide(
                             flip_h: shape_flip_h,
                             flip_v: shape_flip_v,
                             shape_type: shape_prst.take(),
+                            adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: None,
                             content,
                             fill_color: shape_fill_color.take(),
@@ -2292,6 +2324,9 @@ fn parse_inherited_shapes(
                                         flip_v: false,
                                         shape_type: prst.clone(),
                                         ph_type: None,
+                                        // Inherited shapes reject prstGeom, so
+                                        // there are no adjust values to carry.
+                                        adjustments: std::collections::HashMap::new(),
                                         content,
                                         fill_color: if kind == Some("pic") {
                                             None
