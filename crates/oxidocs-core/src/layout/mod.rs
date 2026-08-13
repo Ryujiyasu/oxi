@@ -14211,6 +14211,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             .map(|line| self.ink_line_height_for_line(line, &para.style, para_font_size))
             .collect();
 
+        // S1116 (2026-08-14, default ON, opt-out OXI_S1116_DISABLE): the
+        // S851/S875/S1095 object line
+        // target, for the cumulative raw basis below. The growth lands in
+        // line_heights[] but a SINGLE-line paragraph's cursor advances by
+        // raw_spaced_tw (the documented S612z three-sites trap) — S773 folds the
+        // vector-group target and S795 the bullet-marker target, but the inline
+        // PICTURE / w:object target had no sibling, so a `[text][picture]`
+        // paragraph advanced by its text line alone.
+        let mut s1116_line0_target: f32 = 0.0;
         // S851 (2026-07-14, opt-out OXI_S851_DISABLE): an inline w:object
         // form-field image (routed as a run-level inline object,
         // RunStyle.inline_object_image) contributes its box HEIGHT to its host
@@ -14360,6 +14369,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         obj_h + descent + extra
                     };
+                    if li == 0 && target > line_heights[0] {
+                        s1116_line0_target = target;
+                    }
                     if target > line_heights[li] {
                         line_heights[li] = target;
                     }
@@ -15263,6 +15275,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 raw_spaced_tw
             };
+        // S1116 (2026-08-14, default ON, opt-out OXI_S1116_DISABLE): fold the
+        // inline-object line-0 target (S851/S875/S1095) into the cumulative
+        // basis, exactly as S773 does for a vector group and S795 for a Symbol
+        // bullet. Word truth (`_pb_brimg_gen.py`, 54 arms, Calibri 11 natural
+        // 13.4277): a line holding BOTH text and an inline picture is
+        // `max(natural, img_h + text_descent)` — 18pt picture → 20.906,
+        // 60pt → 62.906 — while Oxi advanced 13.428 for EVERY picture height
+        // because the basis is rebuilt from the first line's FONT metrics and
+        // never consults line_heights. SCOPED to lines.len() == 1 (S795's
+        // scope): on a multi-line paragraph a grown line already diverges from
+        // line_heights[0] by more than the 1.5pt `use_cumulative` tolerance, so
+        // the per-line `cursor.advance(line_height)` branch takes over and is
+        // correct there (the [txt][br][img] arms measure 31.500 vs Word 31.406
+        // today).
+        // ★REACHABLE PATH = the S805 LM0 one (a document with NO <w:docGrid>
+        // element at all). A doc that HAS a no-type docGrid takes s671_fine,
+        // whose `cursor.advance(line_height)` already carries the growth —
+        // educational__0003daa8's 48pt-picture line advances 68.7→119.2 = 50.5
+        // correctly today. 306 of 350 corpus docs carry a docGrid, and the
+        // intersection {no docGrid} × {single-line para whose picture exceeds
+        // its own text line} is EMPTY over all 719 docs, so this ships
+        // byte-identical: EN 248 213→213 / JP 96 92→92 / SSIM 238 bases 0
+        // changed bytes / the 15 text+picture docs all element-identical.
+        // Where the block does fire on a real doc the object is SMALL
+        // (reference__0042471c: obj 11.2 → target 13.42 against a text basis
+        // already ≥ that), so the max() is a no-op. Latent-correctness fix.
+        let raw_spaced_tw: f32 = if std::env::var("OXI_S1116_DISABLE").is_err()
+            && s1116_line0_target > 0.0
+            && raw_spaced_tw > 0.0
+            && lines.len() == 1
+        {
+            raw_spaced_tw.max(s1116_line0_target * 20.0)
+        } else {
+            raw_spaced_tw
+        };
         // LM2 (charGrid) and LM0 single spacing: carry cumul_line_idx across paragraphs.
         // COM-confirmed (2026-04-12, 0e7a p2): Word maintains cumulative line index
         // across paragraph boundaries for LM0 single spacing, producing continuous
