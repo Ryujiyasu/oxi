@@ -14384,6 +14384,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // body natural-hhea of line 0 (max over fragments), and confirm all-Latin
             let mut body_nat: f32 = 0.0;
             let mut body_desc: f32 = 0.0;
+            let mut body_box_asc: f32 = 0.0;
             let mut all_latin = true;
             for f in &lines[0].fragments {
                 let fs = f.style.font_size.unwrap_or(para_font_size);
@@ -14398,6 +14399,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let d = m.win_descent * fs;
                 if d > body_desc {
                     body_desc = d;
+                }
+                let a = m.win_ascent * fs;
+                // The box's TOP is the text ascent plus its external leading
+                // (hhea natural − win sum), which is where a taller marker
+                // starts to overflow.
+                let boxa = a + (n - (m.win_ascent + m.win_descent) * fs).max(0.0);
+                if boxa > body_box_asc {
+                    body_box_asc = boxa;
                 }
             }
             // S821b (2026-07-13): the marker line target is the COMPONENT
@@ -14422,9 +14431,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // (Word inter-item 20.04 = plain, measured). atLeast compares
                 // the raw component against the floor; exact never grows.
                 let s947 = std::env::var("OXI_S947_DISABLE").is_err();
+                // S1112 (2026-08-13, HELD OPT-IN OXI_S1112=1 with OXI_S1091 +
+                // OXI_S1074 — see the bundle note at the S1091 site): the marker's
+                // growth is the ASCENT OVERFLOW, ADDED to the multiplied text
+                // line — it is NOT itself multiplied by the line factor. Word
+                // truth (_pb_bullet_gen.py, 8 numbering arms x 20 items, span
+                // precision ±0.04): Arial 12 + full-size Symbol bullet at
+                // line=276 measures 16.658 = 15.869 + (12.064 − 11.256), where
+                // the old ratio/component model multiplies the whole marker
+                // natural and gives 16.799 (+0.14/bullet — the policies__000f7115
+                // page-26 excess that cancelled its empty-paragraph deficit and
+                // held S1091/S1074 opt-in). The two models COINCIDE at factor
+                // 1.0, which is where S820b/S821b were derived, so the earlier
+                // probes stay satisfied: uklocalspending Arial 11 + Symbol =
+                // 12.649 + 0.741 = 13.390 vs the recorded differential 13.386.
+                let s1112 = std::env::var("OXI_S1112").is_ok();
+                let marker_overflow =
+                    (SYM_ASC_R * para_font_size - body_box_asc).max(0.0);
                 let s689_target = match para.style.line_spacing_rule.as_deref() {
                     Some("exact") if s947 => line_heights[0],
                     Some("atLeast") if s947 => line_heights[0].max(marker_nat),
+                    _ if s1112 => line_heights[0] + marker_overflow,
                     _ => line_heights[0] * scale,
                 };
                 if s821_entry_attribution {
@@ -14565,6 +14592,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             };
             let _ = SYM_DESC;
             let _ = best_sum;
+            // The TEXT fonts' own external leading, kept for the S1112 box top
+            // (S820 drops `ext` from the legacy target when the marker wins).
+            let text_ext = ext;
             if marker_asc > asc {
                 ext = 0.0;
             }
@@ -14576,7 +14606,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
             let target_nat = asc.max(marker_asc) + desc + ext;
             let factor = para.style.line_spacing.unwrap_or(1.0);
-            let target = target_nat * if factor > 0.0 { factor } else { 1.0 };
+            let factor = if factor > 0.0 { factor } else { 1.0 };
+            // S1112: the marker overflows the TEXT box's top (ascent + the
+            // text's own external leading) and that overflow is added to the
+            // multiplied text line rather than multiplied with it. `ext` is
+            // zeroed above when the marker drives the height (S820), so the
+            // text's leading is recovered from `text_ext` for the box top.
+            let target = if std::env::var("OXI_S1112").is_ok() {
+                (asc + desc + text_ext) * factor + (marker_asc - asc - text_ext).max(0.0)
+            } else {
+                target_nat * factor
+            };
             if target > line_heights[0] && marker_growth_ok {
                 // S821 (2026-07-13, opt-out OXI_S821_DISABLE): the marker
                 // growth belongs to the pitch INTO the bullet line, not out
@@ -15218,14 +15258,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // 0.08pt x 17 empties = the 1.4pt drift that put its last spacer over
         // the page bottom.  Decide the CJK test from the ¶ MARK instead — the
         // same font the height itself was measured from (S583/S707/S876/S989).
-        // ★HELD OPT-IN (OXI_S1091=1, default byte-identical): the rule is
-        // Word-correct on both measured docs, but removing the per-empty
-        // inflation EXPOSES compensating errors — policies__000f7115
-        // 1.0000 -> 0.1794 and reports__0020157f 1.0000 -> 0.8065 (its own
-        // empties are 15.50 rounded / 15.80 exact / Word 15.75, so ON is the
-        // closer value yet the doc gains a page).  It also does NOT fix its
-        // own target: correspondence__000f9471 keeps 0.9524 because Word
-        // pushes that last empty even though the box fits by 0.72pt.
+        // ★HELD OPT-IN as the {OXI_S1112, OXI_S1091, OXI_S1074} BUNDLE
+        // (2026-08-13; each flag is byte-identical by default).  The three are
+        // Word-correct and only work together: S1112 removes the marker line's
+        // +0.14pt/bullet, which is exactly what cancelled this rule's
+        // per-empty deficit in policies__000f7115 (its p26 carries 5 empties at
+        // -0.37 against 18 Symbol-bullet lines at +0.11).  With all three,
+        // policies is 1.0000 and the EN frozen sets go 211 -> 212
+        // (reports__00377a16 and educational__002354115a both FAIL -> PASS).
+        // ★TWO EXPOSURES BLOCK THE DEFAULT, both attributable to THIS rule
+        // (S1112/S1074 measured innocent for each):
+        //   ukframework  1.0000 -> 0.9723 {-1:13} -- the JP-corpus sentinel
+        //     regresses 92 -> 91, so the bundle cannot ship yet
+        //   reports__0020157f 1.0000 -> 0.8065 -- its p1 br-page stub then
+        //     overflows the content bottom by 0.36pt (cursor 718.00 + 11.50 vs
+        //     limit 729.14) and its own break leaves a BLANK page; Word fits
+        //     the stub at 715.50, i.e. Oxi's cursor is +2.5 low there from the
+        //     65-border form table above it (a cell-height root, not this rule)
+        // Its own target correspondence__000f9471 also stays 0.9524 (Word
+        // pushes that last empty even though the box fits by 0.72pt).
         let s1091_empty_fine = lines.len() == 1
             && lines[0].fragments.is_empty()
             && !self.doc_body_has_real_cjk
@@ -16390,6 +16441,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // page-bottom threshold the per-line break test uses
                         // (max(ink, the S779/S827 hhea floor), capped at the box)
                         // rather than the full multiplied box.
+                        // ★HELD OPT-IN with the {S1112, S1091, S1074} bundle
+                        // (2026-08-13; blocked by S1091's two exposures, see
+                        // the S1091 site).  Word truth
+                        // for the two documents that disagreed: reports__00377a16
+                        // keeps 2 lines whose BOX bottom is 3.5pt past the content
+                        // bottom (COM: 4-line para split 2+2 at y732.00/752.70,
+                        // content bottom 769.90) — only the natural-height test
+                        // fits it; policies__000f7115's push is then correct too
+                        // once S1112/S1091 put its cursor at Word's 741.00
+                        // (it was 738.92, and the lenient test wrongly kept).
                         let full = line_heights.get(1).copied().unwrap_or(0.0);
                         let floor = s779_win_heights.get(1).copied().unwrap_or(0.0);
                         ink_line_heights
