@@ -3223,6 +3223,37 @@ fn parse_paragraph(
     // for a canvas / inline wps textbox) must keep the BLOCK path: it exists to
     // reserve a whole line-block, and the textbox itself renders as an overlay.
     // probeqwps regressed 1.0 → 0.925 when the placeholder was routed inline.
+    // S1114 (2026-08-13, opt-in OXI_S1114=1): a `<w:br/>` is a LINE BREAK, not
+    // visible text, and a paragraph written
+    //     <w:r><w:br/></w:r><w:r><w:drawing>…wp:inline…</w:drawing></w:r>
+    // satisfied NEITHER route out of here: S537's `image_only` wants every run's
+    // text EMPTY (the break run's text is "\n"), while S1034 below wants VISIBLE
+    // text.  Falling between the two, Oxi emitted the host paragraph's lines AND
+    // a sibling Block::Image — natural + natural + img_h.
+    // Word (DERIVED, `tools/metrics/_pb_brimg_gen.py`, 54 arms = picture height
+    // {6,12,18,24.2,36,60} × 9 run shapes, and the answer is the same whether the
+    // break and the picture share one run or sit in separate runs):
+    //     picture alone on a line   line = max(natural, img_h)
+    //     picture beside text       line = max(natural, img_h + text descent)
+    //     [br][img]                 natural + max(natural, img_h)
+    // i.e. the picture belongs to the line the break opened.  Measured, Calibri
+    // 11 (natural 13.4277): Word 26.812 / 26.812 / 31.406 / 37.594 / 49.406 /
+    // 73.406 against Oxi's 32.855 / 38.855 / 44.855 / 51.056 / 62.855 / 86.855
+    // — an excess of exactly min(img_h, natural).  The already-correct
+    // [txt][br][img] and [img][br][txt] arms (Oxi 31.500 vs Word 31.406) are the
+    // control: they have visible text, so S1034 already routes them inline.
+    // reference__0042471c p28 (a 130.7×24.2pt picture behind a `<w:br/>`) is
+    // exactly this shape and is where that doc's page-1 cursor gains +13.55pt.
+    // ★The picture must sit in its OWN run.  When one run carries both the break
+    // and the drawing Oxi already mishandles it in a different way (the same-run
+    // arms measure 32.855 where Word says 26.812), and routing THAT inline makes
+    // it worse (13.428) because the run's text is consumed by the break — so the
+    // same-run shapes are left exactly as they were and recorded as a residual.
+    let s1114_break_host = std::env::var("OXI_S1114").ok().as_deref() == Some("1")
+        && runs.iter().any(|run| run.text.contains('\n'))
+        && inline_img_runs
+            .iter()
+            .all(|(ri, _)| runs.get(*ri).map_or(false, |r| r.text.is_empty()));
     let s1034_single_inline = std::env::var("OXI_S1034_DISABLE").is_err()
         && allow_inline_flow
         && inline_img_runs.len() == 1
@@ -3230,7 +3261,7 @@ fn parse_paragraph(
         // WHITESPACE is effectively image-only and keeps the calibrated block
         // path (legal__001410a8's 2 figure paragraphs carry a space run — with
         // `!text.is_empty()` they flowed inline and cost it 0.9655 → 0.9616).
-        && runs.iter().any(|run| !run.text.trim().is_empty())
+        && (runs.iter().any(|run| !run.text.trim().is_empty()) || s1114_break_host)
         && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty());
     // S1066 (2026-08-05, default ON, opt-out OXI_S1066_DISABLE): the S854/S984
     // horizontal inline-image flow, extended to a TABLE CELL whose paragraph
