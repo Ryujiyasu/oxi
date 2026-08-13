@@ -14,11 +14,13 @@ import os
 import re
 import sys
 import zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX = "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
-DIFFS = "C:/Users/ryuji/oxi-main/pipeline_data/pagination_diff_postR41"
+DOCX = str(_REPO / r"tools/golden-test/documents/docx")
+DIFFS = str(_REPO / r"pipeline_data/pagination_diff_postR41")
 
 DOCS = ["04b88e7e0b25", "6514f214e482", "d4d126dfe1d9",
         "34140b9c5662", "459f05f1e877"]

@@ -5,12 +5,13 @@ Also reports the per-page best UNIFORM vertical shift (dy maximizing full-page S
 import os, sys, subprocess
 from pathlib import Path
 import numpy as np
-sys.path.insert(0, r"c:\Users\ryuji\oxi-main")
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO))
 from pipeline.config import WORD_PNG_DIR, RENDER_DPI
 from pipeline.ssim_calculator import _load_rgb, _resize_to_match
 from skimage.metrics import structural_similarity as ssim
 sys.stdout.reconfigure(encoding="utf-8")
-REPO=r"c:\Users\ryuji\oxi-main"
+REPO=str(_REPO)
 DW=os.path.join(REPO,"tools","oxi-dwrite-renderer","target","release","oxi-dwrite-renderer.exe")
 DOCX=os.path.join(REPO,"tools","golden-test","documents","docx","3a4f9fbe1a83_001620506.docx")
 BASE="3a4f9fbe1a83_001620506"; OUT="C:/tmp/3a4f"; PXPT=72.0/RENDER_DPI

@@ -25,8 +25,9 @@ Naming: TR_<rule>_h<tw>_<lines>L_lp<linePitch>.docx
 """
 import zipfile
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\tr_height_repro")
+OUT_DIR = (_REPO / r"tools\metrics\tr_height_repro")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

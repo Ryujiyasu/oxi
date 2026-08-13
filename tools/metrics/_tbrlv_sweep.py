@@ -14,7 +14,9 @@ lines (fitz get_drawings). Same doc skeleton as the probes (A4, docGrid lines
 360, MS Mincho 10.5pt default, compat15).
 """
 import os, sys
-sys.path.insert(0, r"c:\Users\ryuji\oxi-main\tools\metrics")
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO / r"tools\metrics"))
 import _probe_gen as pg
 import _probe_gen3 as g3
 

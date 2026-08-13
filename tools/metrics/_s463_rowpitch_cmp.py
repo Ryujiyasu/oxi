@@ -1,8 +1,10 @@
 import json,glob
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 VPOS=6
-DOCS={"gen2_025(JP regress)":glob.glob(r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\gen2_025*.docx")[0],
-      "gen2_054(EN improve)":r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\gen2_054_Audit_Report.docx"}
+DOCS={"gen2_025(JP regress)":glob.glob(str(_REPO / r"tools\golden-test\documents\docx\gen2_025*.docx"))[0],
+      "gen2_054(EN improve)":str(_REPO / r"tools\golden-test\documents\docx\gen2_054_Audit_Report.docx")}
 DUMPS={"gen2_025(JP regress)":("C:/tmp/s463cmp/off25.json","C:/tmp/s463cmp/on25.json"),
        "gen2_054(EN improve)":("C:/tmp/s463cmp/off54.json","C:/tmp/s463cmp/on54.json")}
 def oxi_rowpitch(dump):

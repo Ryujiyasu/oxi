@@ -26,9 +26,11 @@ Instrumentation only. Output docx in tools/golden-test/repros/.
 """
 from __future__ import annotations
 import os, sys, zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 OUT_DOCX = os.path.join(REPO, 'tools', 'golden-test', 'repros', 's416_rightalign_trigger.docx')
 
 # Each test: (label, jc, has_firstLine, text)

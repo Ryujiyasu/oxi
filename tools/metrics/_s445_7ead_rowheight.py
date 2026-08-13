@@ -5,9 +5,11 @@ get each cell's first-para Y (collapsed start, R30) and HeightRule/Height
 per-cell (Cell.Row*).
 """
 import sys, json, win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8")
-DOCX = r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\7ead52b63f0e_000067058.docx"
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\7ead52b63f0e_000067058.docx")
 
 word = win32.gencache.EnsureDispatch("Word.Application")
 word.Visible = False

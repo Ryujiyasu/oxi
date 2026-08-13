@@ -1,6 +1,8 @@
 # bunkacontract: per-paragraph Y (Word COM Info6) vs page, to profile the drift.
 import win32com.client as w, glob
-DOC=glob.glob(r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\*bunka*.docx")[0]
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOC=glob.glob(str(_REPO / r"tools\golden-test\documents\docx\*bunka*.docx"))[0]
 app=w.Dispatch("Word.Application"); app.Visible=False
 try:
     d=app.Documents.Open(DOC, ReadOnly=True)

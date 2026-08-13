@@ -2,8 +2,10 @@
 table cells as paragraphs). Localizes Oxi vertical drift vs Word on gen2_060 p1."""
 import json
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\gen2_060_Employee_Agreement.docx"
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\gen2_060_Employee_Agreement.docx")
 DUMP = r"C:/tmp/gen2dump/layout.json"
 VPOS = 6; PAGE = 3
 

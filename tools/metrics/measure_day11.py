@@ -1,10 +1,13 @@
 """Measure per-char advance for cs/grid variants."""
 import time, sys, os, subprocess, json
 import win32com.client, pythoncom
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 WD_VPOS = 6; WD_HPOS = 5
-DOCX_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
-RENDERER = "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
+RENDERER = str(_REPO / r"tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 
 VARIANTS = ["d11_v0_baseline", "d11_v1_cs_neg9", "d11_v2_cs_neg20",
             "d11_v3_grid_only", "d11_v4_grid_cs_neg9", "d11_v5_grid_cs_neg1"]
@@ -55,7 +58,7 @@ print(f"{'variant':22s} {'W_avg':>7} {'O_avg':>7} {'Δ':>7}")
 all_data = {}
 for v in VARIANTS:
     docx = os.path.join(DOCX_DIR, f"{v}.docx")
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/{v}_oxi.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"{v}_oxi.json")
     word_xs = measure_word(docx)
     oxi_xs = measure_oxi(docx, layout_out)
     if not word_xs or not oxi_xs:

@@ -1,9 +1,11 @@
 import json
 import sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-with open(r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\ph_fixed.json", encoding="utf-8") as f:
+with open(str(_REPO / r"pipeline_data\pptx_probes\ph_fixed.json"), encoding="utf-8") as f:
     d = json.load(f)
 
 for s in d.get("slides", []):

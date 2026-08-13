@@ -2,16 +2,18 @@
 
 Reads:
 - pipeline_data/_0e7a_oxi_layout.json (from --dump-layout)
-- C:/Users/ryuji/oxi-main/pipeline_data/word_dml/0e7a...json
+- pipeline_data/word_dml/0e7a...json
 
 Identifies per-paragraph x/y drift on p.2 to localize the remaining bug
 (post-line-wrap fix; p.2 is now rank 1 bottom-5 at 0.5767).
 """
 import io
 import json
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[1]
 
 OXI = "pipeline_data/_0e7a_oxi_layout.json"
-WORD = r"C:/Users/ryuji/oxi-main/pipeline_data/word_dml/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00.json"
+WORD = str(_REPO / r"pipeline_data/word_dml/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00.json")
 
 with io.open(OXI, encoding="utf-8") as f:
     oxi = json.load(f)

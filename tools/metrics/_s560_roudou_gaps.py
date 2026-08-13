@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 import json,sys
 from collections import defaultdict
+import os
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
-d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))
+d=json.load(open(os.path.join(tempfile.gettempdir(), r"roudou_layout.json"),encoding='utf-8'))
 # para_idx -> (page, min_y, max_y, text)
 rec=defaultdict(lambda:[None,1e9,-1e9,None])
 for pgno,p in enumerate(d['pages']):

@@ -25,8 +25,9 @@ We build 6 axis-isolation variants:
 """
 import zipfile
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\fe_match_repro")
+OUT_DIR = (_REPO / r"tools\metrics\fe_match_repro")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

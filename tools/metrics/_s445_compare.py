@@ -1,13 +1,15 @@
 """S445: per-doc compare current element_iou + pagination summaries vs the
 backed-up baseline (C:/tmp/s445/). Shows only docs that MOVED."""
 import json, io, sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding="utf-8")
 
 def load(p):
     return json.load(io.open(p, encoding="utf-8"))
 
 base = load(r"C:/tmp/s445/baseline_eiou.json")
-cur = load(r"c:/Users/ryuji/oxi-main/pipeline_data/element_iou_diff/_summary.json")
+cur = load(str(_REPO / r"pipeline_data/element_iou_diff/_summary.json"))
 bd = {d["doc_id"]: d["mean_iou"] for d in base["docs"]}
 cd = {d["doc_id"]: d["mean_iou"] for d in cur["docs"]}
 print(f"IOU mean: baseline {base['mean_iou']:.4f} -> current {cur['mean_iou']:.4f}  (Δ {cur['mean_iou']-base['mean_iou']:+.4f})")
@@ -28,7 +30,7 @@ print(f"  ({len(moved)} docs moved; {sum(1 for _,b,c in moved if c>b)} up, {sum(
 # pagination
 try:
     pb = load(r"C:/tmp/s445/baseline_pag.json")
-    pc = load(r"c:/Users/ryuji/oxi-main/pipeline_data/pagination_diff/_summary.json")
+    pc = load(str(_REPO / r"pipeline_data/pagination_diff/_summary.json"))
     print(f"\nPAGINATION: baseline n_pass {pb['n_pass']}/{pb['n_total']} -> current {pc['n_pass']}/{pc['n_total']}")
     pbd = {d['doc_id']: d.get('pass') for d in pb.get('docs', [])}
     pcd = {d['doc_id']: d.get('pass') for d in pc.get('docs', [])}

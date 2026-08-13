@@ -1,8 +1,10 @@
 """Measure Word's actual char advance for de6e32 p7 list items (table cell, 12pt)
 to decide if Word expands cell chars to grid (=S466 right) or uses natural (=OFF right)."""
 import win32com.client as win32, statistics
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 HPOS=5;VPOS=6;PAGE=3
-D=r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\de6e32b5960b_tokumei_08_01-1.docx"
+D=str(_REPO / r"tools\golden-test\documents\docx\de6e32b5960b_tokumei_08_01-1.docx")
 word=win32.gencache.EnsureDispatch("Word.Application");word.Visible=False
 doc=word.Documents.Open(D,ReadOnly=True)
 try:

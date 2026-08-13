@@ -30,8 +30,10 @@ import json, os, sys, zipfile, math
 import win32com.client, pythoncom
 import ctypes
 from ctypes import wintypes
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r"c:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 OUTDIR = os.path.join(REPO, "tools", "golden-test", "repros", "gen2_lineheight")
 OUTJSON = os.path.join(REPO, "pipeline_data", "cjk_notype_line_heights.json")
 

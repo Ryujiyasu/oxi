@@ -23,8 +23,9 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCS_DIR = Path(r"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx")
+DOCS_DIR = (_REPO / r"tools/golden-test/documents/docx")
 OUT_DIR = Path(__file__).resolve().parent / "output"
 
 # word/document.xml marker patterns. Match element open-tag only; namespaces vary.

@@ -2,8 +2,10 @@
 import zipfile
 import xml.etree.ElementTree as ET
 import os
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-docx_path = r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\1ec1091177b1_006.docx"
+docx_path = str(_REPO / r"tools\golden-test\documents\docx\1ec1091177b1_006.docx")
 
 ns = {
     'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',

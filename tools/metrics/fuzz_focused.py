@@ -21,10 +21,11 @@ from pathlib import Path
 
 import win32com.client
 import pythoncom
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-ROOT = Path('c:/Users/ryuji/oxi-main')
+ROOT = _REPO
 RENDERER = ROOT / "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe"
 OUT_ROOT = Path(__file__).parent / "fuzz_runs"
 

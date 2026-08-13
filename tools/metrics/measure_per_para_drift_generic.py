@@ -26,10 +26,12 @@ import statistics
 import sys
 import zipfile
 from collections import defaultdict
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REPO = r"c:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 DOCS_DIR = os.path.join(REPO, "tools", "golden-test", "documents", "docx")
 WORD_SUMMARY = os.path.join(REPO, "pipeline_data", "pagination_word", "_summary.json")
 

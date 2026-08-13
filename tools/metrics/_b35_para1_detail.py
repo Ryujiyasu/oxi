@@ -6,8 +6,10 @@ import os, sys, time
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 import win32com.client
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX_REAL = "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+DOCX_REAL = str(_REPO / r"tools/golden-test/documents/docx")
 DOC = "b35123fe8efc_tokumei_08_01.docx"
 
 

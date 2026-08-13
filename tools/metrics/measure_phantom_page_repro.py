@@ -6,10 +6,11 @@ Look for: does Word ever create a phantom page (a page with only empties)?
 import json
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 
 REPRO_DIR = Path(__file__).parent / "phantom_page_repro"
-OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\phantom_page_measurements.json")
+OUT = (_REPO / r"pipeline_data\phantom_page_measurements.json")
 
 
 def measure(doc_path: Path):

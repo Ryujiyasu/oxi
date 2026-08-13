@@ -5,9 +5,10 @@ Oxi: from the dump, group para's text elements by y. Compare line counts."""
 import sys,os,json
 import win32com.client as win32
 from collections import defaultdict
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 # Oxi line counts per body para_idx (page 3 = index 2), for the 記載要領 paras
-d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/rd_dbg2.json',encoding='utf-8'))
+d=json.load(open(os.path.join(tempfile.gettempdir(), r"rd_dbg2.json"),encoding='utf-8'))
 oxi=defaultdict(set)
 oxitext={}
 for pgno in (2,3):

@@ -15,10 +15,12 @@ Each swept over right margin to find the 1->2 line flip; the flip position
 vs (word) / (word+.) width identifies hang vs no-hang per variant.
 """
 import os, sys, zipfile, shutil, re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "..", "pipeline_data", "_pb_pbdrpunct")
-SRC = r"c:\Users\ryuji\oxi-main\pipeline_data\docx_corpus\en\technical\002c1ffa65f3a566.docx"
+SRC = str(_REPO / r"pipeline_data\docx_corpus\en\technical\002c1ffa65f3a566.docx")
 
 z = zipfile.ZipFile(SRC)
 STYLES = z.read('word/styles.xml').decode('utf-8')

@@ -12,6 +12,8 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 import sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 
 def find_glyph_top_in_region(png_path: str, dpi: int,
@@ -40,8 +42,8 @@ def main():
     # starts ~5.4pt right of cell border = x=82pt; lh region y=124-145pt).
     # Use a wide x window to catch any glyph in row 1.
 
-    word_png = r'C:\Users\ryuji\oxi-main\pipeline_data\word_png\b35123fe8efc_tokumei_08_01\page_0001.png'
-    oxi_pre  = r'C:\Users\ryuji\oxi-main\pipeline_data\oxi_png\b35123fe8efc_tokumei_08_01\page_0001.png'
+    word_png = str(_REPO / r"pipeline_data\word_png\b35123fe8efc_tokumei_08_01\page_0001.png")
+    oxi_pre  = str(_REPO / r"pipeline_data\oxi_png\b35123fe8efc_tokumei_08_01\page_0001.png")
     oxi_post = r'C:\tmp\b35123_d29b\page_p1.png'
 
     # Row 1: y region ~120-145, x ~80-130 (cell 0)

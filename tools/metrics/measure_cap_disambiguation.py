@@ -23,11 +23,13 @@ Suite E3: All-CJK 12pt + mixed-fs yak (10/12/14pt)
 """
 import json, os, sys, time, zipfile, subprocess
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT_DIR = os.path.abspath(r"C:\Users\ryuji\oxi-1\tools\metrics\cap_disambig_repro")
-RESULT = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\cap_disambig.json")
+OUT_DIR = os.path.abspath(str(_REPO / r"tools\metrics\cap_disambig_repro"))
+RESULT = os.path.abspath(str(_REPO / r"pipeline_data\cap_disambig.json"))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 YAKUMONO = set("「")

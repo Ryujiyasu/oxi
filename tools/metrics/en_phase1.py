@@ -12,10 +12,11 @@ Phases (resumable; artifacts cached under pipeline_data/en_benchmark/p1/):
 """
 import os, sys, json
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REPO = Path(r"c:\Users\ryuji\oxi-main")
+REPO = _REPO
 BENCH = REPO / "pipeline_data" / "en_benchmark"
 P1 = BENCH / "p1"
 WDIR = P1 / "word"

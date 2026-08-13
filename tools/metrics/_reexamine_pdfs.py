@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """Re-examine all bisection PDFs without the [:4] limit bug."""
 import sys, os, glob, fitz
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 DIRS = [
-    r'C:\Users\ryuji\oxi-4\pipeline_data\1ec1_body_bisect',
-    r'C:\Users\ryuji\oxi-4\pipeline_data\1ec1_body_bisect_after',
+    str(_REPO / r"pipeline_data\1ec1_body_bisect"),
+    str(_REPO / r"pipeline_data\1ec1_body_bisect_after"),
 ]
 
 for d in DIRS:

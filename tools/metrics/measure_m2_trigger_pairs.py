@@ -35,12 +35,14 @@ Plus controls (Mech 1 SHOULD fire):
 """
 import json, os, sys, time
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 FONT = "ＭＳ 明朝"
 SIZE = 12.0  # 1 char = 12pt CJK fullwidth
-RESULT_PATH = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\m2_trigger_pairs.json")
+RESULT_PATH = os.path.abspath(str(_REPO / r"pipeline_data\m2_trigger_pairs.json"))
 
 # Test pairs. Each pair embedded at chars 6-7 of a 20-char probe.
 # Probe = "漢"×5 + pair + "漢"×(20-5-2) = 5 + 2 + 13 = 20 chars

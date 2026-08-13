@@ -8,6 +8,8 @@ import subprocess
 import sys
 import os
 import re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 # Force UTF-8 output
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -116,7 +118,7 @@ def parse_word_output(lines):
 
 
 def main():
-    base_dir = r"C:\Users\ryuji\oxi-1"
+    base_dir = str(_REPO)
 
     files = [
         "tests/fixtures/basic_test.docx",

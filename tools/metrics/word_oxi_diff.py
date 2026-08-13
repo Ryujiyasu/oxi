@@ -17,6 +17,7 @@ The diff structure surfaces:
 """
 import sys, os, json, argparse, time, subprocess
 from collections import defaultdict
+import tempfile
 
 WD_VPOS = 6
 WD_HPOS = 5
@@ -216,7 +217,7 @@ def main():
     word_data = extract_word_paragraphs(docx_path)
     print(f"  Got {len(word_data)} paragraphs on page 1")
 
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/wod_oxi_{os.path.basename(docx_path)}.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"wod_oxi_{os.path.basename(docx_path)}.json")
     print(f"=== Oxi layout extraction ===")
     oxi_data = extract_oxi_paragraphs(docx_path, layout_out)
     if oxi_data is None:

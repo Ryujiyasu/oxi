@@ -1,10 +1,13 @@
 """For each indent variant, measure Word + Oxi first char x of paragraph."""
 import time, sys, os, subprocess, json
 import win32com.client, pythoncom
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 WD_VPOS = 6; WD_HPOS = 5
-DOCX_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
-RENDERER = "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
+RENDERER = str(_REPO / r"tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 
 VARIANTS = ["v0_full", "v1_no_leftChars", "v2_no_left", "v3_small_left",
             "v4_no_hanging", "v5_chars_hanging_only", "v6_twip_hanging_only",
@@ -47,7 +50,7 @@ print(f"  {'variant':24s} {'first_x':>9}")
 oxi_data = {}
 for v in VARIANTS:
     path = os.path.join(DOCX_DIR, f"indent_matrix_{v}.docx")
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/imatrix_{v}.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"imatrix_{v}.json")
     proc = subprocess.run([RENDERER, path, "/tmp/dummy.png", f"--dump-layout={layout_out}"], capture_output=True, timeout=60)
     if not os.path.exists(layout_out): continue
     with open(layout_out, encoding='utf-8') as f:

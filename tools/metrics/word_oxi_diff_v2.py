@@ -15,6 +15,7 @@ For multi-doc batch:
 """
 import sys, os, json, argparse, time, subprocess
 from collections import defaultdict
+import tempfile
 
 WD_VPOS = 6
 WD_HPOS = 5
@@ -215,7 +216,7 @@ def aggregate(matches, doc_id):
 
 def process_one(docx_path, quiet=False):
     doc_id = os.path.basename(docx_path).replace('.docx', '')
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/diffv2_{doc_id}.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"diffv2_{doc_id}.json")
     word_data = extract_word(docx_path)
     oxi_data = extract_oxi(docx_path, layout_out)
     if oxi_data is None:

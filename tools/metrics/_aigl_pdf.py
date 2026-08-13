@@ -1,7 +1,9 @@
 # Export aiguideline to PDF via Word COM, then use fitz to find the ① glyph's
 # render font + bbox, and compare line heights of ①-lines vs plain body lines.
 import os, win32com.client as w, fitz
-DOC = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\aiguideline_komon.docx"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOC = str(_REPO / r"tools\golden-test\documents\docx\aiguideline_komon.docx")
 PDF = r"C:\tmp\aigl.pdf"
 os.makedirs(r"C:\tmp", exist_ok=True)
 app = w.Dispatch("Word.Application"); app.Visible=False

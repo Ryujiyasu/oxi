@@ -2,11 +2,12 @@
 import json, os, sys, time, subprocess
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REPRO = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\kinsoku_mech2_repro")
-RESULT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\kinsoku_mech2.json")
+REPRO = (_REPO / r"tools\metrics\kinsoku_mech2_repro")
+RESULT = (_REPO / r"pipeline_data\kinsoku_mech2.json")
 YAKUMONO_B = set("」")
 
 

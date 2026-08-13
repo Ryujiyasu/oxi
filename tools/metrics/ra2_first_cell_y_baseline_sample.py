@@ -16,6 +16,8 @@ import zipfile
 import re
 
 import win32com.client
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -23,7 +25,7 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUT_DIR, exist_ok=True)
 OUT_JSON = os.path.join(OUT_DIR, "ra2_first_cell_y_baseline_sample.json")
 
-DOCX_DIR = "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 
 # Reproducible sample
 random.seed(42)

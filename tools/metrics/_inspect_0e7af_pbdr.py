@@ -2,9 +2,11 @@
 """Inspect 0e7af's <w:pBdr> usage."""
 import sys, os, glob, zipfile, re
 from collections import Counter
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-paths = glob.glob(r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx\0e7af*')
+paths = glob.glob(str(_REPO / r"tools\golden-test\documents\docx\0e7af*"))
 DOCX = paths[0]
 print(f"Inspecting: {os.path.basename(DOCX)}\n")
 

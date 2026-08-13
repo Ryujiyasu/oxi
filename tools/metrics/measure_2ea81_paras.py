@@ -2,10 +2,11 @@
 import json, time, sys
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX = Path(r"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/2ea81a8441cc_0025006-192.docx")
+DOCX = (_REPO / r"tools/golden-test/documents/docx/2ea81a8441cc_0025006-192.docx")
 OUT = Path(__file__).with_name("output") / "2ea81_paras.json"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 

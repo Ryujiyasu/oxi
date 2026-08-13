@@ -12,8 +12,9 @@ the backup already exists).
 """
 import os, sys, shutil
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding="utf-8")
-REPO = Path(r"c:\Users\ryuji\oxi-main") / "pipeline_data"
+REPO = _REPO / "pipeline_data"
 OLD = REPO / "word_png"
 NEW = REPO / "word_png_new"
 BACKUP = REPO / "word_png_backup_20260627"

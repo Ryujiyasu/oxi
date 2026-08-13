@@ -17,9 +17,10 @@ Output: tools/metrics/tp3_mutate_repro/M_*.docx
 """
 import re, zipfile, io, shutil
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-SRC = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\tblppr_anchor_repro\TP3_anchor1_tblpY600.docx")
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\tp3_mutate_repro")
+SRC = (_REPO / r"tools\metrics\tblppr_anchor_repro\TP3_anchor1_tblpY600.docx")
+OUT_DIR = (_REPO / r"tools\metrics\tp3_mutate_repro")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

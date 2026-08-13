@@ -15,6 +15,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import tempfile
 
 ROOT = Path(__file__).parent.parent.parent
 
@@ -40,7 +41,7 @@ def main():
     print(f"Word: {len(word_paras)} paragraphs across {word['n_pages']} pages")
 
     # Render Oxi and get layout dump
-    dump_path = Path(r"C:/Users/ryuji/AppData/Local/Temp") / f"{DOC_ID}_ydiv.json"
+    dump_path = Path(tempfile.gettempdir()) / f"{DOC_ID}_ydiv.json"
     cmd = [str(RENDERER), str(DOCX), str(dump_path.with_suffix("")) + "_",
            f"--dump-layout={dump_path}"]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

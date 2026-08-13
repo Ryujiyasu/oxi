@@ -17,14 +17,16 @@ For each probe we record:
 """
 import json, os, sys, time, zipfile, shutil, tempfile
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 SRC_REAL = os.path.abspath(
-    r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\7f272a2dfd3b_index-21.docx")
-OUT_DIR = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\mech3_compress_repro_docs")
+    str(_REPO / r"tools\golden-test\documents\docx\7f272a2dfd3b_index-21.docx"))
+OUT_DIR = os.path.abspath(str(_REPO / r"pipeline_data\mech3_compress_repro_docs"))
 RESULT_PATH = os.path.abspath(
-    r"C:\Users\ryuji\oxi-1\pipeline_data\mech3_compression_formula.json")
+    str(_REPO / r"pipeline_data\mech3_compression_formula.json"))
 
 os.makedirs(OUT_DIR, exist_ok=True)
 

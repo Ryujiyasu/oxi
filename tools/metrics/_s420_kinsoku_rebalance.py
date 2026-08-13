@@ -24,9 +24,11 @@ Instrumentation only.
 """
 from __future__ import annotations
 import os, sys, zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 OUT = os.path.join(REPO, 'tools', 'golden-test', 'repros', 's420_kinsoku_rebalance.docx')
 
 TESTS = [

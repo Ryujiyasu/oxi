@@ -7,8 +7,10 @@ fitting (5)裁量 (~420pt) on 1 line where Word's 426.8pt budget wraps 労働者
 line 2. That 1 line is roudoujoken's -1. Re-run after rendering the dump."""
 import json,sys
 from collections import defaultdict
+import os
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
-d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))
+d=json.load(open(os.path.join(tempfile.gettempdir(), r"roudou_layout.json"),encoding='utf-8'))
 p1=d['pages'][0]
 vb=sorted(set(round(e['x'],1) for e in p1['elements'] if e['type']=='border' and e['h']>0 and 350<e['y']<620))
 print('r7-band vertical borders x:', vb, '(content cell L=col0/col1 bound, R=table right)')

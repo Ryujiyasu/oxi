@@ -13,10 +13,11 @@ import json
 import sys
 from pathlib import Path
 from collections import Counter
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-SURVEY = Path('c:/Users/ryuji/oxi-main/tools/metrics/atleast_snap_survey.json')
+SURVEY = (_REPO / r"tools/metrics/atleast_snap_survey.json")
 
 
 def snap_formula(row_h_pt: float, border_pt: float) -> float:

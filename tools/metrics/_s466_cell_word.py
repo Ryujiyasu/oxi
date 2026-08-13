@@ -1,6 +1,8 @@
 import win32com.client as win32, statistics
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 HPOS=5;VPOS=6
-D=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\chargrid_wrap\cg_cell_12pt.docx"
+D=str(_REPO / r"tools\golden-test\repros\chargrid_wrap\cg_cell_12pt.docx")
 word=win32.gencache.EnsureDispatch("Word.Application");word.Visible=False
 doc=word.Documents.Open(D,ReadOnly=True)
 try:

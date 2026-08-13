@@ -11,12 +11,13 @@ Oxi buggy (pre-fix): A→C=28pt (uses idx C's 300tw at idx B→C boundary).
 import io, json, os, subprocess, sys, time, zipfile
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 TMP_DOCX = Path("pipeline_data") / "_repro_line_exact.docx"
 TMP_JSON = Path("pipeline_data") / "_repro_line_exact_layout.json"
-OXI_RENDERER = Path(r"C:/Users/ryuji/oxi-4/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
+OXI_RENDERER = (_REPO / r"tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 
 CT = '<?xml version="1.0"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
 RELS = '<?xml version="1.0"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'

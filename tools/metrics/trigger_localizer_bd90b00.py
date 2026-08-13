@@ -11,12 +11,14 @@ line_height, snap, tabs, runs) to identify what makes them differ.
 """
 from __future__ import annotations
 import os, sys, json, subprocess
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8')
 
 
 def main():
     import win32com.client as wc
-    docx = r'C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\bd90b00ab7a7_order_05.docx'
+    docx = str(_REPO / r"tools\golden-test\documents\docx\bd90b00ab7a7_order_05.docx")
     word = wc.Dispatch('Word.Application')
     word.Visible = False
     word.DisplayAlerts = 0

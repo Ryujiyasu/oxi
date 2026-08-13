@@ -9,9 +9,10 @@ Predicted: shape_top = anchor_top + posOffset_pt.
 import json, re, zipfile, sys
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\sp_repro")
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\sp_position_v_measurements.json")
+REPRO_DIR = (_REPO / r"tools\metrics\sp_repro")
+OUT = (_REPO / r"pipeline_data\sp_position_v_measurements.json")
 
 
 def parse_posOffset_emu(p):

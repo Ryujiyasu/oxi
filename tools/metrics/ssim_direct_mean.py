@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import os, re, subprocess, sys, tempfile
 from pathlib import Path
-sys.path.insert(0, r"c:\Users\ryuji\oxi-main")
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO))
 from pipeline.config import WORD_PNG_DIR, RENDER_DPI
 from pipeline.ssim_calculator import _load_rgb, _resize_to_match
 from skimage.metrics import structural_similarity as ssim
 sys.stdout.reconfigure(encoding="utf-8")
-REPO=r"c:\Users\ryuji\oxi-main"
+REPO=str(_REPO)
 DW=os.path.join(REPO,"tools","oxi-dwrite-renderer","target","release","oxi-dwrite-renderer.exe")
 DOCS=os.path.join(REPO,"tools","golden-test","documents","docx")
 spec=sys.argv[1]; filt=sys.argv[2:]

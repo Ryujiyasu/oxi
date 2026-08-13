@@ -2,8 +2,10 @@
 Isolates whether Oxi's 5-row table total height is short vs Word."""
 import json, os, subprocess, tempfile
 import win32com.client as win32
-DOCX=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\gen2_lineheight\table_5x3_cambria11.docx"
-RENDER=r"C:\Users\ryuji\oxi-main\tools\oxi-gdi-renderer\target\release\oxi-gdi-renderer.exe"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOCX=str(_REPO / r"tools\golden-test\repros\gen2_lineheight\table_5x3_cambria11.docx")
+RENDER=str(_REPO / r"tools\oxi-gdi-renderer\target\release\oxi-gdi-renderer.exe")
 VPOS=6;PAGE=3
 # Word
 word=win32.gencache.EnsureDispatch("Word.Application");word.Visible=False

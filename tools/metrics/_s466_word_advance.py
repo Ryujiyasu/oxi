@@ -2,8 +2,10 @@
 Determines if Oxi's 11.075pt advance over-expands (pitch error) or is a pure
 wrap-boundary epsilon. wdHorizontalPositionRelativeToPage = 5."""
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 HPOS=5;VPOS=6
-REPRO=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\chargrid_wrap"
+REPRO=str(_REPO / r"tools\golden-test\repros\chargrid_wrap")
 word=win32.gencache.EnsureDispatch("Word.Application");word.Visible=False
 for nm,fs in [("cg_mincho_10p5",10.5),("cg_mincho_10",10.0),("cg_mincho_9",9.0)]:
     doc=word.Documents.Open(f"{REPRO}\{nm}.docx",ReadOnly=True)

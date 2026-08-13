@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 import win32com.client
 import pythoncom
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-ROOT = Path('c:/Users/ryuji/oxi-main')
+ROOT = _REPO
 DOCX = ROOT / 'tools/golden-test/documents/docx/d77a58485f16_20240705_resources_data_outline_08.docx'
 
 

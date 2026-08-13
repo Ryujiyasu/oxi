@@ -22,10 +22,12 @@ import sys
 import time
 
 import win32com.client
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REPO = r"c:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 REPRO_DIR = r"c:\tmp"
 OUT = os.path.join(
     REPO, "pipeline_data", "ra_manual_measurements",

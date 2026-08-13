@@ -5,11 +5,13 @@ JSON cell_row/page/y. Oxi: dump cell_row_idx/page/y. Compute each row's TOP
 page offset to compare. Find the row(s) Oxi under-counts."""
 import json,sys
 from collections import defaultdict
+import os
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 USABLE=841.9-22.7-11.65  # roudoujoken content height ~807.55
 TOP=22.7
 W=json.load(open(r'pipeline_data/pagination_word/roudoujoken.json',encoding='utf-8'))
-d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))
+d=json.load(open(os.path.join(tempfile.gettempdir(), r"roudou_layout.json"),encoding='utf-8'))
 # Word: cell_row -> (page, min_y). Only the FIRST table (table_start of pages1-2).
 wrow={}
 for p in W['paragraphs']:

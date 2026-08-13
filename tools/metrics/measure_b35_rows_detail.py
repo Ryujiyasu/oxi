@@ -11,10 +11,11 @@ Goal: derive multi-font cell formula. Previous attempts with 3 data points
 import json, time, sys
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX = Path(r"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx")
+DOCX = (_REPO / r"tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx")
 
 word = win32com.client.Dispatch("Word.Application")
 time.sleep(1.0)

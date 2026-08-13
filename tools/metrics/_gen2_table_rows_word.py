@@ -1,5 +1,7 @@
 import win32com.client as win32
-DOCX=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\gen2_lineheight\table_5x3_cambria11.docx"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOCX=str(_REPO / r"tools\golden-test\repros\gen2_lineheight\table_5x3_cambria11.docx")
 VPOS=6
 word=win32.gencache.EnsureDispatch("Word.Application");word.Visible=False
 doc=word.Documents.Open(DOCX,ReadOnly=True)

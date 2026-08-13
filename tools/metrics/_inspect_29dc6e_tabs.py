@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Inspect 29dc6e's tab usage to characterize tab patterns."""
 import sys, os, zipfile, re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-DOCX = r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx\29dc6e8943fe_order_01.docx'
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\29dc6e8943fe_order_01.docx")
 
 with zipfile.ZipFile(DOCX) as z:
     doc = z.read('word/document.xml').decode('utf-8')

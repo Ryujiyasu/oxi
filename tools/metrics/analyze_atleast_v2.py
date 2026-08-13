@@ -2,12 +2,13 @@
 import json, math, sys
 from pathlib import Path
 from collections import Counter
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
 
 def main():
-    with open('c:/Users/ryuji/oxi-main/tools/metrics/atleast_snap_survey_v2.json', encoding='utf-8') as f:
+    with open(str(_REPO / r"tools/metrics/atleast_snap_survey_v2.json"), encoding='utf-8') as f:
         rows = json.load(f)
     print(f"Total rows: {len(rows)}")
 

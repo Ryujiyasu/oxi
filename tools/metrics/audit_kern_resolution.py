@@ -37,8 +37,10 @@ import zipfile
 import json
 import re
 import xml.etree.ElementTree as ET
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX_DIR = "C:/Users/ryuji/oxi-main/pipeline_data/golden_per_page"
+DOCX_DIR = str(_REPO / r"pipeline_data/golden_per_page")
 OUT_JSON = os.path.join(os.path.dirname(__file__), "..", "..", "pipeline_data", "kern_audit.json")
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"

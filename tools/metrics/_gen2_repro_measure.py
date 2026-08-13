@@ -3,9 +3,11 @@ Single-line paras => gap = line_height(+after). Reveals Word's exact line
 height and whether Oxi's 0.5pt quantization causes the per-para shortfall."""
 import json, os, subprocess, tempfile, statistics
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\gen2_lineheight"
-RENDER=r"C:\Users\ryuji\oxi-main\tools\oxi-gdi-renderer\target\release\oxi-gdi-renderer.exe"
+REPRO=str(_REPO / r"tools\golden-test\repros\gen2_lineheight")
+RENDER=str(_REPO / r"tools\oxi-gdi-renderer\target\release\oxi-gdi-renderer.exe")
 VPOS=6;PAGE=3
 NAMES=["cambria11_auto100_after0","cambria11_auto115_after0",
        "cambria11_auto115_after200","calibri11_auto115_after0"]

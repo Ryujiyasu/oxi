@@ -12,6 +12,7 @@ from pathlib import Path
 import win32com.client
 import pythoncom
 import fitz
+import tempfile
 
 
 DPI = 144
@@ -64,5 +65,5 @@ def render(docx_path: str, out_dir: str):
 
 if __name__ == "__main__":
     docx = sys.argv[1] if len(sys.argv) > 1 else "DS_full.docx"
-    out = sys.argv[2] if len(sys.argv) > 2 else r"C:\Users\ryuji\AppData\Local\Temp\dstrike_render"
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(tempfile.gettempdir(), r"dstrike_render")
     render(docx, out)

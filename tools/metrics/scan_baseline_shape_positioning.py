@@ -6,8 +6,9 @@ import re
 import zipfile
 from pathlib import Path
 from collections import Counter
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx")
+DOCX_DIR = (_REPO / r"tools\golden-test\documents\docx")
 
 
 # Both wp:anchor and v:shape (VML) carry positioning. Focus on wp: form first.

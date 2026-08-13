@@ -12,11 +12,12 @@ Usage: python tools/metrics/regen_word_png.py [start_idx] [limit]
 """
 import os, sys, time, subprocess
 from pathlib import Path
-sys.path.insert(0, r"c:\Users\ryuji\oxi-main")
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO))
 from pipeline.config import WORD_PNG_DIR, RENDER_DPI
 sys.stdout.reconfigure(encoding="utf-8")
 
-REPO = r"c:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 DOCS = Path(REPO) / "tools" / "golden-test" / "documents" / "docx"
 NEW = Path(REPO) / "pipeline_data" / "word_png_new"
 TIMEOUT = 60

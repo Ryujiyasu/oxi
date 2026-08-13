@@ -6,8 +6,10 @@ the horizontal char-grid bug) or ~9.84 (compressed, matching Oxi)? Sample consec
 in multi-char in-table 10.5pt paragraphs. Writes ASCII results. cp932-safe."""
 import json
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX = r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\b35123fe8efc_tokumei_08_01.docx'
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\b35123fe8efc_tokumei_08_01.docx")
 OUT = r'c:\tmp\b35_char_adv_word.json'
 wdHorizPos = 5
 wdVertPos = 6

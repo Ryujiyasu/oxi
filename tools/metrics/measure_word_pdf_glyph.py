@@ -15,6 +15,8 @@ bd90b00 を PDF に保存し、pi=11 の "年" 文字の y を抽出して比較
 """
 from __future__ import annotations
 import os, sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8')
 
 
@@ -152,7 +154,7 @@ def process(doc_id, docx_dir):
 
 
 def main():
-    docx_dir = r'C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx'
+    docx_dir = str(_REPO / r"tools\golden-test\documents\docx")
     docs = ['bd90b00ab7a7', 'de6e32b5960b', 'db9ca18368cd', 'd77a58485f16']
 
     print('Re-measuring 4 Class A docs with PDF-glyph methodology...')

@@ -8,8 +8,10 @@ from __future__ import annotations
 import os, sys, traceback
 sys.stdout.reconfigure(encoding='utf-8')
 import win32com.client as wc
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC = r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\ed025cbecffb_index-23.docx'
+DOC = str(_REPO / r"tools\golden-test\documents\docx\ed025cbecffb_index-23.docx")
 
 
 def main():

@@ -19,6 +19,8 @@ from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_SHAPE
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 
 def gen_geometry(out_path):
@@ -113,7 +115,7 @@ def gen_slide_sizes(out_dir):
 
 
 if __name__ == "__main__":
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else r"c:\Users\ryuji\oxi-main\pipeline_data\pptx_probes"
+    out_dir = sys.argv[1] if len(sys.argv) > 1 else str(_REPO / r"pipeline_data\pptx_probes")
     os.makedirs(out_dir, exist_ok=True)
     gen_geometry(os.path.join(out_dir, "geometry.pptx"))
     gen_slide_sizes(out_dir)

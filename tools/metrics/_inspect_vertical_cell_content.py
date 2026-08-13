@@ -4,8 +4,10 @@ import sys, os, zipfile, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 import sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 fname = sys.argv[1] if len(sys.argv) > 1 else '459f05f1e877_kyodokenkyuyoushiki01.docx'
-DOCX = rf'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx\{fname}'
+DOCX = str(_REPO / rf"tools\golden-test\documents\docx\{fname}")
 print(f"Inspecting: {fname}\n")
 
 with zipfile.ZipFile(DOCX) as z:

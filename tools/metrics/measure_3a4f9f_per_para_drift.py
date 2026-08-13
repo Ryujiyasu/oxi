@@ -27,9 +27,11 @@ baseline. Phase 1 53/55 mean 0.9842 must remain unchanged.
 from __future__ import annotations
 import os, sys, json, re, statistics
 from collections import defaultdict
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 DOC_ID = '3a4f9fbe1a83'
 DIFF = os.path.join(REPO, 'pipeline_data', 'pagination_diff', f'{DOC_ID}.json')
 WORD = os.path.join(REPO, 'pipeline_data', 'pagination_word', f'{DOC_ID}.json')

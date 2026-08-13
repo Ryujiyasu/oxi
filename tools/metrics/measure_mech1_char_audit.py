@@ -23,11 +23,13 @@ Type B: ） U+FF09, 」 U+300D, 』 U+300F, 】 U+3011, 〕 U+3015,
 """
 import json, os, sys, time, zipfile, subprocess
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT_DIR = os.path.abspath(r"C:\Users\ryuji\oxi-1\tools\metrics\mech1_audit_repro")
-RESULT = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\mech1_char_audit.json")
+OUT_DIR = os.path.abspath(str(_REPO / r"tools\metrics\mech1_audit_repro"))
+RESULT = os.path.abspath(str(_REPO / r"pipeline_data\mech1_char_audit.json"))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 TYPE_A_CHARS = [

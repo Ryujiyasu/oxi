@@ -2,7 +2,9 @@
 print Y and consecutive gap side-by-side to localize the exact drift source."""
 import json
 import win32com.client as win32
-DOCX=r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\gen2_060_Employee_Agreement.docx"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOCX=str(_REPO / r"tools\golden-test\documents\docx\gen2_060_Employee_Agreement.docx")
 DUMP=r"C:/tmp/gen2dump/layout.json"
 VPOS=6;PAGE=3
 

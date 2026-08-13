@@ -4,8 +4,10 @@ given page. If Oxi pitches are uniformly LARGER => CJK cell rows over-snapped
 via Information(6) wdVerticalPositionRelativeToPage + R30 collapsed start."""
 import json
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 VPOS=6;PAGEINFO=3
-DOCX=r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\d4d126dfe1d9_tokumei_08_01-3.docx"
+DOCX=str(_REPO / r"tools\golden-test\documents\docx\d4d126dfe1d9_tokumei_08_01-3.docx")
 DUMP="C:/tmp/tok_d4/layout.json"
 TARGET_PAGE=4
 

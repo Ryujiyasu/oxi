@@ -1,9 +1,11 @@
 """Find where d77a p.9 drift begins by diffing Oxi vs Word DML across all pages."""
 import io, json
 from collections import defaultdict
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[1]
 
 OXI = "pipeline_data/_d77a_oxi_layout.json"
-WORD = r"C:/Users/ryuji/oxi-main/pipeline_data/word_dml/d77a58485f16_20240705_resources_data_outline_08.json"
+WORD = str(_REPO / r"pipeline_data/word_dml/d77a58485f16_20240705_resources_data_outline_08.json")
 
 with io.open(OXI, encoding="utf-8") as f:
     oxi = json.load(f)

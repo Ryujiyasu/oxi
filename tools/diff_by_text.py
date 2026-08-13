@@ -14,6 +14,7 @@ Example: python tools/diff_by_text.py d77a
 import io, json, os, sys
 from collections import defaultdict
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[1]
 
 DOCID_MAP = {
     "d77a": ("d77a58485f16_20240705_resources_data_outline_08",
@@ -29,7 +30,7 @@ DOCID_MAP = {
 def load():
     key = sys.argv[1] if len(sys.argv) > 1 else "d77a"
     full, oxi_path = DOCID_MAP[key]
-    word_path = rf"C:/Users/ryuji/oxi-main/pipeline_data/word_dml/{full}.json"
+    word_path = str(_REPO / rf"pipeline_data/word_dml/{full}.json")
     with io.open(oxi_path, encoding="utf-8") as f: oxi = json.load(f)
     with io.open(word_path, encoding="utf-8") as f: w = json.load(f)
     return full, oxi, w

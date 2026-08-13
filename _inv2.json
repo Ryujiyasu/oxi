@@ -1,0 +1,4522 @@
+[
+ {
+  "file": "RESEARCH_LOG.md",
+  "line": 1195,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\fe_match_measurements.json`",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fe_match_measurements.json`",
+  "text": "`C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fe_match_measurements.json`"
+ },
+ {
+  "file": "tools/diff_0e7a_p2.py",
+  "line": 5,
+  "root": "oxi-main",
+  "rest": "pipeline_data/word_dml/0e7a...json",
+  "raw": "C:/Users/ryuji/oxi-main/pipeline_data/word_dml/0e7a...json",
+  "text": "- C:/Users/ryuji/oxi-main/pipeline_data/word_dml/0e7a...json"
+ },
+ {
+  "file": "tools/diff_0e7a_p2.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "pipeline_data/word_dml/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00.json",
+  "raw": "C:/Users/ryuji/oxi-main/pipeline_data/word_dml/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00.json",
+  "text": "WORD = r\"C:/Users/ryuji/oxi-main/pipeline_data/word_dml/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00.json\""
+ },
+ {
+  "file": "tools/diff_by_text.py",
+  "line": 32,
+  "root": "oxi-main",
+  "rest": "pipeline_data/word_dml/{full}.json",
+  "raw": "C:/Users/ryuji/oxi-main/pipeline_data/word_dml/{full}.json",
+  "text": "word_path = rf\"C:/Users/ryuji/oxi-main/pipeline_data/word_dml/{full}.json\""
+ },
+ {
+  "file": "tools/diff_d77a_drift.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "pipeline_data/word_dml/d77a58485f16_20240705_resources_data_outline_08.json",
+  "raw": "C:/Users/ryuji/oxi-main/pipeline_data/word_dml/d77a58485f16_20240705_resources_data_outline_08.json",
+  "text": "WORD = r\"C:/Users/ryuji/oxi-main/pipeline_data/word_dml/d77a58485f16_20240705_resources_data_outline_08.json\""
+ },
+ {
+  "file": "tools/font-metrics-gen/gen_hgp_gothic_widths.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/golden-test/compare_layout.py",
+  "line": 119,
+  "root": "oxi-1",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-1",
+  "text": "base_dir = r\"C:\\Users\\ryuji\\oxi-1\""
+ },
+ {
+  "file": "tools/golden-test/repros/dstrike_r66/render_word.py",
+  "line": 67,
+  "root": "AppData",
+  "rest": "Local\\Temp\\dstrike_render",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\dstrike_render",
+  "text": "out = sys.argv[2] if len(sys.argv) > 2 else r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\dstrike_render\""
+ },
+ {
+  "file": "tools/metrics/29dc6e_i130_sb_word.json",
+  "line": 2,
+  "root": "oxi-main",
+  "rest": "tools\\\\golden-test\\\\documents\\\\docx\\\\29dc6e8943fe_order_01.docx",
+  "raw": "C:\\\\Users\\\\ryuji\\\\oxi-main\\\\tools\\\\golden-test\\\\documents\\\\docx\\\\29dc6e8943fe_order_01.docx",
+  "text": "\"doc\": \"C:\\\\Users\\\\ryuji\\\\oxi-main\\\\tools\\\\golden-test\\\\documents\\\\docx\\\\29dc6e8943fe_order_01.docx\","
+ },
+ {
+  "file": "tools/metrics/31420af_row_heights_word.json",
+  "line": 2,
+  "root": "oxi-main",
+  "rest": "tools\\\\golden-test\\\\documents\\\\docx\\\\31420af1a08f_tokumei_08_07.docx",
+  "raw": "C:\\\\Users\\\\ryuji\\\\oxi-main\\\\tools\\\\golden-test\\\\documents\\\\docx\\\\31420af1a08f_tokumei_08_07.docx",
+  "text": "\"doc\": \"C:\\\\Users\\\\ryuji\\\\oxi-main\\\\tools\\\\golden-test\\\\documents\\\\docx\\\\31420af1a08f_tokumei_08_07.docx\","
+ },
+ {
+  "file": "tools/metrics/31420af_wrap_lines_word.json",
+  "line": 2,
+  "root": "oxi-main",
+  "rest": "tools\\\\golden-test\\\\documents\\\\docx\\\\31420af1a08f_tokumei_08_07.docx",
+  "raw": "C:\\\\Users\\\\ryuji\\\\oxi-main\\\\tools\\\\golden-test\\\\documents\\\\docx\\\\31420af1a08f_tokumei_08_07.docx",
+  "text": "\"doc\": \"C:\\\\Users\\\\ryuji\\\\oxi-main\\\\tools\\\\golden-test\\\\documents\\\\docx\\\\31420af1a08f_tokumei_08_07.docx\","
+ },
+ {
+  "file": "tools/metrics/_3a4f9f_static_analysis.py",
+  "line": 24,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/_3a4f_anchor.py",
+  "line": 8,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/_3a4f_anchor.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_3a4f_localize.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/_3a4f_localize.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_3a4f_sweep.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/_3a4f_sweep.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_459f_y0_diagnosis.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_REAL = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/_aigl_circle.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\aiguideline_komon.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\aiguideline_komon.docx",
+  "text": "DOC = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\aiguideline_komon.docx\""
+ },
+ {
+  "file": "tools/metrics/_aigl_fmt.py",
+  "line": 2,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\aiguideline_komon.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\aiguideline_komon.docx",
+  "text": "DOC = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\aiguideline_komon.docx\""
+ },
+ {
+  "file": "tools/metrics/_aigl_pdf.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\aiguideline_komon.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\aiguideline_komon.docx",
+  "text": "DOC = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\aiguideline_komon.docx\""
+ },
+ {
+  "file": "tools/metrics/_b35_para1_detail.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_REAL = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/_b35_pre_table_y.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_REAL = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/_bc_drift.py",
+  "line": 3,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\*bunka*.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\*bunka*.docx",
+  "text": "DOC=glob.glob(r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\*bunka*.docx\")[0]"
+ },
+ {
+  "file": "tools/metrics/_bunka_lh.py",
+  "line": 2,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\*bunka*.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\*bunka*.docx",
+  "text": "DOC = glob.glob(r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\*bunka*.docx\")[0]"
+ },
+ {
+  "file": "tools/metrics/_class_A_table_share_5docs.py",
+  "line": 20,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/_class_A_table_share_5docs.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "pipeline_data/pagination_diff_postR41",
+  "raw": "C:/Users/ryuji/oxi-main/pipeline_data/pagination_diff_postR41",
+  "text": "DIFFS = \"C:/Users/ryuji/oxi-main/pipeline_data/pagination_diff_postR41\""
+ },
+ {
+  "file": "tools/metrics/_cy_sweep_direct.py",
+  "line": 7,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "ORIG = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx'"
+ },
+ {
+  "file": "tools/metrics/_cy_sweep_direct.py",
+  "line": 8,
+  "root": "oxi-4",
+  "rest": "pipeline_data\\1ec1_cy_sweep",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\pipeline_data\\1ec1_cy_sweep",
+  "text": "OUTDIR = r'C:\\Users\\ryuji\\oxi-4\\pipeline_data\\1ec1_cy_sweep'"
+ },
+ {
+  "file": "tools/metrics/_debug_cell_border.py",
+  "line": 10,
+  "root": "oxi-2",
+  "rest": "tools\\metrics\\output\\cell_border_absorption_fixtures\\CBA_sz12hp_(6.0pt",
+  "raw": "C:\\Users\\ryuji\\oxi-2\\tools\\metrics\\output\\cell_border_absorption_fixtures\\CBA_sz12hp_(6.0pt",
+  "text": "path = r\"C:\\Users\\ryuji\\oxi-2\\tools\\metrics\\output\\cell_border_absorption_fixtures\\CBA_sz12hp_(6.0pt).docx\""
+ },
+ {
+  "file": "tools/metrics/_gen2_anchors.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx",
+  "text": "DOCX=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx\""
+ },
+ {
+  "file": "tools/metrics/_gen2_gaps.py",
+  "line": 5,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx",
+  "text": "DOCX=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx\""
+ },
+ {
+  "file": "tools/metrics/_gen2_gaps2.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\{NAME}.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\{NAME}.docx",
+  "text": "DOCX=fr\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\{NAME}.docx\""
+ },
+ {
+  "file": "tools/metrics/_gen2_make_repro.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\gen2_lineheight",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight",
+  "text": "OUT = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\""
+ },
+ {
+  "file": "tools/metrics/_gen2_para_y_com.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx",
+  "text": "DOCX = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_060_Employee_Agreement.docx\""
+ },
+ {
+  "file": "tools/metrics/_gen2_repro_measure.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\gen2_lineheight",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight",
+  "text": "REPRO=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\""
+ },
+ {
+  "file": "tools/metrics/_gen2_repro_measure.py",
+  "line": 8,
+  "root": "oxi-main",
+  "rest": "tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe",
+  "text": "RENDER=r\"C:\\Users\\ryuji\\oxi-main\\tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/_gen2_table_derive.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\gen2_lineheight",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight",
+  "text": "OUT=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\""
+ },
+ {
+  "file": "tools/metrics/_gen2_table_measure.py",
+  "line": 5,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\gen2_lineheight\\table_5x3_cambria11.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\\table_5x3_cambria11.docx",
+  "text": "DOCX=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\\table_5x3_cambria11.docx\""
+ },
+ {
+  "file": "tools/metrics/_gen2_table_measure.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe",
+  "text": "RENDER=r\"C:\\Users\\ryuji\\oxi-main\\tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/_gen2_table_rows_word.py",
+  "line": 2,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\gen2_lineheight\\table_5x3_cambria11.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\\table_5x3_cambria11.docx",
+  "text": "DOCX=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\gen2_lineheight\\table_5x3_cambria11.docx\""
+ },
+ {
+  "file": "tools/metrics/_inspect_0e7af_pbdr.py",
+  "line": 7,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx\\0e7af*",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\0e7af*",
+  "text": "paths = glob.glob(r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\0e7af*')"
+ },
+ {
+  "file": "tools/metrics/_inspect_29dc6e_tabs.py",
+  "line": 6,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx\\29dc6e8943fe_order_01.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\29dc6e8943fe_order_01.docx",
+  "text": "DOCX = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\29dc6e8943fe_order_01.docx'"
+ },
+ {
+  "file": "tools/metrics/_inspect_d77a_tabs.py",
+  "line": 6,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a*",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\d77a*",
+  "text": "paths = glob.glob(r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\d77a*')"
+ },
+ {
+  "file": "tools/metrics/_inspect_vertical_cell_content.py",
+  "line": 8,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx\\{fname}",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\{fname}",
+  "text": "DOCX = rf'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx\\{fname}'"
+ },
+ {
+  "file": "tools/metrics/_inspect_vertical_docs.py",
+  "line": 13,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/_pb_pbdrpunct_gen.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\docx_corpus\\en\\technical\\002c1ffa65f3a566.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\docx_corpus\\en\\technical\\002c1ffa65f3a566.docx",
+  "text": "SRC = r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\docx_corpus\\en\\technical\\002c1ffa65f3a566.docx\""
+ },
+ {
+  "file": "tools/metrics/_reexamine_pdfs.py",
+  "line": 7,
+  "root": "oxi-4",
+  "rest": "pipeline_data\\1ec1_body_bisect",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\pipeline_data\\1ec1_body_bisect",
+  "text": "r'C:\\Users\\ryuji\\oxi-4\\pipeline_data\\1ec1_body_bisect',"
+ },
+ {
+  "file": "tools/metrics/_reexamine_pdfs.py",
+  "line": 8,
+  "root": "oxi-4",
+  "rest": "pipeline_data\\1ec1_body_bisect_after",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\pipeline_data\\1ec1_body_bisect_after",
+  "text": "r'C:\\Users\\ryuji\\oxi-4\\pipeline_data\\1ec1_body_bisect_after',"
+ },
+ {
+  "file": "tools/metrics/_rowbox_cmp.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "ROOT = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s415_rightalign_firstline.py",
+  "line": 27,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s416_rightalign_trigger.py",
+  "line": 31,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s420_kinsoku_rebalance.py",
+  "line": 29,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s423_empty_para_height.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s445_7ead_rowheight.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\7ead52b63f0e_000067058.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\7ead52b63f0e_000067058.docx",
+  "text": "DOCX = r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\7ead52b63f0e_000067058.docx\""
+ },
+ {
+  "file": "tools/metrics/_s445_cell_lines.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\7ead52b63f0e_000067058.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\7ead52b63f0e_000067058.docx",
+  "text": "DOCX = r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\7ead52b63f0e_000067058.docx\""
+ },
+ {
+  "file": "tools/metrics/_s445_compare.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "pipeline_data/element_iou_diff/_summary.json",
+  "raw": "c:/Users/ryuji/oxi-main/pipeline_data/element_iou_diff/_summary.json",
+  "text": "cur = load(r\"c:/Users/ryuji/oxi-main/pipeline_data/element_iou_diff/_summary.json\")"
+ },
+ {
+  "file": "tools/metrics/_s445_compare.py",
+  "line": 31,
+  "root": "oxi-main",
+  "rest": "pipeline_data/pagination_diff/_summary.json",
+  "raw": "c:/Users/ryuji/oxi-main/pipeline_data/pagination_diff/_summary.json",
+  "text": "pc = load(r\"c:/Users/ryuji/oxi-main/pipeline_data/pagination_diff/_summary.json\")"
+ },
+ {
+  "file": "tools/metrics/_s445_measure_repro.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\s445_trheight_repro",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\s445_trheight_repro",
+  "text": "REPRO = r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\s445_trheight_repro\""
+ },
+ {
+  "file": "tools/metrics/_s445_measure_repro.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe",
+  "text": "RENDERER = r\"c:\\Users\\ryuji\\oxi-main\\tools\\oxi-gdi-renderer\\target\\release\\oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/_s445_multidoc_trh.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx",
+  "text": "DOCXDIR = r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\""
+ },
+ {
+  "file": "tools/metrics/_s457_freshref.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/_s457_freshref.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "pipeline_data/word_png_new",
+  "raw": "c:/Users/ryuji/oxi-main/pipeline_data/word_png_new",
+  "text": "WORD_PNG_DIR = \"c:/Users/ryuji/oxi-main/pipeline_data/word_png_new\""
+ },
+ {
+  "file": "tools/metrics/_s457_freshref.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s457_multidoc.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/_s457_multidoc.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s463_rowpitch_cmp.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\gen2_025*.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_025*.docx",
+  "text": "DOCS={\"gen2_025(JP regress)\":glob.glob(r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_025*.docx\")[0],"
+ },
+ {
+  "file": "tools/metrics/_s463_rowpitch_cmp.py",
+  "line": 5,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\gen2_054_Audit_Report.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_054_Audit_Report.docx",
+  "text": "\"gen2_054(EN improve)\":r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\gen2_054_Audit_Report.docx\"}"
+ },
+ {
+  "file": "tools/metrics/_s466_cell_word.py",
+  "line": 3,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\chargrid_wrap\\cg_cell_12pt.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\\cg_cell_12pt.docx",
+  "text": "D=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\\cg_cell_12pt.docx\""
+ },
+ {
+  "file": "tools/metrics/_s466_chargrid_measure.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\chargrid_wrap",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap",
+  "text": "REPRO=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\""
+ },
+ {
+  "file": "tools/metrics/_s466_chargrid_repro.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\chargrid_wrap",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap",
+  "text": "OUT=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\""
+ },
+ {
+  "file": "tools/metrics/_s466_p7_word_adv.py",
+  "line": 5,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\de6e32b5960b_tokumei_08_01-1.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\de6e32b5960b_tokumei_08_01-1.docx",
+  "text": "D=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\de6e32b5960b_tokumei_08_01-1.docx\""
+ },
+ {
+  "file": "tools/metrics/_s466_tok_rowpitch.py",
+  "line": 8,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d4d126dfe1d9_tokumei_08_01-3.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d4d126dfe1d9_tokumei_08_01-3.docx",
+  "text": "DOCX=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d4d126dfe1d9_tokumei_08_01-3.docx\""
+ },
+ {
+  "file": "tools/metrics/_s466_word_adv12.py",
+  "line": 3,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\chargrid_wrap\\cg_mincho_12_in_105grid.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\\cg_mincho_12_in_105grid.docx",
+  "text": "D=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\\cg_mincho_12_in_105grid.docx\""
+ },
+ {
+  "file": "tools/metrics/_s466_word_advance.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\chargrid_wrap",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap",
+  "text": "REPRO=r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\chargrid_wrap\""
+ },
+ {
+  "file": "tools/metrics/_s467_gen2_drift.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s467_gen2_drift.py",
+  "line": 43,
+  "root": "AppData",
+  "rest": "Local\\Temp",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp",
+  "text": "dump = os.path.join(r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\", \"s467_%s.json\" % tag)"
+ },
+ {
+  "file": "tools/metrics/_s467_gen2_drift.py",
+  "line": 44,
+  "root": "AppData",
+  "rest": "Local\\Temp",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp",
+  "text": "out_prefix = os.path.join(r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\", \"s467_%s\" % tag)"
+ },
+ {
+  "file": "tools/metrics/_s467_pbdr_gate.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s467_pbdr_gate.py",
+  "line": 14,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s467gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s467gate",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s467gate\""
+ },
+ {
+  "file": "tools/metrics/_s467_repro_grid.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\grid_snap",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\grid_snap",
+  "text": "OUT = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\grid_snap\""
+ },
+ {
+  "file": "tools/metrics/_s467_repro_grid.py",
+  "line": 75,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\_s467_repro_grid.out",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\_s467_repro_grid.out",
+  "text": "io.open(r\"C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\_s467_repro_grid.out\", \"w\", encoding=\"utf-8\").write(txt)"
+ },
+ {
+  "file": "tools/metrics/_s467_repro_list.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s467_repro_list.py",
+  "line": 49,
+  "root": "AppData",
+  "rest": "Local/Temp/s467_list.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/s467_list.json",
+  "text": "dump = r\"C:/Users/ryuji/AppData/Local/Temp/s467_list.json\""
+ },
+ {
+  "file": "tools/metrics/_s467_repro_list.py",
+  "line": 50,
+  "root": "AppData",
+  "rest": "Local/Temp/s467list",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/s467list",
+  "text": "subprocess.run([RENDERER, path, r\"C:/Users/ryuji/AppData/Local/Temp/s467list\", \"150\","
+ },
+ {
+  "file": "tools/metrics/_s467_repro_pbdr.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s467_repro_pbdr.py",
+  "line": 59,
+  "root": "AppData",
+  "rest": "Local/Temp/s467_pbdr.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/s467_pbdr.json",
+  "text": "dump = r\"C:/Users/ryuji/AppData/Local/Temp/s467_pbdr.json\""
+ },
+ {
+  "file": "tools/metrics/_s467_repro_pbdr.py",
+  "line": 60,
+  "root": "AppData",
+  "rest": "Local/Temp/s467pbdr",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/s467pbdr",
+  "text": "subprocess.run([RENDERER, path, r\"C:/Users/ryuji/AppData/Local/Temp/s467pbdr\", \"150\","
+ },
+ {
+  "file": "tools/metrics/_s468_cjk_rawlh.py",
+  "line": 23,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s468_cjk_rawlh.py",
+  "line": 27,
+  "root": "AppData",
+  "rest": "Local\\Temp",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\""
+ },
+ {
+  "file": "tools/metrics/_s468_glyph_ink.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s468_glyph_ink.py",
+  "line": 13,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s468vgate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s468vgate",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s468vgate\""
+ },
+ {
+  "file": "tools/metrics/_s468_realdoc_grid.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s468_realdoc_grid.py",
+  "line": 14,
+  "root": "AppData",
+  "rest": "Local\\Temp",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\""
+ },
+ {
+  "file": "tools/metrics/_s468_vsnap_gate.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s468_vsnap_gate.py",
+  "line": 21,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s468vgate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s468vgate",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s468vgate\""
+ },
+ {
+  "file": "tools/metrics/_s473_gate.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s473_gate.py",
+  "line": 14,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s469gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s469gate",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s469gate\""
+ },
+ {
+  "file": "tools/metrics/_s475_gate.py",
+  "line": 8,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s475_gate.py",
+  "line": 12,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s475gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s475gate",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s475gate\""
+ },
+ {
+  "file": "tools/metrics/_s476_gate.py",
+  "line": 8,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s476_gate.py",
+  "line": 12,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s475gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s475gate",
+  "text": "TMP = r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s475gate\""
+ },
+ {
+  "file": "tools/metrics/_s478_gate.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s478_gate.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s478gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate",
+  "text": "TMP=r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate\"; os.makedirs(TMP,exist_ok=True)"
+ },
+ {
+  "file": "tools/metrics/_s479_gate.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s479_gate.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s478gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate",
+  "text": "TMP=r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate\"; os.makedirs(TMP,exist_ok=True)"
+ },
+ {
+  "file": "tools/metrics/_s480_gate.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s480_gate.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s478gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate",
+  "text": "TMP=r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate\"; os.makedirs(TMP,exist_ok=True)"
+ },
+ {
+  "file": "tools/metrics/_s482_gate.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s482_gate.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s478gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate",
+  "text": "TMP=r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate\"; os.makedirs(TMP,exist_ok=True)"
+ },
+ {
+  "file": "tools/metrics/_s483_gate.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s483_gate.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s478gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate",
+  "text": "TMP=r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate\"; os.makedirs(TMP,exist_ok=True)"
+ },
+ {
+  "file": "tools/metrics/_s484_gate.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"C:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s484_gate.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local\\Temp\\s478gate",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate",
+  "text": "TMP=r\"C:\\Users\\ryuji\\AppData\\Local\\Temp\\s478gate\"; os.makedirs(TMP,exist_ok=True)"
+ },
+ {
+  "file": "tools/metrics/_s559_linecmp.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s559_linecount.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s559_paginate.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s559_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s560_resid.py",
+  "line": 20,
+  "root": "AppData",
+  "rest": "Local/Temp/kyotei_layout2.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/kyotei_layout2.json",
+  "text": "d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/kyotei_layout2.json',encoding='utf-8'))"
+ },
+ {
+  "file": "tools/metrics/_s560_roudou_gaps.py",
+  "line": 5,
+  "root": "AppData",
+  "rest": "Local/Temp/roudou_layout.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json",
+  "text": "d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))"
+ },
+ {
+  "file": "tools/metrics/_s561_r7_width.py",
+  "line": 11,
+  "root": "AppData",
+  "rest": "Local/Temp/roudou_layout.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json",
+  "text": "d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))"
+ },
+ {
+  "file": "tools/metrics/_s561_realdiff.py",
+  "line": 14,
+  "root": "AppData",
+  "rest": "Local/Temp/roudou_layout.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json",
+  "text": "d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))"
+ },
+ {
+  "file": "tools/metrics/_s561_rowdiff.py",
+  "line": 12,
+  "root": "AppData",
+  "rest": "Local/Temp/roudou_layout.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json",
+  "text": "d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))"
+ },
+ {
+  "file": "tools/metrics/_s562_overpack.py",
+  "line": 10,
+  "root": "AppData",
+  "rest": "Local/Temp/rd_dbg2.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/rd_dbg2.json",
+  "text": "d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/rd_dbg2.json',encoding='utf-8'))"
+ },
+ {
+  "file": "tools/metrics/_s565_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s566_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s567_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s568_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s570_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s571_pdf_truth.py",
+  "line": 8,
+  "root": "AppData",
+  "rest": "Local\\Temp\\ikd_truth.pdf",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\ikd_truth.pdf",
+  "text": "PDF  = r'C:\\Users\\ryuji\\AppData\\Local\\Temp\\ikd_truth.pdf'"
+ },
+ {
+  "file": "tools/metrics/_s571_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s572_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s575_ssim_ab.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s576_ssim_ab.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s578_nakaguro.py",
+  "line": 20,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/_s578_ssim_ab.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s583_ssim_ab.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s584_ssim_ab.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s585_ssim_ab.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_s603_ssim_ab.py",
+  "line": 29,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/_survey_field_codes.py",
+  "line": 7,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/_survey_inline_images.py",
+  "line": 6,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/_survey_other_features.py",
+  "line": 7,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/_survey_ruby_vertical_chargrid.py",
+  "line": 6,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/_survey_tab_usage.py",
+  "line": 6,
+  "root": "oxi-4",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = r'C:\\Users\\ryuji\\oxi-4\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/_tbrlv_sweep.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "tools\\metrics",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\")"
+ },
+ {
+  "file": "tools/metrics/_tks_rowaudit.py",
+  "line": 4,
+  "root": "AppData",
+  "rest": "Local\\Temp\\tks_truth.pdf",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\Temp\\tks_truth.pdf",
+  "text": "PDF=r'C:\\Users\\ryuji\\AppData\\Local\\Temp\\tks_truth.pdf'"
+ },
+ {
+  "file": "tools/metrics/_triage_0e7af.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx/0e7af1ae8f21*.docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/0e7af1ae8f21*.docx",
+  "text": "DOCX = glob.glob(r\"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/0e7af1ae8f21*.docx\")[0]"
+ },
+ {
+  "file": "tools/metrics/_triage_0e7af.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "pipeline_data/word_png/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00",
+  "raw": "c:/Users/ryuji/oxi-main/pipeline_data/word_png/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00",
+  "text": "WORD_DIR = r\"c:/Users/ryuji/oxi-main/pipeline_data/word_png/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00\""
+ },
+ {
+  "file": "tools/metrics/agg_word_oxi_diffs.py",
+  "line": 6,
+  "root": "AppData",
+  "rest": "Local/Temp/diffv2_out",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/diffv2_out",
+  "text": "DIR = \"C:/Users/ryuji/AppData/Local/Temp/diffv2_out\""
+ },
+ {
+  "file": "tools/metrics/analyze_atleast_snap.py",
+  "line": 19,
+  "root": "oxi-main",
+  "rest": "tools/metrics/atleast_snap_survey.json",
+  "raw": "c:/Users/ryuji/oxi-main/tools/metrics/atleast_snap_survey.json",
+  "text": "SURVEY = Path('c:/Users/ryuji/oxi-main/tools/metrics/atleast_snap_survey.json')"
+ },
+ {
+  "file": "tools/metrics/analyze_atleast_v2.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools/metrics/atleast_snap_survey_v2.json",
+  "raw": "c:/Users/ryuji/oxi-main/tools/metrics/atleast_snap_survey_v2.json",
+  "text": "with open('c:/Users/ryuji/oxi-main/tools/metrics/atleast_snap_survey_v2.json', encoding='utf-8') as f:"
+ },
+ {
+  "file": "tools/metrics/audit_kern_resolution.py",
+  "line": 41,
+  "root": "oxi-main",
+  "rest": "pipeline_data/golden_per_page",
+  "raw": "C:/Users/ryuji/oxi-main/pipeline_data/golden_per_page",
+  "text": "DOCX_DIR = \"C:/Users/ryuji/oxi-main/pipeline_data/golden_per_page\""
+ },
+ {
+  "file": "tools/metrics/audit_mech_compression_jc_left.py",
+  "line": 25,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/audit_mech_compression_jc_left.py",
+  "line": 26,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech_audit_jc_left.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech_audit_jc_left.json",
+  "text": "RESULT_PATH = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech_audit_jc_left.json\")"
+ },
+ {
+  "file": "tools/metrics/audit_mech_smart.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/audit_mech_smart.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech_audit_smart.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech_audit_smart.json",
+  "text": "RESULT_PATH = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech_audit_smart.json\")"
+ },
+ {
+  "file": "tools/metrics/bisect_mech3_alignment_full.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "text": "r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx\")"
+ },
+ {
+  "file": "tools/metrics/bisect_mech3_alignment_full.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_align_full_docs",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_align_full_docs",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_align_full_docs\")"
+ },
+ {
+  "file": "tools/metrics/bisect_mech3_alignment_full.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_align_full.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_align_full.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_align_full.json\")"
+ },
+ {
+  "file": "tools/metrics/bisect_mech3_csc_values.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "text": "r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx\")"
+ },
+ {
+  "file": "tools/metrics/bisect_mech3_csc_values.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_csc_docs",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_csc_docs",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_csc_docs\")"
+ },
+ {
+  "file": "tools/metrics/bisect_mech3_csc_values.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_csc_values.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_csc_values.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_csc_values.json\")"
+ },
+ {
+  "file": "tools/metrics/build_compat_test.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\compat_test_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\compat_test_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\compat_test_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_exact_to_single_repro.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "tools/metrics/exact_to_single_repro",
+  "raw": "c:/Users/ryuji/oxi-main/tools/metrics/exact_to_single_repro",
+  "text": "OUT = Path('c:/Users/ryuji/oxi-main/tools/metrics/exact_to_single_repro')"
+ },
+ {
+  "file": "tools/metrics/build_fe_2ea81a_match.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\fe_match_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_match_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_match_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_fe_intervening_empty.py",
+  "line": 32,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\fe_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_first_line_offset_repro.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "tools/metrics/first_line_offset_repro",
+  "raw": "c:/Users/ryuji/oxi-main/tools/metrics/first_line_offset_repro",
+  "text": "OUT = Path('c:/Users/ryuji/oxi-main/tools/metrics/first_line_offset_repro')"
+ },
+ {
+  "file": "tools/metrics/build_ft_slope_repro.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\ft_slope_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ft_slope_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ft_slope_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_ic_docdefaults.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\ic_docdef_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ic_docdef_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ic_docdef_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_ic_indent_chars.py",
+  "line": 26,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\ic_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ic_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ic_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_m1_alignment_test.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\m1_alignment_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\m1_alignment_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\m1_alignment_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_order_test.py",
+  "line": 10,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tblppr_anchor_repro\\TP3_anchor1_tblpY600.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tblppr_anchor_repro\\TP3_anchor1_tblpY600.docx",
+  "text": "SRC = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tblppr_anchor_repro\\TP3_anchor1_tblpY600.docx\")"
+ },
+ {
+  "file": "tools/metrics/build_order_test.py",
+  "line": 11,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\order_test_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\order_test_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\order_test_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_sp_position_v.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\sp_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_sp_relative_from.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\sp_relfrom_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_relfrom_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_relfrom_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_tp3_mutate.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tblppr_anchor_repro\\TP3_anchor1_tblpY600.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tblppr_anchor_repro\\TP3_anchor1_tblpY600.docx",
+  "text": "SRC = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tblppr_anchor_repro\\TP3_anchor1_tblpY600.docx\")"
+ },
+ {
+  "file": "tools/metrics/build_tp3_mutate.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tp3_mutate_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tp3_mutate_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tp3_mutate_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_tr_height_matrix.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tr_height_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tr_height_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tr_height_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_tr_hrule_default.py",
+  "line": 11,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tr_hrule_default_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tr_hrule_default_repro",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tr_hrule_default_repro\")"
+ },
+ {
+  "file": "tools/metrics/build_word_true_x_cache.py",
+  "line": 24,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/check_1ec1_fonts.py",
+  "line": 5,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/check_1ec1_grid.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/check_ph_fixed.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes\\ph_fixed.json",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\ph_fixed.json",
+  "text": "with open(r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\ph_fixed.json\", encoding=\"utf-8\") as f:"
+ },
+ {
+  "file": "tools/metrics/check_ph_raw.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes\\ph_fixed.json",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\ph_fixed.json",
+  "text": "with open(r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\ph_fixed.json\", encoding=\"utf-8\") as f:"
+ },
+ {
+  "file": "tools/metrics/check_theme_parse.py",
+  "line": 4,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/com_1ec1_para_y.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1*.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\1ec1091177b1*.docx",
+  "text": "DOCX = glob.glob(r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\1ec1091177b1*.docx')[0]"
+ },
+ {
+  "file": "tools/metrics/com_1ec1_textbox_pitch.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1*.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\1ec1091177b1*.docx",
+  "text": "DOCX = glob.glob(r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\1ec1091177b1*.docx')[0]"
+ },
+ {
+  "file": "tools/metrics/com_b35_cell_pitch.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "text": "DOCX = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx'"
+ },
+ {
+  "file": "tools/metrics/com_b35_char_advance.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "text": "DOCX = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx'"
+ },
+ {
+  "file": "tools/metrics/com_b35_para_pitch.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "text": "DOCX = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx'"
+ },
+ {
+  "file": "tools/metrics/com_b35_para_y.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx",
+  "text": "DOCX = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\b35123fe8efc_tokumei_08_01.docx'"
+ },
+ {
+  "file": "tools/metrics/compare_oxi_vs_word_cell.py",
+  "line": 17,
+  "root": "oxi-4",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "C:/Users/ryuji/oxi-4/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "OXI_RENDERER = Path(r\"C:/Users/ryuji/oxi-4/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\")"
+ },
+ {
+  "file": "tools/metrics/debug_cell_chars.py",
+  "line": 12,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\mech2_cell_repro\\cell_sl3.0.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech2_cell_repro\\cell_sl3.0.docx",
+  "text": "path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech2_cell_repro\\cell_sl3.0.docx\""
+ },
+ {
+  "file": "tools/metrics/diff_3a4f_p74_r33_vs_word.py",
+  "line": 61,
+  "root": "oxi-3",
+  "rest": "pipeline_data\\3a4f_p74_per_char_2026-05-02.json",
+  "raw": "C:\\Users\\ryuji\\oxi-3\\pipeline_data\\3a4f_p74_per_char_2026-05-02.json",
+  "text": "WORD_JSON = r\"C:\\Users\\ryuji\\oxi-3\\pipeline_data\\3a4f_p74_per_char_2026-05-02.json\""
+ },
+ {
+  "file": "tools/metrics/diff_3a4f_p74_r33_vs_word.py",
+  "line": 62,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\golden_per_page\\3a4f9fbe1a83_001620506_p74.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\golden_per_page\\3a4f9fbe1a83_001620506_p74.docx",
+  "text": "DOCX_PATH = r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\golden_per_page\\3a4f9fbe1a83_001620506_p74.docx\""
+ },
+ {
+  "file": "tools/metrics/diff_per_row_bottom_band.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/dump_ph_xml.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes\\ph_resolution.pptx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\ph_resolution.pptx",
+  "text": "pptx = r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\ph_resolution.pptx\""
+ },
+ {
+  "file": "tools/metrics/en_bench.py",
+  "line": 24,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = Path(r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/en_phase1.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = Path(r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/extract_d77a_chars_indent.py",
+  "line": 11,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/extract_d77a_chars_indent.py",
+  "line": 13,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\d77a_chars_indent_extract.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\d77a_chars_indent_extract.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\d77a_chars_indent_extract.json\")"
+ },
+ {
+  "file": "tools/metrics/extract_d77a_context.py",
+  "line": 10,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/extract_d77a_context.py",
+  "line": 11,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\d77a_chars_indent_extract.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\d77a_chars_indent_extract.json",
+  "text": "EXTRACT_JSON = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\d77a_chars_indent_extract.json\")"
+ },
+ {
+  "file": "tools/metrics/extract_d77a_context.py",
+  "line": 12,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\d77a_context_overlay.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\d77a_context_overlay.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\d77a_context_overlay.json\")"
+ },
+ {
+  "file": "tools/metrics/extract_d77a_tables_xml.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_tables_xml_diff.txt",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_tables_xml_diff.txt",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_tables_xml_diff.txt\")"
+ },
+ {
+  "file": "tools/metrics/find_jump_paras.py",
+  "line": 5,
+  "root": "AppData",
+  "rest": "Local/Temp/diffv2_out",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/diffv2_out",
+  "text": "DIR = \"C:/Users/ryuji/AppData/Local/Temp/diffv2_out\""
+ },
+ {
+  "file": "tools/metrics/find_y_divergence_e3c545.py",
+  "line": 43,
+  "root": "AppData",
+  "rest": "Local/Temp",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp",
+  "text": "dump_path = Path(r\"C:/Users/ryuji/AppData/Local/Temp\") / f\"{DOC_ID}_ydiv.json\""
+ },
+ {
+  "file": "tools/metrics/fuzz_bisect.py",
+  "line": 30,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/fuzz_focused.py",
+  "line": 27,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/fuzz_tcmar_probe.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/gen_day11_cs_grid.py",
+  "line": 57,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "OUT_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/gen_day7_matrix.py",
+  "line": 72,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "OUT_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/gen_exact_line_repro.py",
+  "line": 48,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx/repro_exact_line.docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/repro_exact_line.docx",
+  "text": "OUT = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/repro_exact_line.docx\""
+ },
+ {
+  "file": "tools/metrics/gen_indent_matrix.py",
+  "line": 74,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "OUT_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/gen_item6_repro.py",
+  "line": 93,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx/repro_item6_wrap.docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/repro_item6_wrap.docx",
+  "text": "OUT = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/repro_item6_wrap.docx\""
+ },
+ {
+  "file": "tools/metrics/gen_item6_variants.py",
+  "line": 102,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "OUT_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/gen_pptx_repro.py",
+  "line": 116,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes",
+  "text": "out_dir = sys.argv[1] if len(sys.argv) > 1 else r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\""
+ },
+ {
+  "file": "tools/metrics/gen_pptx_spec4.py",
+  "line": 91,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes",
+  "text": "out_dir = sys.argv[1] if len(sys.argv) > 1 else r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\""
+ },
+ {
+  "file": "tools/metrics/gen_pptx_spec4b.py",
+  "line": 67,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes",
+  "text": "out_dir = sys.argv[1] if len(sys.argv) > 1 else r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\""
+ },
+ {
+  "file": "tools/metrics/gen_pptx_spec4c.py",
+  "line": 75,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes",
+  "text": "out_dir = sys.argv[1] if len(sys.argv) > 1 else r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\""
+ },
+ {
+  "file": "tools/metrics/gen_pptx_spec4e.py",
+  "line": 20,
+  "root": "oxi-main",
+  "rest": "tools\\metrics",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\")"
+ },
+ {
+  "file": "tools/metrics/gen_pptx_spec4e.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes\\spec4e_multifont",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\spec4e_multifont",
+  "text": "OUT_DIR = r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\spec4e_multifont\""
+ },
+ {
+  "file": "tools/metrics/gen_tcmar_sweep.py",
+  "line": 63,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "OUT_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/inventory_comments_tracked_changes.py",
+  "line": 27,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCS_DIR = Path(r\"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\")"
+ },
+ {
+  "file": "tools/metrics/libra_bugfinder.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/libra_bugfinder.py",
+  "line": 20,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/libra_bugfinder_incr.py",
+  "line": 8,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/libra_bugfinder_incr.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_block_positions.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_line_heights.py",
+  "line": 8,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_para2.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_positions.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_positions2.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_positions3.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_table_y.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_1ec1_table_y2.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_29dc6e_i130_sb.py",
+  "line": 23,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\29dc6e8943fe_order_01.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\29dc6e8943fe_order_01.docx",
+  "text": "DOC_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\29dc6e8943fe_order_01.docx\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_29dc6e_i130_sb.py",
+  "line": 24,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\29dc6e_i130_sb_word.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\29dc6e_i130_sb_word.json",
+  "text": "OUT_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\29dc6e_i130_sb_word.json\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_2ea81_paras.py",
+  "line": 8,
+  "root": "oxi-4",
+  "rest": "tools/golden-test/documents/docx/2ea81a8441cc_0025006-192.docx",
+  "raw": "C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/2ea81a8441cc_0025006-192.docx",
+  "text": "DOCX = Path(r\"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/2ea81a8441cc_0025006-192.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_31420af_row_heights.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\31420af1a08f_tokumei_08_07.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\31420af1a08f_tokumei_08_07.docx",
+  "text": "DOC_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\31420af1a08f_tokumei_08_07.docx\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_31420af_row_heights.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\31420af_row_heights_word.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\31420af_row_heights_word.json",
+  "text": "OUT_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\31420af_row_heights_word.json\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_31420af_wrap_lines.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\31420af1a08f_tokumei_08_07.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\31420af1a08f_tokumei_08_07.docx",
+  "text": "DOC_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\31420af1a08f_tokumei_08_07.docx\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_31420af_wrap_lines.py",
+  "line": 19,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\31420af_wrap_lines_word.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\31420af_wrap_lines_word.json",
+  "text": "OUT_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\31420af_wrap_lines_word.json\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_3a4f9f_jump3_pre_table_spacing.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/measure_3a4f9f_per_para_drift.py",
+  "line": 32,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/measure_3a4f_focused.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\3a4f9fbe1a83_001620506.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\3a4f9fbe1a83_001620506.docx",
+  "text": "DOCX = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\3a4f9fbe1a83_001620506.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_3a4f_focused.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\3a4f_rowsplit.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\3a4f_rowsplit.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\3a4f_rowsplit.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_adjust_right_ind.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\adjust_right_ind_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\adjust_right_ind_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\adjust_right_ind_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_adjust_right_ind.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\adjust_right_ind.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\adjust_right_ind.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\adjust_right_ind.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_cross_font.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_cross_font_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_cross_font_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_cross_font_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_cross_font.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_cross_font.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_cross_font.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_cross_font.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_dn_disable.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_dn_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_dn_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_dn_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_dn_disable.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_dn.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_dn.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_dn.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_dn_inherit.py",
+  "line": 14,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_dn_inherit_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_dn_inherit_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_dn_inherit_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_dn_inherit.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_dn_inherit.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_dn_inherit.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_dn_inherit.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_glyph_fs.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_glyph_fs_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_glyph_fs_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_glyph_fs_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_glyph_fs.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_glyph_fs.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_glyph_fs.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_glyph_fs.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_glyph_sweep.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_glyph_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_glyph_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_glyph_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_glyph_sweep.py",
+  "line": 31,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_glyph.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_glyph.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_glyph.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_inheritance.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_inherit_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_inherit_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_inherit_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_inheritance.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_inherit.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_inherit.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_inherit.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_ppr_level.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\autospace_ppr_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_ppr_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\autospace_ppr_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_autospace_ppr_level.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\autospace_ppr.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_ppr.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\autospace_ppr.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_b35_row6_7.py",
+  "line": 15,
+  "root": "oxi-4",
+  "rest": "tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx",
+  "raw": "C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx",
+  "text": "DOCX = Path(r\"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_b35_rows_detail.py",
+  "line": 17,
+  "root": "oxi-4",
+  "rest": "tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx",
+  "raw": "C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx",
+  "text": "DOCX = Path(r\"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b35123fe8efc_tokumei_08_01.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_b837_para48_charx.py",
+  "line": 13,
+  "root": "oxi-4",
+  "rest": "tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx",
+  "raw": "C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx",
+  "text": "DOCX = Path(r\"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_b837_para48_wrap.py",
+  "line": 14,
+  "root": "oxi-4",
+  "rest": "tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx",
+  "raw": "C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx",
+  "text": "DOCX = Path(r\"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_balance_byte_width.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\balance_byte_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\balance_byte_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\balance_byte_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_balance_byte_width.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\balance_byte.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\balance_byte.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\balance_byte.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_between_border.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\between_border_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\between_border_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\between_border_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_between_border.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\between_border.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\between_border.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\between_border.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_box_split_border.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\box_split_repro\\repro_*.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\box_split_repro\\repro_*.docx",
+  "text": "REPROS = sorted(_glob.glob(r\"C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\box_split_repro\\repro_*.docx\"))"
+ },
+ {
+  "file": "tools/metrics/measure_box_split_border.py",
+  "line": 23,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "D77A = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_box_split_border.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\box_split_repro\\word_png",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\box_split_repro\\word_png",
+  "text": "OUT_DIR = Path(r\"C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\box_split_repro\\word_png\")"
+ },
+ {
+  "file": "tools/metrics/measure_box_split_border.py",
+  "line": 127,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\word_png",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\word_png",
+  "text": "word_png_dir = Path(r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\word_png\") / name"
+ },
+ {
+  "file": "tools/metrics/measure_box_split_border.py",
+  "line": 139,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\box_split_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\box_split_measurements.json",
+  "text": "out = Path(r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\box_split_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_45char.py",
+  "line": 25,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_45char_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_45char_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_45char_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_45char.py",
+  "line": 26,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_45char.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_45char.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_45char.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_disambiguation.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_disambig_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_disambig_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_disambig_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_disambiguation.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_disambig.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_disambig.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_disambig.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_font_aggregator.py",
+  "line": 12,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_font_sweep_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_font_sweep_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_font_sweep_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_font_aggregator.py",
+  "line": 13,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_font_sweep.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_font_sweep.json",
+  "text": "RESULT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_font_sweep.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_font_size_sweep.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_font_sweep_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_font_sweep_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_font_sweep_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_font_size_sweep.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_font_sweep.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_font_sweep.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_font_sweep.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_large_mixed.py",
+  "line": 31,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_large_mixed_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_large_mixed_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_large_mixed_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_large_mixed.py",
+  "line": 32,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_large_mixed.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_large_mixed.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_large_mixed.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_n1_n2.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_n1_n2_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_n1_n2_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_n1_n2_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_n1_n2.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_n1_n2.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_n1_n2.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_n1_n2.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_other_fonts.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_other_fonts_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_other_fonts_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_other_fonts_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_other_fonts.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_other_fonts.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_other_fonts.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_other_fonts.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_round14_fillers.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cap_round14_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_round14_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cap_round14_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cap_round14_fillers.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cap_round14_fillers.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_round14_fillers.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cap_round14_fillers.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_caps_smallcaps.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\caps_smallcaps_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\caps_smallcaps_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\caps_smallcaps_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_caps_smallcaps.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\caps_smallcaps.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\caps_smallcaps.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\caps_smallcaps.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_chargrid_indent_repro.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\chargrid_indent_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\chargrid_indent_repro",
+  "text": "repro_dir = r'C:\\Users\\ryuji\\oxi-main\\tools\\metrics\\chargrid_indent_repro'"
+ },
+ {
+  "file": "tools/metrics/measure_cjk_notype_line_heights.py",
+  "line": 34,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/measure_cols_layout.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cols_layout_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cols_layout_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cols_layout_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cols_layout.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cols_layout.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cols_layout.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cols_layout.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_cols_overflow.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\cols_overflow_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cols_overflow_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\cols_overflow_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_cols_overflow.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\cols_overflow.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cols_overflow.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\cols_overflow.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_column_break.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\column_break_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\column_break_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\column_break_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_column_break.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\column_break.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\column_break.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\column_break.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_comment.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\comment_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\comment_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\comment_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_comment.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\comment.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\comment.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\comment.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_compat_test.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\compat_test_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\compat_test_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\compat_test_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_compat_test.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\compat_test_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\compat_test_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\compat_test_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_contextual_spacing.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\contextual_spacing_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\contextual_spacing_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\contextual_spacing_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_contextual_spacing.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\contextual_spacing.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\contextual_spacing.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\contextual_spacing.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_d4d126_rowsplit.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "text": "DOCX = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_d4d126_rowsplit.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\ed025_rowsplit.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\ed025_rowsplit.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\ed025_rowsplit.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_all_paras.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_all_paras.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_all_paras_measurement.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_all_paras_measurement.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_all_paras_measurement.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p2_all_paras.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p6_line_ys.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p6_line_ys.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_p6_line_ys.json",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p6_line_ys.json",
+  "text": "OUT = r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p6_line_ys.json\""
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p6_p7_boundary.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOCX = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p6_p7_boundary.py",
+  "line": 62,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_p6_p7_boundary.json",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p6_p7_boundary.json",
+  "text": "out_path = r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p6_p7_boundary.json\""
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p6_p7_cascade.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = r\"C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\""
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p6_p7_cascade.py",
+  "line": 23,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_p6_p7_cascade.json",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p6_p7_cascade.json",
+  "text": "OUT = r\"C:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p6_p7_cascade.json\""
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p7_table_structure.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_p7_table_structure.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_p7_table_structure.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p7_table_structure.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_p7_table_structure.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_pi25_lines.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_post_tbl5.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_post_tbl5.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_post_tbl5_measurement.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_post_tbl5_measurement.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_post_tbl5_measurement.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_tab_width.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_tab_width.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_tab_width_measurement.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_tab_width_measurement.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_tab_width_measurement.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_tbl6_wrap.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx",
+  "text": "DOC = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\d77a58485f16_20240705_resources_data_outline_08.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_d77a_tbl6_wrap.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\d77a_tbl6_wrap_measurement.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_tbl6_wrap_measurement.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\d77a_tbl6_wrap_measurement.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_day11.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/measure_day11.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "RENDERER = \"c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/measure_day11.py",
+  "line": 58,
+  "root": "AppData",
+  "rest": "Local/Temp/{v}_oxi.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/{v}_oxi.json",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/{v}_oxi.json\""
+ },
+ {
+  "file": "tools/metrics/measure_day7.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/measure_day7.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "RENDERER = \"c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/measure_day7.py",
+  "line": 55,
+  "root": "AppData",
+  "rest": "Local/Temp/{v}.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/{v}.json",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/{v}.json\""
+ },
+ {
+  "file": "tools/metrics/measure_db9ca18_pages23.py",
+  "line": 14,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/measure_db9ca18_para37.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/measure_decimal_tab.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\decimal_tab_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\decimal_tab_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\decimal_tab_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_decimal_tab.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\decimal_tab.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\decimal_tab.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\decimal_tab.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_donot_expand_shift_return.py",
+  "line": 26,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\donot_expand_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\donot_expand_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\donot_expand_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_donot_expand_shift_return.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\donot_expand.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\donot_expand.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\donot_expand.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_e3c545_idx29_advance.py",
+  "line": 17,
+  "root": "oxi-4",
+  "rest": "tools/golden-test/documents/docx/e3c545fac7a7_LOD_Handbook.docx",
+  "raw": "C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/e3c545fac7a7_LOD_Handbook.docx",
+  "text": "DOCX = Path(r\"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/e3c545fac7a7_LOD_Handbook.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_cell_pagination.py",
+  "line": 28,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "text": "DOC = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx'"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_cell_pagination.py",
+  "line": 29,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\ra_manual_measurements\\ed025c_cell_pagination.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\ra_manual_measurements\\ed025c_cell_pagination.json",
+  "text": "OUT = r'c:\\Users\\ryuji\\oxi-main\\pipeline_data\\ra_manual_measurements\\ed025c_cell_pagination.json'"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_cell_pitch.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "text": "DOC = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx'"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_cell_pitch.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\ra_manual_measurements\\ed025c_cell_pitch.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\ra_manual_measurements\\ed025c_cell_pitch.json",
+  "text": "OUT = r'c:\\Users\\ryuji\\oxi-main\\pipeline_data\\ra_manual_measurements\\ed025c_cell_pitch.json'"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_footer_top.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "text": "DOC = r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx'"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_oxi_cell_pagination.py",
+  "line": 13,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/measure_ed025c_per_cpi_alignment.py",
+  "line": 50,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/measure_empty_para_pprrpr.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\empty_para_pprrpr_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\empty_para_pprrpr_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\empty_para_pprrpr_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_empty_para_pprrpr.py",
+  "line": 8,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\empty_para_pprrpr.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\empty_para_pprrpr.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\empty_para_pprrpr.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_empty_para_spacing.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\empty_para_spacing_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\empty_para_spacing_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\empty_para_spacing_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_empty_para_spacing.py",
+  "line": 8,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\empty_para_spacing.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\empty_para_spacing.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\empty_para_spacing.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_exact_to_single_repro.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/measure_fe_intervening.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\fe_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_fe_intervening.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\fe_intervening_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fe_intervening_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fe_intervening_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_fe_match.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\fe_match_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_match_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fe_match_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_fe_match.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\fe_match_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fe_match_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fe_match_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_field_complex.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\field_complex_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\field_complex_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\field_complex_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_field_complex.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\field_complex.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\field_complex.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\field_complex.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_field_page.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\field_page_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\field_page_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\field_page_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_field_page.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\field_page.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\field_page.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\field_page.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_field_types.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\field_types_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\field_types_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\field_types_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_field_types.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\field_types.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\field_types.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\field_types.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_first_line_indent.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\first_line_ind_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\first_line_ind_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\first_line_ind_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_first_line_indent.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\first_line_ind.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\first_line_ind.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\first_line_ind.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_first_line_offset_repro.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/measure_fittext_widths.py",
+  "line": 25,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx",
+  "text": "('ed025c', r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\ed025cbecffb_index-23.docx'),"
+ },
+ {
+  "file": "tools/metrics/measure_floating_table_vertanchor_word.py",
+  "line": 28,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/measure_footnote.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\footnote_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\footnote_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\footnote_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_footnote.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\footnote.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\footnote.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\footnote.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_ft_slope.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\ft_slope_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ft_slope_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ft_slope_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_ft_slope.py",
+  "line": 28,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx",
+  "text": "BASELINE_DOCS_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_ft_slope.py",
+  "line": 39,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\ft_slope_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\ft_slope_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\ft_slope_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_fullwidth_latin.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\fullwidth_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fullwidth_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\fullwidth_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_fullwidth_latin.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\fullwidth_latin.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fullwidth_latin.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\fullwidth_latin.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_glyph_top_b35123.py",
+  "line": 43,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\word_png\\b35123fe8efc_tokumei_08_01\\page_0001.png",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\word_png\\b35123fe8efc_tokumei_08_01\\page_0001.png",
+  "text": "word_png = r'C:\\Users\\ryuji\\oxi-main\\pipeline_data\\word_png\\b35123fe8efc_tokumei_08_01\\page_0001.png'"
+ },
+ {
+  "file": "tools/metrics/measure_glyph_top_b35123.py",
+  "line": 44,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\oxi_png\\b35123fe8efc_tokumei_08_01\\page_0001.png",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\pipeline_data\\oxi_png\\b35123fe8efc_tokumei_08_01\\page_0001.png",
+  "text": "oxi_pre  = r'C:\\Users\\ryuji\\oxi-main\\pipeline_data\\oxi_png\\b35123fe8efc_tokumei_08_01\\page_0001.png'"
+ },
+ {
+  "file": "tools/metrics/measure_gutter.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\gutter_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\gutter_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\gutter_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_gutter.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\gutter.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\gutter.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\gutter.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_gutter_at_top.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\gutter_at_top_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\gutter_at_top_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\gutter_at_top_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_gutter_at_top.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\gutter_at_top.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\gutter_at_top.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\gutter_at_top.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_half_half_boundary.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\half_half_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\half_half_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\half_half_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_half_half_boundary.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\half_half.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\half_half.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\half_half.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_halfwidth_katakana.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\halfwidth_katakana_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\halfwidth_katakana_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\halfwidth_katakana_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_halfwidth_katakana.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\halfwidth_katakana.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\halfwidth_katakana.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\halfwidth_katakana.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_header_footer.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\header_footer_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\header_footer_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\header_footer_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_header_footer.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\header_footer.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\header_footer.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\header_footer.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_header_types.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\header_types_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\header_types_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\header_types_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_header_types.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\header_types.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\header_types.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\header_types.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_hiragana_boundary.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\hiragana_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\hiragana_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\hiragana_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_hiragana_boundary.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\hiragana_boundary.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\hiragana_boundary.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\hiragana_boundary.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_hiragana_digit.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\hiragana_digit_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\hiragana_digit_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\hiragana_digit_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_hiragana_digit.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\hiragana_digit.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\hiragana_digit.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\hiragana_digit.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_ic_indent_chars.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\ic_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ic_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\ic_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_ic_indent_chars.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\ic_indent_chars_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\ic_indent_chars_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\ic_indent_chars_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_indent_matrix.py",
+  "line": 6,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/measure_indent_matrix.py",
+  "line": 7,
+  "root": "oxi-main",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "RENDERER = \"c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/measure_indent_matrix.py",
+  "line": 50,
+  "root": "AppData",
+  "rest": "Local/Temp/imatrix_{v}.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/imatrix_{v}.json",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/imatrix_{v}.json\""
+ },
+ {
+  "file": "tools/metrics/measure_item6_variants.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/measure_item6_variants.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "RENDERER = \"c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/measure_item6_variants.py",
+  "line": 73,
+  "root": "AppData",
+  "rest": "Local/Temp/repro_v_{vname}.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/repro_v_{vname}.json",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/repro_v_{vname}.json\""
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_flag.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\kinsoku_flag_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_flag_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_flag_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_flag.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\kinsoku_flag.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_flag.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_flag.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_mech2.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\kinsoku_mech2_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_mech2_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_mech2_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_mech2.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\kinsoku_mech2.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_mech2.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_mech2.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_remeasure.py",
+  "line": 8,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\kinsoku_mech2_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_mech2_repro",
+  "text": "REPRO = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_mech2_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_remeasure.py",
+  "line": 9,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\kinsoku_mech2.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_mech2.json",
+  "text": "RESULT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_mech2.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_retreat.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\kinsoku_retreat_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_retreat_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\kinsoku_retreat_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_kinsoku_retreat.py",
+  "line": 28,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\kinsoku_retreat.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_retreat.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\kinsoku_retreat.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_lang_effect.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\lang_effect_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\lang_effect_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\lang_effect_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_lang_effect.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\lang_effect.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\lang_effect.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\lang_effect.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m1_alignment.py",
+  "line": 11,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\m1_alignment_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\m1_alignment_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\m1_alignment_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_m1_alignment.py",
+  "line": 12,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m1_alignment_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m1_alignment_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m1_alignment_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m1_m2_precedence.py",
+  "line": 35,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m1_m2_precedence.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m1_m2_precedence.json",
+  "text": "RESULT_PATH = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m1_m2_precedence.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m2_position_and_charset.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m2_position_charset.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_position_charset.json",
+  "text": "RESULT_PATH = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_position_charset.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m2_position_sweep.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m2_position_sweep.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_position_sweep.json",
+  "text": "RESULT_PATH = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_position_sweep.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m2_trigger_pairs.py",
+  "line": 43,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m2_trigger_pairs.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_trigger_pairs.json",
+  "text": "RESULT_PATH = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_trigger_pairs.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m2_wrap_budget.py",
+  "line": 31,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m2_wrap_budget.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_wrap_budget.json",
+  "text": "RESULT_PATH = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_wrap_budget.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_m2_wrap_budget_chunked.py",
+  "line": 9,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m2_wrap_budget.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_wrap_budget.json",
+  "text": "RESULT_PATH = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_wrap_budget.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech1_char_audit.py",
+  "line": 29,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\mech1_audit_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech1_audit_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech1_audit_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech1_char_audit.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech1_char_audit.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech1_char_audit.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech1_char_audit.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech2_cellmar_variation.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\mech2_cellmar_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech2_cellmar_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech2_cellmar_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech2_cellmar_variation.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech2_cellmar.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech2_cellmar.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech2_cellmar.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech2_in_cell.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\mech2_cell_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech2_cell_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mech2_cell_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech2_in_cell.py",
+  "line": 28,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech2_cell.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech2_cell.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech2_cell.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech3_7f272a_per_line.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "text": "DOC = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech3_7f272a_per_line.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_7f272a_perline.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_7f272a_perline.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_7f272a_perline.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech3_compression_formula.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx",
+  "text": "r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\7f272a2dfd3b_index-21.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech3_compression_formula.py",
+  "line": 25,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_compress_repro_docs",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_compress_repro_docs",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_compress_repro_docs\")"
+ },
+ {
+  "file": "tools/metrics/measure_mech3_compression_formula.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mech3_compression_formula.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_compression_formula.json",
+  "text": "r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mech3_compression_formula.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mirror_margins.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\mirror_margins_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mirror_margins_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mirror_margins_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_mirror_margins.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mirror_margins.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mirror_margins.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mirror_margins.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_mixed_cjk_sizes.py",
+  "line": 32,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\mixed_cjk_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mixed_cjk_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\mixed_cjk_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_mixed_cjk_sizes.py",
+  "line": 33,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\mixed_cjk_sizes.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mixed_cjk_sizes.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\mixed_cjk_sizes.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_multi_line_border.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\multi_line_border_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\multi_line_border_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\multi_line_border_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_multi_line_border.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\multi_line_border.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\multi_line_border.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\multi_line_border.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_multi_tabs.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\multi_tabs_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\multi_tabs_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\multi_tabs_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_multi_tabs.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\multi_tabs.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\multi_tabs.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\multi_tabs.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_multiline_mech2.py",
+  "line": 30,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\multiline_mech2_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\multiline_mech2_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\multiline_mech2_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_multiline_mech2.py",
+  "line": 31,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\multiline_mech2.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\multiline_mech2.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\multiline_mech2.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_n1_cap_fillers.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\n1_cap_filler_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\n1_cap_filler_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\n1_cap_filler_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_n1_cap_fillers.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\n1_cap_fillers.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\n1_cap_fillers.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\n1_cap_fillers.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_numbered_list.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\numbered_list_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\numbered_list_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\numbered_list_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_numbered_list.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\numbered_list.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\numbered_list.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\numbered_list.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_order_test.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\order_test_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\order_test_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\order_test_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_order_test.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\order_test_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\order_test_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\order_test_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_overflow_punct.py",
+  "line": 31,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\overflow_punct_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\overflow_punct_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\overflow_punct_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_overflow_punct.py",
+  "line": 32,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\overflow_punct.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\overflow_punct.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\overflow_punct.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_page_break.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\page_break_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\page_break_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\page_break_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_page_break.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\page_break.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\page_break.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\page_break.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_page_break_before.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\page_break_before_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\page_break_before_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\page_break_before_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_page_break_before.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\page_break_before.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\page_break_before.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\page_break_before.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_para_borders.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\para_borders_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\para_borders_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\para_borders_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_para_borders.py",
+  "line": 25,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\para_borders.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\para_borders.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\para_borders.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_para_shading.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\para_shading_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\para_shading_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\para_shading_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_para_shading.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\para_shading.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\para_shading.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\para_shading.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_per_para_drift_generic.py",
+  "line": 32,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/measure_per_yak_cap_sweep.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\per_yak_cap_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\per_yak_cap_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\per_yak_cap_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_per_yak_cap_sweep.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\per_yak_cap_sweep.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\per_yak_cap_sweep.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\per_yak_cap_sweep.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_phantom_page_repro.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\phantom_page_measurements.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\phantom_page_measurements.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\phantom_page_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_position_shift.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\position_shift_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\position_shift_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\position_shift_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_position_shift.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\position_shift.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\position_shift.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\position_shift.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_pptx_spec4e.py",
+  "line": 12,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\pptx_probes\\spec4e_multifont",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\spec4e_multifont",
+  "text": "OUT_DIR = r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\pptx_probes\\spec4e_multifont\""
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_fs_sweep.py",
+  "line": 25,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\pure_yak_fs_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_fs_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_fs_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_fs_sweep.py",
+  "line": 26,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\pure_yak_fs.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak_fs.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak_fs.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_line.py",
+  "line": 24,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\pure_yak_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_line.py",
+  "line": 25,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\pure_yak.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_mixed_fs.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\pure_yak_mixed_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_mixed_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_mixed_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_mixed_fs.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\pure_yak_mixed.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak_mixed.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak_mixed.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_n_dep.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\pure_yak_n_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_n_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\pure_yak_n_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_pure_yak_n_dep.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\pure_yak_n.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak_n.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\pure_yak_n.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_rowsplit_boundaries.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_rowsplit_boundaries.py",
+  "line": 19,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\rowsplit_boundaries.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\rowsplit_boundaries.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\rowsplit_boundaries.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_rowsplit_boundaries_v2.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_rowsplit_boundaries_v2.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\rowsplit_boundaries_v2.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\rowsplit_boundaries_v2.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\rowsplit_boundaries_v2.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_rowsplit_boundaries_v3.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_rowsplit_boundaries_v3.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\rowsplit_boundaries_v3.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\rowsplit_boundaries_v3.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\rowsplit_boundaries_v3.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_run_highlight.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\run_highlight_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\run_highlight_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\run_highlight_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_run_highlight.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\run_highlight.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\run_highlight.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\run_highlight.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_s356_29dc6e_sb_repro.py",
+  "line": 17,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\repros\\s356_29dc6e_sb",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\s356_29dc6e_sb",
+  "text": "REPRO_DIR = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\repros\\s356_29dc6e_sb\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_s356_29dc6e_sb_repro.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\s356_29dc6e_sb_word.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\s356_29dc6e_sb_word.json",
+  "text": "OUT_PATH = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\s356_29dc6e_sb_word.json\").resolve()"
+ },
+ {
+  "file": "tools/metrics/measure_section_break.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\section_break_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_break_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_break_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_break.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\section_break.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_break.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_break.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_break_evenodd.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\section_break_evenodd_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_break_evenodd_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_break_evenodd_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_break_evenodd.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\section_break_evenodd.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_break_evenodd.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_break_evenodd.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_margins.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\section_margins_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_margins_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_margins_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_margins.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\section_margins.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_margins.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_margins.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_page_size.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\section_page_size_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_page_size_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\section_page_size_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_section_page_size.py",
+  "line": 17,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\section_page_size.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_page_size.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\section_page_size.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_smart_quotes_emdash_mech2.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\quotes_emdash_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\quotes_emdash_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\quotes_emdash_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_smart_quotes_emdash_mech2.py",
+  "line": 28,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\quotes_emdash_mech2.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\quotes_emdash_mech2.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\quotes_emdash_mech2.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_soft_break.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\soft_break_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\soft_break_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\soft_break_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_soft_break.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\soft_break.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\soft_break.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\soft_break.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_sp_position_v.py",
+  "line": 13,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\sp_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_sp_position_v.py",
+  "line": 14,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\sp_position_v_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\sp_position_v_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\sp_position_v_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_sp_relative_from.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\sp_relfrom_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_relfrom_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\sp_relfrom_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_sp_relative_from.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\sp_relfrom_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\sp_relfrom_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\sp_relfrom_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_split_box_padding.py",
+  "line": 22,
+  "root": "oxi-main",
+  "rest": "tools\\metrics\\split_box_padding_repro",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\split_box_padding_repro",
+  "text": "REPRO_DIR = Path(r\"c:\\Users\\ryuji\\oxi-main\\tools\\metrics\\split_box_padding_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_split_box_padding.py",
+  "line": 23,
+  "root": "oxi-main",
+  "rest": "pipeline_data\\split_box_padding_measurements.json",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\pipeline_data\\split_box_padding_measurements.json",
+  "text": "OUT = Path(r\"c:\\Users\\ryuji\\oxi-main\\pipeline_data\\split_box_padding_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_strike_underline.py",
+  "line": 13,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\strike_underline_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\strike_underline_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\strike_underline_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_strike_underline.py",
+  "line": 14,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\strike_underline.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\strike_underline.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\strike_underline.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tab_clear.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tab_clear_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tab_clear_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tab_clear_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_tab_clear.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\tab_clear.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tab_clear.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tab_clear.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tab_leader.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tab_leader_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tab_leader_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tab_leader_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_tab_leader.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\tab_leader.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tab_leader.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tab_leader.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tab_stops.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tab_stops_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tab_stops_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tab_stops_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_tab_stops.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\tab_stops.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tab_stops.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tab_stops.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tcmar_sweep.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/measure_tcmar_sweep.py",
+  "line": 10,
+  "root": "oxi-main",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "RENDERER = \"c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\""
+ },
+ {
+  "file": "tools/metrics/measure_tcmar_sweep.py",
+  "line": 72,
+  "root": "AppData",
+  "rest": "Local/Temp/repro_tcmar_{name}.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/repro_tcmar_{name}.json",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/repro_tcmar_{name}.json\""
+ },
+ {
+  "file": "tools/metrics/measure_textbox_coords.py",
+  "line": 8,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_textbox_coords2.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "docx_path = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx\")"
+ },
+ {
+  "file": "tools/metrics/measure_top_line_punct.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\top_line_punct_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\top_line_punct_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\top_line_punct_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_top_line_punct.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\top_line_punct.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\top_line_punct.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\top_line_punct.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tp3_mutate.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tp3_mutate_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tp3_mutate_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tp3_mutate_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_tp3_mutate.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\tp3_mutate_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tp3_mutate_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tp3_mutate_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tp_resweep.py",
+  "line": 15,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tblppr_anchor_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tblppr_anchor_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tblppr_anchor_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_tp_resweep.py",
+  "line": 16,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\tp_resweep_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tp_resweep_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tp_resweep_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_tr_height.py",
+  "line": 6,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\tr_height_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tr_height_repro",
+  "text": "REPRO_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\tr_height_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_tr_height.py",
+  "line": 7,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\tr_height_measurements.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tr_height_measurements.json",
+  "text": "OUT = Path(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\tr_height_measurements.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_track_changes.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\track_changes_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\track_changes_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\track_changes_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_track_changes.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\track_changes.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\track_changes.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\track_changes.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_vanish_text.py",
+  "line": 21,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\vanish_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\vanish_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\vanish_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_vanish_text.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\vanish.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\vanish.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\vanish.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_vert_align.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\vert_align_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\vert_align_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\vert_align_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_vert_align.py",
+  "line": 20,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\vert_align.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\vert_align.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\vert_align.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_word_pdf_glyph.py",
+  "line": 155,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx",
+  "text": "docx_dir = r'C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx'"
+ },
+ {
+  "file": "tools/metrics/measure_word_wrap.py",
+  "line": 18,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\word_wrap_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\word_wrap_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\word_wrap_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_word_wrap.py",
+  "line": 19,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\word_wrap.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\word_wrap.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\word_wrap.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_xml_wrappers.py",
+  "line": 22,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\xml_wrappers_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\xml_wrappers_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\xml_wrappers_repro\")"
+ },
+ {
+  "file": "tools/metrics/measure_xml_wrappers.py",
+  "line": 23,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\xml_wrappers.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\xml_wrappers.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\xml_wrappers.json\")"
+ },
+ {
+  "file": "tools/metrics/measure_zero_linegap.py",
+  "line": 430,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\output\\zero_linegap_measurements.json",
+  "raw": "c:\\Users\\ryuji\\oxi-1\\tools\\metrics\\output\\zero_linegap_measurements.json",
+  "text": "OUTPUT_PATH = r\"c:\\Users\\ryuji\\oxi-1\\tools\\metrics\\output\\zero_linegap_measurements.json\""
+ },
+ {
+  "file": "tools/metrics/para_align.py",
+  "line": 31,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ },
+ {
+  "file": "tools/metrics/ra2_3a4f9f_first_cell_y.py",
+  "line": 18,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/ra2_first_cell_y_baseline_sample.py",
+  "line": 26,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/ra2_first_cell_y_universality.py",
+  "line": 33,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/ra2_tblpr_order_survey.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "tools/golden-test/documents/docx",
+  "raw": "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx",
+  "text": "DOCX_DIR = \"C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx\""
+ },
+ {
+  "file": "tools/metrics/regen_word_png.py",
+  "line": 15,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/regen_word_png.py",
+  "line": 19,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/render_onlyoffice.py",
+  "line": 56,
+  "root": "AppData",
+  "rest": "Local\\ONLYOFFICE\\DesktopEditors\\data\\fonts\\AllFonts.js",
+  "raw": "C:\\Users\\ryuji\\AppData\\Local\\ONLYOFFICE\\DesktopEditors\\data\\fonts\\AllFonts.js",
+  "text": "r\"C:\\Users\\ryuji\\AppData\\Local\\ONLYOFFICE\\DesktopEditors\\data\\fonts\\AllFonts.js\""
+ },
+ {
+  "file": "tools/metrics/repro_line_exact_boundary.py",
+  "line": 19,
+  "root": "oxi-4",
+  "rest": "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "raw": "C:/Users/ryuji/oxi-4/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe",
+  "text": "OXI_RENDERER = Path(r\"C:/Users/ryuji/oxi-4/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe\")"
+ },
+ {
+  "file": "tools/metrics/scan_baseline_shape_positioning.py",
+  "line": 10,
+  "root": "oxi-1",
+  "rest": "tools\\golden-test\\documents\\docx",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx",
+  "text": "DOCX_DIR = Path(r\"C:\\Users\\ryuji\\oxi-1\\tools\\golden-test\\documents\\docx\")"
+ },
+ {
+  "file": "tools/metrics/ssim_ab.py",
+  "line": 20,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "# tree parents[2] == the old literal c:\\Users\\ryuji\\oxi-main, so gate numbers are"
+ },
+ {
+  "file": "tools/metrics/ssim_direct.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/ssim_direct.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/ssim_direct_mean.py",
+  "line": 4,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "sys.path.insert(0, r\"c:\\Users\\ryuji\\oxi-main\")"
+ },
+ {
+  "file": "tools/metrics/ssim_direct_mean.py",
+  "line": 9,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO=r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/survey_atleast_snap.py",
+  "line": 36,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/survey_atleast_v2_xml.py",
+  "line": 21,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:/Users/ryuji/oxi-main",
+  "text": "ROOT = Path('c:/Users/ryuji/oxi-main')"
+ },
+ {
+  "file": "tools/metrics/survey_floating_table_vert_anchor.py",
+  "line": 33,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r\"c:\\Users\\ryuji\\oxi-main\""
+ },
+ {
+  "file": "tools/metrics/swap_word_png.py",
+  "line": 16,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = Path(r\"c:\\Users\\ryuji\\oxi-main\") / \"pipeline_data\""
+ },
+ {
+  "file": "tools/metrics/test_save_reopen_effect.py",
+  "line": 44,
+  "root": "oxi-1",
+  "rest": "tools\\\\metrics\\\\output\\\\test_runtime_jfmb.docx",
+  "raw": "C:\\\\Users\\\\ryuji\\\\oxi-1\\\\tools\\\\metrics\\\\output\\\\test_runtime_jfmb.docx",
+  "text": "out_path = \"C:\\\\Users\\\\ryuji\\\\oxi-1\\\\tools\\\\metrics\\\\output\\\\test_runtime_jfmb.docx\""
+ },
+ {
+  "file": "tools/metrics/trigger_localizer_bd90b00.py",
+  "line": 19,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx",
+  "text": "docx = r'C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx'"
+ },
+ {
+  "file": "tools/metrics/verify_exact_body_offset.py",
+  "line": 30,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx",
+  "text": "docx = r'C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx'"
+ },
+ {
+  "file": "tools/metrics/verify_exact_body_offset_v2.py",
+  "line": 28,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx",
+  "raw": "C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx",
+  "text": "docx = r'C:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\bd90b00ab7a7_order_05.docx'"
+ },
+ {
+  "file": "tools/metrics/verify_mech2_csc_dependence.py",
+  "line": 27,
+  "root": "oxi-1",
+  "rest": "tools\\metrics\\m2_csc_verify_repro",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\m2_csc_verify_repro",
+  "text": "OUT_DIR = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\m2_csc_verify_repro\")"
+ },
+ {
+  "file": "tools/metrics/verify_mech2_csc_dependence.py",
+  "line": 28,
+  "root": "oxi-1",
+  "rest": "pipeline_data\\m2_csc_verify.json",
+  "raw": "C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_csc_verify.json",
+  "text": "RESULT = os.path.abspath(r\"C:\\Users\\ryuji\\oxi-1\\pipeline_data\\m2_csc_verify.json\")"
+ },
+ {
+  "file": "tools/metrics/vstack_pixel_dy.py",
+  "line": 11,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "C:/Users/ryuji/oxi-main",
+  "text": "ROOT=r'C:/Users/ryuji/oxi-main'"
+ },
+ {
+  "file": "tools/metrics/word_oxi_char_diff.py",
+  "line": 193,
+  "root": "AppData",
+  "rest": "Local/Temp/cdiff_{os.path.basename(doc_path",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/cdiff_{os.path.basename(doc_path",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/cdiff_{os.path.basename(doc_path)}.json\""
+ },
+ {
+  "file": "tools/metrics/word_oxi_diff.py",
+  "line": 219,
+  "root": "AppData",
+  "rest": "Local/Temp/wod_oxi_{os.path.basename(docx_path",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/wod_oxi_{os.path.basename(docx_path",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/wod_oxi_{os.path.basename(docx_path)}.json\""
+ },
+ {
+  "file": "tools/metrics/word_oxi_diff_v2.py",
+  "line": 218,
+  "root": "AppData",
+  "rest": "Local/Temp/diffv2_{doc_id}.json",
+  "raw": "C:/Users/ryuji/AppData/Local/Temp/diffv2_{doc_id}.json",
+  "text": "layout_out = f\"C:/Users/ryuji/AppData/Local/Temp/diffv2_{doc_id}.json\""
+ },
+ {
+  "file": "tools/metrics/word_true_x.py",
+  "line": 154,
+  "root": "oxi-main",
+  "rest": "tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "raw": "c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx",
+  "text": "r'c:\\Users\\ryuji\\oxi-main\\tools\\golden-test\\documents\\docx\\1ec1091177b1_006.docx'"
+ },
+ {
+  "file": "tools/metrics/x_fidelity_diff.py",
+  "line": 30,
+  "root": "oxi-main",
+  "rest": "",
+  "raw": "c:\\Users\\ryuji\\oxi-main",
+  "text": "REPO = r'c:\\Users\\ryuji\\oxi-main'"
+ }
+]

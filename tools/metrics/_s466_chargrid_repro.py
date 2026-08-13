@@ -3,7 +3,9 @@ tokumei (linePitch=292, charSpace=1453), A4, margins L/R=1080. A long CJK body
 paragraph; measure where Word wraps (chars/line) vs Oxi. Isolates the grid
 char-cell width formula (the open charGrid文字詰め residual)."""
 import zipfile, os
-OUT=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\chargrid_wrap"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+OUT=str(_REPO / r"tools\golden-test\repros\chargrid_wrap")
 os.makedirs(OUT,exist_ok=True)
 CT='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">

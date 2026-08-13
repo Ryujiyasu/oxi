@@ -9,8 +9,10 @@ import docx
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_LINE_SPACING
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT = r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\grid_snap"
+OUT = str(_REPO / r"tools\golden-test\repros\grid_snap")
 os.makedirs(OUT, exist_ok=True)
 VPOS = 6
 PAGE = 3
@@ -72,7 +74,7 @@ def main():
         out.append(measure(word, p, fn))
     word.Quit()
     txt = "\n\n".join(out)
-    io.open(r"C:\Users\ryuji\oxi-main\tools\metrics\_s467_repro_grid.out", "w", encoding="utf-8").write(txt)
+    io.open(str(_REPO / r"tools\metrics\_s467_repro_grid.out"), "w", encoding="utf-8").write(txt)
     print(txt.encode("ascii", "replace").decode())
 
 

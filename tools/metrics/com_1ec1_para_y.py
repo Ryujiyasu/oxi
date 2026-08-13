@@ -10,7 +10,9 @@ import win32com.client as win32
 
 DOCX = None
 import glob
-DOCX = glob.glob(r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\1ec1091177b1*.docx')[0]
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOCX = glob.glob(str(_REPO / r"tools\golden-test\documents\docx\1ec1091177b1*.docx"))[0]
 OUT = r'c:\tmp\1ec1_para_y.json'
 wdVertPos = 6
 wdActiveEndPageNumber = 3

@@ -8,9 +8,11 @@ counts vs Word's measurement to identify rows where Oxi over-fits vs Word.
 """
 from __future__ import annotations
 import os, sys, json, subprocess, tempfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 DOC = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx', 'ed025cbecffb_index-23.docx')
 RENDERER = os.path.join(REPO, 'tools', 'oxi-gdi-renderer', 'target', 'release', 'oxi-gdi-renderer.exe')
 WORD_DATA = os.path.join(REPO, 'pipeline_data', 'ra_manual_measurements', 'ed025c_cell_pagination.json')

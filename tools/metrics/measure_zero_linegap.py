@@ -17,6 +17,8 @@ import json
 import os
 import tempfile
 import time
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 # ─── GDI structures ───
 
@@ -427,7 +429,7 @@ def analyze_zero_linegap(gdi_results):
 
 
 def main():
-    OUTPUT_PATH = r"c:\Users\ryuji\oxi-1\tools\metrics\output\zero_linegap_measurements.json"
+    OUTPUT_PATH = str(_REPO / r"tools\metrics\output\zero_linegap_measurements.json")
 
     print("=" * 90)
     print("Measuring GDI TEXTMETRIC for lineGap=0 fonts")

@@ -23,12 +23,14 @@ This pins:
 """
 import json, os, sys, time
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 FONT = "ＭＳ 明朝"
 SIZE = 12.0
-RESULT_PATH = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\m2_wrap_budget.json")
+RESULT_PATH = os.path.abspath(str(_REPO / r"pipeline_data\m2_wrap_budget.json"))
 
 PROBES = {
     # Each probe is a fixed string with controlled # of yakumono.

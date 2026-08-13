@@ -3,9 +3,10 @@
 Determines the TRUE rendered line heights (gold standard) to resolve the
 COM-table (16.5/21.0) vs Information(6)-gap (14.2/18.0) contradiction."""
 import os, sys, time
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 DOCX = os.path.abspath('tools/golden-test/documents/docx/ikujidetail_002197815.docx')
-PDF  = r'C:\Users\ryuji\AppData\Local\Temp\ikd_truth.pdf'
+PDF  = os.path.join(tempfile.gettempdir(), r"ikd_truth.pdf")
 if not os.path.exists(PDF) or '--reexport' in sys.argv:
     import win32com.client as win32
     w = win32.DispatchEx('Word.Application'); w.Visible = False

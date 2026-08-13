@@ -3,10 +3,11 @@ import json, os, subprocess, sys, tempfile
 from pathlib import Path
 import win32com.client
 import pythoncom
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-ROOT = Path('c:/Users/ryuji/oxi-main')
+ROOT = _REPO
 REPRO_DIR = ROOT / 'tools/metrics/first_line_offset_repro'
 RENDERER = ROOT / 'tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe'
 TOP_MARGIN_PT = 1418 / 20.0  # 70.9pt

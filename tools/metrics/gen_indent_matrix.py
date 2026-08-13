@@ -13,6 +13,8 @@ Variants from baseline (hang-indent like 1636 item 6):
 For each, render text "ABCDEあいうえお" with simple cell, measure Word + Oxi first char x.
 """
 import zipfile, os
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 CTYPES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -71,7 +73,7 @@ VARIANTS = {
     "v8_zero_indent":       '',  # no ind at all
 }
 
-OUT_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+OUT_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 for name, ind in VARIANTS.items():
     path = f"{OUT_DIR}/indent_matrix_{name}.docx"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:

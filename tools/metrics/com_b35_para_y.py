@@ -7,8 +7,10 @@ multiples) or use natural (~18.0)? If Word has NO ~18.0 single-line deltas, Oxi'
 18.0 on opt-out paras is the bug. cp932-safe (UTF-8 file, ASCII out, results to file)."""
 import sys, json
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX = r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\b35123fe8efc_tokumei_08_01.docx'
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\b35123fe8efc_tokumei_08_01.docx")
 OUT = r'c:\tmp\b35_word_paray.json'
 
 wdVertPos = 6

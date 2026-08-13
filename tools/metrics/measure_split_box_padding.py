@@ -16,11 +16,12 @@ import sys
 from pathlib import Path
 from statistics import median
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REPRO_DIR = Path(r"c:\Users\ryuji\oxi-main\tools\metrics\split_box_padding_repro")
-OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\split_box_padding_measurements.json")
+REPRO_DIR = (_REPO / r"tools\metrics\split_box_padding_repro")
+OUT = (_REPO / r"pipeline_data\split_box_padding_measurements.json")
 
 REPROS = ["SB_A", "SB_B", "SB_C", "SB_D", "SB_E", "SB_F"]
 

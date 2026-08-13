@@ -1,8 +1,9 @@
 """For each doc, find the EXACT paragraphs where Δy jumps by ~10pt (one wrap-line worth)."""
 import json, glob, os, sys
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-DIR = "C:/Users/ryuji/AppData/Local/Temp/diffv2_out"
+DIR = os.path.join(tempfile.gettempdir(), r"diffv2_out")
 for f in sorted(glob.glob(os.path.join(DIR, "*.json"))):
     with open(f, encoding='utf-8') as fh:
         d = json.load(fh)

@@ -24,6 +24,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 SPACINGS = [1.0, 1.1, 1.2, 1.3, 1.5, 1.8, 2.0, 2.5, 3.0]
 
@@ -64,6 +66,6 @@ def gen(out_path):
 
 
 if __name__ == "__main__":
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else r"c:\Users\ryuji\oxi-main\pipeline_data\pptx_probes"
+    out_dir = sys.argv[1] if len(sys.argv) > 1 else str(_REPO / r"pipeline_data\pptx_probes")
     os.makedirs(out_dir, exist_ok=True)
     gen(os.path.join(out_dir, "spec4b_lspacing.pptx"))

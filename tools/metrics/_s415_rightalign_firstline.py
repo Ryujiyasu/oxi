@@ -22,9 +22,11 @@ Instrumentation only — does NOT modify oxidocs-core or any baseline.
 """
 from __future__ import annotations
 import os, sys, json
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 DOC_1EC1 = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx', '1ec1091177b1_006.docx')
 DOC_ED025 = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx', 'ed025cbecffb_index-23.docx')
 OUT = os.path.join(REPO, 'pipeline_data', 'ra_manual_measurements', 's415_rightalign_firstline.json')

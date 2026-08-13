@@ -10,8 +10,11 @@ from docx.enum.text import WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import win32com.client as win32
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r"C:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 OUT = os.path.join(REPO, "tools", "golden-test", "repros", "grid_snap")
 RENDERER = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
 VPOS, PAGE = 6, 3
@@ -56,8 +59,8 @@ def build(fn, with_border):
 
 
 def oxi_tops(path):
-    dump = r"C:/Users/ryuji/AppData/Local/Temp/s467_pbdr.json"
-    subprocess.run([RENDERER, path, r"C:/Users/ryuji/AppData/Local/Temp/s467pbdr", "150",
+    dump = os.path.join(tempfile.gettempdir(), r"s467_pbdr.json")
+    subprocess.run([RENDERER, path, os.path.join(tempfile.gettempdir(), r"s467pbdr"), "150",
                     "--dump-layout=" + dump], capture_output=True, text=True)
     d = json.load(io.open(dump, encoding="utf-8"))
     P = {}

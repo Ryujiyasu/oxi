@@ -2,9 +2,11 @@
 """Survey baseline for other untouched OOXML features."""
 import sys, os, glob, zipfile, re
 from collections import Counter
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-DOCX_DIR = r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx'
+DOCX_DIR = str(_REPO / r"tools\golden-test\documents\docx")
 
 features = {
     'sym': 0,                  # <w:sym> symbol char

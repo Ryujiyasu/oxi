@@ -26,9 +26,11 @@ Usage:
 from __future__ import annotations
 import os, sys, json, glob, zipfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 DOCS = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx')

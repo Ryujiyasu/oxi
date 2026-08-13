@@ -7,8 +7,9 @@ Strategy: pin spec > content gap. spec=60pt (1200tw) with 1-line MS Mincho
 """
 import zipfile
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\tr_hrule_default_repro")
+OUT_DIR = (_REPO / r"tools\metrics\tr_hrule_default_repro")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

@@ -1,10 +1,12 @@
 """S445: measure Word row pitch for each trHeight repro variant + Oxi side."""
 import sys, os, glob, json, subprocess, tempfile
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding="utf-8")
 
-REPRO = r"c:\Users\ryuji\oxi-main\tools\metrics\s445_trheight_repro"
-RENDERER = r"c:\Users\ryuji\oxi-main\tools\oxi-gdi-renderer\target\release\oxi-gdi-renderer.exe"
+REPRO = str(_REPO / r"tools\metrics\s445_trheight_repro")
+RENDERER = str(_REPO / r"tools\oxi-gdi-renderer\target\release\oxi-gdi-renderer.exe")
 
 def word_pitches(doc):
     tbl = doc.Tables(1)

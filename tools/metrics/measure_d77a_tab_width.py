@@ -9,10 +9,11 @@ Compare against Oxi which has tab ≈ 5pt (too narrow).
 import json
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 
-DOC = Path(r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
-OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\d77a_tab_width_measurement.json")
+DOC = (_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
+OUT = (_REPO / r"pipeline_data\d77a_tab_width_measurement.json")
 
 
 def main():

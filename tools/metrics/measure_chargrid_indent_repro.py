@@ -7,10 +7,11 @@ tools/metrics/chargrid_indent_repro/word_com_measurements.json.
 import win32com.client
 import os, json
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 word = win32com.client.gencache.EnsureDispatch('Word.Application')
 word.Visible = False
-repro_dir = r'C:\Users\ryuji\oxi-main\tools\metrics\chargrid_indent_repro'
+repro_dir = str(_REPO / r"tools\metrics\chargrid_indent_repro")
 
 names = sorted(f for f in os.listdir(repro_dir) if f.startswith('L2') and f.endswith('.docx'))
 results = {}

@@ -1,13 +1,16 @@
 """For each tcMar variant, COM-measure chars on line 1 + Word-reported cell padding."""
 import time, sys, os, subprocess, json
 import win32com.client, pythoncom
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 WD_VPOS = 6
 WD_HPOS = 5
 
-DOCX_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
-RENDERER = "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
+RENDERER = str(_REPO / r"tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 
 SWEEP = [None, 0, 30, 50, 80, 99, 108, 150, 200, 300, 500]
 NAMES = ["none" if tw is None else f"{tw:04d}" for tw in SWEEP]
@@ -69,7 +72,7 @@ oxi_n = {}
 for tw, name in zip(SWEEP, NAMES):
     path = os.path.join(DOCX_DIR, f"repro_tcmar_{name}.docx")
     if not os.path.exists(path): continue
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/repro_tcmar_{name}.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"repro_tcmar_{name}.json")
     proc = subprocess.run(
         [RENDERER, path, "/tmp/dummy.png", f"--dump-layout={layout_out}"],
         capture_output=True, timeout=60,

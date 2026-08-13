@@ -1,7 +1,9 @@
 import json
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 VPOS=6
-REPRO=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\chargrid_wrap"
+REPRO=str(_REPO / r"tools\golden-test\repros\chargrid_wrap")
 NAMES=["cg_mincho_10p5","cg_mincho_10","cg_mincho_9"]
 
 def oxi_first_line_chars(dump):

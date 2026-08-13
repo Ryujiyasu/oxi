@@ -13,8 +13,9 @@ Variations:
 """
 import os, zipfile
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT = Path('c:/Users/ryuji/oxi-main/tools/metrics/exact_to_single_repro')
+OUT = (_REPO / r"tools/metrics/exact_to_single_repro")
 OUT.mkdir(parents=True, exist_ok=True)
 
 CT = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

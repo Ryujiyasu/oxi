@@ -11,8 +11,9 @@ Already confirmed paragraph (12 variants). Now test the rest.
 """
 import zipfile
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\sp_relfrom_repro")
+OUT_DIR = (_REPO / r"tools\metrics\sp_relfrom_repro")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HEADER = (

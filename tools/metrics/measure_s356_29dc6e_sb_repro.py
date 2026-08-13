@@ -13,9 +13,10 @@ import json
 import sys
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO_DIR = Path(r"c:\Users\ryuji\oxi-main\tools\golden-test\repros\s356_29dc6e_sb").resolve()
-OUT_PATH = Path(r"c:\Users\ryuji\oxi-main\tools\metrics\s356_29dc6e_sb_word.json").resolve()
+REPRO_DIR = (_REPO / r"tools\golden-test\repros\s356_29dc6e_sb").resolve()
+OUT_PATH = (_REPO / r"tools\metrics\s356_29dc6e_sb_word.json").resolve()
 
 word = win32com.client.DispatchEx("Word.Application")
 word.Visible = False

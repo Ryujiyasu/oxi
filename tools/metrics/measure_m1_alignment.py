@@ -7,9 +7,10 @@ for B→A pair, or 10.5pt = no Mech 1).
 import json, sys, time
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\m1_alignment_repro")
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\m1_alignment_measurements.json")
+REPRO_DIR = (_REPO / r"tools\metrics\m1_alignment_repro")
+OUT = (_REPO / r"pipeline_data\m1_alignment_measurements.json")
 ALIGN_NAMES = ["both", "left", "center", "right", "(no jc)"]
 
 

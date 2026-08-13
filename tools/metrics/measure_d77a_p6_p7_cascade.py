@@ -18,9 +18,10 @@ import win32com.client
 import json
 import os
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx"
-OUT = r"C:\Users\ryuji\oxi-main\pipeline_data\d77a_p6_p7_cascade.json"
+DOC = str(_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
+OUT = str(_REPO / r"pipeline_data\d77a_p6_p7_cascade.json")
 
 
 def main():

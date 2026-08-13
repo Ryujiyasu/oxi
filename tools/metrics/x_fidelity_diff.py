@@ -25,9 +25,11 @@ Usage:
 from __future__ import annotations
 import os, sys, json, subprocess, tempfile
 from collections import defaultdict
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 DOCS_DIR = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx')
 RENDERER = os.path.join(REPO, 'tools', 'oxi-gdi-renderer', 'target', 'release', 'oxi-gdi-renderer.exe')
 TRUEX_DIR = os.path.join(REPO, 'pipeline_data', 'word_true_x')

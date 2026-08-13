@@ -10,12 +10,14 @@ import time
 import json
 
 import win32com.client
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 OUT_JSON = os.path.join(os.path.dirname(__file__), "output",
                         "ra2_3a4f9f_first_cell_y.json")
-DOCX_DIR = "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 
 
 def find_3a4f9f():

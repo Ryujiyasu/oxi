@@ -2,9 +2,10 @@
 import json, re, sys
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\tr_height_repro")
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\tr_height_measurements.json")
+REPRO_DIR = (_REPO / r"tools\metrics\tr_height_repro")
+OUT = (_REPO / r"pipeline_data\tr_height_measurements.json")
 
 
 def main():

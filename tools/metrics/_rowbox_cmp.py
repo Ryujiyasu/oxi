@@ -2,8 +2,10 @@
 """Compare Oxi row pitches (default vs OXI_ROWBOX2=1) against Word PDF truth
 on the rowbox_sweep specimen (16 configs, 1 page each)."""
 import os, sys, json, subprocess, tempfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-ROOT = r"c:\Users\ryuji\oxi-main"
+ROOT = str(_REPO)
 SWEEP = os.path.join(os.environ.get("TEMP", "."), "rowbox_sweep")
 DOCX = os.path.join(SWEEP, "rowbox_sweep.docx")
 PDF = os.path.join(SWEEP, "rowbox_sweep.pdf")

@@ -13,12 +13,14 @@ compress identically under jc=both with overflow. Now characterize:
 """
 import json, os, sys, time
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 FONT = "ＭＳ 明朝"
 SIZE = 12.0
-RESULT_PATH = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\m2_position_charset.json")
+RESULT_PATH = os.path.abspath(str(_REPO / r"pipeline_data\m2_position_charset.json"))
 
 
 def make_probe(pair: str, position: str) -> str:

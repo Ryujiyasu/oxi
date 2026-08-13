@@ -25,8 +25,9 @@ Per-char advance measured via Information(5).
 """
 import zipfile
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\m1_alignment_repro")
+OUT_DIR = (_REPO / r"tools\metrics\m1_alignment_repro")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

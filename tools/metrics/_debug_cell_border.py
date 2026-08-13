@@ -1,13 +1,15 @@
 """Debug: probe one fixture with multiple measurement methods."""
 import time
 import win32com.client
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 word = win32com.client.gencache.EnsureDispatch("Word.Application")
 word.Visible = False
 word.DisplayAlerts = False
 time.sleep(2.0)
 
-path = r"C:\Users\ryuji\oxi-2\tools\metrics\output\cell_border_absorption_fixtures\CBA_sz12hp_(6.0pt).docx"
+path = str(_REPO / r"tools\metrics\output\cell_border_absorption_fixtures\CBA_sz12hp_(6.0pt).docx")
 wdoc = word.Documents.Open(path)
 try:
     wdoc.Repaginate()

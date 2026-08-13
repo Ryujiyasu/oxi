@@ -3,8 +3,9 @@ import win32com.client
 import os
 import json
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx"
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
 
 def main():
     word = win32com.client.DispatchEx("Word.Application")
@@ -59,7 +60,7 @@ def main():
             if 5 <= r["page_start"] <= 8 or 5 <= r["page_end"] <= 8:
                 print(f"  idx={r['idx']:3d} pg {r['page_start']}-{r['page_end']}  y_start={r['y_start']}  y_end={r['y_end']}  widow={r['widow_control']} keepNext={r['keep_lines']}  {r['text']!r}")
 
-        out_path = r"C:\Users\ryuji\oxi-main\pipeline_data\d77a_p6_p7_boundary.json"
+        out_path = str(_REPO / r"pipeline_data\d77a_p6_p7_boundary.json")
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
         print(f"\nSaved: {out_path}")

@@ -1,9 +1,11 @@
 import sys
 import zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-pptx = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\ph_resolution.pptx"
+pptx = str(_REPO / r"pipeline_data\pptx_probes\ph_resolution.pptx")
 
 with zipfile.ZipFile(pptx) as z:
     names = z.namelist()

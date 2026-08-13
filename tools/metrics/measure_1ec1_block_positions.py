@@ -2,8 +2,10 @@
 import win32com.client
 import os
 import time
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-docx_path = os.path.abspath(r"C:\Users\ryuji\oxi-1\tools\golden-test\golden-test\documents\docx\1ec1091177b1_006.docx")
+docx_path = os.path.abspath(str(_REPO / r"tools\golden-test\golden-test\documents\docx\1ec1091177b1_006.docx"))
 
 print(f"Opening: {docx_path}")
 

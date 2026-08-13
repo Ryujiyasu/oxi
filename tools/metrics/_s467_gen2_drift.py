@@ -4,10 +4,13 @@ R30) including list items, and diff against the Oxi GDI --dump-layout tops.
 Per-paragraph drift = oxi_top - word_y pinpoints WHICH element loses height."""
 import json, io, subprocess, os, sys
 import win32com.client as win32
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 
 VPOS = 6  # wdVerticalPositionRelativeToPage
 PAGE = 3  # wdActiveEndPageNumber
-REPO = r"C:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 DOCS = {
     "gen2_067": r"gen2_067_SLA_Template.docx",
     "gen2_055": r"gen2_055_Risk_Management_Report.docx",
@@ -40,8 +43,8 @@ def main():
     allout = []
     for tag, fname in DOCS.items():
         docx = os.path.join(REPO, "tools", "golden-test", "documents", "docx", fname)
-        dump = os.path.join(r"C:\Users\ryuji\AppData\Local\Temp", "s467_%s.json" % tag)
-        out_prefix = os.path.join(r"C:\Users\ryuji\AppData\Local\Temp", "s467_%s" % tag)
+        dump = os.path.join(tempfile.gettempdir(), "s467_%s.json" % tag)
+        out_prefix = os.path.join(tempfile.gettempdir(), "s467_%s" % tag)
         subprocess.run([RENDERER, docx, out_prefix, "150", "--dump-layout=" + dump],
                        capture_output=True, text=True)
         otops = oxi_tops(dump)

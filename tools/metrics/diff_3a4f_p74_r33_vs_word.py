@@ -55,11 +55,13 @@ import os
 import sys
 import zipfile
 import re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-WORD_JSON = r"C:\Users\ryuji\oxi-3\pipeline_data\3a4f_p74_per_char_2026-05-02.json"
-DOCX_PATH = r"C:\Users\ryuji\oxi-main\pipeline_data\golden_per_page\3a4f9fbe1a83_001620506_p74.docx"
+WORD_JSON = str(_REPO / r"pipeline_data\3a4f_p74_per_char_2026-05-02.json")
+DOCX_PATH = str(_REPO / r"pipeline_data\golden_per_page\3a4f9fbe1a83_001620506_p74.docx")
 OUT_JSON = os.path.join(os.path.dirname(__file__), "output", "ra2_3a4f_p74_r33_vs_word.json")
 os.makedirs(os.path.dirname(OUT_JSON), exist_ok=True)
 

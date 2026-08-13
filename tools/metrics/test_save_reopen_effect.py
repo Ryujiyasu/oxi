@@ -1,5 +1,7 @@
 """Save runtime doc to disk, reopen, compare space adv."""
 import win32com.client, time, os, sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 word = win32com.client.Dispatch("Word.Application")
@@ -41,7 +43,7 @@ sp1 = find_sp_adv(doc)
 print(f"Runtime (before save): sp_adv = {sp1}")
 
 # Save to disk as new file
-out_path = "C:\\Users\\ryuji\\oxi-1\\tools\\metrics\\output\\test_runtime_jfmb.docx"
+out_path = str(_REPO / r"tools\metrics\output\test_runtime_jfmb.docx")
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 doc.SaveAs2(out_path, FileFormat=12)  # docx
 time.sleep(0.4)

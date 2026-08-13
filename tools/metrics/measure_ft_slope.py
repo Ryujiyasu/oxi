@@ -23,9 +23,10 @@ from pathlib import Path
 import sys
 
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\ft_slope_repro")
-BASELINE_DOCS_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx")
+REPRO_DIR = (_REPO / r"tools\metrics\ft_slope_repro")
+BASELINE_DOCS_DIR = (_REPO / r"tools\golden-test\documents\docx")
 
 BASELINE_DOC_NAMES = [
     "ed025cbecffb_index-23.docx",
@@ -36,7 +37,7 @@ BASELINE_DOC_NAMES = [
     "e201249db062_tokumei_08_05.docx",
 ]
 
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\ft_slope_measurements.json")
+OUT = (_REPO / r"pipeline_data\ft_slope_measurements.json")
 
 
 def parse_floating_xml_order(docx_path):

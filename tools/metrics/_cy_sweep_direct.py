@@ -2,10 +2,12 @@
 import time, pythoncom, win32com.client as wc
 import sys, fitz, json
 import os, zipfile, shutil, tempfile, re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-ORIG = r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx\1ec1091177b1_006.docx'
-OUTDIR = r'C:\Users\ryuji\oxi-4\pipeline_data\1ec1_cy_sweep'
+ORIG = str(_REPO / r"tools\golden-test\documents\docx\1ec1091177b1_006.docx")
+OUTDIR = str(_REPO / r"pipeline_data\1ec1_cy_sweep")
 os.makedirs(OUTDIR, exist_ok=True)
 
 CY_VALUES_EMU = [500000, 1000000, 1500000, 2000000, 2500000, 3028950, 3500000, 4000000, 5000000, 6057900, 8000000]

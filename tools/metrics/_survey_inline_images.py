@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Survey baseline for wp:inline image usage."""
 import sys, os, glob, zipfile, re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-DOCX_DIR = r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx'
+DOCX_DIR = str(_REPO / r"tools\golden-test\documents\docx")
 
 results = []
 for path in sorted(glob.glob(os.path.join(DOCX_DIR, '*.docx'))):

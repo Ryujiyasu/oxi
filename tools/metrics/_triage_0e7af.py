@@ -5,9 +5,11 @@ import json, re, zipfile, glob, os
 import numpy as np
 from PIL import Image, ImageFilter
 from skimage.metrics import structural_similarity as ssim
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX = glob.glob(r"c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/0e7af1ae8f21*.docx")[0]
-WORD_DIR = r"c:/Users/ryuji/oxi-main/pipeline_data/word_png/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00"
+DOCX = glob.glob(str(_REPO / r"tools/golden-test/documents/docx/0e7af1ae8f21*.docx"))[0]
+WORD_DIR = str(_REPO / r"pipeline_data/word_png/0e7af1ae8f21_20230331_resources_open_data_contract_sample_00")
 OXI_PREFIX = r"c:/tmp/_tri_0e7af1ae8f21_p"  # _p<N>.png
 OUT = r"c:/tmp/triage_0e7af_result.json"
 

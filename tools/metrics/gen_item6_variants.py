@@ -1,6 +1,8 @@
 """Generate multiple repro variants to isolate Bug 1 cause.
 Each variant changes ONE setting from baseline."""
 import zipfile, os, sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 # Common XML pieces
@@ -99,7 +101,7 @@ builders = {
     "v6_no_hanging":       build_v6,
 }
 
-OUT_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+OUT_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 for name, builder in builders.items():
     path = f"{OUT_DIR}/repro_v_{name}.docx"
     doc_xml = builder()

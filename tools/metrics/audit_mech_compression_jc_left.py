@@ -19,11 +19,12 @@ import json, re, sys, time, zipfile, random, os
 from pathlib import Path
 from collections import Counter
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx")
-RESULT_PATH = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\mech_audit_jc_left.json")
+DOCX_DIR = (_REPO / r"tools\golden-test\documents\docx")
+RESULT_PATH = (_REPO / r"pipeline_data\mech_audit_jc_left.json")
 YAKUMONO = set("「」（）［］【】〔〕、。，．" "'")
 TYPE_C_NONCOMPRESS = set("ー―・：；！？／＼")
 

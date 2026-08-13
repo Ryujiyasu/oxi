@@ -26,13 +26,15 @@ Measure each yakumono's advance under each slack:
 """
 import json, os, sys, time
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 FONT = "ＭＳ 明朝"
 SIZE = 12.0
 PROBE = "漢漢漢」）漢漢「漢漢漢"  # 11 chars
-RESULT_PATH = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\m1_m2_precedence.json")
+RESULT_PATH = os.path.abspath(str(_REPO / r"pipeline_data\m1_m2_precedence.json"))
 
 
 def measure_one(word, content_w, alignment=3):

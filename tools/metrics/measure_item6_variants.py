@@ -1,13 +1,16 @@
 """For each variant, render with Word + Oxi, COM-measure how many chars fit on line 1."""
 import time, sys, os, subprocess, json
 import win32com.client, pythoncom
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 WD_VPOS = 6
 WD_HPOS = 5
 
-DOCX_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
-RENDERER = "c:/Users/ryuji/oxi-main/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
+RENDERER = str(_REPO / r"tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 
 VARIANTS = [
     "v0_baseline", "v1_tcMar_540", "v2_no_adjustR", "v3_no_autoSpace",
@@ -70,7 +73,7 @@ oxi_results = {}
 for vname in VARIANTS:
     path = os.path.join(DOCX_DIR, f"repro_v_{vname}.docx")
     if not os.path.exists(path): continue
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/repro_v_{vname}.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"repro_v_{vname}.json")
     proc = subprocess.run(
         [RENDERER, path, "/tmp/dummy.png",
          f"--dump-layout={layout_out}"],

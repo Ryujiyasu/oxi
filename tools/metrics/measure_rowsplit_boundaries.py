@@ -13,10 +13,11 @@ dataset for cursor_y formula derivation.
 import json
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 
-DOCX_DIR = Path(r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx")
-OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\rowsplit_boundaries.json")
+DOCX_DIR = (_REPO / r"tools\golden-test\documents\docx")
+OUT = (_REPO / r"pipeline_data\rowsplit_boundaries.json")
 
 # (doc_name, table_indices_to_check)
 TARGETS = [

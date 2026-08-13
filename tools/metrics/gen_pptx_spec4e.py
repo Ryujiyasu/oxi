@@ -14,12 +14,14 @@ baseline deltas).
 """
 import os
 import sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-sys.path.insert(0, r"c:\Users\ryuji\oxi-main\tools\metrics")
+sys.path.insert(0, str(_REPO / r"tools\metrics"))
 
-OUT_DIR = r"c:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\spec4e_multifont"
+OUT_DIR = str(_REPO / r"pipeline_data\pptx_probes\spec4e_multifont")
 OUT_PPTX = os.path.join(OUT_DIR, "spec4e_multifont.pptx")
 
 WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit "

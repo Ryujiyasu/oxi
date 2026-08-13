@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 import json, fitz, sys
+import os
+import tempfile
 io=sys.stdout; io.reconfigure(encoding='utf-8',errors='replace')
-PDF=r'C:\Users\ryuji\AppData\Local\Temp\tks_truth.pdf'
+PDF=os.path.join(tempfile.gettempdir(), r"tks_truth.pdf")
 DUMP=r'C:/tmp/tks_dump.json'  # Oxi S586 dump (89 pages)
 
 wd=fitz.open(PDF)

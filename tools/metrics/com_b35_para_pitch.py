@@ -6,8 +6,10 @@ adjustLineHeightInTable=TRUE) does Word use NATURAL (~14.0/10.5pt) or GRID (17.5
 Writes ASCII results to file."""
 import json
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOCX = r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\b35123fe8efc_tokumei_08_01.docx'
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\b35123fe8efc_tokumei_08_01.docx")
 OUT = r'c:\tmp\b35_para_pitch_word.json'
 wdVertPos = 6
 

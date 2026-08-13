@@ -7,10 +7,13 @@ if ON shifts away / corr drops, VSNAP misaligned (the regression mechanism)."""
 import os, sys
 import numpy as np
 from PIL import Image
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r"C:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 WORD = os.path.join(REPO, "pipeline_data", "word_png")
-TMP = r"C:\Users\ryuji\AppData\Local\Temp\s468vgate"
+TMP = os.path.join(tempfile.gettempdir(), r"s468vgate")
 
 
 def row_profile(path, ref_shape=None):

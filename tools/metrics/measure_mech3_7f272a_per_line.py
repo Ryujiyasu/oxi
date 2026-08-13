@@ -14,11 +14,12 @@ import json, sys, time
 from pathlib import Path
 import win32com.client as w32
 import zipfile, re
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOC = Path(r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\7f272a2dfd3b_index-21.docx")
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\mech3_7f272a_perline.json")
+DOC = (_REPO / r"tools\golden-test\documents\docx\7f272a2dfd3b_index-21.docx")
+OUT = (_REPO / r"pipeline_data\mech3_7f272a_perline.json")
 
 # Type A/B yakumono (compressible per Mech 1/2/3)
 TYPE_A = set("（「『【〔｛〈《［" "‘")

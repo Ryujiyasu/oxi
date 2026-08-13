@@ -8,10 +8,11 @@ import json, os, re, subprocess, sys, tempfile, zipfile
 from pathlib import Path
 import win32com.client
 import pythoncom
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-ROOT = Path('c:/Users/ryuji/oxi-main')
+ROOT = _REPO
 DOCX_DIR = ROOT / 'tools/golden-test/documents/docx'
 RENDERER = ROOT / 'tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe'
 OUT = ROOT / 'tools/metrics/per_row_diff_bottom_band.json'

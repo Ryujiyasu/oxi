@@ -15,11 +15,13 @@ skipped (GetGlyphIndices) → they fall through to the UPM=256 fullwidth path.
 ppem 7-50 (matches the other CJK GDI tables; ppem = round(pt*96/72)).
 """
 import ctypes, json, os, sys, zipfile, re, html
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8')
 gdi32 = ctypes.windll.gdi32
 FACE = 'HGPｺﾞｼｯｸM'           # the ONLY name GDI resolves to the real font
 KEY = 'HGPGothicM'           # canonical table key (is_cjk_font_family)
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 JSON = os.path.join(REPO, 'crates/oxidocs-core/src/font/data/gdi_width_overrides.json')
 DOCX = os.path.join(REPO, 'tools/golden-test/documents/docx/kojin_000505813.docx')
 GGI_MARK_NONEXISTING = 1

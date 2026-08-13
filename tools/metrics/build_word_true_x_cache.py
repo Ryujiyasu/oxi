@@ -20,8 +20,10 @@ import os, sys, json, glob, time, traceback
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.path.insert(0, os.path.dirname(__file__))
 from word_true_x import measure_true_x
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 DOCS_DIR = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx')
 SUMMARY = os.path.join(REPO, 'pipeline_data', 'pagination_diff', '_summary.json')
 OUT_DIR = os.path.join(REPO, 'pipeline_data', 'word_true_x')

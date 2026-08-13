@@ -19,9 +19,10 @@ import json
 import sys
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC_PATH = Path(r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\29dc6e8943fe_order_01.docx").resolve()
-OUT_PATH = Path(r"c:\Users\ryuji\oxi-main\tools\metrics\29dc6e_i130_sb_word.json").resolve()
+DOC_PATH = (_REPO / r"tools\golden-test\documents\docx\29dc6e8943fe_order_01.docx").resolve()
+OUT_PATH = (_REPO / r"tools\metrics\29dc6e_i130_sb_word.json").resolve()
 
 word = win32com.client.DispatchEx("Word.Application")
 word.Visible = False

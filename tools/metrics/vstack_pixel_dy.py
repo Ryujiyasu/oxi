@@ -7,8 +7,10 @@ Usage: python vstack_dy.py <docx_basename_glob>   (e.g. gen2_005)
 """
 import os, sys, json, subprocess, glob
 import fitz
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-ROOT=r'C:/Users/ryuji/oxi-main'
+ROOT=str(_REPO)
 DW=os.path.join(ROOT,'tools/oxi-dwrite-renderer/target/release/oxi-dwrite-renderer.exe')
 DOCDIR=os.path.join(ROOT,'tools/golden-test/documents/docx')
 base=sys.argv[1]

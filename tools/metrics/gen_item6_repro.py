@@ -1,6 +1,8 @@
 """Minimal repro: replicate 1636 item 6's exact pPr + run structure (no anchor shape).
 Goal: trigger the same 1-extra-line wrap difference."""
 import zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 DOC_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -90,7 +92,7 @@ STYLES_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   </w:docDefaults>
 </w:styles>'''
 
-OUT = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/repro_item6_wrap.docx"
+OUT = str(_REPO / r"tools/golden-test/documents/docx/repro_item6_wrap.docx")
 with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr("[Content_Types].xml", CONTENT_TYPES)
     z.writestr("_rels/.rels", REL_XML)

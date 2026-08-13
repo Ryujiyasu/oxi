@@ -6,8 +6,10 @@ then invoke pagination_diff for 3a4f. Usage: python _s559_paginate.py <mode>
 import os
 import subprocess
 import sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 mode = sys.argv[1] if len(sys.argv) > 1 else 'OFF'
 env = dict(os.environ)
 if mode == 'OFF':

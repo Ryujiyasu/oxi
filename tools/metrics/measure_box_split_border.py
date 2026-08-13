@@ -19,10 +19,11 @@ from PIL import Image
 import numpy as np
 
 import glob as _glob
-REPROS = sorted(_glob.glob(r"C:\Users\ryuji\oxi-main\tools\metrics\box_split_repro\repro_*.docx"))
-D77A = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx"
+_REPO = Path(__file__).resolve().parents[2]
+REPROS = sorted(_glob.glob(str(_REPO / r"tools\metrics\box_split_repro\repro_*.docx")))
+D77A = str(_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
 
-OUT_DIR = Path(r"C:\Users\ryuji\oxi-main\tools\metrics\box_split_repro\word_png")
+OUT_DIR = (_REPO / r"tools\metrics\box_split_repro\word_png")
 OUT_DIR.mkdir(exist_ok=True, parents=True)
 
 
@@ -124,7 +125,7 @@ def main():
 
         # For repros, also scan Word PNG via existing pipeline word_png dir
         # For d77a, use pipeline_data/word_png
-        word_png_dir = Path(r"C:\Users\ryuji\oxi-main\pipeline_data\word_png") / name
+        word_png_dir = (_REPO / r"pipeline_data\word_png") / name
         if word_png_dir.exists():
             page_data = []
             for png in sorted(word_png_dir.glob("page_*.png")):
@@ -136,7 +137,7 @@ def main():
         else:
             print(f"  No Word PNG dir at {word_png_dir}")
 
-    out = Path(r"C:\Users\ryuji\oxi-main\pipeline_data\box_split_measurements.json")
+    out = (_REPO / r"pipeline_data\box_split_measurements.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(all_data, f, ensure_ascii=False, indent=2)
     print(f"\nSaved: {out}")

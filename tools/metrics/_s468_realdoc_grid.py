@@ -6,12 +6,15 @@ already the box top). Report each side's grid residual distribution.
 """
 import json, io, subprocess, os, glob
 import win32com.client as win32
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 
 VPOS = 6
 PAGE = 3
-REPO = r"C:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 RENDERER = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
-TMP = r"C:\Users\ryuji\AppData\Local\Temp"
+TMP = tempfile.gettempdir()
 DOCS = ["0e7af1ae8f21", "3a4f9fbe1a83", "2ea81a8441cc", "34140b9c5662"]
 
 

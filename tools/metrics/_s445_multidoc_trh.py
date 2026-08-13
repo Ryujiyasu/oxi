@@ -9,9 +9,11 @@ and compare to the doc's trHeight sample values.
 """
 import sys, os, json, statistics, zipfile, re
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding="utf-8")
 
-DOCXDIR = r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx"
+DOCXDIR = str(_REPO / r"tools\golden-test\documents\docx")
 DOCS = {
     "7ead52b63f0e": "7ead52b63f0e_000067058.docx",
     "6514f214e482": None,

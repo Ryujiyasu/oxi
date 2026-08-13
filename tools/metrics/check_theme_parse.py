@@ -1,7 +1,9 @@
 """Check what parse_theme returns for 1ec1's theme."""
 import zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-docx_path = r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\1ec1091177b1_006.docx"
+docx_path = str(_REPO / r"tools\golden-test\documents\docx\1ec1091177b1_006.docx")
 with zipfile.ZipFile(docx_path) as z:
     with z.open('word/theme/theme1.xml') as f:
         content = f.read().decode('utf-8')

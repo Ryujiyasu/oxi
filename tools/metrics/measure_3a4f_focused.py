@@ -5,11 +5,12 @@ import sys
 from pathlib import Path
 from statistics import median
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX = Path(r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\3a4f9fbe1a83_001620506.docx")
-OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\3a4f_rowsplit.json")
+DOCX = (_REPO / r"tools\golden-test\documents\docx\3a4f9fbe1a83_001620506.docx")
+OUT = (_REPO / r"pipeline_data\3a4f_rowsplit.json")
 
 MAX_CELLS_PER_TABLE = 2  # only measure first 2 cells
 

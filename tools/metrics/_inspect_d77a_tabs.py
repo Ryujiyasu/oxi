@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """Inspect d77a's actual <w:tab/> usages."""
 import sys, os, zipfile, re, glob
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-paths = glob.glob(r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx\d77a*')
+paths = glob.glob(str(_REPO / r"tools\golden-test\documents\docx\d77a*"))
 DOCX = paths[0]
 print(f"Inspecting: {os.path.basename(DOCX)}\n")
 

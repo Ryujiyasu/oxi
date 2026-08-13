@@ -20,9 +20,11 @@ import sys
 import time
 
 import win32com.client
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 
-REPO = r"c:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 DOCX = os.path.join(REPO, "tools", "golden-test", "documents", "docx",
                     "3a4f9fbe1a83_001620506.docx")
 OUT = os.path.join(REPO, "pipeline_data", "ra_manual_measurements",

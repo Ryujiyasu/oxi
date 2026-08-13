@@ -3,8 +3,10 @@ font size, line rule; measure Word row pitch (col1 cell tops). Isolates the
 source of the +0.375pt cell-row excess over the body line (15.0pt @ Cambria 11)."""
 import zipfile, os
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT=r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\gen2_lineheight"
+OUT=str(_REPO / r"tools\golden-test\repros\gen2_lineheight")
 VPOS=6
 CT='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">

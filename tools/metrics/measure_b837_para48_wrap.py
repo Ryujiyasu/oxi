@@ -8,10 +8,11 @@ Compares with Oxi's 5-line wrap claim.
 import json, time, sys
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX = Path(r"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx")
+DOCX = (_REPO / r"tools/golden-test/documents/docx/b837808d0555_20240705_resources_data_guideline_02.docx")
 OUT = Path(__file__).with_name("output") / "b837_para48_wrap.json"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 

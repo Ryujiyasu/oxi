@@ -1,5 +1,7 @@
 """Sweep tblCellMar L=R values to find the threshold where Word's wrap changes."""
 import zipfile, os
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 CONTENT_TYPES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -60,7 +62,7 @@ def build_doc(tcmar_tw):
 </w:document>
 '''
 
-OUT_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+OUT_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 SWEEP = [None, 0, 30, 50, 80, 99, 108, 150, 200, 300, 500]
 for tw in SWEEP:
     name = "none" if tw is None else f"{tw:04d}"

@@ -8,10 +8,11 @@ import json, os, subprocess, sys, tempfile
 from pathlib import Path
 import win32com.client
 import pythoncom
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-ROOT = Path('c:/Users/ryuji/oxi-main')
+ROOT = _REPO
 DOCX = ROOT / 'tools/golden-test/documents/docx/db9ca18368cd_20241122_resource_open_data_01.docx'
 RENDERER = ROOT / 'tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe'
 

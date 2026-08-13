@@ -1,5 +1,7 @@
 """Day 7: line-2 wrap + bullet variants to pin Word's first-line-indent rule."""
 import zipfile, os
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 CTYPES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -69,7 +71,7 @@ VARIANTS = [
     ("d7_v5_no_indent_bullet", '', True),  # bullet list, no indent
 ]
 
-OUT_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+OUT_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 for name, ind, num in VARIANTS:
     path = f"{OUT_DIR}/{name}.docx"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:

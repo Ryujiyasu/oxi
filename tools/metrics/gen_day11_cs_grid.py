@@ -11,6 +11,8 @@ Variants:
 For each, measure Word per-char x positions to derive per-char advance.
 """
 import zipfile
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 CTYPES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -54,7 +56,7 @@ VARIANTS = [
     ("d11_v4_grid_cs_neg9", -9, True),
     ("d11_v5_grid_cs_neg1", -1, True),
 ]
-OUT_DIR = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+OUT_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 for name, cs, grid in VARIANTS:
     path = f"{OUT_DIR}/{name}.docx"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:

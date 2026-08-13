@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Inspect 4 vertical-writing docs to understand what features they use."""
 import sys, os, zipfile, re
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 VERTICAL_DOCS = [
@@ -10,7 +12,7 @@ VERTICAL_DOCS = [
     'ed025cbecffb_index-23.docx',
 ]
 
-DOCX_DIR = r'C:\Users\ryuji\oxi-4\tools\golden-test\documents\docx'
+DOCX_DIR = str(_REPO / r"tools\golden-test\documents\docx")
 
 for fname in VERTICAL_DOCS:
     path = os.path.join(DOCX_DIR, fname)

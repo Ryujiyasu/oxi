@@ -1,8 +1,10 @@
 """Check rFonts in 1ec1 para 2 runs via XML."""
 import zipfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-docx_path = r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\1ec1091177b1_006.docx"
+docx_path = str(_REPO / r"tools\golden-test\documents\docx\1ec1091177b1_006.docx")
 with zipfile.ZipFile(docx_path) as z:
     with z.open('word/document.xml') as f:
         tree = ET.parse(f)

@@ -1,9 +1,10 @@
 """Aggregate divergence patterns across docs to identify common cause clusters."""
 import json, os, glob, sys
 from collections import Counter
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-DIR = "C:/Users/ryuji/AppData/Local/Temp/diffv2_out"
+DIR = os.path.join(tempfile.gettempdir(), r"diffv2_out")
 files = sorted(glob.glob(os.path.join(DIR, "*.json")))
 print(f"Loaded {len(files)} doc reports")
 

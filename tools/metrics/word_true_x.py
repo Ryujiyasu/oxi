@@ -24,6 +24,8 @@ anchor if a page has <2 anchors.
 """
 from __future__ import annotations
 import sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 GLOBAL_SLOPE = 0.75  # pt/px at 100% zoom, 96 DPI (validated S416)
 
@@ -151,7 +153,7 @@ if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import os
     path = sys.argv[1] if len(sys.argv) > 1 else \
-        r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\1ec1091177b1_006.docx'
+        str(_REPO / r"tools\golden-test\documents\docx\1ec1091177b1_006.docx")
     recs = measure_true_x(path)
     # Validate: print right/center cells with x_true vs x_info5
     print(f'{os.path.basename(path)}: {len(recs)} paragraphs')

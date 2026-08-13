@@ -17,9 +17,11 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 GDI = os.path.join(REPO, 'tools', 'oxi-gdi-renderer', 'target', 'release', 'oxi-gdi-renderer.exe')
 DOCX_REAL = os.path.join(REPO, 'tools', 'golden-test', 'documents', 'docx', '3a4f9fbe1a83_001620506.docx')
 DOCX_COM = r'c:\tmp\3a4f9f.docx'

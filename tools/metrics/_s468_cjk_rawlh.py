@@ -19,12 +19,15 @@ from docx.shared import Pt, Inches
 from docx.enum.text import WD_LINE_SPACING
 from docx.oxml.ns import qn
 import win32com.client as win32
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r"C:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 OUT = os.path.join(REPO, "tools", "golden-test", "repros", "cjk_rawlh")
 os.makedirs(OUT, exist_ok=True)
 RENDERER = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
-TMP = r"C:\Users\ryuji\AppData\Local\Temp"
+TMP = tempfile.gettempdir()
 VPOS = 6
 PAGE = 3
 CJK = "日本語のテキスト本文確認用の行"  # 日本語のテキスト本文確認用の行

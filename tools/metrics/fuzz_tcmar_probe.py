@@ -11,10 +11,11 @@ import json, os, subprocess, sys, tempfile, zipfile
 from pathlib import Path
 import win32com.client
 import pythoncom
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-ROOT = Path('c:/Users/ryuji/oxi-main')
+ROOT = _REPO
 OUT_DIR = ROOT / "tools/metrics/fuzz_runs/tcmar_probe"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 RENDERER = ROOT / "tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe"

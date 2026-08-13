@@ -3,6 +3,8 @@
 residual +1 (per-section column WIDTH causing extra wraps vs pure height)."""
 import json,sys
 from collections import defaultdict
+import os
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 W=json.load(open(r'pipeline_data/pagination_word/kyotei36spec.json',encoding='utf-8'))
 # Word: paras 450..489, count lines via y-gap on same page (approx)
@@ -17,7 +19,7 @@ for i in range(470,491):
     print('  i=%-3d p%d x=%5.1f y=%6.1f %s'%(i,p['page'],p['x'],p['y'],g))
     prev=p
 # Oxi col width check: estimate from layout2 dump line x-extents on pages 4/5
-d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/kyotei_layout2.json',encoding='utf-8'))
+d=json.load(open(os.path.join(tempfile.gettempdir(), r"kyotei_layout2.json"),encoding='utf-8'))
 for pgno in (3,4):
     p=d['pages'][pgno]
     txt=[e for e in p['elements'] if e['type']=='text' and e['text'].strip()]

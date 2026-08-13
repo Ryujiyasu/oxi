@@ -18,10 +18,11 @@ Phases (each resumable; artifacts cached):
 """
 import os, sys, json, subprocess, glob
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8")
 
-REPO = Path(r"c:\Users\ryuji\oxi-main")
+REPO = _REPO
 CORPUS = REPO / "pipeline_data" / "docx_corpus" / "en"
 BENCH = REPO / "pipeline_data" / "en_benchmark"
 WORD_PNG = BENCH / "word_png"

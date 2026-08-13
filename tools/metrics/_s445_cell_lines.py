@@ -3,8 +3,10 @@ Want to know: is the cell single-line? What is Word's content height
 (line-box top to bottom) that makes atLeast row render 44.25 not 43.0?
 """
 import sys, win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding="utf-8")
-DOCX = r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\7ead52b63f0e_000067058.docx"
+DOCX = str(_REPO / r"tools\golden-test\documents\docx\7ead52b63f0e_000067058.docx")
 word = win32.gencache.EnsureDispatch("Word.Application")
 word.Visible = False
 doc = word.Documents.Open(DOCX, ReadOnly=True)

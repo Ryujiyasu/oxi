@@ -25,11 +25,13 @@ Measure 」's x-position to determine if it overflows or wraps.
 """
 import json, os, sys, time, zipfile, subprocess
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT_DIR = os.path.abspath(r"C:\Users\ryuji\oxi-1\tools\metrics\overflow_punct_repro")
-RESULT = os.path.abspath(r"C:\Users\ryuji\oxi-1\pipeline_data\overflow_punct.json")
+OUT_DIR = os.path.abspath(str(_REPO / r"tools\metrics\overflow_punct_repro"))
+RESULT = os.path.abspath(str(_REPO / r"pipeline_data\overflow_punct.json"))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 CJK_FONT = "ＭＳ 明朝"

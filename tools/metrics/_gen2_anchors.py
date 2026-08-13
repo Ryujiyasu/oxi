@@ -1,7 +1,9 @@
 """Drift curve via UNIQUE anchor paragraphs (Word COM vs Oxi dump), gen2_060 p1."""
 import json
 import win32com.client as win32
-DOCX=r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\gen2_060_Employee_Agreement.docx"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOCX=str(_REPO / r"tools\golden-test\documents\docx\gen2_060_Employee_Agreement.docx")
 DUMP=r"C:/tmp/gen2dump/layout.json"
 VPOS=6;PAGE=3
 ANCHORS=["Employee Agreement","Overview","The following report","Purpose",

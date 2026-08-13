@@ -11,10 +11,11 @@ Target markers:
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 
 XML = Path(r"C:\tmp\d77a_xml\word\document.xml")
-OUT = Path(r"c:\Users\ryuji\oxi-main\pipeline_data\d77a_tables_xml_diff.txt")
+OUT = (_REPO / r"pipeline_data\d77a_tables_xml_diff.txt")
 
 
 def main():

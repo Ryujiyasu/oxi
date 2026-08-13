@@ -14,9 +14,10 @@ For each paragraph in problem cells (rows 2, 3, 8, 10 from XML), measure:
 import os, json, sys
 import win32com.client
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC_PATH = Path(r"c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\31420af1a08f_tokumei_08_07.docx").resolve()
-OUT_PATH = Path(r"c:\Users\ryuji\oxi-main\tools\metrics\31420af_wrap_lines_word.json").resolve()
+DOC_PATH = (_REPO / r"tools\golden-test\documents\docx\31420af1a08f_tokumei_08_07.docx").resolve()
+OUT_PATH = (_REPO / r"tools\metrics\31420af_wrap_lines_word.json").resolve()
 
 word = win32com.client.DispatchEx("Word.Application")
 word.Visible = False

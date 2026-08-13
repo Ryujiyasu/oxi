@@ -2,8 +2,10 @@
 (line=276 => 1.15x), with/without after-spacing, to measure Word's exact line
 height vs Oxi's. Each para is single-line so consecutive Y-gap = line_height(+after)."""
 import zipfile, os
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-OUT = r"C:\Users\ryuji\oxi-main\tools\golden-test\repros\gen2_lineheight"
+OUT = str(_REPO / r"tools\golden-test\repros\gen2_lineheight")
 os.makedirs(OUT, exist_ok=True)
 
 CT = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

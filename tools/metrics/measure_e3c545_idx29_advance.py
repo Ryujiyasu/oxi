@@ -11,10 +11,11 @@ against Oxi's computed advance from char_width_pt().
 import json, time, sys
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX = Path(r"C:/Users/ryuji/oxi-4/tools/golden-test/documents/docx/e3c545fac7a7_LOD_Handbook.docx")
+DOCX = (_REPO / r"tools/golden-test/documents/docx/e3c545fac7a7_LOD_Handbook.docx")
 OUT = Path(__file__).with_name("output") / "e3c545_idx29_advance.json"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 

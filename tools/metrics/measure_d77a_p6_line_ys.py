@@ -8,9 +8,10 @@ Output: JSON list of {idx, text_preview, page_start, line_ys, char_counts}
 import win32com.client
 import json
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx"
-OUT = r"C:\Users\ryuji\oxi-main\pipeline_data\d77a_p6_line_ys.json"
+DOC = str(_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
+OUT = str(_REPO / r"pipeline_data\d77a_p6_line_ys.json")
 TARGET_PAGES = (5, 6, 7)  # context around p6
 STEP = 1  # char step for Y sampling
 

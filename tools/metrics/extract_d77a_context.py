@@ -6,10 +6,11 @@
 """
 import json, re, zipfile, sys
 from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC = Path(r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
-EXTRACT_JSON = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\d77a_chars_indent_extract.json")
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\d77a_context_overlay.json")
+DOC = (_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
+EXTRACT_JSON = (_REPO / r"pipeline_data\d77a_chars_indent_extract.json")
+OUT = (_REPO / r"pipeline_data\d77a_context_overlay.json")
 CHAR_WIDTH = 10.5  # docDefault.sz=21 → 10.5pt
 
 

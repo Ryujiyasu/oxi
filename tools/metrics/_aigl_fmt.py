@@ -1,5 +1,7 @@
 import win32com.client as w
-DOC = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\aiguideline_komon.docx"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOC = str(_REPO / r"tools\golden-test\documents\docx\aiguideline_komon.docx")
 app=w.Dispatch("Word.Application"); app.Visible=False
 try:
     d=app.Documents.Open(DOC, ReadOnly=True)

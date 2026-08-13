@@ -1,7 +1,9 @@
 # COM-measure aiguideline_komon: the ①②③ lines around "６．禁止事項" (word_i=53).
 # Per-paragraph: page, vertical Y, line height (Y gap to next), font name, font.size, text head.
 import sys, win32com.client as w
-DOC = r"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\aiguideline_komon.docx"
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
+DOC = str(_REPO / r"tools\golden-test\documents\docx\aiguideline_komon.docx")
 app = w.Dispatch("Word.Application"); app.Visible = False
 try:
     doc = app.Documents.Open(DOC, ReadOnly=True)

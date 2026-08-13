@@ -15,6 +15,7 @@ Usage:
     python tools/metrics/word_oxi_char_diff.py <docx> [--max-paras N]
 """
 import sys, os, json, argparse, time, subprocess
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 WD_VPOS = 6
@@ -190,7 +191,7 @@ def main():
     word_paras = extract_word_chars(doc_path, max_paras=args.max_paras)
     print(f"  Got {len(word_paras)} non-empty paras with chars on page 1")
 
-    layout_out = f"C:/Users/ryuji/AppData/Local/Temp/cdiff_{os.path.basename(doc_path)}.json"
+    layout_out = os.path.join(tempfile.gettempdir(), rf"cdiff_{os.path.basename(doc_path)}.json")
     print(f"=== Oxi per-char extract ===")
     oxi_lines = extract_oxi_lines(doc_path, layout_out)
     if oxi_lines is None:

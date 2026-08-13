@@ -1,6 +1,8 @@
 """Minimal repro: exact line rule with various line values + 12pt fontSize.
 Tests glyph_top position rule when line > fontSize."""
 import zipfile, os, sys
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 # Build minimal docx by hand for precise control over XML
@@ -45,7 +47,7 @@ STYLES_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   </w:docDefaults>
 </w:styles>'''
 
-OUT = "c:/Users/ryuji/oxi-main/tools/golden-test/documents/docx/repro_exact_line.docx"
+OUT = str(_REPO / r"tools/golden-test/documents/docx/repro_exact_line.docx")
 with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr("[Content_Types].xml", CONTENT_TYPES)
     z.writestr("_rels/.rels", REL_XML)

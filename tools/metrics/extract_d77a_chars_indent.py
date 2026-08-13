@@ -7,10 +7,11 @@ that actually use chars-based indents (avoids Word session timeout on
 import json, re, zipfile, sys, time
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
-DOC = Path(r"C:\Users\ryuji\oxi-1\tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
+DOC = (_REPO / r"tools\golden-test\documents\docx\d77a58485f16_20240705_resources_data_outline_08.docx")
 TARGET_PAGES = [3, 6, 8, 9, 10]
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\d77a_chars_indent_extract.json")
+OUT = (_REPO / r"pipeline_data\d77a_chars_indent_extract.json")
 
 
 def parse_paragraphs_xml(docx_path):

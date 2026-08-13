@@ -13,12 +13,15 @@ import os, sys, glob, subprocess
 import numpy as np
 from PIL import Image
 from skimage.metrics import structural_similarity as ssim
+from pathlib import Path
+import tempfile
+_REPO = Path(__file__).resolve().parents[2]
 
-REPO = r"C:\Users\ryuji\oxi-main"
+REPO = str(_REPO)
 DWRITE = os.path.join(REPO, "tools", "oxi-dwrite-renderer", "target", "release", "oxi-dwrite-renderer.exe")
 DOCX = os.path.join(REPO, "tools", "golden-test", "documents", "docx")
 WORD = os.path.join(REPO, "pipeline_data", "word_png")
-TMP = r"C:\Users\ryuji\AppData\Local\Temp\s468vgate"
+TMP = os.path.join(tempfile.gettempdir(), r"s468vgate")
 os.makedirs(TMP, exist_ok=True)
 
 

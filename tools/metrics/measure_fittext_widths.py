@@ -20,9 +20,11 @@ from __future__ import annotations
 import os, sys, json, traceback, zipfile, re
 sys.stdout.reconfigure(encoding='utf-8')
 import win32com.client as wc
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 DOCS = [
-    ('ed025c', r'c:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\ed025cbecffb_index-23.docx'),
+    ('ed025c', str(_REPO / r"tools\golden-test\documents\docx\ed025cbecffb_index-23.docx")),
 ]
 OUT_DIR = os.path.abspath('pipeline_data')
 

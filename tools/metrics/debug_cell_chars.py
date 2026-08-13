@@ -1,6 +1,8 @@
 """Debug: enumerate all chars in cell probe at slack=3 to find the 2 extra chars."""
 import sys, time, subprocess
 import win32com.client as w32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 subprocess.run(['taskkill','/F','/IM','WINWORD.EXE'], capture_output=True)
@@ -9,7 +11,7 @@ time.sleep(2)
 word = w32.Dispatch("Word.Application")
 word.Visible = False
 word.DisplayAlerts = False
-path = r"C:\Users\ryuji\oxi-1\tools\metrics\mech2_cell_repro\cell_sl3.0.docx"
+path = str(_REPO / r"tools\metrics\mech2_cell_repro\cell_sl3.0.docx")
 d = word.Documents.Open(path, ReadOnly=True)
 chars = d.Range().Characters
 print(f"Total characters: {chars.Count}")

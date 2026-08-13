@@ -1,7 +1,9 @@
 import json,sys
 import win32com.client as win32
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 NAME=sys.argv[1]; DUMP=sys.argv[2]
-DOCX=fr"C:\Users\ryuji\oxi-main\tools\golden-test\documents\docx\{NAME}.docx"
+DOCX=str(_REPO / rf"tools\golden-test\documents\docx\{NAME}.docx")
 VPOS=6;PAGE=3
 d=json.load(open(DUMP,encoding="utf-8"))
 groups={}

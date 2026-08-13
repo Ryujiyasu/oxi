@@ -5,13 +5,15 @@ cancels in consecutive gaps -> a paragraph where Word_gap >> Oxi_gap is where
 Oxi under-counts height (the ~15.7pt that lets page 3 start higher)."""
 import json,sys
 from collections import defaultdict
+import os
+import tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 def dec(s):
     try: return s.encode('latin1').decode('utf-8')
     except: return s
 def norm(s): return ''.join((s or '').split())
 W=json.load(open(r'pipeline_data/pagination_word/roudoujoken.json',encoding='utf-8'))
-d=json.load(open(r'C:/Users/ryuji/AppData/Local/Temp/roudou_layout.json',encoding='utf-8'))
+d=json.load(open(os.path.join(tempfile.gettempdir(), r"roudou_layout.json"),encoding='utf-8'))
 # Oxi: para_idx -> (page, top_y, joined_text)
 opar=defaultdict(lambda:[None,1e9,[]])
 for pgno,p in enumerate(d['pages']):

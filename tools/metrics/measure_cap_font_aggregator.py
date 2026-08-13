@@ -6,11 +6,12 @@ with incremental save and Word restart per variant.
 import json, os, sys, time, subprocess, re
 from pathlib import Path
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REPRO_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\cap_font_sweep_repro")
-RESULT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\cap_font_sweep.json")
+REPRO_DIR = (_REPO / r"tools\metrics\cap_font_sweep_repro")
+RESULT = (_REPO / r"pipeline_data\cap_font_sweep.json")
 PROBE_LEN = 24
 YAKUMONO = set("「")
 

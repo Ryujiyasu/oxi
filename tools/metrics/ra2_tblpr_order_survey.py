@@ -15,10 +15,12 @@ import sys
 import zipfile
 import re
 import glob
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DOCX_DIR = "C:/Users/ryuji/oxi-main/tools/golden-test/documents/docx"
+DOCX_DIR = str(_REPO / r"tools/golden-test/documents/docx")
 
 
 # Match a <w:tblPr ...>...</w:tblPr> block (non-greedy, allow attributes).

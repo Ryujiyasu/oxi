@@ -11,9 +11,10 @@ from pathlib import Path
 import sys
 
 import win32com.client as w32
+_REPO = Path(__file__).resolve().parents[2]
 
-REPRO_DIR = Path(r"C:\Users\ryuji\oxi-1\tools\metrics\tblppr_anchor_repro")
-OUT = Path(r"C:\Users\ryuji\oxi-1\pipeline_data\tp_resweep_measurements.json")
+REPRO_DIR = (_REPO / r"tools\metrics\tblppr_anchor_repro")
+OUT = (_REPO / r"pipeline_data\tp_resweep_measurements.json")
 
 
 def parse_tblpY(docx_path):

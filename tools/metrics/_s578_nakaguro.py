@@ -14,10 +14,12 @@ and in Oxi (--dump-layout) with S578 OFF vs ON. Expectation:
 import os, sys, zipfile, subprocess, json
 sys.stdout.reconfigure(encoding='utf-8')
 import fitz
+from pathlib import Path
+_REPO = Path(__file__).resolve().parents[2]
 
 OUT = os.path.abspath('tools/golden-test/repros/s578_nakaguro')
 os.makedirs(OUT, exist_ok=True)
-REPO = r'c:\Users\ryuji\oxi-main'
+REPO = str(_REPO)
 GDI = os.path.join(REPO, 'tools', 'oxi-gdi-renderer', 'target', 'release', 'oxi-gdi-renderer.exe')
 
 CT = ('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'

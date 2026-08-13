@@ -11,10 +11,11 @@ Tests single-fs cells at various n_paras and font sizes.
 import io, json, os, subprocess, sys, time, zipfile
 from pathlib import Path
 import win32com.client
+_REPO = Path(__file__).resolve().parents[2]
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OXI_RENDERER = Path(r"C:/Users/ryuji/oxi-4/tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
+OXI_RENDERER = (_REPO / r"tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 TMP_DOCX = Path("pipeline_data") / "_compare_tmp.docx"
 TMP_JSON = Path("pipeline_data") / "_compare_tmp.json"
 
