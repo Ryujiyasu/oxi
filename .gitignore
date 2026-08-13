@@ -69,8 +69,10 @@ pipeline_data/docx_corpus/
 *.stackdump
 
 # Local-only research memory (disclosure decision 2026-07-13)
-CLAUDE.local.md
-Codex.local.md
+# Glob, not the exact name: an exact `CLAUDE.local.md` pattern leaves renames
+# and .bak siblings untracked-but-visible to git.
+CLAUDE.local*
+Codex.local*
 docs/spec/
 AGENTS_STATE.json
 
