@@ -108,7 +108,13 @@ def chars():
 
 
 def arms():
-    return [(f, cp, nm) for f in FONTS for cp, nm in chars()]
+    """Each font opens with its OWN marker-only control arm (cp None).
+
+    The first cut used a single Arial control for every font, which inflated
+    every Calibri per-copy value by (Calibri marker - Arial marker)/REPEAT =
+    0.12pt -- enough to blur the 0.375pt fallback steps this probe is after.
+    """
+    return [(f, cp, nm) for f in FONTS for cp, nm in [(None, "control")] + chars()]
 
 
 def rpr(font, sz):
@@ -135,10 +141,10 @@ def marker(tag, font, pbb=False):
 
 def gen():
     os.makedirs(OUT, exist_ok=True)
-    body = [marker("M00S", FONTS[0], True), marker("M00E", FONTS[0])]
-    for ai, (font, cp, _nm) in enumerate(arms(), start=1):
+    body = []
+    for ai, (font, cp, _nm) in enumerate(arms()):
         body.append(marker("M%02dS" % ai, font, True))
-        for _ in range(REPEAT):
+        for _ in range(REPEAT if cp is not None else 0):
             body.append(subject(font, cp))
         body.append(marker("M%02dE" % ai, font))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
@@ -165,15 +171,20 @@ def gen():
 
 
 def report(spans, who):
-    base = spans.get(0)
-    if base is None:
-        raise SystemExit("control arm missing")
-    print("%s   marker-only span = %.2f" % (who, base))
+    base = {}
+    for ai, (font, cp, _nm) in enumerate(arms()):
+        if cp is None and spans.get(ai) is not None:
+            base[font] = spans[ai]
+    print("%s   marker-only spans %s"
+          % (who, {f: round(v, 2) for f, v in base.items()}))
     print("%-9s %-8s %-18s %9s" % ("font", "cp", "name", "per copy"))
-    for ai, (font, cp, nm) in enumerate(arms(), start=1):
-        s = spans.get(ai)
+    for ai, (font, cp, nm) in enumerate(arms()):
+        if cp is None:
+            continue
+        s, b = spans.get(ai), base.get(font)
         print("%-9s U+%04X %-18s %9s"
-              % (font, cp, nm[:18], "MISSING" if s is None else "%.3f" % ((s - base) / REPEAT)))
+              % (font, cp, nm[:18],
+                 "MISSING" if s is None or b is None else "%.3f" % ((s - b) / REPEAT)))
 
 
 def read():
@@ -197,11 +208,51 @@ def read():
         d.Close(False)
         app.Quit()
     spans = {}
-    for ai in range(0, len(arms()) + 1):
+    for ai in range(0, len(arms())):
         s, e = ys.get((ai, "S")), ys.get((ai, "E"))
         if s and e and s[0] == e[0]:
             spans[ai] = e[1] - s[1]
     report(spans, "WORD")
+
+
+def pdf():
+    """Which font does Word actually draw each symbol in?
+
+    The line height follows the font Word falls back to when the run's ascii
+    font has no glyph, so the fallback has to be identified, not guessed:
+    ExportAsFixedFormat, then read the span font name per arm with fitz.
+    """
+    import fitz
+    import win32com.client as w
+    out = os.path.join(OUT, os.path.basename(docx()).replace(".docx", ".pdf"))
+    app = w.DispatchEx("Word.Application")
+    app.Visible = False
+    d = app.Documents.Open(docx(), ReadOnly=True)
+    try:
+        d.ExportAsFixedFormat(out, 17)          # wdExportFormatPDF
+    finally:
+        d.Close(False)
+        app.Quit()
+    doc = fitz.open(out)
+    print("%-9s %-8s %-18s %-26s %s" % ("font", "cp", "name", "Word span font", "size"))
+    for ai, (font, cp, nm) in enumerate(arms()):
+        if cp is None:
+            continue
+        page = doc[ai]                          # one arm per page (pageBreakBefore)
+        hit = None
+        for blk in page.get_text("rawdict")["blocks"]:
+            for ln in blk.get("lines", []):
+                for sp in ln.get("spans", []):
+                    if any(c["c"] == chr(cp) for c in sp.get("chars", [])):
+                        hit = (sp["font"], round(sp["size"], 2))
+                        break
+                if hit:
+                    break
+            if hit:
+                break
+        print("%-9s U+%04X %-18s %-26s %s"
+              % (font, cp, nm[:18], hit[0] if hit else "(not drawn as text)",
+                 hit[1] if hit else ""))
 
 
 def oxi(envs=""):
@@ -220,7 +271,7 @@ def oxi(envs=""):
             if len(t) == 4 and t.startswith("M") and t[3] in "SE" and t[1:3].isdigit():
                 ys.setdefault((int(t[1:3]), t[3]), (pg["page"], e["y"]))
     spans = {}
-    for ai in range(0, len(arms()) + 1):
+    for ai in range(0, len(arms())):
         s, e = ys.get((ai, "S")), ys.get((ai, "E"))
         if s and e and s[0] == e[0]:
             spans[ai] = e[1] - s[1]
@@ -233,4 +284,4 @@ if __name__ == "__main__":
     if sys.argv[1] == "oxi":
         oxi(next((a for a in sys.argv[2:] if a not in ("theme", "cjk")), ""))
     else:
-        {"gen": gen, "read": read}[sys.argv[1]]()
+        {"gen": gen, "read": read, "pdf": pdf}[sys.argv[1]]()
