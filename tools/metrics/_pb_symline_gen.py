@@ -17,9 +17,17 @@ a Latin run and reads Word's own line height for each, with a true CJK arm and a
 plain Latin arm as the two controls.  Each arm is one page holding REPEAT copies
 between markers, so the per-copy height comes out to +-0.05pt.
 
-  python _pb_symline_gen.py gen
-  python _pb_symline_gen.py read              # Word COM truth
-  python _pb_symline_gen.py oxi               # Oxi, same arms
+★The plain arms do NOT reproduce the specimen: with an explicit Arial in
+docDefaults, Oxi gives U+25A1 the Arial line (21.000) like Word.  The specimen
+instead resolves its fonts through the THEME
+(`<w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" .../>`)
+whose `<a:ea typeface=""/>` is EMPTY.  The `theme` variant below mirrors exactly
+that -- same docDefaults, the specimen's own theme1.xml part, runs still naming
+Arial explicitly -- so the two documents differ in one thing only.
+
+  python _pb_symline_gen.py gen  [theme]
+  python _pb_symline_gen.py read [theme]      # Word COM truth
+  python _pb_symline_gen.py oxi  ""  [theme]  # Oxi, same arms
 """
 import os
 import subprocess
@@ -30,7 +38,34 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_symline")
-DOCX = os.path.join(OUT, "symline.docx")
+THEME = False
+SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "reports",
+                        "0020157f48ee08b2.docx")
+
+
+def docx():
+    return os.path.join(OUT, "symline%s%s.docx"
+                        % ("_theme" if THEME else "", "_cjk" if WITH_CJK else ""))
+
+
+# docDefaults exactly as the specimen writes them, so the only difference from
+# the plain arms is where the font names come from.
+THEME_STYLES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + "%s" + ">"
+    "<w:docDefaults><w:rPrDefault><w:rPr>"
+    '<w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"'
+    ' w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/><w:sz w:val="22"/>'
+    "</w:rPr></w:rPrDefault>"
+    '<w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+    "</w:pPrDefault></w:docDefaults>"
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+    "<w:name w:val=\"Normal\"/></w:style></w:styles>")
+THEME_CT = (
+    '<Override PartName="/word/theme/theme1.xml" '
+    'ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>')
+THEME_REL = (
+    '<Relationship Id="rIdTh" Type="http://schemas.openxmlformats.org/'
+    'officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>')
 GDI = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release",
                    "oxi-gdi-renderer.exe")
 
@@ -54,14 +89,26 @@ CHARS = [
     (0x25C6, "BLACK DIAMOND"),
     (0x2610, "BALLOT BOX"),
     (0x2713, "CHECK MARK"),
+]
+# ★These two must live in their OWN document.  A single real CJK character
+# anywhere in the body sets Oxi's doc_body_has_real_cjk, which switches off
+# every ambiguous-class carve-out (S801/S830/S888/S951/S966/S1103) at once — the
+# first cut of this probe put them beside the symbols and measured a flat CJK
+# line for all 14, which says nothing about the Latin-document path.
+CJK_CONTROLS = [
     (0x3007, "IDEOGRAPHIC ZERO"),
     (0x4E00, "CJK control"),
 ]
 FONTS = ["Arial", "Calibri"]
+WITH_CJK = False
+
+
+def chars():
+    return CHARS + (CJK_CONTROLS if WITH_CJK else [])
 
 
 def arms():
-    return [(f, cp, nm) for f in FONTS for cp, nm in CHARS]
+    return [(f, cp, nm) for f in FONTS for cp, nm in chars()]
 
 
 def rpr(font, sz):
@@ -99,13 +146,22 @@ def gen():
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
            '<w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440" '
            'w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>')
-    with zipfile.ZipFile(DOCX, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", CT)
+    ct, drels, styles = CT, DRELS, STYLES
+    if THEME:
+        ct = CT.replace("</Types>", THEME_CT + "</Types>")
+        drels = DRELS.replace("</Relationships>", THEME_REL + "</Relationships>")
+        styles = THEME_STYLES % NS
+    with zipfile.ZipFile(docx(), "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
         z.writestr("_rels/.rels", RELS)
-        z.writestr("word/_rels/document.xml.rels", DRELS)
-        z.writestr("word/styles.xml", STYLES)
+        z.writestr("word/_rels/document.xml.rels", drels)
+        z.writestr("word/styles.xml", styles)
+        if THEME:
+            # the specimen's own theme part, so `<a:ea typeface=""/>` is verbatim
+            z.writestr("word/theme/theme1.xml",
+                       zipfile.ZipFile(SPECIMEN).read("word/theme/theme1.xml"))
         z.writestr("word/document.xml", doc)
-    print("wrote", DOCX, len(arms()), "arms x", REPEAT)
+    print("wrote", docx(), len(arms()), "arms x", REPEAT, "theme" if THEME else "")
 
 
 def report(spans, who):
@@ -126,7 +182,7 @@ def read():
     app = w.DispatchEx("Word.Application")
     app.Visible = False
     app.ScreenUpdating = False
-    d = app.Documents.Open(DOCX, ReadOnly=True)
+    d = app.Documents.Open(docx(), ReadOnly=True)
     ys = {}
     try:
         d.Repaginate()
@@ -155,7 +211,7 @@ def oxi(envs=""):
         k, _, v = kv.partition("=")
         env[k] = v or "1"
     out = os.path.join(tempfile.gettempdir(), "symline_oxi.json")
-    subprocess.run([GDI, DOCX, os.path.join(tempfile.gettempdir(), "sym"),
+    subprocess.run([GDI, docx(), os.path.join(tempfile.gettempdir(), "sym"),
                     "--dump-layout=" + out], check=True, capture_output=True, env=env)
     ys = {}
     for pg in json.load(open(out, encoding="utf-8"))["pages"]:
@@ -172,7 +228,9 @@ def oxi(envs=""):
 
 
 if __name__ == "__main__":
+    THEME = "theme" in sys.argv[2:]
+    WITH_CJK = "cjk" in sys.argv[2:]
     if sys.argv[1] == "oxi":
-        oxi(sys.argv[2] if len(sys.argv) > 2 else "")
+        oxi(next((a for a in sys.argv[2:] if a not in ("theme", "cjk")), ""))
     else:
         {"gen": gen, "read": read}[sys.argv[1]]()
