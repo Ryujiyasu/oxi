@@ -6,7 +6,7 @@ from pptx import Presentation
 from pptx.util import Pt, Inches, Emu
 from pptx.enum.text import PP_ALIGN
 
-OUT_DIR = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\theme_default2"
+OUT_DIR = os.path.abspath(r"pipeline_data\pptx_probes\theme_default2")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 prs = Presentation()

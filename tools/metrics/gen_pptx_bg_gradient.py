@@ -29,7 +29,7 @@ from pptx.util import Emu
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT = Path(r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\bg_gradient")
+OUT = Path(r"pipeline_data\pptx_probes\bg_gradient").resolve()
 
 # (label, <p:bg> inner XML)
 def lin(ang_deg: float, stops: list[tuple[int, str]], scaled: int = 0) -> str:

@@ -8,8 +8,9 @@ For each accent wedge, extract:
 From East (which starts at 12 o'clock) we get top = cy - r, so r = cy - top.
 """
 import json
+import os
 
-PDF = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\chart_pie3\chart_pie3.pdf"
+PDF = os.path.abspath(r"pipeline_data\pptx_probes\chart_pie3\chart_pie3.pdf")
 
 ACCENT = {
     (0.31, 0.506, 0.741): "a1",

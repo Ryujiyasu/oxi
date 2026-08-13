@@ -22,7 +22,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Emu
 
-OUT = Path(r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\alpha_fill")
+OUT = Path(r"pipeline_data\pptx_probes\alpha_fill").resolve()
 SW, SH = 9144000, 5143500
 
 # (label, backdrop hex or None, [(fill hex, alpha permille-of-100000)])

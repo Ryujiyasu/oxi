@@ -7,7 +7,7 @@ from pptx import Presentation
 from pptx.util import Pt, Inches, Emu
 from pptx.enum.text import PP_ALIGN
 
-OUT_DIR = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\spec6_baseline"
+OUT_DIR = os.path.abspath(r"pipeline_data\pptx_probes\spec6_baseline")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # One slide per font size, so the PDF baseline of each "FS<n>" label is unambiguous.

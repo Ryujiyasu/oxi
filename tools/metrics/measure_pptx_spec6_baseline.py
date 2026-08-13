@@ -6,7 +6,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 import win32com.client
 
-OUT_DIR = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\spec6_baseline"
+OUT_DIR = os.path.abspath(r"pipeline_data\pptx_probes\spec6_baseline")
 PPTX = os.path.join(OUT_DIR, "spec6_baseline.pptx")
 PDF = os.path.join(OUT_DIR, "spec6_baseline.pdf")
 

@@ -8,7 +8,7 @@ import win32com.client
 
 import os
 
-BASE = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\chart_pie3"
+BASE = os.path.abspath(r"pipeline_data\pptx_probes\chart_pie3")
 PPTX = os.path.join(BASE, "chart_pie3.pptx")
 PDF = os.path.join(BASE, "chart_pie3.pdf")
 OUT_JSON = os.path.join(BASE, "chart_pie3_truth.json")

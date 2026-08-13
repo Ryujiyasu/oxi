@@ -3,7 +3,7 @@ import json, os, sys
 sys.stdout.reconfigure(encoding="utf-8")
 import win32com.client
 
-OUT_DIR = r"C:\Users\ryuji\oxi-main\pipeline_data\pptx_probes\theme_default2"
+OUT_DIR = os.path.abspath(r"pipeline_data\pptx_probes\theme_default2")
 PPTX = os.path.join(OUT_DIR, "theme_default2.pptx")
 PDF = os.path.join(OUT_DIR, "theme_default2.pdf")
 
