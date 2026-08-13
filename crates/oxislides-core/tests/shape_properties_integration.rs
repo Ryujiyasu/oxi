@@ -115,7 +115,7 @@ fn paragraph_alignment_parsed() {
     for shape in &p.slides[0].shapes {
         if let ShapeContent::TextBox { paragraphs } = &shape.content {
             for para in paragraphs {
-                if matches!(para.alignment, SlideAlignment::Center) {
+                if matches!(para.alignment, Some(SlideAlignment::Center)) {
                     saw_center = true;
                 }
             }
@@ -125,22 +125,27 @@ fn paragraph_alignment_parsed() {
 }
 
 #[test]
-fn alignment_defaults_to_left_when_unspecified() {
-    // multi_slide.pptx slide 1 title is left/default-aligned. Pin that
-    // unspecified alignment yields the Left default (not a panic / garbage).
+fn alignment_is_none_or_a_valid_variant() {
+    // multi_slide.pptx slide 1 title is left/default-aligned. Since S6 an
+    // unspecified algn parses to None (inherit the master txStyles level)
+    // rather than a materialized Left, so the pin is "None or a real variant",
+    // never a panic / garbage.
     let multi = parse_pptx(include_bytes!("../../../tests/fixtures/multi_slide.pptx"))
         .expect("multi_slide.pptx must parse");
-    // Just assert every paragraph has a valid alignment variant (exhaustive
-    // match guards against an unparsed/garbage state).
+    // The exhaustive match guards against an unparsed state and fails to
+    // compile if a variant is added without revisiting this test.
     for slide in &multi.slides {
         for shape in &slide.shapes {
             if let ShapeContent::TextBox { paragraphs } = &shape.content {
                 for para in paragraphs {
                     match para.alignment {
-                        SlideAlignment::Left
-                        | SlideAlignment::Center
-                        | SlideAlignment::Right
-                        | SlideAlignment::Justify => {}
+                        None
+                        | Some(
+                            SlideAlignment::Left
+                            | SlideAlignment::Center
+                            | SlideAlignment::Right
+                            | SlideAlignment::Justify,
+                        ) => {}
                     }
                 }
             }
