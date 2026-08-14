@@ -89,6 +89,11 @@ CHARS = [
     (0x25C6, "BLACK DIAMOND"),
     (0x2610, "BALLOT BOX"),
     (0x2713, "CHECK MARK"),
+    # The two shapes the CORPUS actually carries (census 2026-08-14:
+    # forms__002f81ab has 16x Cambria U+2605, forms__001ae487 has 4x
+    # Calibri U+2610). Everything above was chosen from the specimen
+    # `reports__0020157f`; these two are what the fix has to get right.
+    (0x2605, "BLACK STAR"),
 ]
 # ★These two must live in their OWN document.  A single real CJK character
 # anywhere in the body sets Oxi's doc_body_has_real_cjk, which switches off
@@ -99,7 +104,7 @@ CJK_CONTROLS = [
     (0x3007, "IDEOGRAPHIC ZERO"),
     (0x4E00, "CJK control"),
 ]
-FONTS = ["Arial", "Calibri"]
+FONTS = ["Arial", "Calibri", "Cambria"]
 WITH_CJK = False
 
 
