@@ -576,6 +576,35 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             // Opt-out OXI_EMF_DISABLE.
                             let is_emf = data.len() > 44
                                 && data[40..44] == [0x20, 0x45, 0x4D, 0x46]; // " EMF"
+                            // WMF: convert to EMF and play through the same path.
+                            // A placeable header (D7 CD C6 9A) is not part of the
+                            // metafile proper and must be stripped first. Corpus:
+                            // 20 docs incl. golden 3a4f/model/tokyoshugyo.
+                            let wmf_body: Option<&[u8]> = if data.len() > 22
+                                && data[0..4] == [0xD7, 0xCD, 0xC6, 0x9A]
+                            {
+                                Some(&data[22..])
+                            } else if data.len() > 18
+                                && (data[0] == 1 || data[0] == 2)
+                                && data[1] == 0
+                                && data[2] == 9
+                                && data[3] == 0
+                            {
+                                Some(&data[..])
+                            } else {
+                                None
+                            };
+                            if let Some(body) = wmf_body {
+                                if std::env::var("OXI_EMF_DISABLE").is_err() {
+                                    let hemf = windows::Win32::System::DataExchange::SetWinMetaFileBits(
+                                        body, HDC::default(), None);
+                                    if !hemf.is_invalid() {
+                                        let rc = RECT { left: x, top: y, right: x + ew, bottom: y + eh };
+                                        let _ = PlayEnhMetaFile(mem_dc, hemf, &rc);
+                                        let _ = DeleteEnhMetaFile(hemf);
+                                    }
+                                }
+                            }
                             if is_emf && std::env::var("OXI_EMF_DISABLE").is_err() {
                                 let hemf = SetEnhMetaFileBits(data);
                                 if !hemf.is_invalid() {

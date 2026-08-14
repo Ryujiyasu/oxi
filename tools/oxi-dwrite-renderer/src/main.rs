@@ -575,13 +575,22 @@ fn page_factory_handle(
 #[cfg(windows)]
 /// Rasterize an EMF via a GDI memory DC (D2D cannot play metafiles).
 /// Returns None if anything fails, so the caller falls back to the old path.
-unsafe fn rasterize_emf(data: &[u8], w: i32, h: i32) -> Option<image::DynamicImage> {
+unsafe fn rasterize_emf(
+    data: &[u8],
+    wmf_body: Option<&[u8]>,
+    w: i32,
+    h: i32,
+) -> Option<image::DynamicImage> {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::RECT;
     if w <= 0 || h <= 0 {
         return None;
     }
-    let hemf = SetEnhMetaFileBits(data);
+    let hemf = match wmf_body {
+        Some(body) => windows::Win32::System::DataExchange::SetWinMetaFileBits(
+            body, HDC::default(), None),
+        None => SetEnhMetaFileBits(data),
+    };
     if hemf.is_invalid() {
         return None;
     }
@@ -649,8 +658,19 @@ unsafe fn render_image(
     // either, so rasterize it through a GDI memory DC at 2x the dest size and
     // feed the pixels into the existing bitmap path. Opt-out OXI_EMF_DISABLE.
     let is_emf = data.len() > 44 && data[40..44] == [0x20, 0x45, 0x4D, 0x46];
-    let emf_img = if is_emf && std::env::var("OXI_EMF_DISABLE").is_err() {
-        rasterize_emf(data, (w_pt * 2.0).ceil() as i32, (h_pt * 2.0).ceil() as i32)
+    // WMF: strip the placeable header (D7 CD C6 9A) if present, convert with
+    // SetWinMetaFileBits, and rasterize through the same path.
+    let wmf_body: Option<&[u8]> = if data.len() > 22 && data[0..4] == [0xD7, 0xCD, 0xC6, 0x9A] {
+        Some(&data[22..])
+    } else if data.len() > 18 && (data[0] == 1 || data[0] == 2) && data[1] == 0
+        && data[2] == 9 && data[3] == 0
+    {
+        Some(&data[..])
+    } else {
+        None
+    };
+    let emf_img = if (is_emf || wmf_body.is_some()) && std::env::var("OXI_EMF_DISABLE").is_err() {
+        rasterize_emf(data, wmf_body, (w_pt * 2.0).ceil() as i32, (h_pt * 2.0).ceil() as i32)
     } else {
         None
     };
