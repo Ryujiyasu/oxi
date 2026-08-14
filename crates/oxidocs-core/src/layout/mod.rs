@@ -15090,15 +15090,66 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                         let fs = frag.style.font_size.unwrap_or(para_font_size);
                         let m = self.metrics_for_text(&frag.text, &frag.style, &para.style);
-                        let mut h = m.word_line_height_no_grid(fs);
-                        if !m.is_cjk_83_64_font() {
-                            let hh = m.natural_line_height_hhea(fs);
-                            if hh > s805_hhea_max {
-                                s805_hhea_max = hh;
+                        // S1119: pick the per-CHAR face FIRST. The fallback face
+                        // REPLACES the run font for the chars it covers and can be
+                        // SHORTER (Calibri black-square: Word 20.438 = Courier New,
+                        // below Calibri's own 21.973), so this has to happen before
+                        // the run font's own value is folded into s805_hhea_max —
+                        // folding first makes the rule unable to lower anything,
+                        // which is exactly why the Calibri arms stayed put.
+                        let s1119_on = !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S1119").is_ok()
+                            && !frag.text.is_empty();
+                        let s1119_faces: Option<Vec<&crate::font::FontMetrics>> = if s1119_on
+                            && frag
+                                .text
+                                .chars()
+                                .any(|c| self.registry.symbol_fallback_face(c, m).is_some())
+                        {
+                            Some(
+                                frag.text
+                                    .chars()
+                                    .map(|c| self.registry.symbol_fallback_face(c, m).unwrap_or(m))
+                                    .collect(),
+                            )
+                        } else {
+                            None
+                        };
+                        let mut h = match &s1119_faces {
+                            Some(fs_list) => fs_list
+                                .iter()
+                                .map(|f| f.word_line_height_no_grid(fs))
+                                .fold(0.0f32, f32::max),
+                            None => m.word_line_height_no_grid(fs),
+                        };
+                        match &s1119_faces {
+                            Some(fs_list) => {
+                                let hh = fs_list
+                                    .iter()
+                                    .filter(|f| !f.is_cjk_83_64_font())
+                                    .map(|f| f.natural_line_height_hhea(fs))
+                                    .fold(0.0f32, f32::max);
+                                if hh > s805_hhea_max {
+                                    s805_hhea_max = hh;
+                                }
+                            }
+                            None => {
+                                if !m.is_cjk_83_64_font() {
+                                    let hh = m.natural_line_height_hhea(fs);
+                                    if hh > s805_hhea_max {
+                                        s805_hhea_max = hh;
+                                    }
+                                }
                             }
                         }
                         // Raw (un-floored) height for Multiple spacing cumulative base
-                        let mut raw = (m.win_ascent + m.win_descent) * fs;
+                        let mut raw = match &s1119_faces {
+                            Some(fs_list) => fs_list
+                                .iter()
+                                .map(|f| (f.win_ascent + f.win_descent) * fs)
+                                .fold(0.0f32, f32::max),
+                            None => (m.win_ascent + m.win_descent) * fs,
+                        };
                         // S612z-circle (2026-06-23): embedded Zen Old Mincho renders CIRCLED
                         // NUMBERS (①-⑳) in its deep-win-descent box (1.448em = 17.376@12pt)
                         // while kanji fall back to MS Mincho (15.56). DERIVED from the Word
@@ -15115,6 +15166,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         {
                             h = h.max(fs * 1448.0 / 1000.0);
                         }
+                        // S1119 (see the chain in `symbol_fallback_face`): the
+                        // THIRD site. `no_grid_max` / `no_grid_raw_max` /
+                        // `s805_hhea_max` are recomputed here from the fragments,
+                        // discarding the ma/md fold above — the same
+                        // recomputed-downstream shape that made two earlier
+                        // attempts at S1118 byte-exact no-ops. Fold the fallback
+                        // face in HERE or the rule cannot reach a no-grid Latin
+                        // paragraph's advance at all.
                         if h > no_grid_max {
                             no_grid_max = h;
                         }
@@ -24079,6 +24138,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         }
     }
 
+    /// S1119: the face a RUN's text should be measured with when the run font
+    /// has no glyph for it (see `symbol_fallback_face` for the derived chain).
+    ///
+    /// Returns Some(face) only when EVERY char of the run resolves to the SAME
+    /// fallback face — the pure-symbol run the corpus actually has
+    /// (forms__002f81ab's 16 star runs, forms__001ae487's 4 ballot-box runs).
+    /// A MIXED run keeps the run font: the body path folds per-char and can do
+    /// better, but a cell line is measured from a single FontMetrics, and
+    /// approximating a mixed run here would invent behaviour no arm measures.
+    ///
+    /// ★CELLS ARE NOT WIRED. The rule is measured for BODY lines only (the
+    /// `_pb_symline_gen.py` plain and `grid` variants). Whether Word applies the
+    /// same fallback inside a table cell — where the line height has its own
+    /// clamps and the row can pin it via trHeight — is UNMEASURED, so the cell
+    /// call site was deliberately left alone rather than shipped on the
+    /// assumption that it composes. Add a cell variant to the probe first.
+    fn s1119_run_face<'a>(
+        &'a self,
+        text: &str,
+        m: &'a crate::font::FontMetrics,
+    ) -> Option<&'a crate::font::FontMetrics> {
+        if self.doc_body_has_real_cjk
+            || text.is_empty()
+            || std::env::var("OXI_S1119").is_err()
+        {
+            return None;
+        }
+        let mut face: Option<&crate::font::FontMetrics> = None;
+        for ch in text.chars() {
+            let f = self.registry.symbol_fallback_face(ch, m)?;
+            match face {
+                None => face = Some(f),
+                Some(prev) if prev.family == f.family => {}
+                Some(_) => return None,
+            }
+        }
+        face
+    }
+
     fn line_height_inner(
         &self,
         font_size: f32,
@@ -24850,6 +24948,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     asc = asc.max(vg);
                     des = des.max(vg);
                 }
+                // S1119: a pure-symbol fragment whose run font has no glyph is
+                // drawn by Word in the fallback face — REPLACE, do not max():
+                // Calibri black-square measures 20.438 (Courier New) BELOW
+                // Calibri's own 21.973, so a max() fold cannot reach it. This is
+                // the GRID path's copy of the no-grid fold below.
+                if let Some(fb) = self.s1119_run_face(&frag.text, metrics) {
+                    asc = fb.word_ascent_pt(font_size);
+                    des = fb.word_descent_pt(font_size);
+                }
                 if asc > max_ascent {
                     max_ascent = asc;
                 }
@@ -24862,7 +24969,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 }
                 // S671: track the tallest fragment's hhea natural line height
                 // (Latin design line height incl. lineGap) for the no-type-grid base.
-                let nat = metrics.natural_line_height_hhea(font_size);
+                let nat = match self.s1119_run_face(&frag.text, metrics) {
+                    Some(fb) => fb.natural_line_height_hhea(font_size),
+                    None => metrics.natural_line_height_hhea(font_size),
+                };
                 if nat > hhea_natural_max {
                     hhea_natural_max = nat;
                     hhea_natural_family = metrics.family.clone();

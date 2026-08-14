@@ -39,13 +39,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_symline")
 THEME = False
+# ★GRID variant: the same arms under a <w:docGrid>. The plain/theme arms have no
+# docGrid at all, which is the NO-GRID body path; a real corpus form usually has
+# one, and the line height is computed by a DIFFERENT function there. Without
+# this variant the grid wiring would ship unmeasured.
+GRID = False
 SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "reports",
                         "0020157f48ee08b2.docx")
 
 
 def docx():
-    return os.path.join(OUT, "symline%s%s.docx"
-                        % ("_theme" if THEME else "", "_cjk" if WITH_CJK else ""))
+    return os.path.join(OUT, "symline%s%s%s.docx"
+                        % ("_theme" if THEME else "", "_grid" if GRID else "",
+                           "_cjk" if WITH_CJK else ""))
 
 
 # docDefaults exactly as the specimen writes them, so the only difference from
@@ -155,7 +161,8 @@ def gen():
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
-           '<w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440" '
+           + ('<w:docGrid w:linePitch="360"/>' if GRID else '')
+           + '<w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440" '
            'w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>')
     ct, drels, styles = CT, DRELS, STYLES
     if THEME:
@@ -285,8 +292,9 @@ def oxi(envs=""):
 
 if __name__ == "__main__":
     THEME = "theme" in sys.argv[2:]
+    GRID = "grid" in sys.argv[2:]
     WITH_CJK = "cjk" in sys.argv[2:]
     if sys.argv[1] == "oxi":
-        oxi(next((a for a in sys.argv[2:] if a not in ("theme", "cjk")), ""))
+        oxi(next((a for a in sys.argv[2:] if a not in ("theme", "grid", "cjk")), ""))
     else:
         {"gen": gen, "read": read, "pdf": pdf}[sys.argv[1]]()

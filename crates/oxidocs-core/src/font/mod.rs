@@ -88,7 +88,53 @@ struct RawFontMetrics {
     /// use the typo metrics for line layout instead of the GDI win box.
     #[serde(default)]
     use_typo_metrics: bool,
+    /// Hex bitmap of glyph coverage over SYM_RANGES, one bit per codepoint,
+    /// LSB-first within each byte (tools/metrics/add_symbol_fallback_metrics.py).
+    /// Empty when the generator could not read the face (e.g. symbol.ttf, whose
+    /// cmap is not Unicode) — treated as "unknown", never as "absent".
+    #[serde(default)]
+    sym_coverage: String,
     widths: HashMap<u32, u16>,
+}
+
+/// S1115's ambiguous ranges — the codepoints that rule routes to the ascii
+/// font, hence exactly the set where Word's symbol fallback can bite.
+pub const SYM_RANGES: [(u32, u32); 4] = [
+    (0x2010, 0x2044),
+    (0x2190, 0x22FF),
+    (0x2460, 0x24FF),
+    (0x2500, 0x27BF),
+];
+
+/// Index of `c` within SYM_RANGES, or None when it is outside them.
+fn decode_hex(h: &str) -> Vec<u8> {
+    if h.len() % 2 != 0 {
+        return Vec::new();
+    }
+    let b = h.as_bytes();
+    let mut out = Vec::with_capacity(h.len() / 2);
+    for i in (0..b.len()).step_by(2) {
+        let hi = (b[i] as char).to_digit(16);
+        let lo = (b[i + 1] as char).to_digit(16);
+        match (hi, lo) {
+            (Some(a), Some(c)) => out.push((a * 16 + c) as u8),
+            _ => return Vec::new(),
+        }
+    }
+    out
+}
+
+/// Index of `c` within SYM_RANGES, or None when it is outside them.
+pub fn sym_range_index(c: char) -> Option<usize> {
+    let cp = c as u32;
+    let mut base = 0usize;
+    for (a, b) in SYM_RANGES {
+        if cp >= a && cp <= b {
+            return Some(base + (cp - a) as usize);
+        }
+        base += (b - a + 1) as usize;
+    }
+    None
 }
 
 /// Per-character font metrics normalized to 1em.
@@ -120,6 +166,11 @@ pub struct FontMetrics {
     /// the GDI line (max(hhea, win)).
     #[serde(default)]
     pub use_typo_metrics: bool,
+    /// Decoded `sym_coverage` bitmap; empty = unknown (never "absent").
+    /// Not part of the serialized form (the registry rebuilds it from the raw
+    /// hex on load), so `#[serde(skip)]` keeps FontMetrics round-trippable.
+    #[serde(skip)]
+    pub sym_coverage: Vec<u8>,
     /// Per-character advance widths, normalized to 1em.
     pub char_widths: HashMap<char, f32>,
 }
@@ -127,6 +178,14 @@ pub struct FontMetrics {
 impl FontMetrics {
     /// Look up the advance width for a character (normalized to 1em).
     /// Falls back to fullwidth/halfwidth heuristics for unmeasured chars.
+    /// Does this face have a glyph for `c`?  `None` = no coverage data for
+    /// this face (never assume "absent" — that would invent a fallback).
+    pub fn has_symbol_glyph(&self, c: char) -> Option<bool> {
+        let idx = sym_range_index(c)?;
+        let byte = self.sym_coverage.get(idx >> 3)?;
+        Some(byte & (1 << (idx & 7)) != 0)
+    }
+
     pub fn char_width_em(&self, c: char) -> f32 {
         self.char_widths
             .get(&c)
@@ -497,6 +556,36 @@ pub struct FontMetricsRegistry {
 
 impl FontMetricsRegistry {
     /// Load the embedded font metrics data, cached globally after first call.
+    /// S1119 (2026-08-14): the face Word actually draws `c` with, when the run
+    /// font has no glyph for it. DERIVED from `_pb_symline_gen.py` (3 run fonts
+    /// x 13 codepoints, 18pt symbol beside 10pt text) cross-referenced against
+    /// the candidate faces' cmaps — one ordered chain explains all 39 arms:
+    ///
+    ///     the run font itself -> Courier New -> Cambria Math -> Segoe UI Symbol
+    ///
+    /// Word truth: Arial circled-one / diamond 21.094 = Cambria Math; Arial and
+    /// Calibri ballot/check/star 24.000 = Segoe UI Symbol; Calibri black-square
+    /// 20.438 = Courier New. The ORDER is pinned by exactly two arms — Calibri
+    /// black-square (Courier New HAS it and wins over Cambria Math, which also
+    /// has it) and Calibri diamond (Courier New lacks it, so Cambria Math wins).
+    /// If a later measurement contradicts the chain, re-measure those two first.
+    ///
+    /// Returns None when the run font has the glyph, when coverage data is
+    /// missing for either side, or when no candidate face covers the codepoint.
+    pub fn symbol_fallback_face(&self, c: char, run: &FontMetrics) -> Option<&FontMetrics> {
+        if run.has_symbol_glyph(c) != Some(false) {
+            return None;
+        }
+        for fam in ["Courier New", "Cambria Math", "Segoe UI Symbol"] {
+            if let Some(m) = self.fonts.get(fam) {
+                if m.has_symbol_glyph(c) == Some(true) {
+                    return Some(m);
+                }
+            }
+        }
+        None
+    }
+
     pub fn load() -> Self {
         use std::sync::OnceLock;
         static CACHED: OnceLock<FontMetricsRegistry> = OnceLock::new();
@@ -585,6 +674,7 @@ impl FontMetricsRegistry {
                 typo_descent,
                 typo_line_gap,
                 use_typo_metrics: raw.use_typo_metrics,
+                sym_coverage: decode_hex(&raw.sym_coverage),
                 char_widths,
             };
 
@@ -646,6 +736,7 @@ impl FontMetricsRegistry {
                     typo_descent: 471.0 / 2048.0,
                     typo_line_gap: 0.0,
                     use_typo_metrics: false,
+                    sym_coverage: Vec::new(),
                     char_widths: calibri.char_widths,
                 };
                 fonts.insert("Gill Sans Nova".to_string(), gill);
