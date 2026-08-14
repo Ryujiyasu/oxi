@@ -560,8 +560,7 @@ impl FontMetricsRegistry {
     /// font has no glyph for it. DERIVED from `_pb_symline_gen.py` (3 run fonts
     /// x 13 codepoints, 18pt symbol beside 10pt text) cross-referenced against
     /// the candidate faces' cmaps — one ordered chain explains all 39 arms:
-    ///
-    ///     the run font itself -> Courier New -> Cambria Math -> Segoe UI Symbol
+    /// the run font itself -> Courier New -> Cambria Math -> Segoe UI Symbol.
     ///
     /// Word truth: Arial circled-one / diamond 21.094 = Cambria Math; Arial and
     /// Calibri ballot/check/star 24.000 = Segoe UI Symbol; Calibri black-square

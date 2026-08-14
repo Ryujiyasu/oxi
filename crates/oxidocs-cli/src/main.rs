@@ -1246,6 +1246,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                 // pre-R-05 state).
                 oxidocs_core::layout::LayoutContent::Balloon { .. } => {}
                 oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => {}
+                // S1120 custGeom paths: not surfaced in the CLI page model yet
+                oxidocs_core::layout::LayoutContent::VectorPath { .. } => {}
             }
         }
 

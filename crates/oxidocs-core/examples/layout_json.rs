@@ -74,6 +74,9 @@ fn output_flat(result: &layout::LayoutResult, out: &mut impl Write) {
                 layout::LayoutContent::BalloonConnector { from_x, from_y, to_x, to_y, color_hex } => {
                     writeln!(out, "CONNECTOR\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{}", from_x, from_y, to_x, to_y, color_hex).unwrap();
                 }
+                layout::LayoutContent::VectorPath { segs, .. } => {
+                    writeln!(out, "VECTORPATH\t{:.3}\t{:.3}\t{:.1}\t{:.3}\t{}", elem.x, elem.y, elem.width, elem.height, segs.len()).unwrap();
+                }
             }
         }
     }

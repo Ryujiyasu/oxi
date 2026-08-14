@@ -839,6 +839,18 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
                         },
+                        // S1120 custGeom paths: stub kind string like the
+                        // balloon variants — segment payload not serialised to
+                        // JS yet (the browser editor skips unknown kinds).
+                        oxidocs_core::layout::LayoutContent::VectorPath { fill, .. } => LayoutElementJs {
+                            x: elem.x, y: elem.y, width: elem.width, height: elem.height,
+                            kind: "vector_path".into(),
+                            text: None, font_size: None, font_family: None, bold: None, italic: None,
+                            underline: None, underline_style: None, strikethrough: None,
+                            color: fill, highlight: None, character_spacing: None, corner_radius: None,
+                            image_data: None, content_type: None,
+                            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+                        },
                     }
                 }).collect(),
             }
@@ -994,6 +1006,14 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             character_spacing: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
         },
+        // S1120 custGeom paths: stub kind string (segments not serialised yet)
+        oxidocs_core::layout::LayoutContent::VectorPath { fill, .. } => LayoutElementJs {
+            x: elem.x, y: elem.y, width: elem.width, height: elem.height, kind: "vector_path".into(),
+            text: None, font_size: None, font_family: None, bold: None, italic: None,
+            underline: None, underline_style: None, strikethrough: None, color: fill, highlight: None,
+            character_spacing: None, corner_radius: None, image_data: None, content_type: None,
+            x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
+        },
     }
 }
 
@@ -1134,6 +1154,8 @@ fn layout_to_pdf(
                 // R-05a: balloon variants not yet rendered to PDF; skip.
                 oxidocs_core::layout::LayoutContent::Balloon { .. } => {}
                 oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => {}
+                // S1120 custGeom paths: not drawn in the wasm PDF writer yet
+                oxidocs_core::layout::LayoutContent::VectorPath { .. } => {}
             }
         }
 

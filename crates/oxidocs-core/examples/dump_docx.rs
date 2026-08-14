@@ -177,6 +177,9 @@ fn main() {
                 layout::LayoutContent::WatermarkText { ref text, rotation, .. } => {
                     println!("  [{:2}] WATERMARK ({:.1},{:.1}) w={:.1} h={:.1} rot={:.1} text={:?}", ei, elem.x, elem.y, elem.width, elem.height, rotation, text);
                 }
+                layout::LayoutContent::VectorPath { ref segs, .. } => {
+                    println!("  [{:2}] VECTORPATH ({:.1},{:.1}) w={:.1} h={:.1} segs={}", ei, elem.x, elem.y, elem.width, elem.height, segs.len());
+                }
             }
         }
     }
