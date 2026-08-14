@@ -84,15 +84,21 @@ STYLES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + 
 
 
 def arms():
-    return [(wl, ind) for wl in WORD_LENS for ind in INDENTS]
+    """justified 群のあと、同一内容・同一段幅の LEFT 揃え双子群。
+
+    左揃え行の語数 = その段幅に NATURAL で入る語数。justified 行がそれより
+    多ければ、その差がまさに Word の over-fill であり、語幅を justify 結果から
+    逆算する必要が無くなる（語幅のデバイス量子化ノイズが消える）。"""
+    base = [(wl, ind) for wl in WORD_LENS for ind in INDENTS]
+    return [(wl, ind, "both") for wl, ind in base] + [(wl, ind, "left") for wl, ind in base]
 
 
 def body():
     ps = []
-    for i, (wl, ind) in enumerate(arms()):
+    for i, (wl, ind, jc) in enumerate(arms()):
         # enough words to fill 3+ lines at the widest column
         words = " ".join(["m" * wl] * 60)
-        ppr = ('<w:pPr><w:jc w:val="both"/>'
+        ppr = ('<w:pPr><w:jc w:val="%s"/>' % jc
                + ('<w:pageBreakBefore/>' if i else '')
                + '<w:ind w:right="%d"/>' % ind
                + '<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'
@@ -124,9 +130,11 @@ def _report(rows, who):
     print("%-5s %-6s %8s %8s %9s %9s %9s  %s"
           % ("wlen", "indent", "col_pt", "words", "spaces", "space", "ratio", "note"))
     prev_key = None
-    for (wl, ind), r in zip(arms(), rows):
+    for (wl, ind, jc), r in zip(arms(), rows):
         if r is None:
             print("%-5d %-6d   MISSING" % (wl, ind))
+            continue
+        if jc != "both":
             continue
         nw, ns, adv, w1 = r
         col = 468.0 - ind / 20.0
