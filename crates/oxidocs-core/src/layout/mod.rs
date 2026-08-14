@@ -17116,6 +17116,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let mut frag_width_adjustments: Vec<f32> = vec![0.0; line.fragments.len()];
             let mut frag_spacing_after: Vec<f32> = vec![0.0; line.fragments.len()];
             let mut justify_char_spacing: f32 = 0.0;
+            // S1117 (2026-08-14, HELD OPT-IN OXI_S1117 — see the gate result at the end
+            // of this comment): a compat>=15 justified line may
+            // be OVER-FULL by design — Word 2013+ fits a word whose natural width
+            // exceeds the column and then COMPRESSES the inter-word spaces to land
+            // exactly on the right margin. Oxi's BREAK already reproduces that
+            // (repro `pipeline_data/_pb_spacecomp2/pset_m15_only.docx`: both Word
+            // and Oxi carry "forecast" onto line 1) but the render leaves the
+            // spaces natural, so the line runs 9.87pt PAST the margin — violating
+            // the invariant recorded below ("Word never overshoots the right
+            // margin"). The compression mechanism already exists as S994's negative
+            // slack path; it was scoped to wpJustification (2 docs) because that
+            // was the only known producer of a wider-than-column line. compat>=15
+            // is the other, and it is 412 of the 719 corpus documents.
+            //   Word truth (`_pb_spacecomp2`, same paragraph, only settings.xml
+            //   differing):  mode 15 -> space 1.5637 = 0.724x natural, line ends ON
+            //   the margin;  mode 14/12 -> space 3.7051 = 1.715x, "forecast" wraps.
+            //   Oxi mode 15 -> break correct, space 2.2020 = natural, +9.87 overrun.
+            // Latin scope (!doc_body_has_real_cjk): a CJK line's negative slack is
+            // Phase 1's yakumono business and it carries no ASCII spaces to give.
+            // ★GATE RESULT (2026-08-14): HELD OPT-IN, NOT shipped. SSIM sentinel
+            // A/B over 238 word_png bases moved exactly ONE document and moved it
+            // the WRONG WAY — db9ca18368cd net −0.0014 (0 improved / 1 regressed);
+            // EN frozen 5 sets 213→213 and pagination unchanged, as expected for a
+            // render-only rule. The likely cause is that this rule compresses onto a
+            // target that is itself 2.20pt short (see the OPEN note at the slack
+            // computation below), so it trades a +9.87 overrun for a −2.20 undershoot
+            // plus over-tight spaces (Oxi 1.5320 vs Word 1.5637). Re-gate only after
+            // that constant is explained; shipping it alone is an S559-style
+            // compensating error.
+            let s1117_compat15_overfull = self.compat_mode >= 15
+                && !self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1117").is_ok();
 
             let is_soft_break_line =
                 self.do_not_expand_shift_return && line.break_type == LineBreakType::SoftBreak;
@@ -17157,6 +17189,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 } else {
                     0.0
                 };
+                // ★OPEN (2026-08-14): every justified Latin line lands exactly 2.20pt
+                // short of the right margin — 553.10 against a 555.30 edge, on L0/L1/L2
+                // of `_pb_spacecomp2/pset_m15_only.docx` alike, with different content
+                // and different space counts each. 2.20 is exactly Cambria 10pt's
+                // natural space (2.2021), and Word puts those same lines ON the margin
+                // (last visible char at 554.72..554.97 = margin minus side bearing).
+                // The obvious mechanism — `line_text_width` charging the line's
+                // trailing space against the slack while the distribution loops below
+                // skip the last fragment — was IMPLEMENTED AND MEASURED TWICE (as a
+                // whole all-space last fragment, then as the trailing space run inside
+                // the last fragment) and was a byte-exact NO-OP both times: the last
+                // fragment carries no trailing space at all. So the constant is real
+                // but its source is NOT the trailing space. Instrument the three terms
+                // (render_width / extra_indent / line_text_width) before guessing a
+                // third time.
                 let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
 
                 // S472 break-agnostic demand compression (replaces Phase 1 + Stage 2b
@@ -17443,7 +17490,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // Pure Latin with no spaces: do NOT add inter-character spacing
                     }
                 } else if slack < 0.0
-                    && self.wp_justification
+                    && (self.wp_justification || s1117_compat15_overfull)
                     && std::env::var("OXI_S994_DISABLE").is_err()
                 {
                     // S994 render: wpJustification selected content WIDER than the
