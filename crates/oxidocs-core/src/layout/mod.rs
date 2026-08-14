@@ -6397,8 +6397,34 @@ impl LayoutEngine {
                                     next_para.style.space_before.unwrap_or(0.0)
                                 }
                             };
-                            let next_lines = (((next_h - follower_sb)
-                                / (one_line_h - follower_sb).max(0.01))
+                            // S1124 (2026-08-15, opt-out OXI_S1124_DISABLE): S915
+                            // subtracts the follower's space_BEFORE from both sides
+                            // of this division but forgot space_AFTER, so the
+                            // denominator is (line + after), not the per-line
+                            // increment. NDIS 0043bfe0 "Additional Supports"
+                            // follower (docDefaults before=5 after=5 line=15
+                            // atLeast): next_h=160, one_line=25 -> old
+                            // round(155/20)=8 lines where the REAL count is 10
+                            // (Word PDF: 2 on p39 + 8 on p40; Oxi render: 10 —
+                            // the paragraph estimate itself was right all along).
+                            // nlines=8 inflated line_h_next to (160-25)/7=19.3
+                            // (real 15.0), follower_orphans tripped by 1.6pt, the
+                            // heading whole-moved, and 70 pages of the price guide
+                            // cascaded +1 ({+1:2813}). Mirror the sb gate for sa.
+                            let follower_sa = if std::env::var("OXI_S1124_DISABLE").is_ok() {
+                                0.0
+                            } else {
+                                let raw_lr = next_para.style.line_spacing_rule.as_deref();
+                                let explicit_rule =
+                                    raw_lr == Some("exact") || raw_lr == Some("atLeast");
+                                if !next_para.style.has_direct_after && !explicit_rule {
+                                    0.0
+                                } else {
+                                    next_para.style.space_after.unwrap_or(0.0)
+                                }
+                            };
+                            let next_lines = (((next_h - follower_sb - follower_sa)
+                                / (one_line_h - follower_sb - follower_sa).max(0.01))
                             .round() as usize)
                                 .max(1);
                             // ★The follower moves WHOLLY only when WIDOW/ORPHAN control is
