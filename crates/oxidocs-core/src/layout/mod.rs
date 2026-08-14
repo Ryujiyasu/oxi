@@ -15098,7 +15098,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // folding first makes the rule unable to lower anything,
                         // which is exactly why the Calibri arms stayed put.
                         let s1119_on = !self.doc_body_has_real_cjk
-                            && std::env::var("OXI_S1119").is_ok()
+                            && std::env::var("OXI_S1119_DISABLE").is_err()
                             && !frag.text.is_empty();
                         let s1119_faces: Option<Vec<&crate::font::FontMetrics>> = if s1119_on
                             && frag
@@ -24148,6 +24148,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// better, but a cell line is measured from a single FontMetrics, and
     /// approximating a mixed run here would invent behaviour no arm measures.
     ///
+    /// ★★SCOPE LIMIT, measured 2026-08-14: the chain was derived from runs that
+    /// name their ascii font EXPLICITLY. A run that INHERITS the theme font can
+    /// land somewhere else entirely — forms__001ae487's rFonts-less ballot boxes
+    /// inherit theme minorHAnsi (Calibri, empty <a:ea>), and Word's own PDF draws
+    /// them in **MS-Gothic** at advance 11.04, not the Segoe UI Symbol the probe's
+    /// explicit-Calibri arm measures. Oxi resolves that run to MS Gothic too, so
+    /// the rule correctly does NOT fire there — but it means the chain is not a
+    /// universal answer to "which face draws this glyph", only to "which face
+    /// does Word fall back to for an explicitly-fonted run". A document's own
+    /// font context can override it.
     /// ★CELLS ARE NOT WIRED. The rule is measured for BODY lines only (the
     /// `_pb_symline_gen.py` plain and `grid` variants). Whether Word applies the
     /// same fallback inside a table cell — where the line height has its own
@@ -24161,7 +24171,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ) -> Option<&'a crate::font::FontMetrics> {
         if self.doc_body_has_real_cjk
             || text.is_empty()
-            || std::env::var("OXI_S1119").is_err()
+            || std::env::var("OXI_S1119_DISABLE").is_ok()
         {
             return None;
         }
