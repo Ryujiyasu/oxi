@@ -20031,7 +20031,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // 0.01tw epsilon only absorbs f32 accumulation noise (≤ ~1e-3tw);
                     // an exactly-full line (integer-tw content, the c14 shape) stays
                     // KEEP by construction.
+                    // ★JUSTIFIED lines keep the legacy rounded accumulator (opt-out
+                    // OXI_S1061_JC_DISABLE to test the blanket form). Same shape as the
+                    // compat14 exclusion: a justified line's fit budget carries the
+                    // S799/S994/S1028 space-compression credits, and those were
+                    // calibrated ON the rounded accumulator, which drifts ~+0.5tw per
+                    // word above the true sum (db9ca line 2: rounded 8232 vs exact
+                    // 8223 at 8 words). Making the content exact without re-deriving
+                    // the credits lets a justified line keep a word Word wraps —
+                    // db9ca__20241122 «(This also applies if “This Content” is» keeps
+                    // `is` where Word's own PDF wraps it (SSIM −0.0037). The two
+                    // specimens that DEMAND exact (policies__003ccc95 'owners',
+                    // ukhealthform 'claims.') are both LEFT-aligned, where no credit
+                    // exists and the budget is the bare content width.
                     let s1061b = (self.compat_mode >= 15 && self.compat_mode_explicit
+                        && (!is_justified || std::env::var("OXI_S1061_JC_DISABLE").is_ok())
                         && std::env::var("OXI_S1061_DISABLE").is_err())
                         || std::env::var("OXI_S1061").is_ok();
                     let word_width_tw = if s1061b {
