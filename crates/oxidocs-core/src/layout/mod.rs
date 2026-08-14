@@ -4608,6 +4608,19 @@ impl LayoutEngine {
         let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
+        // S1123 (2026-08-14): the page a block STARTED on, never overwritten.
+        // `block_page_indices` serves two different consumers with two
+        // different meanings: footnote bookkeeping wants the block's FINAL
+        // page (the ow@7969 overwrite exists for it — its comment says "if
+        // the paragraph moved entirely" but the code is unconditional), while
+        // anchored-float resolution wants the ANCHOR page = where the
+        // paragraph BEGINS. administrative__000727a4: paragraph 0 opens with
+        // a page-break char (), its mark stays on p1, the overwrite set
+        // its entry to p2, and all 18 anchored shapes rendered one page late
+        // (Word draws them on p1 at start+offset). Keep both meanings in
+        // separate arrays instead of re-conditioning the overwrite (which
+        // the footnote path relies on).
+        let mut block_start_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
         let mut block_page_indices: Vec<usize> = Vec::with_capacity(page.blocks.len());
         let mut current_page_idx: usize = 0;
         // S469 (2026-06-01): wrap-below floating tables (vertAnchor="text",
@@ -5488,6 +5501,7 @@ impl LayoutEngine {
             // subtracting any accumulated wrap-below advance on this page.
             block_y_positions.push(cursor.cursor_y - anchor_flow_offset);
             block_page_indices.push(current_page_idx);
+            block_start_page_indices.push(current_page_idx);
             match block {
                 Block::Paragraph(para) => {
                     // S945 (2026-07-19): an EMPTY section-ending paragraph (in-body
@@ -9504,10 +9518,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 FloatKind::Tb => {
                     let tbi = *fi;
                     let text_box = &page.text_boxes[tbi];
-                    let target_page = block_page_indices
-                        .get(text_box.anchor_block_index)
-                        .copied()
-                        .unwrap_or(0);
+                    // S1123: anchors resolve on the block's START page.
+                    let s1123 = std::env::var("OXI_S1123_DISABLE").is_err();
+                    let target_page = if s1123 {
+                        block_start_page_indices
+                            .get(text_box.anchor_block_index)
+                            .copied()
+                            .unwrap_or(0)
+                    } else {
+                        block_page_indices
+                            .get(text_box.anchor_block_index)
+                            .copied()
+                            .unwrap_or(0)
+                    };
                     if std::env::var("OXI_DEBUG_TB").is_ok() {
                         let (rx, ry) =
                             self.resolve_textbox_position(text_box, page, &block_y_positions);
@@ -9580,10 +9603,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if let Some(ref _pos) = img.position {
                         let (abs_x, mut abs_y) =
                             self.resolve_floating_image_position(img, page, &block_y_positions);
-                        let mut target_page = block_page_indices
-                            .get(img.anchor_block_index)
-                            .copied()
-                            .unwrap_or(0);
+                        // S1123: see the textbox arm.
+                        let mut target_page = if std::env::var("OXI_S1123_DISABLE").is_err() {
+                            block_start_page_indices
+                                .get(img.anchor_block_index)
+                                .copied()
+                                .unwrap_or(0)
+                        } else {
+                            block_page_indices
+                                .get(img.anchor_block_index)
+                                .copied()
+                                .unwrap_or(0)
+                        };
                         if let Some(&(fp, fy)) = s734_flow_pos.get(&img.anchor_block_index) {
                             if img.wrap_type == Some(crate::ir::WrapType::TopAndBottom) {
                                 target_page = fp;
