@@ -155,6 +155,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     oxidocs_core::layout::LayoutContent::TableBorder { .. } => "border",
                     oxidocs_core::layout::LayoutContent::CellShading { .. } => "shading",
                     oxidocs_core::layout::LayoutContent::BoxRect { .. } => "box",
+                    oxidocs_core::layout::LayoutContent::VectorPath { .. } => "path",
                     oxidocs_core::layout::LayoutContent::Image { .. } => "image",
                     oxidocs_core::layout::LayoutContent::ClipStart => "clip",
                     oxidocs_core::layout::LayoutContent::ClipEnd => "clip",
@@ -497,6 +498,66 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         let _ = DeleteObject(brush);
                     }
 
+                    oxidocs_core::layout::LayoutContent::VectorPath { ref segs, ref fill, ref stroke_color, stroke_width } => {
+                        // S1120: custGeom outline (hmrc crown). Segments are
+                        // normalized 0..1 over the element box; scale by (ew, eh)
+                        // and offset by (x, y). GDI path + winding fill.
+                        use oxidocs_core::ir::PathSeg;
+                        let hex = |h: &str| -> Option<u32> {
+                            let c = h.strip_prefix('#').unwrap_or(h);
+                            if c.len() == 6 {
+                                let r = u8::from_str_radix(&c[0..2], 16).ok()?;
+                                let g = u8::from_str_radix(&c[2..4], 16).ok()?;
+                                let b = u8::from_str_radix(&c[4..6], 16).ok()?;
+                                Some((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
+                            } else {
+                                None
+                            }
+                        };
+                        let px = |nx: f32| -> i32 { x + (nx * ew as f32).round() as i32 };
+                        let py = |ny: f32| -> i32 { y + (ny * eh as f32).round() as i32 };
+                        SetPolyFillMode(mem_dc, WINDING);
+                        let _ = BeginPath(mem_dc);
+                        let mut started = false;
+                        for seg in segs {
+                            match *seg {
+                                PathSeg::M(nx, ny) => {
+                                    let _ = MoveToEx(mem_dc, px(nx), py(ny), None);
+                                    started = true;
+                                }
+                                PathSeg::L(nx, ny) => {
+                                    if started { let _ = LineTo(mem_dc, px(nx), py(ny)); }
+                                }
+                                PathSeg::C(x1, y1, x2, y2, nx, ny) => {
+                                    if started {
+                                        let pts = [
+                                            windows::Win32::Foundation::POINT { x: px(x1), y: py(y1) },
+                                            windows::Win32::Foundation::POINT { x: px(x2), y: py(y2) },
+                                            windows::Win32::Foundation::POINT { x: px(nx), y: py(ny) },
+                                        ];
+                                        let _ = PolyBezierTo(mem_dc, &pts);
+                                    }
+                                }
+                                PathSeg::Z => { let _ = CloseFigure(mem_dc); }
+                            }
+                        }
+                        let _ = EndPath(mem_dc);
+                        let fill_brush = fill.as_deref().and_then(hex).map(|c| CreateSolidBrush(COLORREF(c)));
+                        let pen = stroke_color.as_deref().and_then(hex)
+                            .map(|c| CreatePen(PS_SOLID, ((*stroke_width) as f64 * scale).max(1.0) as i32, COLORREF(c)));
+                        let ob = fill_brush.map(|b| SelectObject(mem_dc, b));
+                        let op = pen.map(|p| SelectObject(mem_dc, p));
+                        match (fill_brush.is_some(), pen.is_some()) {
+                            (true, true) => { let _ = StrokeAndFillPath(mem_dc); }
+                            (true, false) => { let _ = FillPath(mem_dc); }
+                            (false, true) => { let _ = StrokePath(mem_dc); }
+                            (false, false) => { let _ = AbortPath(mem_dc); }
+                        }
+                        if let Some(o) = ob { SelectObject(mem_dc, o); }
+                        if let Some(o) = op { SelectObject(mem_dc, o); }
+                        if let Some(b) = fill_brush { let _ = DeleteObject(b); }
+                        if let Some(p) = pen { let _ = DeleteObject(p); }
+                    }
                     oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, stroke_width, corner_radius } => {
                         // Word optimizes out BoxRect with white fill and no border — they
                         // paint white-over-white and are visually indistinguishable from

@@ -909,6 +909,22 @@ pub struct VectorShape {
     pub stroke_width: f32,
     #[serde(default)]
     pub is_line: bool,
+    /// S1120: a custGeom outline, in the shape's LOCAL path space normalized
+    /// to 0..1 over path_wh (the renderer scales by w/h). Present only for
+    /// curve shapes; line/rect shapes keep the legacy empty path. Commands:
+    /// M x y (move), L x y (line), C x1 y1 x2 y2 x y (cubic), Z (close).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<PathSeg>,
+}
+
+/// One command of a `VectorShape::path` outline (coordinates normalized 0..1
+/// over the shape's path box).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PathSeg {
+    M(f32, f32),
+    L(f32, f32),
+    C(f32, f32, f32, f32, f32, f32),
+    Z,
 }
 
 /// A geometric shape (DrawingML or VML)

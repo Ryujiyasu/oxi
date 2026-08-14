@@ -5212,6 +5212,9 @@ fn parse_drawing(
         prst: Option<String>,
         pts: Vec<(f32, f32)>,
         path_wh: Option<(f32, f32)>,
+        /// S1120: ordered path commands. 'M'/'L' consume 1 following pt,
+        /// 'C' consumes 3, 'Z' none — assembled at shape close.
+        cmds: Vec<char>,
         n_paths: u32,
         has_curve: bool,
         ln_w: Option<f32>,
@@ -5271,6 +5274,7 @@ fn parse_drawing(
                             prst: None,
                             pts: Vec::new(),
                             path_wh: None,
+                            cmds: Vec::new(),
                             n_paths: 0,
                             has_curve: false,
                             ln_w: None,
@@ -5300,7 +5304,25 @@ fn parse_drawing(
                         }
                     }
                     "cubicBezTo" | "quadBezTo" | "arcTo" if s839_wsp.is_some() => {
-                        s839_wsp.as_mut().unwrap().has_curve = true;
+                        let w = s839_wsp.as_mut().unwrap();
+                        w.has_curve = true;
+                        // S1120: quad/arc are approximated by the renderer as
+                        // cubic consuming 3 pts is only true for cubicBezTo;
+                        // quadBezTo has 2, arcTo 0 — mark them distinctly.
+                        w.cmds.push(match local.as_str() {
+                            "cubicBezTo" => 'C',
+                            "quadBezTo" => 'Q',
+                            _ => 'A',
+                        });
+                    }
+                    "moveTo" if s839_wsp.is_some() => {
+                        s839_wsp.as_mut().unwrap().cmds.push('M');
+                    }
+                    "lnTo" if s839_wsp.is_some() => {
+                        s839_wsp.as_mut().unwrap().cmds.push('L');
+                    }
+                    "close" if s839_wsp.is_some() => {
+                        s839_wsp.as_mut().unwrap().cmds.push('Z');
                     }
                     "anchor" => {
                         is_anchor = true;
@@ -6221,6 +6243,11 @@ fn parse_drawing(
                             s839_grp_seen = true;
                         }
                     }
+                    "close" if s839_wsp.is_some() => {
+                        // S1120: <a:close/> is an EMPTY element — the Start-side
+                        // case never sees it.
+                        s839_wsp.as_mut().unwrap().cmds.push('Z');
+                    }
                     "pt" if s839_wsp.is_some() => {
                         let (mut x, mut y) = (0.0f32, 0.0f32);
                         for attr in e.attributes().flatten() {
@@ -6312,7 +6339,75 @@ fn parse_drawing(
                                     w.ln_w, w.ln_color, w.lnref, w.fillref, w.no_fill,
                                     stroke, fill, is_line, is_rect);
                             }
-                            if (stroke.is_some() || fill.is_some()) && (is_line || is_rect) {
+                            // S1120 (2026-08-14): a CURVE custGeom (the hmrc
+                            // crown: 22 shapes, 490 cubicBezTo) previously fell
+                            // through this gate entirely — only line/rect shapes
+                            // became VectorShapes, so the logo rendered as its
+                            // one straight bar. Assemble the command list into a
+                            // normalized path (0..1 over path_wh) and ship it.
+                            let s1120_path: Vec<crate::ir::PathSeg> = if w.has_curve
+                                && !w.cmds.is_empty()
+                                && std::env::var("OXI_S1120_DISABLE").is_err()
+                            {
+                                let (pw, ph) = w.path_wh.unwrap_or(w.ext);
+                                let (pw, ph) = (pw.max(1.0), ph.max(1.0));
+                                let mut segs = Vec::new();
+                                let mut i = 0usize;
+                                let pts = &w.pts;
+                                let n = |k: usize| -> Option<(f32, f32)> {
+                                    pts.get(k).map(|&(x, y)| (x / pw, y / ph))
+                                };
+                                for &c in &w.cmds {
+                                    match c {
+                                        'M' => {
+                                            if let Some((x, y)) = n(i) {
+                                                segs.push(crate::ir::PathSeg::M(x, y));
+                                            }
+                                            i += 1;
+                                        }
+                                        'L' => {
+                                            if let Some((x, y)) = n(i) {
+                                                segs.push(crate::ir::PathSeg::L(x, y));
+                                            }
+                                            i += 1;
+                                        }
+                                        'C' => {
+                                            if let (Some(a), Some(b), Some(cpt)) =
+                                                (n(i), n(i + 1), n(i + 2))
+                                            {
+                                                segs.push(crate::ir::PathSeg::C(
+                                                    a.0, a.1, b.0, b.1, cpt.0, cpt.1,
+                                                ));
+                                            }
+                                            i += 3;
+                                        }
+                                        'Q' => {
+                                            // quad -> cubic (2/3 rule needs the
+                                            // current point; approximate with a
+                                            // cubic whose both controls are the
+                                            // quad control — visually adequate
+                                            // for logo-scale art)
+                                            if let (Some(a), Some(bpt)) = (n(i), n(i + 1)) {
+                                                segs.push(crate::ir::PathSeg::C(
+                                                    a.0, a.1, a.0, a.1, bpt.0, bpt.1,
+                                                ));
+                                            }
+                                            i += 2;
+                                        }
+                                        'A' => { /* arcTo: no pts consumed; skip */ }
+                                        'Z' => segs.push(crate::ir::PathSeg::Z),
+                                        _ => {}
+                                    }
+                                }
+                                segs
+                            } else {
+                                Vec::new()
+                            };
+                            let s1120_curve = !s1120_path.is_empty()
+                                && (stroke.is_some() || fill.is_some());
+                            if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
+                                || s1120_curve
+                            {
                                 let ((gx, gy), (gex, gey), (cx0, cy0), (cex, cey)) = s839_grp;
                                 let (sx, sy) = if s839_grp_seen && cex > 0.0 && cey > 0.0 {
                                     (gex / cex, gey / cey)
@@ -6328,7 +6423,8 @@ fn parse_drawing(
                                     fill,
                                     stroke,
                                     stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
-                                    is_line,
+                                    is_line: is_line && !s1120_curve,
+                                    path: s1120_path,
                                 });
                             }
                         }

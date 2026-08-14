@@ -1719,6 +1719,15 @@ pub enum LayoutContent {
         stroke_width: f32,
         corner_radius: f32,
     },
+    /// S1120: a custGeom outline (the hmrc crown). Segments are normalized
+    /// 0..1 over the element box; the renderer scales by (w, h) and offsets
+    /// by (x, y). Fill uses winding; stroke optional.
+    VectorPath {
+        segs: Vec<crate::ir::PathSeg>,
+        fill: Option<String>,
+        stroke_color: Option<String>,
+        stroke_width: f32,
+    },
     /// A preset shape outline (e.g. bracketPair, brace, etc.)
     PresetShape {
         shape_type: String,
@@ -18245,6 +18254,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         color: vs.stroke.clone(),
                                         width: vs.stroke_width,
                                         style: None,
+                                    },
+                                );
+                                if let Some(pi) = body_para_index {
+                                    e.paragraph_index = Some(pi);
+                                }
+                                elements.push(e);
+                            } else if !vs.path.is_empty() {
+                                // S1120: curve custGeom -> real outline
+                                let mut e = LayoutElement::new(
+                                    vx,
+                                    vy,
+                                    vs.w,
+                                    vs.h,
+                                    LayoutContent::VectorPath {
+                                        segs: vs.path.clone(),
+                                        fill: vs.fill.clone(),
+                                        stroke_color: vs.stroke.clone(),
+                                        stroke_width: vs.stroke_width,
                                     },
                                 );
                                 if let Some(pi) = body_para_index {
