@@ -17135,19 +17135,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             //   Oxi mode 15 -> break correct, space 2.2020 = natural, +9.87 overrun.
             // Latin scope (!doc_body_has_real_cjk): a CJK line's negative slack is
             // Phase 1's yakumono business and it carries no ASCII spaces to give.
-            // ★GATE RESULT (2026-08-14): HELD OPT-IN, NOT shipped. SSIM sentinel
-            // A/B over 238 word_png bases moved exactly ONE document and moved it
-            // the WRONG WAY — db9ca18368cd net −0.0014 (0 improved / 1 regressed);
-            // EN frozen 5 sets 213→213 and pagination unchanged, as expected for a
-            // render-only rule. The likely cause is that this rule compresses onto a
-            // target that is itself 2.20pt short (see the OPEN note at the slack
-            // computation below), so it trades a +9.87 overrun for a −2.20 undershoot
-            // plus over-tight spaces (Oxi 1.5320 vs Word 1.5637). Re-gate only after
-            // that constant is explained; shipping it alone is an S559-style
-            // compensating error.
+            // ★★SHIPS ONLY AS A PAIR WITH S1118 (2026-08-14). Measured alone this
+            // rule LOSES: SSIM sentinel A/B over 238 word_png bases moved one
+            // document the wrong way (db9ca18368cd net −0.0014, 0 improved / 1
+            // regressed), because it compresses onto a target that is itself 2.20pt
+            // short — S1118's trailing-space bug. Paired with S1118 the same
+            // document goes net **+0.1349** (1 improved / 0 regressed) and the repro
+            // lands every line exactly on the margin. So `OXI_S1117_DISABLE` alone
+            // does NOT return the tree to a neutral state: it leaves S1118 widening
+            // lines that this rule is no longer reining in. Disable both or neither.
             let s1117_compat15_overfull = self.compat_mode >= 15
                 && !self.doc_body_has_real_cjk
-                && std::env::var("OXI_S1117").is_ok();
+                && std::env::var("OXI_S1117_DISABLE").is_err();
 
             let is_soft_break_line =
                 self.do_not_expand_shift_return && line.break_type == LineBreakType::SoftBreak;
@@ -17205,6 +17204,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // (render_width / extra_indent / line_text_width) before guessing a
                 // third time.
                 let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
+                // OXI_DBG_SLACK: the three terms behind the unexplained 2.20pt
+                // undershoot, plus the fragment tail so the trailing-space question
+                // is answered from data rather than from the source shape.
+                if std::env::var("OXI_DBG_SLACK").is_ok() {
+                    let nf = line.fragments.len();
+                    let tail: Vec<String> = line
+                        .fragments
+                        .iter()
+                        .skip(nf.saturating_sub(3))
+                        .map(|f| format!("{:?}/w={:.3}", f.text, f.width))
+                        .collect();
+                    eprintln!(
+                        "[SLACK] li={} render_w={:.3} extra_ind={:.3} text_w={:.3} grid={:.3} slack={:.3} nfrag={} tail={}",
+                        line_idx, render_width, extra_indent, line_text_width,
+                        grid_extra_on_line, slack, nf, tail.join(" ")
+                    );
+                }
 
                 // S472 break-agnostic demand compression (replaces Phase 1 + Stage 2b
                 // below when on). Reset standalone 、。 to natural, compute the line's
@@ -17351,10 +17367,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .enumerate()
                     .map(|(i, f)| f.width + frag_width_adjustments[i])
                     .sum();
-                slack = if phase1_compressed {
-                    render_width - extra_indent - post_phase1_ltw
+                // S1118 (2026-08-14, opt-in OXI_S1118): a justified line's TRAILING
+                // space fragment HANGS past the right margin in Word — it is not part
+                // of the content being justified. `post_phase1_ltw` sums EVERY
+                // fragment, so that space is charged against the slack while the
+                // distribution loops below skip the last fragment (`fi < len-1`) and
+                // never give it back. The visible content is therefore justified to
+                // (render_width − one space) and every such line lands exactly one
+                // space-advance short of the margin.
+                //   Word truth (`_pb_spacecomp2/pset_m15_only.pdf`, Cambria 10): the
+                //   last VISIBLE char sits at 554.72 / 554.97 / 554.94 against a
+                //   555.30 margin (remainder = side bearing) and the trailing space's
+                //   own origin is AT 554.91..555.01 — it starts on the margin and
+                //   hangs over. Oxi ships those lines at 553.10 = 555.30 − 2.20, and
+                //   2.20 is exactly Cambria 10pt's natural space (2.2021).
+                // ★This adjustment MUST live here, not at the first `slack` binding:
+                // that one is unconditionally RECOMPUTED from post_phase1_ltw a few
+                // lines up, which silently discarded two earlier attempts at this rule
+                // (both measured byte-exact no-ops, which read as "the trailing space
+                // isn't there" — OXI_DBG_SLACK shows it plainly IS: tail=" "/w=2.202).
+                let s1118_trailing_hang = if std::env::var("OXI_S1118_DISABLE").is_err()
+                    && !self.doc_body_has_real_cjk
+                {
+                    line.fragments
+                        .last()
+                        .filter(|f| !f.text.is_empty() && f.text.chars().all(|c| c == ' '))
+                        .map(|f| f.width + frag_width_adjustments[line.fragments.len() - 1])
+                        .unwrap_or(0.0)
                 } else {
-                    render_width - extra_indent - post_phase1_ltw - grid_extra_on_line
+                    0.0
+                };
+                slack = if phase1_compressed {
+                    render_width - extra_indent - post_phase1_ltw + s1118_trailing_hang
+                } else {
+                    render_width - extra_indent - post_phase1_ltw + s1118_trailing_hang
+                        - grid_extra_on_line
                 };
 
                 // 2026-04-21: Stage 2b — de-compress pre-compressed 、。,．toward
