@@ -44,13 +44,20 @@ THEME = False
 # one, and the line height is computed by a DIFFERENT function there. Without
 # this variant the grid wiring would ship unmeasured.
 GRID = False
+# ★CELL variant: the REPEAT subject paragraphs go inside a one-cell table, with
+# the markers still in the body.  A cell line height has its own clamps and the
+# row can pin it via trHeight, so whether Word applies the SAME fallback rule
+# there is a separate question from the body arms — S1119 deliberately shipped
+# without wiring cells until this variant answers it.  No trHeight is set, so
+# the row is free to grow with its content.
+CELL = False
 SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "reports",
                         "0020157f48ee08b2.docx")
 
 
 def docx():
     return os.path.join(OUT, "symline%s%s%s.docx"
-                        % ("_theme" if THEME else "", "_grid" if GRID else "",
+                        % ("_theme" if THEME else "", ("_grid" if GRID else "") + ("_cell" if CELL else ""),
                            "_cjk" if WITH_CJK else ""))
 
 
@@ -155,8 +162,20 @@ def gen():
     body = []
     for ai, (font, cp, _nm) in enumerate(arms()):
         body.append(marker("M%02dS" % ai, font, True))
-        for _ in range(REPEAT if cp is not None else 0):
-            body.append(subject(font, cp))
+        subs = [subject(font, cp) for _ in range(REPEAT if cp is not None else 0)]
+        if CELL:
+            # One cell holding every subject paragraph. The control arm (cp None)
+            # still emits the table with a single empty paragraph so the cell's
+            # own padding cancels in (span - control).
+            inner = "".join(subs) if subs else ("<w:p>%s</w:p>" % ppr(font))
+            body.append(
+                '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>'
+                '<w:tblLayout w:type="fixed"/></w:tblPr>'
+                '<w:tblGrid><w:gridCol w:w="8000"/></w:tblGrid>'
+                '<w:tr><w:tc><w:tcPr><w:tcW w:w="8000" w:type="dxa"/></w:tcPr>'
+                + inner + "</w:tc></w:tr></w:tbl>")
+        else:
+            body.extend(subs)
         body.append(marker("M%02dE" % ai, font))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
@@ -293,8 +312,9 @@ def oxi(envs=""):
 if __name__ == "__main__":
     THEME = "theme" in sys.argv[2:]
     GRID = "grid" in sys.argv[2:]
+    CELL = "cell" in sys.argv[2:]
     WITH_CJK = "cjk" in sys.argv[2:]
     if sys.argv[1] == "oxi":
-        oxi(next((a for a in sys.argv[2:] if a not in ("theme", "grid", "cjk")), ""))
+        oxi(next((a for a in sys.argv[2:] if a not in ("theme", "grid", "cell", "cjk")), ""))
     else:
         {"gen": gen, "read": read, "pdf": pdf}[sys.argv[1]]()

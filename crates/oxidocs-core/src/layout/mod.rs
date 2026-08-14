@@ -24158,12 +24158,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// universal answer to "which face draws this glyph", only to "which face
     /// does Word fall back to for an explicitly-fonted run". A document's own
     /// font context can override it.
-    /// ★CELLS ARE NOT WIRED. The rule is measured for BODY lines only (the
-    /// `_pb_symline_gen.py` plain and `grid` variants). Whether Word applies the
-    /// same fallback inside a table cell — where the line height has its own
-    /// clamps and the row can pin it via trHeight — is UNMEASURED, so the cell
-    /// call site was deliberately left alone rather than shipped on the
-    /// assumption that it composes. Add a cell variant to the probe first.
+    /// Cells ARE wired as of 2026-08-14, on the strength of the probe's `cell`
+    /// variant (subjects inside a one-cell table, no trHeight, markers left in
+    /// the body): Word's per-arm deltas there match the body arms to 0.001pt.
     fn s1119_run_face<'a>(
         &'a self,
         text: &str,
@@ -31512,6 +31509,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         Some(ff) => self.registry.get(ff),
                                                         None => self.registry.default_metrics(),
                                                     };
+                                                    // S1119 cells (measured 2026-08-14,
+                                                    // `_pb_symline_gen.py ... cell`): Word applies
+                                                    // the SAME fallback inside a table cell. The
+                                                    // deltas against each font's control arm are
+                                                    // identical to the body arms to 0.001pt —
+                                                    // Arial ballot +3.281 (body +3.281), Calibri
+                                                    // black-square −1.594 (body −1.593), Calibri
+                                                    // diamond −0.938 (body −0.937). Only the BASE
+                                                    // differs (a cell line carries no external
+                                                    // leading, ~1.5pt lower). This site was left
+                                                    // unwired at first ship precisely because that
+                                                    // was unmeasured; the cell variant settles it.
+                                                    let metrics =
+                                                        self.s1119_run_face(_text, metrics).unwrap_or(metrics);
                                                     self.line_height_inner(
                                                         *fs,
                                                         effective_line_spacing,
