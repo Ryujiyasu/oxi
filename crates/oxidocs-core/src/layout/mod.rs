@@ -36918,6 +36918,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     self.line_height_inner(font_size, eff_ls, eff_lr, metrics, false, None, true)
                 };
+                // S1119 estimate side (2026-08-14): the cell ROW height is
+                // max(estimate, emit), so wiring only the emit fold left the
+                // estimate as a FLOOR — Calibri black-square and diamond both
+                // came out at the same 20.224 no matter what emit computed,
+                // which is what exposed this second site. Same delta form as
+                // emit: Word's per-face drop is the plain natural difference
+                // (verified ±0.06 against the Calibri 18pt control).
+                let lh = match self.s1119_run_face(&run.text, metrics) {
+                    Some(fb) => {
+                        lh + fb.natural_line_height_hhea(font_size)
+                            - metrics.natural_line_height_hhea(font_size)
+                    }
+                    None => lh,
+                };
                 s1099_lhs.push((s1099_ri, lh));
                 if lh > max_line_height {
                     max_line_height = lh;
