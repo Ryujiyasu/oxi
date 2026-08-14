@@ -43,7 +43,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 FONT, SZ = "Cambria", 20                # 10pt
 SPACE_PT = 0.2202 * 10.0                # Cambria hmtx space @10pt = 2.2021
 # Word lengths -> different space COUNT per line (the model discriminator)
-WORD_LENS = [2, 4, 8]
+WORD_LENS = [1, 2, 4, 8]
 # right indent sweep, in twips: 0 .. 600tw (0 .. 30pt) in 20tw (1pt) steps
 INDENTS = list(range(0, 1620, 20))
 
@@ -96,8 +96,15 @@ def arms():
 def body():
     ps = []
     for i, (wl, ind, jc) in enumerate(arms()):
-        # enough words to fill 3+ lines at the widest column
-        words = " ".join(["m" * wl] * 60)
+        # ★Word count must SCALE with (word length x font size): a fixed 60 words
+        # made the wlen=8 / 20pt arms ten lines long, which spilled some arms onto a
+        # SECOND page and silently broke the one-arm-per-page mapping (687 pages vs
+        # 648 arms) — every downstream number was then read off the wrong arm.
+        # Size each paragraph to ~3 lines so one arm is always exactly one page.
+        em = SZ / 2.0
+        per_word = wl * 0.832 * em + 0.2202 * em
+        n_words = max(8, int(3.0 * 468.0 / per_word) + 2)
+        words = " ".join(["m" * wl] * n_words)
         ppr = ('<w:pPr><w:jc w:val="%s"/>' % jc
                + ('<w:pageBreakBefore/>' if i else '')
                + '<w:ind w:right="%d"/>' % ind
