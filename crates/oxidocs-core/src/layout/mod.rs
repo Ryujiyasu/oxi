@@ -31521,9 +31521,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     // leading, ~1.5pt lower). This site was left
                                                     // unwired at first ship precisely because that
                                                     // was unmeasured; the cell variant settles it.
-                                                    let metrics =
-                                                        self.s1119_run_face(_text, metrics).unwrap_or(metrics);
-                                                    self.line_height_inner(
+                                                    // ★Apply the face as a DELTA, not a
+                                                    // substitution. Oxi's cell model already
+                                                    // matches Word for the run font (Calibri 18pt
+                                                    // control: Oxi 20.447 vs Word 20.438), but the
+                                                    // substituted face has no GDI cell entry and
+                                                    // falls to a different branch, so swapping the
+                                                    // metrics wholesale moved Calibri black-square
+                                                    // only −0.223 where Word moves −1.594.
+                                                    // Word's per-face drop IS the plain natural
+                                                    // difference, verified against the Calibri
+                                                    // control at 18pt (±0.06, the rounding class):
+                                                    //   Cambria Math (typo)  −0.928 vs −0.938
+                                                    //   Courier New  (win)   −1.641 vs −1.594
+                                                    //   Segoe UI Sym (win)   +1.911 vs +1.968
+                                                    let base = self.line_height_inner(
                                                         *fs,
                                                         effective_line_spacing,
                                                         effective_line_rule,
@@ -31531,7 +31543,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         para.style.snap_to_grid,
                                                         row_line_pitch,
                                                         true,
-                                                    )
+                                                    );
+                                                    match self.s1119_run_face(_text, metrics) {
+                                                        Some(fb) => {
+                                                            base + fb.natural_line_height_hhea(*fs)
+                                                                - metrics.natural_line_height_hhea(*fs)
+                                                        }
+                                                        None => base,
+                                                    }
                                                 },
                                             )
                                             .fold(0.0_f32, f32::max);
