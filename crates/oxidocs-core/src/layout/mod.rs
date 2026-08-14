@@ -29483,6 +29483,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     } else {
                                         eff_cell_w
                                     };
+                                    // S1121 (2026-08-14): thread WHETHER this base already
+                                    // subtracted the cell padding, so the S493J alignment
+                                    // adjust below cannot subtract it a SECOND time. S493J's
+                                    // own condition list (3 flags) predates S768/S531/S559/
+                                    // S585n/CELLPAIR/S713 — on a pure-Latin document S768
+                                    // makes EVERY cell take the pad-subtracted base, so the
+                                    // alignment area lost pad_l+pad_r twice and a right-
+                                    // aligned number cell (hmrc's 1-8 boxes: avail 2.40 <
+                                    // line 3.55) collapsed to LEFT-aligned.
+                                    let mut s1121_pad_in_base = true;
                                     let wrap_base = if s585c_narrow
                                         && matches!(
                                             para.alignment,
@@ -29513,6 +29523,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // (Word's content area). See the estimate-side s768_latin_wrap comment.
                                         (wrap_cell_w - pad_l - pad_r).max(0.0)
                                     } else {
+                                        s1121_pad_in_base = false;
                                         cell_w
                                     };
                                     let mut wrap_w =
@@ -31741,7 +31752,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // Word leaves the ~5.4pt cell right-margin). Subtract the padding for
                                         // ALIGNMENT only when wrap_base didn't already (wrapping unchanged →
                                         // Phase-1 safe). Opt-out OXI_S493J_DISABLE.
-                                        let pad_adjust = if cell_hang_inner
+                                        // S1121: if the wrap base ALREADY subtracted the
+                                        // padding (any of the 9 branches above), do not
+                                        // subtract it again here — S493J only exists for the
+                                        // legacy `cell_w` base. Opt-out OXI_S1121_DISABLE
+                                        // restores the double subtraction.
+                                        let pad_adjust = if (s1121_pad_in_base
+                                            && std::env::var("OXI_S1121_DISABLE").is_err())
+                                            || cell_hang_inner
                                             || s301_layout_fixed
                                             || s412_cellmar_subtract
                                             || std::env::var("OXI_S493J_DISABLE").is_ok()

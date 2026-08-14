@@ -197,6 +197,60 @@ def measure_doc(word, docx_path: str) -> dict:
                 "table_start": table_start,
             })
 
+        # S1122 (2026-08-14, opt-in OXI_MEASURE_TEXTBOX=1): TEXTBOX paragraphs.
+        # Document.Paragraphs enumerates the BODY only, so a textbox-driven
+        # document (administrative__000727a4: body = 3 EMPTY paragraphs,
+        # content = 21 shapes) measures as "nothing to match" and
+        # pagination_diff scores it 0.0000/FAIL mechanically — a MEASUREMENT
+        # failure, not a layout one. Shape text lives at
+        # Shapes(i).TextFrame.TextRange.Paragraphs and its ranges answer
+        # Information(3/5/6) like body ranges (verified on the specimen:
+        # 'Visitors to farm…' -> page 1 y=282.0 x=364.5). Oxi's side already
+        # records textbox text (para_idx=None -> y-line pseudo-key), so adding
+        # the Word side makes the existing matcher work unchanged.
+        # Opt-in so the frozen truth caches only change when re-measured
+        # deliberately with the flag set.
+        if os.environ.get("OXI_MEASURE_TEXTBOX") == "1":
+            try:
+                n_shapes = doc.Shapes.Count
+            except Exception:
+                n_shapes = 0
+            tb_i = 100000  # i-namespace far above any body count
+            for si in range(1, n_shapes + 1):
+                try:
+                    sh = doc.Shapes(si)
+                    if not sh.TextFrame.HasText:
+                        continue
+                    tr = sh.TextFrame.TextRange
+                    for tpi in range(1, tr.Paragraphs.Count + 1):
+                        r = tr.Paragraphs(tpi).Range
+                        raw = r.Text
+                        txt = raw.replace(chr(13), "").replace(chr(7), "")
+                        txt = txt.replace(chr(10), "").replace(chr(12), "").replace(chr(11), "")[:30]
+                        if not txt.strip():
+                            continue
+                        try:
+                            pg = r.Information(3)
+                            ty = r.Information(6)
+                            tx = r.Information(5)
+                        except Exception:
+                            continue
+                        tb_i += 1
+                        rows.append({
+                            "i": tb_i,
+                            "page": pg,
+                            "y": round(ty, 2) if ty is not None else None,
+                            "x": round(tx, 2) if tx is not None else None,
+                            "text": txt,
+                            "in_table": False,
+                            "cell_row": None,
+                            "cell_col": None,
+                            "table_start": None,
+                            "in_textbox": True,
+                        })
+                except Exception:
+                    continue
+
         return {
             "filename": os.path.basename(docx_path),
             "n_pages": n_pages,
