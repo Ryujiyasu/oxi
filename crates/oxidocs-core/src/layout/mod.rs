@@ -31698,6 +31698,73 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     .fold(0.0_f32, f32::max);
                                         }
 
+                                        // S1125 (2026-08-15, opt-out OXI_S1125_DISABLE): a CELL
+                                        // bullet's line 0 grows for its SYMBOL numbering marker
+                                        // exactly as a body bullet line does — the S820b/S1112
+                                        // ascent-overflow model, unmultiplied: overflow =
+                                        // (marker_asc − text_asc − text_ext)⁺, advanced at the
+                                        // paragraph ENTRY like S821 (Word truth: the exit pitch
+                                        // b2→next-row is IDENTICAL 13.82 with and without the
+                                        // Symbol marker — only the pitch INTO the bullet grows).
+                                        // Word truth (_pb_bulletpitch_gen.py, NDIS-faithful
+                                        // table-style cell arms): Symbol marker 11.64/11.76 vs
+                                        // Arial marker / no marker 11.16; the model's 9.2+0.54 =
+                                        // 9.74 sits centred in Word's 9.64/9.76 px alternation.
+                                        // This is the NDIS technical__0043bfe0 −1 root: every
+                                        // price row carries 1-2 Symbol bullets, Oxi's cell path
+                                        // priced them flat (the S795/S1112 body sites are
+                                        // layout_paragraph-only) → −0.4..−0.56/bullet → rows 13%
+                                        // short from p78 on. Symbol-only (a non-Symbol marker
+                                        // measured NO growth — B/J arms; the S1037 tall-marker
+                                        // cell case stays unmeasured/unwired); exact/atLeast
+                                        // absorb the marker (S947); Latin docs only (JP corpus
+                                        // byte-identical).
+                                        if line_idx == 0
+                                            && !self.doc_body_has_real_cjk
+                                            && !matches!(
+                                                effective_line_rule,
+                                                Some("exact") | Some("atLeast")
+                                            )
+                                            && list_marker_info
+                                                .as_ref()
+                                                .map_or(false, |(m, _, _)| m.contains('\u{F0B7}'))
+                                            && std::env::var("OXI_S1125_DISABLE").is_err()
+                                        {
+                                            let mut s1125_asc: f32 = 0.0;
+                                            let mut s1125_best_sum: f32 = 0.0;
+                                            let mut s1125_ext: f32 = 0.0;
+                                            for (t, fs, _, _, _, _, _, _, font_family, _, _, _, _, _) in
+                                                line.iter()
+                                            {
+                                                if t.trim().is_empty() {
+                                                    continue;
+                                                }
+                                                let m = match font_family.as_deref() {
+                                                    Some(ff) => self.registry.get(ff),
+                                                    None => self.registry.default_metrics(),
+                                                };
+                                                s1125_asc = s1125_asc.max(m.win_ascent * *fs);
+                                                let win_sum = (m.win_ascent + m.win_descent) * *fs;
+                                                let fext = (m.natural_line_height_hhea(*fs)
+                                                    - win_sum)
+                                                    .max(0.0);
+                                                if win_sum > s1125_best_sum {
+                                                    s1125_best_sum = win_sum;
+                                                    s1125_ext = fext;
+                                                }
+                                            }
+                                            if s1125_asc > 0.0 {
+                                                // Microsoft Symbol winAsc 2059/2048 (the S795 const)
+                                                let mfs = list_marker_info
+                                                    .as_ref()
+                                                    .map(|(_, f, _)| *f)
+                                                    .unwrap_or(0.0);
+                                                content_h += (2059.0 / 2048.0 * mfs
+                                                    - s1125_asc
+                                                    - s1125_ext)
+                                                    .max(0.0);
+                                            }
+                                        }
                                         // Task P step 6 (2026-07-22, default ON, opt-out OXI_S982_DISABLE): grow the cell
                                         // line to fit an inline OLE object. The F8FE fragment carries
                                         // the object EXTENT as width but line_height_inner priced it
@@ -37174,6 +37241,55 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 );
             }
             height += s1099_h;
+
+            // S1125 estimate side (2026-08-15): the row height is
+            // max(estimate, actual), so the emit-side marker growth alone
+            // would be clamped away whenever the estimate wins — mirror the
+            // Symbol-marker ascent overflow once (line 0 only). Same gates as
+            // the emit fold (see the layout_table site); in_cell per the
+            // S944/S946 lesson (this estimator also serves body keepNext /
+            // footnote callers, whose marker growth the body path already
+            // prices via S795/S1112).
+            if in_cell
+                && !self.doc_body_has_real_cjk
+                && !matches!(eff_lr, Some("exact") | Some("atLeast"))
+                && para
+                    .style
+                    .list_marker
+                    .as_deref()
+                    .map_or(false, |m| m.contains('\u{F0B7}'))
+                && std::env::var("OXI_S1125_DISABLE").is_err()
+            {
+                let mut s1125_asc: f32 = 0.0;
+                let mut s1125_best_sum: f32 = 0.0;
+                let mut s1125_ext: f32 = 0.0;
+                for run in para.runs.iter() {
+                    if run.text.trim().is_empty() {
+                        continue;
+                    }
+                    let fs = self.resolve_font_size(&run.style, &para.style);
+                    let m = self.metrics_for_text(&run.text, &run.style, &para.style);
+                    s1125_asc = s1125_asc.max(m.win_ascent * fs);
+                    let win_sum = (m.win_ascent + m.win_descent) * fs;
+                    let fext = (m.natural_line_height_hhea(fs) - win_sum).max(0.0);
+                    if win_sum > s1125_best_sum {
+                        s1125_best_sum = win_sum;
+                        s1125_ext = fext;
+                    }
+                }
+                if s1125_asc > 0.0 {
+                    let marker_style = s1037_marker_style(para)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            para.runs
+                                .first()
+                                .map(|r| r.style.clone())
+                                .unwrap_or_default()
+                        });
+                    let mfs = self.resolve_font_size(&marker_style, &para.style);
+                    height += (2059.0 / 2048.0 * mfs - s1125_asc - s1125_ext).max(0.0);
+                }
+            }
 
             // Ruby paragraph-tail expansion (§18 spec, V3/V6/V9 measurement).
             // Greenfield: 0/177 baseline docs use w:ruby, so this branch is
