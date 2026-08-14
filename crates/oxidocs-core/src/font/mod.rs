@@ -520,9 +520,26 @@ impl FontMetricsRegistry {
         // grows). Widths are EMPTY (S579 pattern) so advances keep the
         // existing path. Opt-out for A/B: OXI_SYMBOL_METRICS_DISABLE.
         let skip_symbol = std::env::var("OXI_SYMBOL_METRICS_DISABLE").is_ok();
+        // S1119 (2026-08-14, opt-out OXI_SYMFB_METRICS_DISABLE): the two faces
+        // Word's symbol FALLBACK chain lands on. Added as data (see
+        // tools/metrics/add_symbol_fallback_metrics.py); this switch exists so a
+        // pure-data change can still be A/B'd by the SSIM sentinel, the same way
+        // OXI_SYMBOL_METRICS_DISABLE gates the S786 'Symbol' entry.
+        // ★Both faces are ALSO named directly by document.xml (Segoe UI Symbol
+        // 486 rFonts references, Cambria Math 478), so adding them changes those
+        // runs' line heights whether or not the fallback rule is wired up yet.
+        // ★Cambria Math only behaves because the extractor now emits
+        // use_typo_metrics: its win box is 5.5801 em (math stretchy glyphs) and
+        // the S950 max(hhea, win) rule would give a 100pt line at 18pt. The font
+        // sets fsSelection bit 7 and its typo sum 1.1724 em is Word's measured
+        // 1.1719, so the existing typo branch is correct once the flag is there.
+        let skip_symfb = std::env::var("OXI_SYMFB_METRICS_DISABLE").is_ok();
 
         for raw in raw_list {
             if skip_symbol && raw.family == "Symbol" {
+                continue;
+            }
+            if skip_symfb && matches!(raw.family.as_str(), "Segoe UI Symbol" | "Cambria Math") {
                 continue;
             }
             let upm = raw.units_per_em as f32;

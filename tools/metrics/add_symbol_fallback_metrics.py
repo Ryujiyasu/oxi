@@ -125,6 +125,13 @@ def extract(path, index, codepoints):
         "typo_ascender": int(round(os2.sTypoAscender * 2048 / upm)),
         "typo_descender": int(round(os2.sTypoDescender * 2048 / upm)),
         "typo_line_gap": int(round(os2.sTypoLineGap * 2048 / upm)),
+        # ★MUST be emitted: the registry reads this as #[serde(default)] = false,
+        # and without it Cambria Math falls to max(hhea, win) = 5.5801 em -- a
+        # 100pt line at 18pt, on a face document.xml references 478 times. The
+        # font sets fsSelection bit 7 (0x00C0) and its typo sum 1.1724 em is
+        # exactly Word's measured 1.1719, so the existing S950 typo branch is
+        # already correct once the flag is present.
+        "use_typo_metrics": bool(os2.fsSelection & (1 << 7)),
         "widths": widths,
     }
     f.close()
