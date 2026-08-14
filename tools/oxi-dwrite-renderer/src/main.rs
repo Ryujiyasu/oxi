@@ -425,6 +425,11 @@ unsafe fn render_page_elements(
                 render_box_rect(rt, el.x, el.y, el.width, el.height,
                     fill.as_deref(), stroke_color.as_deref(), *stroke_width, *corner_radius)?;
             }
+            LayoutContent::VectorPath { ref segs, ref fill, ref stroke_color, stroke_width } => {
+                if exclude.iter().any(|e| e == "box") { continue; }
+                render_vector_path(rt, el.x, el.y, el.width, el.height,
+                    segs, fill.as_deref(), stroke_color.as_deref(), *stroke_width)?;
+            }
             LayoutContent::CellShading { color } => {
                 if exclude.iter().any(|e| e == "shading") { continue; }
                 render_filled_rect(rt, el.x, el.y, el.width, el.height, color)?;
@@ -858,6 +863,74 @@ unsafe fn draw_arrowhead(
     sink.EndFigure(D2D1_FIGURE_END_CLOSED);
     sink.Close()?;
     rt.FillGeometry(&geom, brush, None);
+    Ok(())
+}
+
+#[cfg(windows)]
+unsafe fn render_vector_path(
+    rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
+    x_pt: f32, y_pt: f32, w_pt: f32, h_pt: f32,
+    segs: &[oxidocs_core::ir::PathSeg],
+    fill: Option<&str>, stroke: Option<&str>, stroke_width: f32,
+) -> windows::core::Result<()> {
+    // S1120: custGeom outline (hmrc crown). Segments are normalized 0..1 over
+    // the element box; scale by (w, h), offset by (x, y), winding fill.
+    use windows::Win32::Graphics::Direct2D::*;
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    use oxidocs_core::ir::PathSeg;
+    let px = |nx: f32| (x_pt + nx * w_pt) * PT_TO_DIP;
+    let py = |ny: f32| (y_pt + ny * h_pt) * PT_TO_DIP;
+    let factory = rt.GetFactory()?;
+    let geom: ID2D1PathGeometry = factory.CreatePathGeometry()?;
+    let sink = geom.Open()?;
+    sink.SetFillMode(D2D1_FILL_MODE_WINDING);
+    let mut open = false;
+    for seg in segs {
+        match *seg {
+            PathSeg::M(nx, ny) => {
+                if open {
+                    sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                }
+                sink.BeginFigure(D2D_POINT_2F { x: px(nx), y: py(ny) },
+                                 D2D1_FIGURE_BEGIN_FILLED);
+                open = true;
+            }
+            PathSeg::L(nx, ny) => {
+                if open {
+                    sink.AddLine(D2D_POINT_2F { x: px(nx), y: py(ny) });
+                }
+            }
+            PathSeg::C(x1, y1, x2, y2, nx, ny) => {
+                if open {
+                    sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                        point1: D2D_POINT_2F { x: px(x1), y: py(y1) },
+                        point2: D2D_POINT_2F { x: px(x2), y: py(y2) },
+                        point3: D2D_POINT_2F { x: px(nx), y: py(ny) },
+                    });
+                }
+            }
+            PathSeg::Z => {
+                if open {
+                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                    open = false;
+                }
+            }
+        }
+    }
+    if open {
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+    }
+    sink.Close()?;
+    if let Some(f) = fill {
+        let (r, g, b) = parse_hex_rgb(f);
+        let brush = rt.CreateSolidColorBrush(&rgb_to_d2d_color(r, g, b), None)?;
+        rt.FillGeometry(&geom, &brush, None);
+    }
+    if let Some(sc) = stroke {
+        let (r, g, b) = parse_hex_rgb(sc);
+        let brush = rt.CreateSolidColorBrush(&rgb_to_d2d_color(r, g, b), None)?;
+        rt.DrawGeometry(&geom, &brush, stroke_width * PT_TO_DIP, None);
+    }
     Ok(())
 }
 

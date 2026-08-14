@@ -6345,8 +6345,16 @@ fn parse_drawing(
                             // became VectorShapes, so the logo rendered as its
                             // one straight bar. Assemble the command list into a
                             // normalized path (0..1 over path_wh) and ship it.
-                            let s1120_path: Vec<crate::ir::PathSeg> = if w.has_curve
-                                && !w.cmds.is_empty()
+                            // ★NOT just has_curve: the crown logotype's H, M
+                            // and v are STRAIGHT-edge polygons (pts=13/16/11,
+                            // curve=false) that fail is_rect's pts<=6 corner
+                            // test too — the first cut gated on has_curve and
+                            // dropped exactly those three letters. Any real
+                            // command list that is neither a line nor a rect
+                            // ships as a path.
+                            let s1120_path: Vec<crate::ir::PathSeg> = if !w.cmds.is_empty()
+                                && !is_line
+                                && !is_rect
                                 && std::env::var("OXI_S1120_DISABLE").is_err()
                             {
                                 let (pw, ph) = w.path_wh.unwrap_or(w.ext);
