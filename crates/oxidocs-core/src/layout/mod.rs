@@ -7230,9 +7230,41 @@ impl LayoutEngine {
                                         0.0
                                     }
                                 };
-                                let s1038_row_orphan = std::env::var("OXI_S1038_DISABLE").is_err()
-                                    && !self.doc_body_has_real_cjk
-                                    && !fresh_one_page
+                                // S1127 (2026-08-15, SHIPPED default-ON with S1126, opt-out
+                // OXI_S1127_DISABLE): the heading's OWN
+                // space-before is missing from `this_h` on the TABLE-follower
+                // path. estimate_para_height drops a style-defined space_before,
+                // and the paragraph-follower branch adds it back (S709/S1087 at
+                // the `let this_h = if s709` site) — this branch never did, so a
+                // heading is measured ~one gap too short against `remaining`.
+                // technical__00549a8f p25: Heading2 sb=216tw=10.8, heading 15.8,
+                // first row 17.2 → Word needs 43.8 of the 34.6 left and pushes;
+                // Oxi compares 33.0 ≤ 34.6 and keeps the heading with the table
+                // starting on p26 = an orphaned keepNext heading. Same reset key
+                // as S1087 (has_direct_before), same exact/atLeast exclusion.
+                let s1127_sb = if std::env::var("OXI_S1127_DISABLE").is_err()
+                    && !para.style.has_direct_before
+                    && para.style.line_spacing_rule.as_deref() != Some("exact")
+                    && para.style.line_spacing_rule.as_deref() != Some("atLeast")
+                {
+                    if let (Some(bl), Some(pitch)) = (para.style.before_lines, grid_pitch) {
+                        bl / 100.0 * pitch
+                    } else {
+                        para.style.space_before.unwrap_or(0.0)
+                    }
+                } else {
+                    0.0
+                };
+                let this_h = this_h + s1127_sb;
+                // ...and the `!fresh_one_page` gate goes with it: whether the WHOLE
+                // table would fit a fresh page is S1024's whole-move question, not
+                // this one. 00549a8f's table is small (207.7pt, fresh1=true) and
+                // has no keepNext row-chain, so S1024 leaves it alone; the first
+                // row still cannot follow the heading, and Word still pushes.
+                let s1038_row_orphan = std::env::var("OXI_S1038_DISABLE").is_err()
+                    && !self.doc_body_has_real_cjk
+                                    && (!fresh_one_page
+                                        || std::env::var("OXI_S1127_DISABLE").is_err())
                                     && this_h <= remaining
                                     && first_row_h > 0.0
                                     && this_h + first_row_h > remaining + 0.5
@@ -35212,6 +35244,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// infeasible (equal-waterfill) branch in `waterfill_autofit_columns` (Probe
     /// W-2, 2026-07-25), so this raw widest-word min is only the FEASIBLE-case min.
     fn column_content_mins(&self, table: &Table) -> Vec<f32> {
+        self.column_content_mins_brk(table, false)
+    }
+
+    /// `hyphen_only`: restrict the break opportunities to whitespace and
+    /// hyphens for the S1126 autofit minimum. Word's autofit min-content does
+    /// NOT break a digit/slash token — reports__001f1397's first column holds
+    /// `20010/11` and Word lays that column out at 1229tw, which is its
+    /// no-slash minimum (1225); allowing the `/` break predicts 1184tw (−2pt,
+    /// and the wrong shrink share for every other column). The general wrap
+    /// path keeps `is_break_after`'s wider set (S783's opportunity model), so
+    /// the two callers ask for different rules.
+    fn column_content_mins_brk(&self, table: &Table, hyphen_only: bool) -> Vec<f32> {
         let ncols = table.grid_columns.len();
         let mut mins = vec![0.0f32; ncols];
         let (def_l, def_r) = table
@@ -35247,7 +35291,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     if ch.is_whitespace() {
                                         cell_max = cell_max.max(seg);
                                         seg = 0.0;
-                                    } else if is_break_after(ch) {
+                                    } else if if hyphen_only {
+                                        matches!(ch, '-' | '\u{2010}' | '\u{2013}' | '\u{2014}')
+                                    } else {
+                                        is_break_after(ch)
+                                    } {
                                         seg += bw;
                                         cell_max = cell_max.max(seg);
                                         seg = 0.0;
@@ -35486,6 +35534,100 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 && total > available
                 && table_grid_columns.len() > 1
             {
+                // S1126 (2026-08-15, opt-out OXI_S1126_DISABLE): Word's AUTOFIT
+                // shrink. DERIVED (tools/metrics/_pb_tblfit_gen.py, 9 arms, Word
+                // PDF border strokes; then confirmed on the real specimen to
+                // ±1.8tw = 0.09pt):
+                //   min_i    = longest unbreakable segment (whitespace + hyphen
+                //              breaks only) + that column's cell margins
+                //   w_i      = max(grid_i, min_i)
+                //   usable   = content width + the table's LEFT cell margin —
+                //              Word lets an auto table overflow the right margin
+                //              by exactly that much (probe: table spans margin →
+                //              margin+avail+108tw in BOTH the probe and the
+                //              specimen)
+                //   if Σw > usable: w_i −= (Σw − usable) × slack_i / Σslack,
+                //              slack_i = max(grid_i − min_i, 0)
+                // The probe pins every part: C_minwide (a column whose min
+                // exceeds its grid) predicts −213/−21 vs Word's −214/−21;
+                // E/F/G (excess 200/1000/3000tw) all land on the slack shares;
+                // H_minall shows Word goes BELOW min rather than overflow when
+                // the deficit exceeds the total slack (so no clamp).
+                // The legacy rule dumped the whole excess on the LAST column —
+                // probe G collapsed it from 3006 to 8tw — which is the nested-
+                // table behaviour (report §14.2), kept for nested and for CJK
+                // (column_content_mins has no CJK line breaking, so a Japanese
+                // paragraph reads as one enormous unbreakable segment — the
+                // same scope note S1078 carries).
+                // ★SCOPE: cells that declare a dxa PREFERRED width. Word has two
+                // autofit regimes and this rule is the first one. When the cells
+                // instead say `<w:tcW w:w="0" w:type="auto"/>` (parsed to
+                // width=None) Word IGNORES the grid and lays the table out from
+                // the content min/max — probe arms M_tcw_auto / N_ukls, same grid
+                // as F, come out 612/4049/627/3848 (the two short-content columns
+                // collapse to their minimum and the two prose columns split the
+                // rest) where the dxa arms all land on the slack shares. That is
+                // uklocalspending's shape (tblW auto + every tcW auto): Word
+                // renders its 14018tw grid at FULL width in a 13778tw landscape
+                // column, and shrinking it by any amount costs the JP gate a doc
+                // (1.0000 → 0.9701). The content-driven regime is measured but
+                // NOT implemented — those tables keep the legacy last-column
+                // clamp until it is derived properly.
+                let s1126_dxa = table.rows.first().map_or(false, |r| {
+                    !r.cells.is_empty() && r.cells.iter().all(|c| c.width.is_some())
+                });
+                // SHIPPED default-ON with S1127 (opt-out OXI_S1126_DISABLE). On its
+                // own it cost technical__00549a8f its PASS (1.0000→0.9991): that
+                // doc's correct pagination rode on the legacy clamp making a table
+                // too WIDE and therefore too TALL, which pushed a keepNext heading
+                // for the wrong reason. S1127 supplies the real reason (the
+                // heading's own space-before + the first-row orphan rule), and the
+                // pair is gate-clean — EN 215 PASS unchanged with no PASS→FAIL, JP
+                // 92, SSIM 238 byte-identical.
+                let s1126 = std::env::var("OXI_S1126_DISABLE").is_err()
+                    && !is_nested
+                    && s1126_dxa
+                    && !self.doc_body_has_real_cjk;
+                if s1126 {
+                    let mins = self.column_content_mins_brk(table, true);
+                    if mins.len() == table_grid_columns.len() {
+                        let inset = table
+                            .style
+                            .default_cell_margins
+                            .as_ref()
+                            .and_then(|m| m.left)
+                            .unwrap_or(5.4);
+                        let usable = available + inset;
+                        let mut w: Vec<f32> = table_grid_columns
+                            .iter()
+                            .zip(&mins)
+                            .map(|(g, m)| g.max(*m))
+                            .collect();
+                        let sum: f32 = w.iter().sum();
+                        if sum > usable {
+                            let deficit = sum - usable;
+                            let slack: Vec<f32> = table_grid_columns
+                                .iter()
+                                .zip(&mins)
+                                .map(|(g, m)| (g - m).max(0.0))
+                                .collect();
+                            let ss: f32 = slack.iter().sum();
+                            if ss > 0.01 {
+                                for (wi, s) in w.iter_mut().zip(&slack) {
+                                    *wi -= deficit * s / ss;
+                                }
+                            } else {
+                                // every column already at/below its minimum:
+                                // share the deficit by width (H_minall's shape)
+                                let t: f32 = w.iter().sum();
+                                for wi in w.iter_mut() {
+                                    *wi -= deficit * *wi / t;
+                                }
+                            }
+                        }
+                        return w;
+                    }
+                }
                 // S1003: a DIRECT BODY autofit table waterfills all columns; the
                 // last-column-only clamp is the nested-table rule (report §14.2).
                 if std::env::var("OXI_S1003").is_ok() && !is_nested {
