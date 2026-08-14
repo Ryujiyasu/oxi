@@ -31,11 +31,11 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_spacecomp")
-DOCX = os.path.join(OUT, "spacecomp3.docx")
+DOCX = os.path.join(OUT, "spacecomp3.docx")   # rebound in __main__ per size
 PDF = os.path.join(OUT, "spacecomp3_word.pdf")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-FONT, SZ = "Cambria", 20                 # 10pt
+FONT, SZ = "Cambria", 20                 # half-points; sz=40 -> 20pt via argv
 NPREFIX = 20                              # 'm' words before the candidate
 WLENS = [1, 2, 4, 8, 12]
 INDENTS = list(range(0, 820, 20))         # 0..41pt in 1pt steps
@@ -142,7 +142,7 @@ def read():
         return sorted(rows[sorted(rows)[0]]) if rows else None
 
     half = len(arms()) // 2
-    NAT = 2.161
+    NAT = 2.161 * (SZ / 20.0)
     print("wlen  col      just語 left語 over  space(比率)   吸収pt")
     prev_key = None
     for i in range(half):
@@ -168,4 +168,10 @@ def read():
 
 
 if __name__ == "__main__":
+    for a in sys.argv[2:]:
+        if a.startswith("sz="):
+            SZ = int(a.split("=", 1)[1])
+    DOCX = os.path.join(OUT, "spacecomp3_sz%d.docx" % SZ)
+    PDF = os.path.join(OUT, "spacecomp3_sz%d_word.pdf" % SZ)
+    STYLES = STYLES.replace('w:val="20"', 'w:val="%d"' % SZ)
     {"gen": gen, "read": read}[sys.argv[1]]()
