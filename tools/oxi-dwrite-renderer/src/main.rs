@@ -573,6 +573,65 @@ fn page_factory_handle(
 }
 
 #[cfg(windows)]
+/// Rasterize an EMF via a GDI memory DC (D2D cannot play metafiles).
+/// Returns None if anything fails, so the caller falls back to the old path.
+unsafe fn rasterize_emf(data: &[u8], w: i32, h: i32) -> Option<image::DynamicImage> {
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::Foundation::RECT;
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let hemf = SetEnhMetaFileBits(data);
+    if hemf.is_invalid() {
+        return None;
+    }
+    let screen = GetDC(None);
+    let mem = CreateCompatibleDC(screen);
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+    let dib = CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok();
+    let out = dib.and_then(|dib| {
+        let old = SelectObject(mem, dib);
+        let rc = RECT { left: 0, top: 0, right: w, bottom: h };
+        // white ground, like the page
+        let white = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+        FillRect(mem, &rc, white);
+        let _ = DeleteObject(white);
+        let ok = PlayEnhMetaFile(mem, hemf, &rc).as_bool();
+        let img = if ok && !bits.is_null() {
+            let n = (w * h * 4) as usize;
+            let raw = std::slice::from_raw_parts(bits as *const u8, n);
+            // BGRA -> RGBA
+            let mut rgba = Vec::with_capacity(n);
+            for px in raw.chunks_exact(4) {
+                rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+            }
+            image::RgbaImage::from_raw(w as u32, h as u32, rgba)
+                .map(image::DynamicImage::ImageRgba8)
+        } else {
+            None
+        };
+        SelectObject(mem, old);
+        let _ = DeleteObject(dib);
+        img
+    });
+    let _ = DeleteDC(mem);
+    ReleaseDC(None, screen);
+    let _ = DeleteEnhMetaFile(hemf);
+    out
+}
+
 unsafe fn render_image(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     _d2d_factory: &windows::Win32::Graphics::Direct2D::ID2D1Factory,
@@ -584,9 +643,23 @@ unsafe fn render_image(
     use windows::Win32::Graphics::Direct2D::Common::*;
 
     // Decode via image crate (jpg/png/etc.)
-    let img = match image::load_from_memory(data) {
-        Ok(i) => i,
-        Err(_) => return Ok(()),
+    // EMF: the image crate cannot decode a metafile, so these boxes rendered
+    // BLANK (the GDI renderer's finding, reference__0042471c p7: zero non-white
+    // pixels where Word draws a full statistics chart). D2D cannot play an EMF
+    // either, so rasterize it through a GDI memory DC at 2x the dest size and
+    // feed the pixels into the existing bitmap path. Opt-out OXI_EMF_DISABLE.
+    let is_emf = data.len() > 44 && data[40..44] == [0x20, 0x45, 0x4D, 0x46];
+    let emf_img = if is_emf && std::env::var("OXI_EMF_DISABLE").is_err() {
+        rasterize_emf(data, (w_pt * 2.0).ceil() as i32, (h_pt * 2.0).ceil() as i32)
+    } else {
+        None
+    };
+    let img = match emf_img {
+        Some(i) => i,
+        None => match image::load_from_memory(data) {
+            Ok(i) => i,
+            Err(_) => return Ok(()),
+        },
     };
     // S775: a:srcRect — crop the source (percent insets), the remainder
     // stretches to the full dest rect (Word's picture-crop semantics).

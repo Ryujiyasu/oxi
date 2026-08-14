@@ -565,6 +565,30 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                     }
                     oxidocs_core::layout::LayoutContent::Image { ref data, ref crop, .. } => {
                         if !data.is_empty() {
+                            // EMF/WMF: the `image` crate cannot decode a metafile, so
+                            // `load_from_memory` just returns Err and the whole branch is
+                            // skipped — the box is reserved and painted NOTHING. Measured
+                            // on reference__0042471c p7: the 737x309px chart area came out
+                            // with luminance range (255,255) and ZERO non-white pixels,
+                            // while Word draws the chart's axis labels, legend and stats
+                            // box in there (22 "lines" per page in the PDF text stream).
+                            // GDI can play it directly. Corpus: EMF 28 docs, WMF 20.
+                            // Opt-out OXI_EMF_DISABLE.
+                            let is_emf = data.len() > 44
+                                && data[40..44] == [0x20, 0x45, 0x4D, 0x46]; // " EMF"
+                            if is_emf && std::env::var("OXI_EMF_DISABLE").is_err() {
+                                let hemf = SetEnhMetaFileBits(data);
+                                if !hemf.is_invalid() {
+                                    let rc = RECT {
+                                        left: x,
+                                        top: y,
+                                        right: x + ew,
+                                        bottom: y + eh,
+                                    };
+                                    let _ = PlayEnhMetaFile(mem_dc, hemf, &rc);
+                                    let _ = DeleteEnhMetaFile(hemf);
+                                }
+                            }
                             // Decode image and draw via GDI StretchDIBits
                             if let Ok(img) = image::load_from_memory(data) {
                                 // S775: a:srcRect — crop the source (percent
