@@ -32,6 +32,15 @@ Oxi change costs one GDI render.
 3. Counting a run's children with a regex over `<w:r>...</w:r>` matches the
    `<w:t>` of runs nested INSIDE the run's own drawing/textbox (the non-greedy
    close tag belongs to the inner run). Use ElementTree direct children.
+
+★★4. A raw Word-vs-Oxi LINE COUNT is not a wrap metric. Word draws the text
+   INSIDE embedded charts (axis labels, legends, series names, statistics
+   boxes); Oxi draws none of it, and every such label counts as a Word "line".
+   On reference__0042471c that is ~54 of the 61-line gap — p7 and p9 lose 22
+   lines each to one EMF statistics chart, p2 loses 10 to a DrawingML bar
+   chart — leaving only ~7 lines of genuine wrap divergence. Check the
+   per-page deficit and look at what is actually missing BEFORE reading a
+   line-count gap as a breaking problem.
 """
 import difflib
 import json
