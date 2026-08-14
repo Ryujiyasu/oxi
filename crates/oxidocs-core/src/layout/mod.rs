@@ -19989,8 +19989,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             ($style:expr) => {
                 if !word.is_empty() {
                     if dbg_flush {
-                        eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} avail={} spcred={} tabslack={} line_n={} just={} s799={}",
-                            word, pt_to_tw(word_width), current_width_tw, available_tw,
+                        eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} curw_f={:.4} ww_f={:.4} avail={} spcred={} tabslack={} line_n={} just={} s799={}",
+                            word, pt_to_tw(word_width), current_width_tw, current_width, word_width, available_tw,
                             latin_space_credit_tw, right_tab_slack_tw, lines.len(),
                             is_justified, s799_space_shrink);
                     }
@@ -20000,25 +20000,43 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // break. Word wraps based on natural char widths (fontSize for
                     // fullwidth, smaller for halfwidth). Grid extra only affects
                     // character positioning within the line, not line break count.
-                    // S1061 (2026-08-02, HELD OPT-IN OXI_S1061=1, default byte-identical):
-                    // the fit test rounds the PENDING WORD to twips and adds it to an
-                    // accumulator that was itself rounded per word/char, so a line
-                    // measures up to ~1tw narrower than its true advance and Oxi keeps a
-                    // word Word wraps. Word's rule is exactly "the line content EXCLUDING
-                    // the trailing space fits (text_right - ind_right)" — derived at 1pt
-                    // resolution in scratchpad/rightedge (42 arms: keep at limit 534.00,
-                    // wrap at 533.00, for content measuring 533.22; a justified line
-                    // instead overruns by a constant 2.8pt). policies__003ccc95's two
-                    // divider pages come from exactly this: internal 9218 vs a true
-                    // 9220.6 against 9220. The exact float accumulator `current_width`
-                    // already runs in parallel, so measuring against IT is the fix.
-                    // ★HELD: exact widths shift every Latin break by up to 1tw, and the
-                    // S1028 char-budget windows (LO/HI, half-em cap, exclusive hang) were
-                    // calibrated ON the rounded widths — legal__0011b198 1.0000→0.9793 and
-                    // legal__0011dcc 1.0000→0.9048 (both PASS only since S1028), plus
-                    // ukhealthform 1.0000→0.9953. Ships with an S1028 re-derivation.
-                    let word_width_tw = if std::env::var("OXI_S1061").is_ok() {
-                        pt_to_tw(current_width + word_width) - current_width_tw
+                    // S1061 (2026-08-02, held) → S1061b (2026-08-15, SHIPPED default-ON
+                    // for EXPLICIT compat15, opt-out OXI_S1061_DISABLE, force-everywhere
+                    // OXI_S1061=1 kept for probing): the fit test rounds the PENDING WORD
+                    // to twips and adds it to an accumulator that was itself rounded per
+                    // word, so a line measures up to ~2tw narrower than its true advance
+                    // and Oxi keeps a word Word wraps. Word's rule is "the line content
+                    // EXCLUDING the trailing space fits (text_right - ind_right)" at
+                    // EXACT design-metric sums — scratchpad/rightedge (42 arms) +
+                    // policies__003ccc95 'owners' knife-edge (exact 8560.23 > budget
+                    // 8560 → Word wraps; per-word-rounded 8558 kept it → the doc's -2
+                    // page drift). ★compat-SCOPED, which dissolves the old HELD blocker:
+                    // Word's compat15 layout runs on exact design metrics (hmtx/upm
+                    // sums), while compat14 legacy layout runs on QUANTIZED advances —
+                    // Courier New 12pt breaks at 7.2pt/char exactly (= 600/1000em),
+                    // NOT the font's true 1229/2048 = 7.20117 (dcc PDF advances are
+                    // flat 7.2; capacity-exact lines 9936=9936 KEEP, which exact sums
+                    // would wrap). The legacy per-word rounding ≡ the quantized model
+                    // on the c14 twins (144tw/char for words < 22 chars), so c14 keeps
+                    // it and the S1028 windows stay calibrated — no re-derivation
+                    // needed. Blast radius (S1125-era A/B): 5 compat15 docs improve
+                    // (correspondence__001b7c 0.9857→1.0000 FAIL→PASS, 001aad pcd+1→0,
+                    // creative__0158c +0.06, reference__0052ba +0.003, policies pcd
+                    // −2→−1), the 2 compat14 legal twins are the only regressions —
+                    // exactly the scope split.
+                    // ★CEIL, not round: Word wraps on ANY exact excess. ukhealthform
+                    // 'claims.' measures 9063.398tw against budget 9063 — Word wraps,
+                    // but pt_to_tw's round() collapsed it to 9063 and kept it (the JP-
+                    // gate PASS→FAIL); 'owners' 8560.23 vs 8560 is the same shape. The
+                    // 0.01tw epsilon only absorbs f32 accumulation noise (≤ ~1e-3tw);
+                    // an exactly-full line (integer-tw content, the c14 shape) stays
+                    // KEEP by construction.
+                    let s1061b = (self.compat_mode >= 15 && self.compat_mode_explicit
+                        && std::env::var("OXI_S1061_DISABLE").is_err())
+                        || std::env::var("OXI_S1061").is_ok();
+                    let word_width_tw = if s1061b {
+                        ((current_width + word_width) * 20.0 - 0.01).ceil() as i32
+                            - current_width_tw
                     } else {
                         pt_to_tw(word_width)
                     };
