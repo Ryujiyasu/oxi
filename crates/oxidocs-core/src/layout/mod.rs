@@ -35591,11 +35591,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 if s1126 {
                     let mins = self.column_content_mins_brk(table, true);
                     if mins.len() == table_grid_columns.len() {
+                        // The overflow tolerance is the FIRST cell's own left
+                        // margin, not the table default: probe K (per-cell tcMar
+                        // 15tw, no tblCellMar) lands at 9042tw = available + 15,
+                        // where reading only the table default gives + 108 and
+                        // leaves the table 185tw too wide. The corpus specimen
+                        // (per-cell tcMar 108, no tblCellMar) is unchanged — its
+                        // per-cell value equals the default this used to assume.
                         let inset = table
-                            .style
-                            .default_cell_margins
-                            .as_ref()
+                            .rows
+                            .first()
+                            .and_then(|r| r.cells.first())
+                            .and_then(|c| c.margins.as_ref())
                             .and_then(|m| m.left)
+                            .or_else(|| {
+                                table
+                                    .style
+                                    .default_cell_margins
+                                    .as_ref()
+                                    .and_then(|m| m.left)
+                            })
                             .unwrap_or(5.4);
                         let usable = available + inset;
                         let mut w: Vec<f32> = table_grid_columns

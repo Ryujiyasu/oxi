@@ -244,12 +244,17 @@ def oxi(envs=""):
     for ai in range(len(ARMS)):
         if ai >= len(pages):
             break
-        xs = sorted(round(e["x"], 2) for e in pages[ai]["elements"]
-                    if (e.get("text") or "").startswith(MARK))
-        rights = [round(e["x"] + (e.get("w") or 0), 2) for e in pages[ai]["elements"]
-                  if e.get("type") == "border"]
-        if xs:
-            per[ai] = _cells_from_xs(xs) + [max(rights) if rights else xs[-1]]
+        # ★borders, not the marker glyph: the marker readout assumes a fixed
+        # 5.4pt inset and reports a 15tw-margin arm ~93tw wide (the layout is
+        # right; the reporter was not). Same basis as the Word side.
+        bx = sorted({round(e["x"], 2) for e in pages[ai]["elements"]
+                     if e.get("type") == "border"})
+        ded = []
+        for x in bx:
+            if not ded or x - ded[-1] > 0.6:
+                ded.append(x)
+        if len(ded) >= 2:
+            per[ai] = ded
     report("OXI " + (envs or "(default)"), per)
 
 
