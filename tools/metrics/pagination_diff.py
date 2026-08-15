@@ -78,6 +78,25 @@ def normalize_text(s: str) -> str:
     # sides through the same function.
     s = re.sub(r"\t+\s*\d+\s*$", "", s)
     s = re.sub(r"\.{2,}\s*\d*\s*$", "", s)
+    # ★C0 control characters are Word placeholders, not text (2026-08-15):
+    # Range.Text returns \x01 for an inline shape/embedded object anchor and
+    # \x15 for a note reference. reference__000f9f89's three "non-empty"
+    # paragraphs are literally '\x01\x15' and '\x01\x15\t\x01\x15\t\x01\x15' —
+    # image anchors — so the matcher had nothing real to pair, scored the doc
+    # 0.0 and called it a FAIL although Oxi's 2 pages equal Word's. Oxi's dump
+    # carries no placeholder for an anchor, so the two sides can never agree on
+    # these; dropping them makes such a doc TEXTLESS, which the page-count rule
+    # below then judges. Keeps \t (a real separator) and the S747 placeholders
+    # handled above.
+    # ★NOT the break characters \x0c (page) and \x0e (column): a paragraph whose
+    # Word text STARTS with one has its Information(6) reported at the BREAK —
+    # still on the old page — while its glyphs render on the next, so Word and
+    # Oxi disagree by construction (reports__00156ad9's «\x0eTable S2 Primer
+    # sequences…» caption: Word p2 y=468.75, Oxi p3). Stripping them made that
+    # paragraph matchable and manufactured a +1. Keeping them leaves it
+    # unmatchable, which is what it is. Same R30 family as the collapsed-start
+    # fix.
+    s = re.sub(r"[\x00-\x08\x0b\x0f-\x1f]", "", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
@@ -227,6 +246,23 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     # due to font substitution / encoding) but they reduce confidence;
     # surface in the summary.
     pass_binary = (n_matched > 0) and (n_zero == n_matched)
+    # ★TEXTLESS documents (2026-08-15): a doc whose Word truth carries no
+    # matchable paragraph at all — an image-only flyer, a pure-textbox poster —
+    # had nothing to match, scored 0.0 and was counted a FAIL even when Oxi's
+    # page count equalled Word's. Five frozen EN docs sit in that state
+    # (creative__00feb732 / creative__010300e3 / creative__005a52f8 /
+    # administrative__000727a4 / technical__002481dd: Word 1p or 2p with 0
+    # non-empty paragraphs, Oxi identical). With no text the only observable IS
+    # the page count, so judge on that: pages equal ⇒ PASS with score 1.0. This
+    # is a MEASUREMENT correction — no renderer behaviour changes — and it is
+    # deliberately narrow (zero matchable paragraphs, not "few").
+    textless = not word_paras or all(
+        len(normalize_text(str(p.get("text") or ""))) < MIN_MATCH_LEN for p in word_paras
+    )
+    if textless and n_matched == 0:
+        pcd0 = (oxi.get("n_pages") or 0) - (word.get("n_pages") or 0)
+        pass_binary = pcd0 == 0
+        score = 1.0 if pass_binary else 0.0
 
     # S724 gate hardening (2026-07-03): the matched-only score has a BLIND
     # SPOT — breakage that makes paragraphs UNMATCHABLE (content truncation,
