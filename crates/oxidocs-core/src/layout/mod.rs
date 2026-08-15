@@ -5,6 +5,7 @@
 /// Session 117: per-char compression algorithm for jc=both / distribute paragraphs.
 /// Not yet integrated into the layout pipeline — see docs/design/jc_both_per_char_compression.md.
 #[allow(dead_code)]
+pub mod hyphen;
 pub mod jc_both_compress;
 mod kinsoku;
 pub mod math;
