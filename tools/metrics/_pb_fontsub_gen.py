@@ -47,6 +47,16 @@ ARMS = [
     ("f_arial", "Arial", 22, True),               # installed control
     ("g_times", "Times New Roman", 22, True),     # installed control
     ("h_avenir_16", "Avenir Book", 32, True),     # size sweep: 16pt
+    # ★what does Word fall back to when it knows NOTHING about the font? Arm d
+    # (no fontTable entry) came out Cambria, but that is one shape. Oxi's
+    # unknown-font fallback is Calibri and several shipped rules were calibrated
+    # on it, so the fallback is only worth changing if Word's choice holds
+    # across the declared family/pitch — these arms declare a fontTable entry
+    # for the same bogus name with each family value.
+    ("i_bogus_swiss", "Zzqx Swiss", 22, "swiss"),
+    ("j_bogus_roman", "Zzqx Roman", 22, "roman"),
+    ("k_bogus_modern", "Zzqx Modern", 22, "modern"),
+    ("l_bogus_auto", "Zzqx Auto", 22, "auto"),
 ]
 # A line long enough to wrap exactly once at the probe's column width.
 LINE = ("The quick brown fox jumps over the lazy dog while the quick brown fox "
@@ -87,7 +97,13 @@ def gen():
               '<w:name w:val="Normal"/></w:style></w:styles>')
     # the specimen's own fontTable, so the declared panose/sig for Avenir Book
     # and Didot are byte-identical to the real document's
-    ftbl = zipfile.ZipFile(SPECIMEN).read("word/fontTable.xml")
+    ftbl = zipfile.ZipFile(SPECIMEN).read("word/fontTable.xml").decode("utf-8")
+    extra = "".join(
+        '<w:font w:name="%s"><w:panose1 w:val="00000000000000000000"/>'
+        '<w:charset w:val="00"/><w:family w:val="%s"/><w:pitch w:val="variable"/>'
+        "</w:font>" % (font, fam)
+        for _n, font, _sz, fam in ARMS if isinstance(fam, str))
+    ftbl = ftbl.replace("</w:fonts>", extra + "</w:fonts>").encode("utf-8")
     ct = CT.replace("</Types>",
                     '<Override PartName="/word/fontTable.xml" ContentType='
                     '"application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>'
