@@ -100,6 +100,19 @@ ARMS = [
     ("baskervilleol", "Baskerville Old Face", 20),
     ("arialroundedm", "Arial Rounded MT Bold", 20),
     ("lucidacallig", "Lucida Calligraphy", 20),
+    # S1142 batch: .otf / cloud faces, plus the CJK families the JP corpus
+    # names. The CJK arms use Latin text on purpose -- Word applies the
+    # 83/64 inflation to a CJK face even then (UD NK-R 1.50379).
+    ("montserrat", "Montserrat", 20),
+    ("merriweather", "Merriweather", 20),
+    ("nunito", "Nunito", 20),
+    ("roboto", "Roboto", 20),
+    ("sourcesans", "Source Sans Pro", 20),
+    ("avenirnext", "Avenir Next LT Pro", 20),
+    ("pmingliu", "PMingLiU", 20),
+    ("batang", "Batang", 20),
+    ("udnkr", "UD デジタル 教科書体 NK-R", 20),
+    ("bizudgothic", "BIZ UDゴシック", 20),
 ]
 SENT = ("The registrar must determine the percentage of care that a person has "
         "for a child during a care period and notify each person concerned. ")

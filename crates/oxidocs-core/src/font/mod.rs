@@ -645,6 +645,9 @@ impl FontMetricsRegistry {
             "Lucida Sans Unicode", "Jokerman", "Impact", "Eras Bold ITC",
             "Broadway", "Baskerville Old Face", "Arial Rounded MT Bold",
             "Lucida Calligraphy",
+            // S1142: the .otf / cloud-font sweep (see add_twcen_metrics.py).
+            "Montserrat", "Merriweather", "Nunito", "Roboto", "Source Sans Pro",
+            "Avenir Next LT Pro",
         ];
 
         for raw in raw_list {

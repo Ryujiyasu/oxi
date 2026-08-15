@@ -56,9 +56,84 @@ FACES = [
     ("Broadway", "C:/Windows/Fonts/BROADW.TTF"),
     ("Baskerville Old Face", "C:/Windows/Fonts/BASKVILL.TTF"),
     ("Arial Rounded MT Bold", "C:/Windows/Fonts/ARLRDBD.TTF"),
+    # S1141 (2026-08-15): the last family in the sweep. Its only face declares
+    # subfamily "Italic" (the design is a calligraphic slant), which is why the
+    # resolver pass that found the others skipped it -- the file is still what
+    # Word uses for `w:ascii="Lucida Calligraphy"`. reference__00476cb8 sets it
+    # on 18 runs, and the Calibri fallback it was getting is 1.22070 against the
+    # face's 1.36133: +1.55pt on an 11pt line.
+    ("Lucida Calligraphy", "C:/Windows/Fonts/LCALLIG.TTF"),
+    # S1142 (2026-08-15): the two font sources the earlier audit missed --
+    # OpenType (.otf, invisible to a *.tt* glob) and Office's CLOUD font cache.
+    # Word renders these as the real face, so the table needs their metrics.
+    # Latin cloud faces, each verified against Word in a COMPLETE document
+    # (the minimal-docx probe cannot be trusted for font resolution):
+    ("Montserrat", "cloud:Montserrat"),                 # Word 1.21900 (typo set)
+    ("Merriweather", "cloud:Merriweather"),             # Word 1.25757 (typo set)
+    ("Nunito", "cloud:Nunito"),                         # Word 1.36417 (typo set)
+    ("Roboto", "cloud:Roboto"),                         # Word 1.20117
+    ("Source Sans Pro", "cloud:Source Sans Pro"),       # Word 1.25691
+    ("Avenir Next LT Pro", "cloud:Avenir Next LT Pro"), # Word 1.21308
+    # HELD (2026-08-15): the CJK half of the S1142 sweep is measured but NOT
+    # shipped. Adding it makes educational__0214ac95 -- a docGrid
+    # type=lines linePitch=360 document whose body is 85% UD Digi Kyokasho --
+    # grow from Word's 2 pages to 3 (JA blind-50 pcd==0 44 -> 43), because a
+    # 12pt line at the face's CJK-inflated 1.5em lands exactly ON the 18pt
+    # grid pitch and takes a second cell. Word does not. The grid tolerance
+    # has to be derived before these entries can land.
+    # # CJK faces the JP corpus names by their JAPANESE family name -- the key has
+    # # to be the string the docx writes. Widths are left EMPTY (the S579 CJK
+    # # convention: MS Gothic / Meiryo carry none) so only the line height moves.
+    # # All measured on the 83/64 path in Word: UD NK-R 1.3000, PMingLiU 1.3010,
+    # # Batang 1.3017 against their 1.0-1.157 naturals.
+    # ("PMingLiU", "cloud:PMingLiU", True),
+    # ("Batang", "cloud:Batang", True),
+    # ("UD デジタル 教科書体 N-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#0", True),
+    # ("UD デジタル 教科書体 NP-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#1", True),
+    # ("UD デジタル 教科書体 NK-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#2", True),
+    # ("UD デジタル 教科書体 N-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#0", True),
+    # ("UD デジタル 教科書体 NP-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#1", True),
+    # ("UD デジタル 教科書体 NK-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#2", True),
+    # ("BIZ UDゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#0", True),
+    # ("BIZ UDPゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#1", True),
+    # ("BIZ UD明朝 Medium", "C:/Windows/Fonts/BIZ-UDMinchoM.ttc#0", True),
 ]
 # the codepoint set every existing entry carries
 REF_FAMILY = "Verdana"
+
+
+def resolve(path):
+    r"""Expand a "cloud:<Family>" spec to a real file.
+
+    Office keeps its downloadable faces in
+    %LOCALAPPDATA%\Microsoft\FontCache\CloudFonts\<Family>\<numeric id>.ttf --
+    a third font source besides C:\Windows\Fonts and the per-user font dir, and
+    one that neither a *.tt* glob nor .NET's InstalledFontCollection reports.
+    Word renders these as the real face (measured: it embeds "Avenir Next LT Pro"
+    itself, not a substitute), so their metrics belong in the table. The numeric
+    file name differs per machine, hence the lookup by family directory.
+    """
+    if not path.startswith("cloud:"):
+        return path
+    fam = path[len("cloud:"):]
+    root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "FontCache",
+                        "4", "CloudFonts", fam)
+    if not os.path.isdir(root):
+        return path
+    from fontTools.ttLib import TTFont
+    best = None
+    for f in sorted(os.listdir(root)):
+        if not f.lower().endswith((".ttf", ".otf")):
+            continue
+        full = os.path.join(root, f)
+        try:
+            sub = (TTFont(full, lazy=True)["name"].getDebugName(2) or "").lower()
+        except Exception:
+            continue
+        if sub in ("regular", "book", ""):
+            return full
+        best = best or full
+    return best or path
 
 
 def extract(path, codepoints):
@@ -101,6 +176,15 @@ def extract(path, codepoints):
         "typo_ascender": int(round(os2.sTypoAscender * 2048 / upm)),
         "typo_descender": int(round(os2.sTypoDescender * 2048 / upm)),
         "typo_line_gap": int(round(os2.sTypoLineGap * 2048 / upm)),
+        # S1142 (2026-08-15): fsSelection bit 7 (USE_TYPO_METRICS) decides which
+        # set Word measures the line with. Measured on the Office CLOUD fonts,
+        # where the two sets differ widely: bit set -> the typo sum (Montserrat
+        # 1.21900 = Word 1.21900, Merriweather 1.25700 = 1.25757, Nunito 1.36400
+        # = 1.36417); bit clear -> max(hhea+gap, win), the S950 rule (Roboto
+        # 1.20020 = 1.20117, Source Sans Pro 1.25700 = 1.25691, Avenir Next LT
+        # Pro 1.21289 = 1.21308). Without this field those three would each be
+        # 0.6-1.6pt per 10pt line too tall.
+        "use_typo_metrics": bool(os2.fsSelection & (1 << 7)),
         "widths": widths,
     }
     f.close()
@@ -115,18 +199,25 @@ def main():
     codepoints = sorted(int(k) for k in ref["widths"])
     have = {x.get("family") for x in data}
 
-    for fam, path in FACES:
+    for face in FACES:
+        fam, path = face[0], face[1]
+        no_widths = len(face) > 2 and face[2]
         if fam in have:
             print("already present:", fam)
             continue
+        path = resolve(path)
         if not os.path.exists(path.partition("#")[0]):
             print("MISSING FONT FILE:", path)
             return 1
-        e, missing = extract(path, codepoints)
+        e, missing = extract(path, [] if no_widths else codepoints)
         e["family"] = fam
-        nat = max(
-            (e["ascender"] + abs(e["descender"]) + e["line_gap"]),
-            (e["win_ascent"] + e["win_descent"]),
+        nat = (
+            (e["typo_ascender"] + abs(e["typo_descender"]) + e["typo_line_gap"])
+            if e["use_typo_metrics"]
+            else max(
+                (e["ascender"] + abs(e["descender"]) + e["line_gap"]),
+                (e["win_ascent"] + e["win_descent"]),
+            )
         ) / 2048.0
         print(
             "%-16s upm=2048 hhea=%d/%d/%d win=%d/%d natural=%.6f widths=%d missing=%d"
