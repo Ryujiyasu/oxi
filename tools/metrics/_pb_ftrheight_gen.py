@@ -76,6 +76,14 @@ ARMS = [
     # footer the way before does. These two arms test the asymmetry directly.
     ("f16_style_sa", -8, 0),              # style after + direct line=auto
     ("f17_style_sb_sa", -9, 0),           # style before AND after
+    # ★the specimen's footer shape, rebuilt synthetically so one piece can be
+    # removed at a time: [empty 8pt para with before=120] + [2-row table whose
+    # ROW 1 cells carry before=120] + [trailing empty para]. f9_real leaves an
+    # 11.1pt residual once its DOCPROPERTY fields resolve; these locate it.
+    ("r1_replica", -10, 0),
+    ("r2_no_rowsb", -11, 0),     # same, row-1 cells without before
+    ("r3_no_tail", -12, 0),      # same as r1, no trailing empty para
+    ("r4_no_head", -13, 0),      # same as r1, no leading empty para
 ]
 SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "technical",
                         "002c1ffa65f3a566.docx")
@@ -99,6 +107,33 @@ def para(text, pbb=False):
 def footer_xml(npara, nrows):
     if npara == -1:                    # the specimen's own footer part
         return zipfile.ZipFile(SPECIMEN).read("word/footer4.xml").decode("utf-8")
+    if npara in (-10, -11, -12, -13):
+        def p8(txt, sb):
+            return ('<w:p><w:pPr>%s<w:rPr><w:rFonts w:ascii="Times New Roman" '
+                    'w:hAnsi="Times New Roman"/><w:sz w:val="16"/></w:rPr></w:pPr>'
+                    '%s</w:p>'
+                    % ('<w:spacing w:before="120"/>' if sb else "",
+                       ('<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" '
+                        'w:hAnsi="Times New Roman"/><w:sz w:val="16"/></w:rPr>'
+                        '<w:t>%s</w:t></w:r>' % txt) if txt else ""))
+        # ★2 rows made the stack too short: the body bottom stayed pinned to the
+        # declared margin in all four arms and nothing discriminated. Six rows
+        # push the stack past (bottom margin - footer distance) = 42.5pt so a
+        # per-row spacing error shows up as whole lines.
+        row_sb = npara != -11
+        rows = ""
+        for r in range(6):
+            cells = "".join(
+                '<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/></w:tcPr>%s</w:tc>'
+                % p8("R%dC%d" % (r + 1, c + 1), row_sb and r % 2 == 1) for c in range(3))
+            rows += "<w:tr>%s</w:tr>" % cells
+        tbl = ('<w:tbl><w:tblPr><w:tblW w:w="7303" w:type="dxa"/></w:tblPr>'
+               '<w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/>'
+               '<w:gridCol w:w="2503"/></w:tblGrid>' + rows + "</w:tbl>")
+        head = "" if npara == -13 else p8("", True)
+        tail = "" if npara == -12 else p8("", False)
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ' + NS + ">"
+                + head + tbl + tail + "</w:ftr>")
     if npara in (-8, -9):
         style = "FtrSA" if npara == -8 else "FtrSBSA"
         body = "".join(
