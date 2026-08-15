@@ -20447,6 +20447,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=whole_word badness={} cap={} dec={}",
                             s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                     }
+                    let mut hyphenated = false;
                     if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
                         // S1128 (2026-08-15, SHIPPED default-ON, opt-out
@@ -20460,7 +20461,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         //       word when none does.
                         // Latin-only (the JP corpus sets no autoHyphenation and
                         // hyphen::break_offsets rejects non-alphabetic tokens anyway).
-                        let mut hyphenated = false;
+                        // (declared above the wrap block — the advance below needs it)
                         if self.auto_hyphenation
                             && !self.doc_body_has_real_cjk
                             && std::env::var("OXI_S1128_DISABLE").is_err()
@@ -20519,10 +20520,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                             }
                         }
-                        let _ = hyphenated;
                         wrap_and_seed!(ws);
                     }
-                    let word_width_tw = pt_to_tw(word_width);
+                    // S1128: the hyphenation branch replaces `word` with its TAIL, so
+                    // the twips advance has to be recomputed — but ONLY then. Doing it
+                    // unconditionally overwrote S1061b's exact-sum advance with a plain
+                    // rounded one for every word, which silently took back S1061b on
+                    // creative__0158c02ae (0.9247 -> 0.8622, found by bisecting the
+                    // score against d42eac81 — the opt-out flag did not restore it,
+                    // which is what pointed at a change outside the flag).
+                    let word_width_tw = if hyphenated {
+                        pt_to_tw(word_width)
+                    } else {
+                        word_width_tw
+                    };
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
                         width: word_width,
