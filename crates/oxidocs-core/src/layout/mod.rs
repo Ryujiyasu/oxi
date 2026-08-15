@@ -25753,10 +25753,66 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // heading START, not the region. Left as a comment (not gated).
                             let apply_tol = is_empty && just_over_pitch && !ascii_is_cjk;
                             let tol = if apply_tol { 0.5 } else { 0.0 };
-                            return (((spaced - tol + pitch * 0.5) / pitch) + 0.5)
-                                .floor()
-                                .max(1.0)
-                                * pitch;
+                            // S1143 (2026-08-15, opt-out OXI_S1143_DISABLE): decide the
+                            // CELL COUNT from the hhea natural, not from `spaced`.
+                            // `run_base` is the GDI pixel-rounded height (Times New Roman
+                            // 15.5pt -> 25px @96dpi = 18.75pt against the face's own
+                            // 17.82), so a Latin line that FITS one 18pt cell was being
+                            // pushed into two. DERIVED (_pb_gridcell_gen.py, docGrid
+                            // type=lines linePitch=360, Word truth): Segoe UI 13.5 =
+                            // 17.954 -> 1 cell, Trebuchet 15.5 = 17.997 -> 1 cell,
+                            // Cambria 15.5 = 18.173 -> 2, MS Mincho 14 = 18.16 -> 2,
+                            // Times 16 = 18.40 -> 2. So the rule is `natural <= pitch`,
+                            // and Oxi was 2-celling the first two. Latin scope, exactly
+                            // like S671 (a CJK line's 1.0em hhea would drop the 83/64
+                            // multiplier that its own measurement confirms: MS Mincho 14
+                            // must stay 2 cells). This is the root of the held S1142 CJK
+                            // batch too -- UD Digi Kyokasho 12pt inflates to exactly
+                            // 18.0 and Word keeps it in one cell.
+                            let cell_basis = if !dominant_cjk_83_64
+                                && hhea_natural_max > 0.0
+                                && std::env::var("OXI_S1143_DISABLE").is_err()
+                            {
+                                (hhea_natural_max * line_spacing.unwrap_or(1.0)).min(spaced)
+                            } else {
+                                spaced
+                            };
+                            // S1143b: the count itself. `floor(h/pitch + 1.0)` (what
+                            // the expression above computes) equals ceil(h/pitch)
+                            // everywhere EXCEPT at an exact multiple, where it returns
+                            // one cell too many -- and that is precisely the case the
+                            // held CJK font batch hits (UD Digi Kyokasho 12pt inflates
+                            // to 18.000 against an 18pt pitch). DERIVED
+                            // (_pb_gridexact_gen.py: MS Mincho 16pt = 20.75pt exactly,
+                            // five sections stepping linePitch one twip at a time):
+                            //   pitch 20.70 -> Word 2 cells, Oxi 2
+                            //   pitch 20.75 -> Word 1 cell,  Oxi 2   <- the off-by-one
+                            //   pitch 20.80 -> Word 1 cell,  Oxi 1
+                            // So Word counts ceil(natural/pitch) with equality landing
+                            // in ONE cell. The empty-paragraph 0.5pt tolerance (S195/
+                            // S583) is unchanged -- it subtracts from the height before
+                            // this count, exactly as before.
+                            // S1143c: Word counts in WHOLE TWIPS. UD Digi Kyokasho's
+                            // 12pt line is 18.0017pt -- 0.0017 OVER an 18pt pitch, so a
+                            // bare ceil still gives two cells, yet Word gives one:
+                            // 360.03tw rounds to 360 = the pitch exactly. Rounding the
+                            // height to twips before the count explains every arm of
+                            // both probes at once:
+                            //   17.824 -> 356.5tw  -> 1   (Times 15.5)
+                            //   17.954 -> 359.1tw  -> 1   (Segoe UI 13.5)
+                            //   17.997 -> 359.9tw  -> 1   (Trebuchet 15.5)
+                            //   18.0017 -> 360.0tw -> 1   (UD Digi Kyokasho 12, the doc)
+                            //   18.156 -> 363.1tw  -> 2   (MS Mincho 14)
+                            //   18.173 -> 363.5tw  -> 2   (Cambria 15.5)
+                            //   20.750 -> 415.0tw  -> 1 at pitch 415, 2 at pitch 414
+                            let h_tw = ((cell_basis - tol) * 20.0).round();
+                            let p_tw = (pitch * 20.0).round();
+                            let cells = if std::env::var("OXI_S1143_DISABLE").is_ok() {
+                                (((cell_basis - tol) / pitch) + 1.0).floor()
+                            } else {
+                                (h_tw / p_tw).ceil()
+                            };
+                            return cells.max(1.0) * pitch;
                         }
                     }
                 }
