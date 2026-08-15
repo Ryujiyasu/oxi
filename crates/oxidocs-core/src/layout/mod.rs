@@ -12514,7 +12514,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     }
                     // S803: fold the style-level spacing the estimate dropped.
-                    if s803_on && !p.style.has_direct_spacing {
+                    // S1131 (2026-08-15, opt-in OXI_S1131=1): do the same for a
+                    // DIRECT `w:spacing` — that spacing is dropped too, and the
+                    // `!has_direct_spacing` guard then loses it entirely.
+                    // MEASURED (_pb_ftrheight_gen.py f10_p8_sb: 8 footer paragraphs
+                    // each with a direct `w:before="120"`): Word's body bottom is
+                    // 529.9, Oxi's 575.5 — 45.6pt low, and 8 × 6pt = 48. The same
+                    // footer shape drives technical__002c1ffa: with its real footer
+                    // part (arm f9_real) Word stops the body at 575.9 and Oxi at
+                    // 610.0. The sz-only arm (f11_p8_sz16) already agrees to 0.4pt,
+                    // so the font side is fine and only the spacing is missing.
+                    let s1131 = std::env::var("OXI_S1131").is_ok();
+                    if s803_on && (!p.style.has_direct_spacing || s1131) {
                         let sb = p.style.space_before.unwrap_or(0.0);
                         let sa = p.style.space_after.unwrap_or(0.0);
                         if let Some(prev) = s803_prev_sa {

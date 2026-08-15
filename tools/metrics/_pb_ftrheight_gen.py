@@ -53,7 +53,19 @@ ARMS = [
     ("f6_p1_t1", 1, 1),
     ("f7_p1_t3", 1, 3),
     ("f8_p8_t1", 8, 1),
+    # ★the specimen's OWN footer part, verbatim: the synthetic arms agree with
+    # Word to 0.4pt, so whatever costs technical__002c1ffa its 3pt lives in that
+    # footer (8 paragraphs, three of them `w:spacing w:before="120"`, a 1-row
+    # table, and a trailing `Footer`-styled empty paragraph).
+    ("f9_real", -1, 0),
+    # ★the real footer's paragraphs carry `w:spacing w:before="120"` (6pt) and
+    # sz=16 (8pt). These arms isolate the space-before: same paragraph count as
+    # f4, once with the 6pt before and once with the 8pt font.
+    ("f10_p8_sb", -2, 0),
+    ("f11_p8_sz16", -3, 0),
 ]
+SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "technical",
+                        "002c1ffa65f3a566.docx")
 
 
 def docx():
@@ -72,6 +84,20 @@ def para(text, pbb=False):
 
 
 def footer_xml(npara, nrows):
+    if npara == -1:                    # the specimen's own footer part
+        return zipfile.ZipFile(SPECIMEN).read("word/footer4.xml").decode("utf-8")
+    if npara in (-2, -3):
+        sb = ' w:before="120"' if npara == -2 else ""
+        sz = 16 if npara == -3 else 20
+        body = "".join(
+            '<w:p><w:pPr><w:spacing%s w:after="0" w:line="240" w:lineRule="auto"/>'
+            '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+            '<w:sz w:val="%d"/></w:rPr></w:pPr><w:r>'
+            '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+            '<w:sz w:val="%d"/></w:rPr><w:t>F%d</w:t></w:r></w:p>' % (sb, sz, sz, i + 1)
+            for i in range(8))
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ' + NS + ">"
+                + body + "</w:ftr>")
     body = "".join(para("F%d" % (i + 1)) for i in range(npara))
     if nrows:
         rows = "".join(
