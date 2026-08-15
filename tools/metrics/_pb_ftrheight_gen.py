@@ -63,6 +63,19 @@ ARMS = [
     # f4, once with the 6pt before and once with the 8pt font.
     ("f10_p8_sb", -2, 0),
     ("f11_p8_sz16", -3, 0),
+    # ★which declaration form does the estimate drop? f10 (direct before) is
+    # dropped; creative__00d0925f's footer (direct LINE only, spacing from a
+    # style) regressed when S1131 folded it, so that form is kept. These arms
+    # separate the four combinations so the rule is measured, not inferred.
+    ("f12_style_sb_directline", -4, 0),   # style before + direct line=auto
+    ("f13_style_sb_only", -5, 0),         # style before, no direct spacing
+    ("f14_direct_sb_exact", -6, 0),       # direct before + direct line=exact
+    ("f15_style_sb_exact", -7, 0),        # style before + direct line=exact
+    # ★creative__00d0925f's footer carries space-AFTER (style after=180) and no
+    # before, and it PASSES without any fold — so after may not extend the
+    # footer the way before does. These two arms test the asymmetry directly.
+    ("f16_style_sa", -8, 0),              # style after + direct line=auto
+    ("f17_style_sb_sa", -9, 0),           # style before AND after
 ]
 SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "technical",
                         "002c1ffa65f3a566.docx")
@@ -86,6 +99,34 @@ def para(text, pbb=False):
 def footer_xml(npara, nrows):
     if npara == -1:                    # the specimen's own footer part
         return zipfile.ZipFile(SPECIMEN).read("word/footer4.xml").decode("utf-8")
+    if npara in (-8, -9):
+        style = "FtrSA" if npara == -8 else "FtrSBSA"
+        body = "".join(
+            '<w:p><w:pPr><w:pStyle w:val="%s"/>'
+            '<w:spacing w:line="240" w:lineRule="auto"/>'
+            '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+            '<w:sz w:val="20"/></w:rPr></w:pPr><w:r>'
+            '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+            '<w:sz w:val="20"/></w:rPr><w:t>F%d</w:t></w:r></w:p>' % (style, i + 1)
+            for i in range(8))
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ' + NS + ">"
+                + body + "</w:ftr>")
+    if npara in (-4, -5, -6, -7):
+        style = "FtrSB"
+        direct = {-4: '<w:spacing w:line="240" w:lineRule="auto"/>',
+                  -5: "",
+                  -6: '<w:spacing w:before="120" w:line="200" w:lineRule="exact"/>',
+                  -7: '<w:spacing w:line="200" w:lineRule="exact"/>'}[npara]
+        use_style = npara in (-4, -5, -7)
+        body = "".join(
+            '<w:p><w:pPr>%s%s<w:rPr><w:rFonts w:ascii="Times New Roman" '
+            'w:hAnsi="Times New Roman"/><w:sz w:val="20"/></w:rPr></w:pPr><w:r>'
+            '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+            '<w:sz w:val="20"/></w:rPr><w:t>F%d</w:t></w:r></w:p>'
+            % ('<w:pStyle w:val="%s"/>' % style if use_style else "", direct, i + 1)
+            for i in range(8))
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ' + NS + ">"
+                + body + "</w:ftr>")
     if npara in (-2, -3):
         sb = ' w:before="120"' if npara == -2 else ""
         sz = 16 if npara == -3 else 20
@@ -146,7 +187,17 @@ def gen():
               '<w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
               ' w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>'
               '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
-              '<w:name w:val="Normal"/></w:style></w:styles>')
+              '<w:name w:val="Normal"/></w:style>'
+              '<w:style w:type="paragraph" w:styleId="FtrSB"><w:name w:val="FtrSB"/>'
+              '<w:basedOn w:val="Normal"/><w:pPr>'
+              '<w:spacing w:before="120" w:after="0"/></w:pPr></w:style>'
+              '<w:style w:type="paragraph" w:styleId="FtrSA"><w:name w:val="FtrSA"/>'
+              '<w:basedOn w:val="Normal"/><w:pPr>'
+              '<w:spacing w:before="0" w:after="120"/></w:pPr></w:style>'
+              '<w:style w:type="paragraph" w:styleId="FtrSBSA"><w:name w:val="FtrSBSA"/>'
+              '<w:basedOn w:val="Normal"/><w:pPr>'
+              '<w:spacing w:before="120" w:after="120"/></w:pPr></w:style>'
+              "</w:styles>")
     ct_extra = "".join(
         '<Override PartName="/word/footer%d.xml" ContentType='
         '"application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' % ai
