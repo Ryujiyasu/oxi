@@ -202,19 +202,44 @@ def gen():
         '<Override PartName="/word/footer%d.xml" ContentType='
         '"application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' % ai
         for ai in range(len(ARMS)))
+    ct_extra += ('<Override PartName="/docProps/core.xml" ContentType='
+                 '"application/vnd.openxmlformats-package.core-properties+xml"/>'
+                 '<Override PartName="/docProps/app.xml" ContentType='
+                 '"application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+                 '<Override PartName="/docProps/custom.xml" ContentType='
+                 '"application/vnd.openxmlformats-officedocument.custom-properties+xml"/>')
     ct = CT.replace("</Types>", ct_extra + "</Types>")
     rel_extra = "".join(
         '<Relationship Id="rIdF%d" Type="http://schemas.openxmlformats.org/'
         'officeDocument/2006/relationships/footer" Target="footer%d.xml"/>' % (ai, ai)
         for ai in range(len(ARMS)))
     drels = DRELS.replace("</Relationships>", rel_extra + "</Relationships>")
+    rels = RELS.replace("</Relationships>",
+                        '<Relationship Id="rIdCore" Type="http://schemas.openxmlformats.org/'
+                        'package/2006/relationships/metadata/core-properties" '
+                        'Target="docProps/core.xml"/>'
+                        '<Relationship Id="rIdApp" Type="http://schemas.openxmlformats.org/'
+                        'officeDocument/2006/relationships/extended-properties" '
+                        'Target="docProps/app.xml"/>'
+                        '<Relationship Id="rIdCustom" Type="http://schemas.openxmlformats.org/'
+                        'officeDocument/2006/relationships/custom-properties" '
+                        'Target="docProps/custom.xml"/>'
+                        "</Relationships>")
     with zipfile.ZipFile(docx(), "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", ct)
-        z.writestr("_rels/.rels", RELS)
+        z.writestr("_rels/.rels", rels)
         z.writestr("word/_rels/document.xml.rels", drels)
         z.writestr("word/styles.xml", styles)
         for ai, (_n, npara, nrows) in enumerate(ARMS):
             z.writestr("word/footer%d.xml" % ai, footer_xml(npara, nrows))
+        # ★the specimen's footer uses DOCPROPERTY fields; without its docProps
+        # parts Word renders "Error! Property name is incorrect" strings that
+        # WRAP and make the arm's footer taller than the real one — the first
+        # run of f9_real measured a 96pt stack that way, 43pt of which was the
+        # error text. Copy the parts so the fields resolve.
+        zs = zipfile.ZipFile(SPECIMEN)
+        for part in [n for n in zs.namelist() if n.startswith("docProps")]:
+            z.writestr(part, zs.read(part))
         z.writestr("word/document.xml", doc)
     print("wrote", docx(), len(ARMS), "arms | page", PGH / 20.0,
           "pt | bottom margin", MAR_BOT / 20.0, "| footer dist", FTR_DIST / 20.0)
