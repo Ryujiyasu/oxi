@@ -51,8 +51,16 @@ ARMS = [
     ("line_off0", "line", 0.0, 1, 24),
     ("margin_off0", "margin", 0.0, 1, 24),
     ("page_off40", "page", 40.0, 1, 24),
+    # (arm, relFrom, offset, host index, size, filler paragraphs before the host)
+    ("overflow_top", "paragraph", 0.0, 1, 24, 0, True),
+    ("overflow_bottom", "paragraph", 0.0, 1, 24, 44, True),
 ]
 BOX_W, BOX_H = 120.0, 24.0
+# overflow arms: the declared extent is far smaller than the text needs, and the
+# host paragraph sits near the page bottom. Word never grows a page for an
+# absolutely-positioned box; the question is whether Oxi's page-bottom test sees
+# the overflowing content.
+OVERFLOW_LINES = 12
 
 
 def docx():
@@ -66,13 +74,18 @@ def marker(tag, ai, brk):
             "</w:r></w:p>" % ("<w:pageBreakBefore/>" if brk else "", tag, ai))
 
 
-def anchored(pid, rel, off_pt, sz_hp):
+def anchored(pid, rel, off_pt, sz_hp, overflow=False):
     cx, cy = int(BOX_W * EMU), int(BOX_H * EMU)
     off = int(off_pt * EMU)
     rpr = ('<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="18"/>'
            "</w:rPr>")
     inner = ('<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
              ' w:lineRule="auto"/></w:pPr><w:r>' + rpr + "<w:t>BOX</w:t></w:r></w:p>")
+    if overflow:
+        inner += "".join(
+            '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
+            ' w:lineRule="auto"/></w:pPr><w:r>' + rpr + "<w:t>OVF%02d</w:t></w:r></w:p>" % i
+            for i in range(OVERFLOW_LINES))
     return (
         '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
         ' w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman"'
@@ -111,11 +124,16 @@ def body_line(sz_hp, n):
 def gen():
     os.makedirs(OUT, exist_ok=True)
     body = []
-    for ai, (name, rel, off, host_idx, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        name, rel, off, host_idx, sz = arm[:5]
+        fillers = arm[5] if len(arm) > 5 else 0
+        overflow = len(arm) > 6 and arm[6]
         body.append(marker("A", ai, ai > 0))
+        for f in range(fillers):
+            body.append(body_line(sz, 900 + f))
         for k in range(3):
             if k == host_idx:
-                body.append(anchored(100 + ai, rel, off, sz))
+                body.append(anchored(100 + ai, rel, off, sz, overflow))
             else:
                 body.append(body_line(sz, k))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
@@ -144,7 +162,8 @@ def report(per, who):
     print("== %s ==" % who)
     print("%-14s %-10s %6s %9s %9s %9s"
           % ("arm", "relFrom", "off", "host_top", "box_top", "box-host"))
-    for ai, (name, rel, off, host_idx, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        name, rel, off, host_idx, sz = arm[:5]
         g = per.get(ai) or {}
         h, b = g.get("host"), g.get("box")
         if h is None or b is None:

@@ -25486,6 +25486,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     return hhea_natural_max.max(val);
                 }
                 if val == 0.0 {
+                    // S1145 (2026-08-16, opt-out OXI_S1145_DISABLE): R55's
+                    // `line=0 atLeast` means "the natural height, no grid snap" --
+                    // and the natural is the font's EXACT one, not the GDI
+                    // pixel-rounded `run_base` this returned. S887 above already
+                    // says so for Latin, but it is scoped to no-grid / no-type-grid
+                    // documents, so a TYPED grid fell through to here. DERIVED
+                    // (_pb_gridcell_gen.py, docGrid type=lines linePitch=360,
+                    // `line=0 atLeast` arms):
+                    //   Times New Roman 16pt: Word 18.395, hhea 18.398, base 18.750
+                    //   MS Mincho 13pt:       Word 16.857, hhea x 83/64 16.859,
+                    //                         base 16.750
+                    //   MS Mincho 16pt:       Word 20.754, hhea x 83/64 20.750 = base
+                    // The CJK side takes the same 83/64 inflation its own line height
+                    // uses; only the rounding was wrong. These are exactly the
+                    // paragraphs that move when a CJK face finally gets real metrics
+                    // (educational__0214ac95's four spacing-bearing body lines).
+                    if hhea_natural_max > 0.0 && std::env::var("OXI_S1145_DISABLE").is_err() {
+                        return if dominant_cjk_83_64 {
+                            hhea_natural_max * (83.0 / 64.0)
+                        } else {
+                            hhea_natural_max
+                        };
+                    }
                     return base;
                 }
                 // Non-zero val: original behavior (snap natural, then max with val)

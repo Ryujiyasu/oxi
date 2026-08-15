@@ -60,6 +60,14 @@ ARMS = [
     ("segoe135", "Segoe UI", 27),          # 17.954
     ("treb155", "Trebuchet MS", 31),       # 17.997  -- the exact-pitch case
     ("camb155", "Cambria", 31),            # 18.173
+    # R55 says `line=0 atLeast` means "natural height, no grid snap" -- but that
+    # was derived in a document with NO docGrid. The UD worksheet's four
+    # spacing-bearing body paragraphs carry exactly this rule INSIDE a
+    # type=lines grid, and they are the only body lines whose height changes
+    # when the CJK metrics land. So ask the question in the grid.
+    ("min16_at0", "MS Mincho", 32, 'w:before="0" w:after="0" w:line="0" w:lineRule="atLeast"'),
+    ("min13_at0", "MS Mincho", 26, 'w:before="0" w:after="0" w:line="0" w:lineRule="atLeast"'),
+    ("tnr16_at0", "Times New Roman", 32, 'w:before="0" w:after="0" w:line="0" w:lineRule="atLeast"'),
 ]
 SENT = ("The registrar must determine the percentage of care that a person has "
         "for a child during a care period and notify each person concerned. ")
@@ -73,8 +81,10 @@ def docx():
 def gen():
     os.makedirs(OUT, exist_ok=True)
     body = []
-    for ai, (name, font, sz) in enumerate(ARMS):
-        sz = int(sz)
+    for ai, arm in enumerate(ARMS):
+        name, font, sz = arm[0], arm[1], int(arm[2])
+        spacing = arm[3] if len(arm) > 3 else ('w:before="0" w:after="0"'
+                                               ' w:line="240" w:lineRule="auto"')
         cjk = font.startswith("MS ")
         rpr = ('<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>'
                '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>'
@@ -86,9 +96,9 @@ def gen():
             ' w:hAnsi="Arial"/><w:sz w:val="14"/></w:rPr><w:t>A%02dZ</w:t>'
             "</w:r></w:p>" % ("<w:pageBreakBefore/>" if ai else "", ai))
         body.append(
-            '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
-            ' w:lineRule="auto"/></w:pPr><w:r>%s<w:t xml:space="preserve">%s</w:t>'
-            "</w:r></w:p>" % (rpr, (SENT_JA * 12) if cjk else (SENT * 6)))
+            '<w:p><w:pPr><w:spacing %s/></w:pPr><w:r>%s'
+            '<w:t xml:space="preserve">%s</w:t></w:r></w:p>'
+            % (spacing, rpr, (SENT_JA * 12) if cjk else (SENT * 6)))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="11907" w:h="16839"/>'
@@ -116,7 +126,8 @@ def gen():
 def report(per, who):
     print("== %s ==" % who)
     print("%-9s %-18s %6s %7s %9s %8s" % ("arm", "font", "size", "lines", "pitch", "cells"))
-    for ai, (name, font, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        name, font, sz = arm[0], arm[1], arm[2]
         ys = per.get(ai) or []
         if len(ys) < 3:
             print("%-9s MISSING (%d lines)" % (name, len(ys)))
@@ -144,7 +155,8 @@ def pdf():
         for m in re.finditer(r"A(\d\d)Z", doc[pi].get_text()):
             page_of.setdefault(int(m.group(1)), pi)
     per = {}
-    for ai, (_n, _f, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        sz = arm[2]
         pi = page_of.get(ai)
         if pi is None:
             continue
@@ -176,7 +188,8 @@ def oxi(envs=""):
             if m:
                 page_of.setdefault(int(m.group(1)), pi)
     per = {}
-    for ai, (_n, _f, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        sz = arm[2]
         pi = page_of.get(ai)
         if pi is None:
             continue
