@@ -23,6 +23,7 @@ a constant.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -98,6 +99,7 @@ ARMS = [
     ("broadway", "Broadway", 20),
     ("baskervilleol", "Baskerville Old Face", 20),
     ("arialroundedm", "Arial Rounded MT Bold", 20),
+    ("lucidacallig", "Lucida Calligraphy", 20),
 ]
 SENT = ("The registrar must determine the percentage of care that a person has "
         "for a child during a care period and notify each person concerned. ")
@@ -113,11 +115,23 @@ def gen():
     for ai, (name, font, sz) in enumerate(ARMS):
         rpr = ('<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:cs="%s"/>'
                '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (font, font, font, sz, sz))
+        # ARM MARKER (7pt so the per-arm size filter never picks it up -- at 10pt
+        # it joined the 10pt arms' own line set and stretched their spans).
+        # An arm whose paragraph overflows onto a second page used to
+        # shift every later arm's page by one, and the report read the wrong
+        # font's pitch under the right font's name (caught 2026-08-15 when
+        # "Lucida Calligraphy" came back with Arial Rounded MT Bold's 1.15727).
+        # Each page now carries its own index so the readers can map by marker
+        # instead of by position.
         body.append(
             '<w:p><w:pPr>%s<w:spacing w:before="0" w:after="0" w:line="240"'
+            ' w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial"'
+            ' w:hAnsi="Arial"/><w:sz w:val="14"/></w:rPr><w:t>A%02dZ</w:t>'
+            "</w:r></w:p>" % ("<w:pageBreakBefore/>" if ai else "", ai))
+        body.append(
+            '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
             ' w:lineRule="auto"/></w:pPr><w:r>%s<w:t xml:space="preserve">%s</w:t>'
-            "</w:r></w:p>" % ("<w:pageBreakBefore/>" if ai else "", rpr,
-                              SENT * (18 if sz <= 24 else 8)))
+            "</w:r></w:p>" % (rpr, SENT * (18 if sz <= 24 else 8)))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="11907" w:h="16839"/>'
@@ -171,7 +185,14 @@ def pdf():
         app.Quit()
     doc = fitz.open(out)
     per = {}
-    for ai in range(min(len(ARMS), doc.page_count)):
+    marker_page = {}
+    for pi in range(doc.page_count):
+        for m in re.finditer(r"A(\d\d)Z", doc[pi].get_text()):
+            marker_page.setdefault(int(m.group(1)), pi)
+    for ai in range(len(ARMS)):
+        pi = marker_page.get(ai)
+        if pi is None:
+            continue
         # Read BASELINES of the arm's own spans, not line bboxes: the paragraph
         # mark inherits Normal's 10pt Times New Roman, and on the last line that
         # taller span lifts the bbox top by (0.891*10 - 0.891*9) = 0.89pt --
@@ -179,7 +200,7 @@ def pdf():
         # first run of this probe reported for tnr9.
         want = ARMS[ai][2] / 2.0
         ys = set()
-        for bl in doc[ai].get_text("dict")["blocks"]:
+        for bl in doc[pi].get_text("dict")["blocks"]:
             if bl["type"] != 0:
                 continue
             for ln in bl["lines"]:
@@ -201,9 +222,18 @@ def oxi(envs=""):
                     "--dump-layout=" + out], check=True, capture_output=True, env=env)
     pages = json.load(open(out, encoding="utf-8"))["pages"]
     per = {}
-    for ai in range(min(len(ARMS), len(pages))):
+    marker_page = {}
+    for pi, pg in enumerate(pages):
+        for e in pg["elements"]:
+            m = re.fullmatch(r"A(\d\d)Z", (e.get("text") or "").strip())
+            if m:
+                marker_page.setdefault(int(m.group(1)), pi)
+    for ai in range(len(ARMS)):
+        pi = marker_page.get(ai)
+        if pi is None:
+            continue
         want = ARMS[ai][2] / 2.0
-        per[ai] = sorted({round(e["y"], 3) for e in pages[ai]["elements"]
+        per[ai] = sorted({round(e["y"], 3) for e in pages[pi]["elements"]
                           if e.get("type") == "text" and (e.get("text") or "").strip()
                           and abs((e.get("font_size") or 0) - want) < 0.06})
     report(per, "OXI " + (envs or "(default)"))

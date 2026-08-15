@@ -644,6 +644,7 @@ impl FontMetricsRegistry {
             "Ink Free", "Franklin Gothic Book", "Wingdings", "Sylfaen",
             "Lucida Sans Unicode", "Jokerman", "Impact", "Eras Bold ITC",
             "Broadway", "Baskerville Old Face", "Arial Rounded MT Bold",
+            "Lucida Calligraphy",
         ];
 
         for raw in raw_list {
