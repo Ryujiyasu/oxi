@@ -11088,6 +11088,21 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
     // declarations all resolve through normalize/base/case-insensitive lookup
     // first) and JP / SSIM are untouched. Shipped on the probe's evidence, the
     // same standard the wrapSquare side-wrap work used.
+    // ★2026-08-15 CORRECTION: `w:family` is NOT the discriminator. The probe
+    // above builds a MINIMAL docx (no docProps / settings / webSettings), and
+    // Word treats such a file as incomplete: drop any single part from a real
+    // document and its substitution flips to Cambria too (measured on
+    // ukframework, five parts, each removal alone). Repeating the family sweep
+    // INSIDE a complete document (tools/metrics/_pb_fontsub2_gen.py plus the
+    // ukframework body-swap slice) gives Cambria for no-entry / roman / swiss /
+    // modern alike, while ukframework's own `Humnst777 Lt BT` -- a name Word
+    // knows -- comes back Calibri no matter what the fontTable, theme,
+    // docDefaults or compat mode say. So the real rule is "a face Word cannot
+    // resolve AT ALL falls back to Cambria", and this roman-only alias is a
+    // correct but partial slice of it. Left as is because widening it would
+    // also catch faces that ARE installed and merely missing from Oxi's
+    // registry (S1140 shrank that set but did not empty it); revisit together
+    // with a registry-vs-installed audit.
     if std::env::var("OXI_S1133_DISABLE").is_err() {
         for (name, info) in &document.styles.font_table {
             if info.family.as_deref() == Some("roman")

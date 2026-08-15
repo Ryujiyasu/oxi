@@ -515,6 +515,16 @@ impl FontMetrics {
                     | "Yu Mincho Regular"
                     | "Yu Mincho Demibold"
                     | "Meiryo"
+                    // S1139: Meiryo UI is its own face (descent 430 vs Meiryo's
+                    // 901), and giving it a table entry took it OFF this
+                    // name-keyed list -- it used to arrive here as "Meiryo".
+                    // Word applies the same CJK multiplier to it: measured
+                    // 1.65119em against the face's own 1.27002 x 83/64 =
+                    // 1.64714, the same 0.3% residual Meiryo itself carries
+                    // (1.95065 measured vs 1.94531). Calibrated in the same
+                    // probe run by MS Mincho and MS Gothic, whose 1.0em natural
+                    // comes back 1.29711 = 83/64 to within a quantum.
+                    | "Meiryo UI"
             )
         }
     }
@@ -622,8 +632,24 @@ impl FontMetricsRegistry {
         // sets fsSelection bit 7 and its typo sum 1.1724 em is Word's measured
         // 1.1719, so the existing typo branch is correct once the flag is there.
         let skip_symfb = std::env::var("OXI_SYMFB_METRICS_DISABLE").is_ok();
+        // S1138/S1139/S1140 (2026-08-15, opt-out OXI_S1140_METRICS_DISABLE): the
+        // sweep of families the corpus names in a real run and this machine has
+        // installed, but the table did not hold -- every one of them was being
+        // measured as Calibri. Word agrees with each new entry to within 0.0003em
+        // (_pb_linepitch_gen.py, 12 arms + Trebuchet + Meiryo UI). Same flag
+        // shape as the two above so a data-only change is still A/B-able.
+        let skip_s1140 = std::env::var("OXI_S1140_METRICS_DISABLE").is_ok();
+        const S1140_FAMILIES: &[&str] = &[
+            "Trebuchet MS", "Trebuchet MS Bold", "Meiryo UI", "Segoe UI Emoji",
+            "Ink Free", "Franklin Gothic Book", "Wingdings", "Sylfaen",
+            "Lucida Sans Unicode", "Jokerman", "Impact", "Eras Bold ITC",
+            "Broadway", "Baskerville Old Face", "Arial Rounded MT Bold",
+        ];
 
         for raw in raw_list {
+            if skip_s1140 && S1140_FAMILIES.contains(&raw.family.as_str()) {
+                continue;
+            }
             if skip_symbol && raw.family == "Symbol" {
                 continue;
             }
@@ -1505,6 +1531,16 @@ pub fn render_family_name(name: &str) -> &str {
         "Calibri"
     } else if name == "CG Times" || name.starts_with("CG Times ") {
         "Times New Roman"
+    } else if name == "Courier" && std::env::var("OXI_S1137_DISABLE").is_err() {
+        // S1137 (2026-08-15): bare "Courier" is the legacy raster face; Word
+        // draws it as Courier New. Measured, not assumed (_pb_linepitch_gen.py):
+        // a 10pt "Courier" paragraph's Word line pitch is 11.3300 = Courier New's
+        // 1.13281em, where Oxi's unknown-font fallback gave Calibri's 1.22070
+        // (12.2070) -- 0.88pt per line. Unlike Helvetica/Times, "Courier" has no
+        // FontSubstitutes registry key, so this is Word's own mapping. Corpus
+        // reach today is zero: all 118 docs that name it do so only in latent
+        // MacroText styles no paragraph applies. Correct, not load-bearing.
+        "Courier New"
     } else if name == "Times" && std::env::var("OXI_S1005_DISABLE").is_err() {
         // S1005: bare "Times" (PostScript) → Times New Roman (FontSubstitutes).
         "Times New Roman"
@@ -1687,6 +1723,10 @@ fn normalize_family_name(name: &str) -> String {
         "Avenir Book" | "Avenir Next" | "Avenir" if std::env::var("OXI_S1132_DISABLE").is_err() => {
             "Tw Cen MT".to_string()
         }
+        // S1137: see render_family_name -- Word draws bare "Courier" as
+        // Courier New, and the metrics have to follow the same face or the line
+        // height stays Calibri's.
+        "Courier" if std::env::var("OXI_S1137_DISABLE").is_err() => "Courier New".to_string(),
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),

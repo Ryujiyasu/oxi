@@ -61,6 +61,13 @@ ARMS = [
     ("H_16pt",          (40, 40),  "sym", 32),
     ("I_body",          None,      "sym", 16),
     ("J_no_marker",     (40, 40),  "non", 16),
+    # K/L (2026-08-15): the Wingdings marker. 182 corpus docs drive a bullet
+    # through a numbering.xml rFonts="Wingdings", and until S1140 the registry
+    # had no Wingdings entry, so those markers were measured with the default
+    # (Calibri) metrics. Word's own figure decides whether the real 1.10986em
+    # face is what lifts the line.
+    ("K_marker_wing",   (40, 40),  "win", 16),
+    ("L_marker_wing16", (40, 40),  "win", 32),
 ]
 
 
@@ -145,8 +152,8 @@ def name_para():
 
 
 def bullet_para(mk, txt):
-    if mk in ("sym", "ari"):
-        num = "1" if mk == "sym" else "2"
+    if mk in ("sym", "ari", "win"):
+        num = {"sym": "1", "ari": "2", "win": "3"}[mk]
         return ('<w:p><w:pPr><w:pStyle w:val="ListParagraph"/>'
                 '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="%s"/></w:numPr>'
                 '<w:contextualSpacing w:val="0"/>' % num + rfonts() + "</w:pPr>"

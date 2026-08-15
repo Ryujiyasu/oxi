@@ -73,6 +73,16 @@ ARMS = [
     ("futura10", "Futura Bk BT", 20),
     ("grammarsaurus10", "Grammarsaurus", 20),
     ("meiryoui10", "Meiryo UI", 20),
+    # calibrate the CJK line-height multiplier against faces already in the
+    # table: if Word = natural x 83/64 for these, Meiryo UI's measured
+    # 1.65119 / 1.27002 = 1.30013 is the same law within quantisation.
+    ("meiryo10", "Meiryo", 20),
+    ("meiryo8", "Meiryo", 16),
+    ("meiryo14", "Meiryo", 28),
+    ("meiryo20", "Meiryo", 40),
+    ("msmincho14", "MS Mincho", 28),
+    ("msmincho10", "MS Mincho", 20),
+    ("msgothic10", "MS Gothic", 20),
     # Fourth pass: the S1140 batch -- families installed here and named by the
     # corpus that had no table entry. Each new entry is only trustworthy if
     # Word agrees with it on this probe.
