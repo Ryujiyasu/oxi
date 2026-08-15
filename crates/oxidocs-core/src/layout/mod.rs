@@ -12505,7 +12505,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // 11.5pt — one line — below Word while f13/f16 matched:
                         // the missing first-before exactly cancelled the trailing
                         // after it does add.
-                        let s1131_first = std::env::var("OXI_S1131").is_ok()
+                        let s1131_first = std::env::var("OXI_S1131_DISABLE").is_err()
                             && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"));
                         if !p.style.has_direct_spacing || s1131_first {
                             footer_h += p.style.space_before.unwrap_or(0.0).max(0.0);
@@ -12522,7 +12522,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                     }
                     // S803: fold the style-level spacing the estimate dropped.
-                    // S1131 (2026-08-15, opt-in OXI_S1131=1): do the same for a
+                    // S1131 (2026-08-15, SHIPPED default-ON with S1132, opt-out
+                    // OXI_S1131_DISABLE): do the same for a
                     // DIRECT `w:spacing` — that spacing is dropped too, and the
                     // `!has_direct_spacing` guard then loses it entirely.
                     // MEASURED (_pb_ftrheight_gen.py f10_p8_sb: 8 footer paragraphs
@@ -12537,7 +12538,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // whether the spacing came from the style or from a direct
                     // `w:spacing`; f14/f15 with rule=exact already agree to
                     // 0.4pt because the estimate keeps spacing there).
-                    let s1131 = std::env::var("OXI_S1131").is_ok()
+                    let s1131 = std::env::var("OXI_S1131_DISABLE").is_err()
                         && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"));
                     if s803_on && (!p.style.has_direct_spacing || s1131) {
                         let sb = p.style.space_before.unwrap_or(0.0);

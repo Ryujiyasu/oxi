@@ -1673,6 +1673,20 @@ fn normalize_family_name(name: &str) -> String {
         {
             "Calibri".to_string()
         }
+        // S1132 (2026-08-15): Word substitutes the Mac-only Avenir family with
+        // TW CEN MT — measured, not guessed (tools/metrics/_pb_fontsub_gen.py:
+        // the PDF span font for an `Avenir Book` run is TwCenMT-Regular, and the
+        // line pitch is 11.88 at 11pt = Tw Cen MT's 1.0889em natural, where the
+        // Calibri fallback gives 13.44). The probe also shows the choice does
+        // NOT depend on the docx's fontTable entry (same result with and
+        // without), and the OS FontSubstitutes registry has no Avenir key, so
+        // this is Word's own PANOSE-driven mapping (Avenir Book declares
+        // 020B0503020203020204 = swiss/normal-sans/book — Tw Cen MT's shape).
+        // creative__00d0925f sets its whole body in Avenir Book 11pt: Word fits
+        // it on ONE page at 12.0 pitch, Oxi needed two at 13.0.
+        "Avenir Book" | "Avenir Next" | "Avenir" if std::env::var("OXI_S1132_DISABLE").is_err() => {
+            "Tw Cen MT".to_string()
+        }
         // OSS metric-compatible fonts
         "Carlito" => "Carlito".to_string(),
         "Caladea" => "Caladea".to_string(),
