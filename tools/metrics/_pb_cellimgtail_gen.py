@@ -44,13 +44,14 @@ IMG_W_PT = 340.0
 # predicate split them and cost that doc its PASS (1.0000 -> 0.9692). Its rows
 # differ from this probe's original 9-line tail only in HOW MUCH follows the
 # image, so the tail length is now swept too.
-TAILS = [1, 2, 3, 9]
+TAILS = [9]
 # ★The first cut swept 0-14 filler lines and NOTHING crossed a page: the line
 # pitch is 13.8, so even arm 7 ended at 609 with the whole row on one page.
 # The row (image 220 + 9 tail lines 124 = 344) only crosses when its top is
 # past 720-344 = 376, i.e. from ~22 filler lines on; the sweep now walks the
 # boundary through the tail.
-FILLERS = [22, 26, 30, 34]
+# 1-line steps through the transition: where exactly does splitting stop?
+FILLERS = [26, 27, 28, 29, 30, 31, 32]
 
 
 def arms():

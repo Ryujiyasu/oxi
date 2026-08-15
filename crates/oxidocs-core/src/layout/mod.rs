@@ -27975,8 +27975,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 matches!(b, Block::Paragraph(p)
                                 if p.runs.iter().any(|r| !r.text.trim().is_empty()))
                             };
-                            cell.blocks[..first].iter().any(real_para)
-                                && cell.blocks[last + 1..].iter().any(real_para)
+                            // S1129 (2026-08-15, opt-in OXI_S1129=1): the BEFORE
+                            // half of the predicate is not Word's rule. Probe
+                            // _pb_cellimgtail_gen.py (2-cell row, cell = image +
+                            // 9 tail lines, nothing before the image, 12 filler
+                            // sweeps) shows Word filling the page with the tail:
+                            // 7 / 5 / 3 / 1 / 0 lines kept as the row walks down,
+                            // one line lost per 13.8pt — keep-all-that-fit, no
+                            // whole-push. Oxi keeps NONE in every arm because
+                            // this predicate needs content before the image too.
+                            // What the recorded evidence actually needs is the
+                            // AFTER half alone: educational__00161422's terminal
+                            // images (nothing after) keep the whole-push, and
+                            // the S998 target (paras before AND after) splits.
+                            // educational__002a301d p5 is this probe's shape and
+                            // loses 2 pages to it.
+                            let after = cell.blocks[last + 1..].iter().any(real_para);
+                            if std::env::var("OXI_S1129").is_ok() {
+                                after
+                            } else {
+                                cell.blocks[..first].iter().any(real_para) && after
+                            }
                         }
                         _ => false,
                     }
