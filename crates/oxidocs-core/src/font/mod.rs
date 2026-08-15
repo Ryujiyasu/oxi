@@ -525,6 +525,17 @@ impl FontMetrics {
                     // probe run by MS Mincho and MS Gothic, whose 1.0em natural
                     // comes back 1.29711 = 83/64 to within a quantum.
                     | "Meiryo UI"
+                    | "PMingLiU"
+                    | "Batang"
+                    | "UD デジタル 教科書体 N-R"
+                    | "UD デジタル 教科書体 NP-R"
+                    | "UD デジタル 教科書体 NK-R"
+                    | "UD デジタル 教科書体 N-B"
+                    | "UD デジタル 教科書体 NP-B"
+                    | "UD デジタル 教科書体 NK-B"
+                    | "BIZ UDゴシック"
+                    | "BIZ UDPゴシック"
+                    | "BIZ UD明朝 Medium"
             )
         }
     }
@@ -647,7 +658,8 @@ impl FontMetricsRegistry {
             "Lucida Calligraphy",
             // S1142: the .otf / cloud-font sweep (see add_twcen_metrics.py).
             "Montserrat", "Merriweather", "Nunito", "Roboto", "Source Sans Pro",
-            "Avenir Next LT Pro",
+            "Avenir Next LT Pro", "PMingLiU", "Batang",
+            "UD デジタル 教科書体 N-R", "UD デジタル 教科書体 NP-R", "UD デジタル 教科書体 NK-R", "UD デジタル 教科書体 N-B", "UD デジタル 教科書体 NP-B", "UD デジタル 教科書体 NK-B", "BIZ UDゴシック", "BIZ UDPゴシック", "BIZ UD明朝 Medium",
         ];
 
         for raw in raw_list {

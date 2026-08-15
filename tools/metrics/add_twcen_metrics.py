@@ -74,29 +74,20 @@ FACES = [
     ("Roboto", "cloud:Roboto"),                         # Word 1.20117
     ("Source Sans Pro", "cloud:Source Sans Pro"),       # Word 1.25691
     ("Avenir Next LT Pro", "cloud:Avenir Next LT Pro"), # Word 1.21308
-    # HELD (2026-08-15): the CJK half of the S1142 sweep is measured but NOT
-    # shipped. Adding it makes educational__0214ac95 -- a docGrid
-    # type=lines linePitch=360 document whose body is 85% UD Digi Kyokasho --
-    # grow from Word's 2 pages to 3 (JA blind-50 pcd==0 44 -> 43), because a
-    # 12pt line at the face's CJK-inflated 1.5em lands exactly ON the 18pt
-    # grid pitch and takes a second cell. Word does not. The grid tolerance
-    # has to be derived before these entries can land.
-    # # CJK faces the JP corpus names by their JAPANESE family name -- the key has
-    # # to be the string the docx writes. Widths are left EMPTY (the S579 CJK
-    # # convention: MS Gothic / Meiryo carry none) so only the line height moves.
-    # # All measured on the 83/64 path in Word: UD NK-R 1.3000, PMingLiU 1.3010,
-    # # Batang 1.3017 against their 1.0-1.157 naturals.
-    # ("PMingLiU", "cloud:PMingLiU", True),
-    # ("Batang", "cloud:Batang", True),
-    # ("UD デジタル 教科書体 N-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#0", True),
-    # ("UD デジタル 教科書体 NP-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#1", True),
-    # ("UD デジタル 教科書体 NK-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#2", True),
-    # ("UD デジタル 教科書体 N-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#0", True),
-    # ("UD デジタル 教科書体 NP-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#1", True),
-    # ("UD デジタル 教科書体 NK-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#2", True),
-    # ("BIZ UDゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#0", True),
-    # ("BIZ UDPゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#1", True),
-    # ("BIZ UD明朝 Medium", "C:/Windows/Fonts/BIZ-UDMinchoM.ttc#0", True),
+    # UNHELD 2026-08-16 after S1145 gave `line=0 atLeast` its exact natural
+    # height inside a typed grid -- the rule that governs every body
+    # paragraph these faces move in educational__0214ac95.
+    ("PMingLiU", "cloud:PMingLiU", True),
+    ("Batang", "cloud:Batang", True),
+    ("UD デジタル 教科書体 N-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#0", True),
+    ("UD デジタル 教科書体 NP-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#1", True),
+    ("UD デジタル 教科書体 NK-R", "C:/Windows/Fonts/UDDigiKyokashoN-R.ttc#2", True),
+    ("UD デジタル 教科書体 N-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#0", True),
+    ("UD デジタル 教科書体 NP-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#1", True),
+    ("UD デジタル 教科書体 NK-B", "C:/Windows/Fonts/UDDigiKyokashoN-B.ttc#2", True),
+    ("BIZ UDゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#0", True),
+    ("BIZ UDPゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#1", True),
+    ("BIZ UD明朝 Medium", "C:/Windows/Fonts/BIZ-UDMinchoM.ttc#0", True),
 ]
 # the codepoint set every existing entry carries
 REF_FAMILY = "Verdana"
