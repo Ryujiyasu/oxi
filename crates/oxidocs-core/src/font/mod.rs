@@ -1902,10 +1902,17 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_to_default() {
+    fn test_fallback_by_name_script() {
+        // S1146: a font Word cannot resolve falls back by the NAME'S SCRIPT, not
+        // to the default body face. Measured in complete documents (see the
+        // registry's fallback): Latin-named -> Cambria 1.17291em, CJK-named ->
+        // Yu Gothic 1.67300em, both invariant across 8 and 7 real names plus an
+        // invented one each.
         let reg = FontMetricsRegistry::load();
-        let unknown = reg.get("NonexistentFont");
-        assert_eq!(unknown.family, "Calibri");
+        assert_eq!(reg.get("NonexistentFont").family, "Cambria");
+        assert_eq!(reg.get("MS-Mincho").family, "Cambria");
+        assert_eq!(reg.get("Zzquartz 未知書体").family, "Yu Gothic Regular");
+        assert_eq!(reg.get("ふい字").family, "Yu Gothic Regular");
     }
 
     #[test]
