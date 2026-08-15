@@ -12499,7 +12499,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // the reserved stack (replaces the S780 before−desc relief).
                     if s806_latin && s806_first_before {
                         s806_first_before = false;
-                        if !p.style.has_direct_spacing {
+                        // S1131 covers the FIRST paragraph's before too: with a
+                        // direct `w:spacing` the old guard skipped it, so probe
+                        // f17 (style before AND after, direct line=auto) landed
+                        // 11.5pt — one line — below Word while f13/f16 matched:
+                        // the missing first-before exactly cancelled the trailing
+                        // after it does add.
+                        let s1131_first = std::env::var("OXI_S1131").is_ok()
+                            && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"));
+                        if !p.style.has_direct_spacing || s1131_first {
                             footer_h += p.style.space_before.unwrap_or(0.0).max(0.0);
                         } else if (p.runs.is_empty() || p.runs.iter().all(|r| r.text.is_empty()))
                             && std::env::var("OXI_S930_DISABLE").is_err()
@@ -12524,7 +12532,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // part (arm f9_real) Word stops the body at 575.9 and Oxi at
                     // 610.0. The sz-only arm (f11_p8_sz16) already agrees to 0.4pt,
                     // so the font side is fine and only the spacing is missing.
-                    let s1131 = std::env::var("OXI_S1131").is_ok();
+                    // ★the measured condition is the LINE RULE, not directness
+                    // (probe f10/f12/f16/f17 all short by ~46pt with rule=auto,
+                    // whether the spacing came from the style or from a direct
+                    // `w:spacing`; f14/f15 with rule=exact already agree to
+                    // 0.4pt because the estimate keeps spacing there).
+                    let s1131 = std::env::var("OXI_S1131").is_ok()
+                        && matches!(p.style.line_spacing_rule.as_deref(), None | Some("auto"));
                     if s803_on && (!p.style.has_direct_spacing || s1131) {
                         let sb = p.style.space_before.unwrap_or(0.0);
                         let sa = p.style.space_after.unwrap_or(0.0);
