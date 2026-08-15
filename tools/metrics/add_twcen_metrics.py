@@ -88,6 +88,20 @@ FACES = [
     ("BIZ UDゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#0", True),
     ("BIZ UDPゴシック", "C:/Windows/Fonts/BIZ-UDGothicR.ttc#1", True),
     ("BIZ UD明朝 Medium", "C:/Windows/Fonts/BIZ-UDMinchoM.ttc#0", True),
+    # S1147 (2026-08-16): the HG family. The earlier sweep missed these
+    # because its scan read only w:ascii / w:hAnsi -- a Japanese document
+    # names its body face in w:eastAsia, and HG丸ｺﾞｼｯｸM-PRO alone carries
+    # 6744 references across 14 corpus documents. All are installed here, so
+    # Word draws them for real; without an entry they took the unresolved
+    # path, which S1146 sends to Yu Gothic -- 6 JA blind documents lost a
+    # page each until these landed. Widths empty per the S579 CJK convention.
+    ("HG丸ｺﾞｼｯｸM-PRO", "C:/Windows/Fonts/HGRSMP.TTF", True),
+    ("HGP創英角ｺﾞｼｯｸUB", "C:/Windows/Fonts/HGRSGU.TTC#1", True),
+    ("HGPｺﾞｼｯｸE", "C:/Windows/Fonts/HGRGE.TTC#1", True),
+    ("HGP行書体", "C:/Windows/Fonts/HGRGY.TTC#1", True),
+    ("HGS明朝E", "C:/Windows/Fonts/HGRME.TTC#2", True),
+    ("HG創英角ﾎﾟｯﾌﾟ体", "C:/Windows/Fonts/HGRPP1.TTC#0", True),
+    ("HGP創英角ﾎﾟｯﾌﾟ体", "C:/Windows/Fonts/HGRPP1.TTC#1", True),
 ]
 # the codepoint set every existing entry carries
 REF_FAMILY = "Verdana"

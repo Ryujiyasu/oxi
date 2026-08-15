@@ -536,6 +536,13 @@ impl FontMetrics {
                     | "BIZ UDゴシック"
                     | "BIZ UDPゴシック"
                     | "BIZ UD明朝 Medium"
+                    | "HG丸ｺﾞｼｯｸM-PRO"
+                    | "HGP創英角ｺﾞｼｯｸUB"
+                    | "HGPｺﾞｼｯｸE"
+                    | "HGP行書体"
+                    | "HGS明朝E"
+                    | "HG創英角ﾎﾟｯﾌﾟ体"
+                    | "HGP創英角ﾎﾟｯﾌﾟ体"
             )
         }
     }
@@ -660,6 +667,7 @@ impl FontMetricsRegistry {
             "Montserrat", "Merriweather", "Nunito", "Roboto", "Source Sans Pro",
             "Avenir Next LT Pro", "PMingLiU", "Batang",
             "UD デジタル 教科書体 N-R", "UD デジタル 教科書体 NP-R", "UD デジタル 教科書体 NK-R", "UD デジタル 教科書体 N-B", "UD デジタル 教科書体 NP-B", "UD デジタル 教科書体 NK-B", "BIZ UDゴシック", "BIZ UDPゴシック", "BIZ UD明朝 Medium",
+            "HG丸ｺﾞｼｯｸM-PRO", "HGP創英角ｺﾞｼｯｸUB", "HGPｺﾞｼｯｸE", "HGP行書体", "HGS明朝E", "HG創英角ﾎﾟｯﾌﾟ体", "HGP創英角ﾎﾟｯﾌﾟ体",
         ];
 
         for raw in raw_list {
@@ -1101,6 +1109,33 @@ impl FontMetricsRegistry {
                 {
                     return m;
                 }
+            }
+        }
+        // S1146 (2026-08-16, opt-out OXI_S1146_DISABLE): a font Word cannot
+        // resolve does NOT fall back to the default body face -- it falls back by
+        // the NAME'S SCRIPT. MEASURED in complete documents (the ukframework
+        // body-swap slice; a minimal docx puts Word in a degraded mode and cannot
+        // answer this), reading the face Word actually embeds:
+        //   Latin-named, unresolvable -> Cambria 1.17291em
+        //     (MS-Mincho, MS-Gothic, Kaiti TC, Voltage, ShinGo-Medium-Identity-H,
+        //      Grammarsaurus, Frutiger 45 Light, "inherit", and an invented name)
+        //   CJK-named,  unresolvable -> Yu Gothic 1.67300em
+        //     (楷體-繁, ＤＦ特太ゴシック体, ヒラギノ角ゴ Pro W3, 平成明朝, ふい字,
+        //      AR丸ゴシック体M, ＭＳ明朝, and the invented "Zzquartz 未知書体" --
+        //      7/7 identical, so the discriminator is the name's script, not the
+        //      face)
+        // Oxi sent every one of them to Calibri (1.22070em): 0.05em too tall for
+        // the Latin half and 0.45em too short for the CJK half. The corpus names
+        // 57 such families across 50 documents.
+        if std::env::var("OXI_S1146_DISABLE").is_err() {
+            let cjk_named = family.chars().any(|c| {
+                matches!(c as u32,
+                    0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
+                    | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+            });
+            let want = if cjk_named { "Yu Gothic Regular" } else { "Cambria" };
+            if let Some(m) = self.fonts.get(want) {
+                return m;
             }
         }
         // Fallback to default

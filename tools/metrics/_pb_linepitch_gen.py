@@ -74,6 +74,11 @@ ARMS = [
     ("futura10", "Futura Bk BT", 20),
     ("grammarsaurus10", "Grammarsaurus", 20),
     ("meiryoui10", "Meiryo UI", 20),
+    # S1146: what an unresolvable name falls back to, by the name's script.
+    ("unk_latin", "Zzquartz Trial Face", 20),
+    ("unk_cjk", "Zzquartz 未知書体", 20),
+    ("msmincho_ps", "MS-Mincho", 20),
+    ("msmincho_fw", "ＭＳ明朝", 20),
     # calibrate the CJK line-height multiplier against faces already in the
     # table: if Word = natural x 83/64 for these, Meiryo UI's measured
     # 1.65119 / 1.27002 = 1.30013 is the same law within quantisation.
