@@ -11072,6 +11072,33 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             }
         }
     }
+    // S1133 (2026-08-15, SHIPPED default-ON, opt-out OXI_S1133_DISABLE): a font
+    // Word cannot find falls back
+    // by its DECLARED `w:family`, not to one fixed face. MEASURED
+    // (tools/metrics/_pb_fontsub_gen.py, the same bogus name declared with each
+    // family value, 11pt): swiss / modern / auto → Calibri (line pitch 13.44),
+    // family="roman" → CAMBRIA (12.84), and no fontTable entry at all → Cambria
+    // too. Oxi's unknown-font fallback is Calibri for every case, so the swiss /
+    // modern / auto side is already right and only `roman` is wrong — 0.6pt per
+    // line, the S1132 shape. Scoped to an explicit roman declaration whose face
+    // the registry does not know and whose name is not CJK (the no-entry case is
+    // left alone: 97 of its occurrences are CJK names that resolve through
+    // normalize_family_name).
+    // CORPUS-INERT by measurement: the EN A/B changes no document (the 66 roman
+    // declarations all resolve through normalize/base/case-insensitive lookup
+    // first) and JP / SSIM are untouched. Shipped on the probe's evidence, the
+    // same standard the wrapSquare side-wrap work used.
+    if std::env::var("OXI_S1133_DISABLE").is_err() {
+        for (name, info) in &document.styles.font_table {
+            if info.family.as_deref() == Some("roman")
+                && !registry.supports_family(name)
+                && !registry.get(name).is_cjk_83_64_font()
+                && !alias.contains_key(name)
+            {
+                alias.insert(name.clone(), "Cambria".to_string());
+            }
+        }
+    }
     if alias.is_empty() {
         return;
     }
