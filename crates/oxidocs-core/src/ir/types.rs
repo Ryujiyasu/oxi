@@ -73,6 +73,15 @@ pub struct Document {
     /// 0 JP → byte-identical elsewhere by construction.
     #[serde(default)]
     pub wp_justification: bool,
+    /// `<w:autoHyphenation/>` (CT_OnOff, settings.xml): Word breaks words at
+    /// legal hyphenation points to fill lines. 6/619 corpus docs set it; the
+    /// rule Word applies is derived in `layout::hyphen`.
+    #[serde(default)]
+    pub auto_hyphenation: bool,
+    /// `<w:hyphenationZone w:val="…"/>` in twips — the right-margin gap Word
+    /// tolerates before it bothers to hyphenate. Default 360tw = 0.25in = 18pt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyphenation_zone: Option<f32>,
     /// w:doNotExpandShiftReturn compat setting.
     /// When true, Shift+Enter (soft break) lines are NOT justified even in jc=both paragraphs.
     #[serde(default)]

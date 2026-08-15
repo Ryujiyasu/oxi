@@ -70,6 +70,11 @@ impl OoxmlParser {
         let fn_special_declared = self.parse_fn_special_declared();
         let compress_punctuation = self.parse_compress_punctuation();
         let wp_justification = self.parse_compat_bool_flag("wpJustification");
+        // `<w:autoHyphenation/>` and `<w:hyphenationZone>` live directly under
+        // w:settings (not inside w:compat), but parse_compat_bool_flag scans the
+        // whole part for the element name, so it reads them correctly.
+        let auto_hyphenation = self.parse_compat_bool_flag("autoHyphenation");
+        let hyphenation_zone = self.parse_settings_twips("hyphenationZone");
         let do_not_expand_shift_return = self.parse_compat_bool_flag("doNotExpandShiftReturn");
         let balance_single_byte_double_byte_width =
             self.parse_compat_bool_flag("balanceSingleByteDoubleByteWidth");
@@ -582,6 +587,8 @@ impl OoxmlParser {
             fn_special_declared,
             compress_punctuation,
             wp_justification,
+            auto_hyphenation,
+            hyphenation_zone,
             do_not_expand_shift_return,
             balance_single_byte_double_byte_width,
         };
@@ -1112,6 +1119,32 @@ impl OoxmlParser {
             }
         }
         false
+    }
+
+    /// Read a `<w:NAME w:val="TWIPS"/>` setting from word/settings.xml, in points.
+    fn parse_settings_twips(&mut self, name: &str) -> Option<f32> {
+        let xml = self.read_part("word/settings.xml").ok()?;
+        let mut reader = Reader::from_str(&xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) => {
+                    if local_name(e.name().as_ref()) == name {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                return String::from_utf8_lossy(&attr.value)
+                                    .parse::<f32>()
+                                    .ok()
+                                    .map(|v| v / 20.0);
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Parse word/settings.xml for defaultTabStop value.

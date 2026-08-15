@@ -1934,6 +1934,11 @@ pub struct LayoutEngine {
     /// Absent = legacy (Word ≤2010) document — Word applies ≤14 layout
     /// behaviors (jc=left demand oikomi) even though compat_mode reports 15.
     compat_mode_explicit: bool,
+    /// `<w:autoHyphenation/>` + `<w:hyphenationZone>` (points, default 18 =
+    /// 0.25in): the two inputs of the derived hyphenation rule (see
+    /// `layout::hyphen`).
+    auto_hyphenation: bool,
+    hyphenation_zone: f32,
     /// S933b: whether word/settings.xml exists (justify-shrink class split).
     settings_part_exists: bool,
     /// S833: settings.xml footnotePr declares custom special footnotes ->
@@ -2255,6 +2260,8 @@ impl LayoutEngine {
             default_tab_stop: 36.0,
             compat_mode: 15,
             compat_mode_explicit: true,
+            auto_hyphenation: false,
+            hyphenation_zone: 18.0,
             settings_part_exists: true,
             fn_special_declared: false,
             compress_punctuation: false,
@@ -2380,6 +2387,8 @@ impl LayoutEngine {
             default_tab_stop: doc.default_tab_stop.unwrap_or(36.0),
             compat_mode: doc.compat_mode,
             compat_mode_explicit: doc.compat_mode_explicit,
+            auto_hyphenation: doc.auto_hyphenation,
+            hyphenation_zone: doc.hyphenation_zone.unwrap_or(18.0),
             settings_part_exists: doc.settings_part_exists,
             fn_special_declared: doc.fn_special_declared,
             compress_punctuation: doc.compress_punctuation,
@@ -20440,8 +20449,80 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     if (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap) && !current_line.fragments.is_empty()
                         && !para_all_whitespace {
+                        // S1128 (2026-08-15, SHIPPED default-ON, opt-out
+                        // OXI_S1128_DISABLE): `<w:autoHyphenation/>`.
+                        // DERIVED in layout::hyphen from a 120-arm Word probe:
+                        //   (a) if the gap left by the last WHOLE word is within the
+                        //       hyphenation zone (w:hyphenationZone, default 18pt),
+                        //       Word does not hyphenate at all;
+                        //   (b) otherwise it takes the LONGEST legal prefix whose
+                        //       width plus the hyphen still fits, and wraps the whole
+                        //       word when none does.
+                        // Latin-only (the JP corpus sets no autoHyphenation and
+                        // hyphen::break_offsets rejects non-alphabetic tokens anyway).
+                        let mut hyphenated = false;
+                        if self.auto_hyphenation
+                            && !self.doc_body_has_real_cjk
+                            && std::env::var("OXI_S1128_DISABLE").is_err()
+                        {
+                            let gap = (available_tw - current_width_tw) as f32 / 20.0;
+                            if gap > self.hyphenation_zone {
+                                let hyphen_w = self
+                                    .registry
+                                    .char_width_pt_with_fallback(
+                                        '-',
+                                        self.resolve_font_size(&ws, para_style),
+                                        self.metrics_for(&ws, para_style),
+                                    );
+                                let room = gap - hyphen_w;
+                                // char widths of the pending word, cumulative
+                                let fs = self.resolve_font_size(&ws, para_style);
+                                let m = self.metrics_for_text(&word, &ws, para_style);
+                                let mut cum = 0.0f32;
+                                let mut upto: Vec<(usize, f32)> = Vec::new();
+                                for (bi, ch) in word.char_indices() {
+                                    cum += self.registry.char_width_pt_with_fallback(ch, fs, m);
+                                    upto.push((bi + ch.len_utf8(), cum));
+                                }
+                                let mut best: Option<(usize, f32)> = None;
+                                for off in hyphen::break_offsets(&word) {
+                                    if let Some(&(_, w)) = upto.iter().find(|(b, _)| *b == off) {
+                                        if w <= room {
+                                            best = Some((off, w));
+                                        }
+                                    }
+                                }
+                                if let Some((off, w)) = best {
+                                    let head = format!("{}-", &word[..off]);
+                                    let hw = w + hyphen_w;
+                                    current_line.fragments.push(LineFragment {
+                                        text: head,
+                                        width: hw,
+                                        natural_width: hw,
+                                        style: ws.clone(),
+                                        tab_alignment: None,
+                                        tab_position: None,
+                                        field_type: wft,
+                                        run_index: word_run_index,
+                                        char_offset: word_char_offset,
+                                    });
+                                    current_width += hw;
+                                    current_width_tw += pt_to_tw(hw);
+                                    current_capw_tw += pt_to_tw(hw);
+                                    let tail = word[off..].to_string();
+                                    let tail_w = word_width - w;
+                                    word = tail;
+                                    word_width = tail_w;
+                                    word_natural_width = tail_w;
+                                    word_char_offset += off;
+                                    hyphenated = true;
+                                }
+                            }
+                        }
+                        let _ = hyphenated;
                         wrap_and_seed!(ws);
                     }
+                    let word_width_tw = pt_to_tw(word_width);
                     current_line.fragments.push(LineFragment {
                         text: std::mem::take(&mut word),
                         width: word_width,
