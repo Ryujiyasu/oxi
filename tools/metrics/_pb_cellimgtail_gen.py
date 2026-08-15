@@ -39,13 +39,22 @@ from _pb_pxgrid_gen import CT, DRELS, NS, RELS  # noqa: E402
 PGW, PGH, MARG = 12240, 15840, 1440      # Letter, 1in margins
 IMG_H_PT = 220.0                          # the specimen's images are 226-271pt
 IMG_W_PT = 340.0
-TAIL = 9                                  # marker lines after the image
+# ★TAIL sweep (2026-08-15): educational__00161422 whole-pushes rows shaped
+# [image, ONE caption line] — dropping the before-image half of the S998
+# predicate split them and cost that doc its PASS (1.0000 -> 0.9692). Its rows
+# differ from this probe's original 9-line tail only in HOW MUCH follows the
+# image, so the tail length is now swept too.
+TAILS = [1, 2, 3, 9]
 # ★The first cut swept 0-14 filler lines and NOTHING crossed a page: the line
 # pitch is 13.8, so even arm 7 ended at 609 with the whole row on one page.
 # The row (image 220 + 9 tail lines 124 = 344) only crosses when its top is
 # past 720-344 = 376, i.e. from ~22 filler lines on; the sweep now walks the
 # boundary through the tail.
-FILLERS = [22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44]
+FILLERS = [22, 26, 30, 34]
+
+
+def arms():
+    return [(t, f) for t in TAILS for f in FILLERS]
 
 
 def docx():
@@ -95,13 +104,13 @@ def img_para():
 def gen():
     os.makedirs(OUT, exist_ok=True)
     body = []
-    for ai, fill in enumerate(FILLERS):
+    for ai, (tail, fill) in enumerate(arms()):
         body.append(para("M%02d" % ai, pbb=ai > 0))
         for k in range(fill):
             body.append(para("a%df%d" % (ai, k)))
         # A 2-cell row (multi-cell = the specimen's shape, and the split path
         # S754 takes for it), the left cell carrying image + marker tail.
-        cell = img_para() + "".join(para("a%dL%d" % (ai, k + 1)) for k in range(TAIL))
+        cell = img_para() + "".join(para("a%dL%d" % (ai, k + 1)) for k in range(tail))
         body.append(
             '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>'
             '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="000000"/>'
@@ -144,20 +153,20 @@ def gen():
         z.writestr("word/styles.xml", styles)
         z.writestr("word/media/p.png", png_bytes())
         z.writestr("word/document.xml", doc)
-    print("wrote", docx(), len(FILLERS), "arms | image", IMG_H_PT, "pt | tail", TAIL)
+    print("wrote", docx(), len(arms()), "arms | image", IMG_H_PT, "pt | tails", TAILS)
 
 
 def report(per, who):
     print("== %s ==  (content bottom = %.1fpt)" % (who, (PGH - MARG) / 20.0))
     print("%-6s %-8s %-28s %s" % ("arm", "fillers", "tail on page 1", "img bottom"))
-    for ai, fill in enumerate(FILLERS):
+    for ai, (tail, fill) in enumerate(arms()):
         got = per.get(ai)
         if not got:
-            print("%-6d %-8d MISSING" % (ai, fill))
+            print("%-5d %-5d %-7d MISSING" % (ai, tail, fill))
             continue
         kept, imgb = got
-        print("%-6d %-8d %-28s %s"
-              % (ai, fill, " ".join(kept) if kept else "(none)",
+        print("%-5d %-5d %-7d %-26s %s"
+              % (ai, tail, fill, " ".join(kept) if kept else "(none)",
                  "%.1f" % imgb if imgb else "?"))
 
 
@@ -184,12 +193,12 @@ def pdf():
                 t = "".join(s["text"] for s in ln["spans"]).strip()
                 if t:
                     page_of.setdefault(t, (pi, round(ln["bbox"][1], 1)))
-    for ai in range(len(FILLERS)):
+    for ai, (tail, _f) in enumerate(arms()):
         start = page_of.get("M%02d" % ai)
         if not start:
             continue
         p0 = start[0]
-        kept = [f"L{k}" for k in range(1, TAIL + 1)
+        kept = [f"L{k}" for k in range(1, tail + 1)
                 if page_of.get(f"a{ai}L{k}", (-1,))[0] == p0]
         # image bottom on that page = the tallest drawing rect
         imgb = None
@@ -221,12 +230,12 @@ def oxi(envs=""):
             if e.get("type") == "image" and (e.get("h") or 0) > 100:
                 imgs.setdefault(pi, e["y"] + e["h"])
     per = {}
-    for ai in range(len(FILLERS)):
+    for ai, (tail, _f) in enumerate(arms()):
         start = page_of.get("M%02d" % ai)
         if not start:
             continue
         p0 = start[0]
-        kept = [f"L{k}" for k in range(1, TAIL + 1)
+        kept = [f"L{k}" for k in range(1, tail + 1)
                 if page_of.get(f"a{ai}L{k}", (-1,))[0] == p0]
         per[ai] = (kept, imgs.get(p0))
     report(per, "OXI " + (envs or "(default)"))
