@@ -78,6 +78,11 @@ ARMS = [
     # table: if Word = natural x 83/64 for these, Meiryo UI's measured
     # 1.65119 / 1.27002 = 1.30013 is the same law within quantisation.
     ("meiryo10", "Meiryo", 20),
+    # `line=0 atLeast` (R55: natural height, no grid snap) -- the rule the UD
+    # worksheet's body paragraphs carry. Does Word apply the CJK 83/64 there?
+    ("min16_at0", "MS Mincho", 32, 'w:before="0" w:after="0" w:line="0" w:lineRule="atLeast"'),
+    ("min16_auto", "MS Mincho", 32),
+    ("tnr16_at0", "Times New Roman", 32, 'w:before="0" w:after="0" w:line="0" w:lineRule="atLeast"'),
     ("meiryo8", "Meiryo", 16),
     ("meiryo14", "Meiryo", 28),
     ("meiryo20", "Meiryo", 40),
@@ -125,7 +130,12 @@ def docx():
 def gen():
     os.makedirs(OUT, exist_ok=True)
     body = []
-    for ai, (name, font, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        name, font, sz = arm[0], arm[1], arm[2]
+        # 4th field = an explicit spacing element (the `line=0 atLeast` rule the
+        # UD worksheet's body paragraphs use, which R55 reads as "natural height,
+        # no grid snap")
+        spacing = arm[3] if len(arm) > 3 else 'w:before="0" w:after="0" w:line="240" w:lineRule="auto"'
         rpr = ('<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:cs="%s"/>'
                '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (font, font, font, sz, sz))
         # ARM MARKER (7pt so the per-arm size filter never picks it up -- at 10pt
@@ -142,9 +152,9 @@ def gen():
             ' w:hAnsi="Arial"/><w:sz w:val="14"/></w:rPr><w:t>A%02dZ</w:t>'
             "</w:r></w:p>" % ("<w:pageBreakBefore/>" if ai else "", ai))
         body.append(
-            '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
-            ' w:lineRule="auto"/></w:pPr><w:r>%s<w:t xml:space="preserve">%s</w:t>'
-            "</w:r></w:p>" % (rpr, SENT * (18 if sz <= 24 else 8)))
+            '<w:p><w:pPr><w:spacing %s/></w:pPr><w:r>%s'
+            '<w:t xml:space="preserve">%s</w:t></w:r></w:p>'
+            % (spacing, rpr, SENT * (18 if sz <= 24 else 8)))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="11907" w:h="16839"/>'
@@ -173,7 +183,8 @@ def report(per, who):
     print("== %s ==" % who)
     print("%-11s %-18s %6s %7s %6s %9s %9s"
           % ("arm", "font", "size", "lines", "span", "pitch", "em"))
-    for ai, (name, font, sz) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        name, font, sz = arm[0], arm[1], arm[2]
         ys = per.get(ai) or []
         if len(ys) < 5:
             print("%-11s MISSING (%d lines)" % (name, len(ys)))
