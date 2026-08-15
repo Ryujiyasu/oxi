@@ -13335,6 +13335,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             }
         }
+        // S1134 (2026-08-15): the cursor now stands at this paragraph's content
+        // top. An EMPTY bordered paragraph emits no element, and the border draw
+        // below falls back to `start_x` — the LEFT MARGIN used as a Y. A footer
+        // whose separator rule is exactly that (a text-less paragraph carrying
+        // only `pBdr top`) therefore drew its rule near the top of the BODY:
+        // technical__002c1ffa's rule lands at 118.75 = 120.5 - space 1 - 0.75
+        // against Word's 616.39, on all 368 pages.
+        let s1134_content_top = cursor.cursor_y;
+        // S1135 (2026-08-15): an `atLeast` line puts its extra leading ABOVE the
+        // text, and Word's TOP BORDER comes down with the text rather than
+        // staying at the line-box top. Probe _pb_bdratleast_gen.py, 8 arms:
+        // atLeast 13pt over 8pt Times New Roman (leading 3.80) moves Word's rule
+        // from 82.56 to 86.30 while Oxi holds it at 82.50; atLeast 20pt moves it
+        // 10.80. `exact` (text also moves down) and a line MULTIPLIER (leading
+        // below the text) leave the rule at the box top in both engines, so the
+        // shift is the atLeast leading alone, not the glyph offset. Filled from
+        // the first line below.
+        let mut s1135_atleast_lead = 0.0f32;
 
         // Debug: dump per-paragraph cursor_y for Class A FAIL root cause investigation.
         // Gated by env OXI_DUMP_CURSOR_Y. Day 33 part 7 (option B).
@@ -17913,6 +17931,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 text_y_off
             };
+            // S1135: the first line's atLeast leading, for the top border below.
+            // This is the offset Oxi ACTUALLY draws the glyphs at, so the rule
+            // keeps its 1.75pt clearance above the visible text even where the
+            // leading itself is a hair off Word's (the 11pt arm holds 0.5 against
+            // Word's 13 - 12.649 = 0.351). Reading it back beats recomputing the
+            // natural height, which disagrees with the line-height code by 0.2pt
+            // at 8pt and by 1.2pt on the specimen's own footer.
+            if line_idx == 0
+                && para.style.line_spacing_rule.as_deref() == Some("atLeast")
+                && para.style.borders.as_ref().map_or(false, |b| b.top.is_some())
+            {
+                s1135_atleast_lead = text_y_off.max(0.0);
+            }
 
             // S517 (2026-06-09): the body list-marker element was emitted before
             // this loop with the default text_y_off=0.0 (never set), so for wide
@@ -19428,7 +19459,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
         // Paragraph borders (e.g., Title style bottom border)
         if let Some(ref borders) = para.style.borders {
-            let para_top = elements.first().map(|e| e.y).unwrap_or(start_x);
+            // S1134: `start_x` was the historical fallback — an X in a Y slot.
+            // Opt-out OXI_S1134_DISABLE restores it.
+            let para_top = elements.first().map(|e| e.y).unwrap_or(
+                if std::env::var("OXI_S1134_DISABLE").is_ok() {
+                    start_x
+                } else {
+                    s1134_content_top
+                },
+            );
             let para_bottom = cursor.cursor_y;
             let border_x = start_x;
             let border_width = content_width;
@@ -19548,7 +19587,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 if !s1042_skip_top {
                     let bw = top.width;
                     let color = top.color.clone().unwrap_or_else(|| "000000".to_string());
-                    let border_y = para_top - top.space - bw;
+                    let s1135 = if std::env::var("OXI_S1135_DISABLE").is_ok() {
+                        0.0
+                    } else {
+                        s1135_atleast_lead
+                    };
+                    let border_y = para_top + s1135 - top.space - bw;
                     elements.push(LayoutElement::new(
                         border_x,
                         border_y,
@@ -26010,7 +26054,37 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .metrics_for_text(&frag.text, &frag.style, para_style)
                             .is_cjk_83_64_font()
                     });
-                let max_font_cell: f32 = if !s504_latin_line {
+                // S1136 (2026-08-15, opt-out OXI_S1136_DISABLE): an EMPTY line has
+                // no fragment for S504 to inspect, so it kept the point-size
+                // subtrahend and reserved the whole `line_height - fs` above the
+                // (invisible) mark: 13 - 8 = 5.0 where the same paragraph WITH
+                // text gets 13 - 9.199 = 3.80. Nothing is drawn either way, but
+                // S1135 hangs the top border off this offset, and Word puts the
+                // empty paragraph's rule at exactly the same place as the text
+                // one's (_pb_bdratleast_gen.py: both 86.30). Take the cell from
+                // the paragraph MARK's metrics, the same source
+                // `natural_line_height_for_line` uses for an empty line.
+                let s1136_cell: Option<f32> = if line.fragments.is_empty()
+                    && std::env::var("OXI_S1136_DISABLE").is_err()
+                {
+                    let rpr = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                    // prefer_ascii: an empty paragraph's height follows the ASCII
+                    // font (S583/S707), and technical__002c1ffa's footer mark has
+                    // a CJK-theme eastAsia over a Times New Roman ascii — through
+                    // the eastAsia chain the cell comes back CJK-classified and
+                    // this whole branch would fall back to the point size again.
+                    let m = self.metrics_for_para_mark_g(&rpr, para_style, true);
+                    if m.is_cjk_83_64_font() {
+                        None
+                    } else {
+                        Some(m.line_height_pt(max_font_size).max(max_font_size))
+                    }
+                } else {
+                    None
+                };
+                let max_font_cell: f32 = if let Some(c) = s1136_cell {
+                    c
+                } else if !s504_latin_line {
                     max_font_size
                 } else {
                     let mut c = 0.0_f32;

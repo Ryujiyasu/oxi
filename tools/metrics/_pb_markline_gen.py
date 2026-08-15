@@ -51,7 +51,16 @@ ARMS = [
     ("g_mark_ea",    "Calibri", 22, None, None),   # mark also names an eastAsia font
     ("h_style_sb",   "Calibri", 22, None, None),   # + spacing before=40
     ("i_leader_tab", "Calibri", 22, None, None),   # + right leader-dot tab
+    # ★FAITHFUL SLICE: the specimen's own styles.xml + theme, body written here
+    # (so no fields, no docProps artifacts — the trap that cost two rounds on the
+    # footer probe). The paragraph uses pStyle TOC5, whose chain is
+    # TOC5 (kern=28, sz=18, line=240 auto) -> OPCParaBase (line=260 atLeast,
+    # sz=22) -> docDefaults (Times New Roman). The synthetic arms above put
+    # Oxi at 10.35 against Word's 10.32; the real document puts it at 10.5.
+    ("j_faithful", None, 0, None, None),
 ]
+SPECIMEN = os.path.join(REPO, "pipeline_data", "docx_corpus", "en", "technical",
+                        "002c1ffa65f3a566.docx")
 LINE = ("Determination must be revoked if there is a change to the "
         "responsible person's cost percentage and the registrar is notified "
         "of that change within the period allowed by the regulations")
@@ -89,6 +98,21 @@ def gen():
         sb = ' w:before="40"' if name in ("h_style_sb", "i_leader_tab") else ""
         tab = ('<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="7088"/></w:tabs>'
                if name == "i_leader_tab" else "")
+        if name == "j_faithful":
+            body.append(
+                '<w:p><w:pPr><w:pStyle w:val="TOC5"/><w:rPr>'
+                '<w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"'
+                ' w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/><w:noProof/>'
+                '<w:kern w:val="0"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:pPr>'
+                '<w:r><w:rPr><w:noProof/></w:rPr><w:t xml:space="preserve">%s</w:t>'
+                "</w:r></w:p>" % LINE)
+            body.append(
+                '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
+                ' w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>'
+                '<w:sz w:val="20"/></w:rPr></w:pPr><w:r><w:rPr>'
+                '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/></w:rPr>'
+                "<w:t>E%02d</w:t></w:r></w:p>" % ai)
+            continue
         body.append(
             '<w:p><w:pPr>%s<w:spacing%s w:after="0" w:line="240"'
             ' w:lineRule="auto"/><w:ind w:left="2098" w:right="567"/>%s</w:pPr>'
@@ -118,10 +142,20 @@ def gen():
               '<w:name w:val="Normal"/><w:rPr><w:sz w:val="18"/></w:rPr></w:style>'
               "</w:styles>")
     with zipfile.ZipFile(docx(), "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", CT)
+        z.writestr("[Content_Types].xml", CT.replace(
+            "</Types>",
+            '<Override PartName="/word/theme/theme1.xml" ContentType='
+            '"application/vnd.openxmlformats-officedocument.theme+xml"/></Types>'))
         z.writestr("_rels/.rels", RELS)
-        z.writestr("word/_rels/document.xml.rels", DRELS)
-        z.writestr("word/styles.xml", styles)
+        z.writestr("word/_rels/document.xml.rels", DRELS.replace(
+            "</Relationships>",
+            '<Relationship Id="rIdTh" Type="http://schemas.openxmlformats.org/'
+            'officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>'
+            "</Relationships>"))
+        zs = zipfile.ZipFile(SPECIMEN)
+        z.writestr("word/styles.xml", zs.read("word/styles.xml"))
+        for part in [n for n in zs.namelist() if n.startswith("word/theme/")]:
+            z.writestr(part, zs.read(part))
         z.writestr("word/document.xml", doc)
     print("wrote", docx(), len(ARMS), "arms")
 
