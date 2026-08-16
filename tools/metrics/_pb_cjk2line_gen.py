@@ -44,9 +44,13 @@ FACE = "HG丸ｺﾞｼｯｸM-PRO"
 SZ_HP = 16                 # 8pt, as in the specimen
 PITCH = 327                # twips = 16.35pt
 FILLERS = 36               # grid lines before the spacer
+EMPTIES = 7                # of those, empty paragraphs immediately before
 # spacer heights in twips; 20tw = 1pt. The flip is expected somewhere in here.
 # refined sweep: 0.25pt (5tw) steps across both edges of the split window
-SPACERS = list(range(70, 116, 5)) + list(range(360, 416, 5))
+# third sweep: around the specimen's own position. cursor = 710.45 +
+# (tw-70)/20, so tw=327 reproduces its 723.30 (room 16.55, line box 16.35
+# -> line0 clears the bottom by 0.20 and Word still moves the paragraph).
+SPACERS = list(range(295, 366, 5))
 LINE1 = ("居住系サービス　共同生活援助（グループホーム）・共同生活介護（ケアホーム）　"
          "利用者数　23年度実績　5,921　24年度　見込み　6,374　実績　6,635　"
          "25年度　見込み　6,907　実績　7,321　26年度　見込み　7,441")
@@ -70,8 +74,13 @@ def gen():
     for ai, tw in enumerate(SPACERS):
         body.append(para("A%02dZ" % ai,
                          "<w:pageBreakBefore/>" if ai else ""))
-        for k in range(FILLERS):
+        for k in range(FILLERS - EMPTIES):
             body.append(para("うめ%02d-%02d" % (ai, k)))
+        # S-specimen shape: the test paragraph is preceded by a run of EMPTY
+        # paragraphs (reports__11b5f886 has ~7 grid lines of them, 608.9 -> 723.3).
+        # Text fillers alone did not reproduce Word's whole-paragraph push.
+        for _ in range(EMPTIES):
+            body.append(para(""))
         # exact-height spacer: moves the cursor without claiming a grid slot
         body.append(para("s",
                          '<w:spacing w:before="0" w:after="0" w:line="%d"'
@@ -112,7 +121,7 @@ def report(per, who):
             print("%-8s %9.2f MISSING" % ("sp%d" % tw, tw / 20.0))
             continue
         l0, l1 = g.get("l0"), g.get("l1")
-        v = "split 1+1" if (l1 is not None and l1 != l0) else "whole"
+        v = "split 1+1" if (l1 is not None and l1 != l0) else "both on p%s" % l0
         print("%-8s %9.2f %-18s %s" % ("sp%d" % tw, tw / 20.0, "%s/%s" % (l0, l1), v))
 
 
