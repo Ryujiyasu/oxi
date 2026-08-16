@@ -56,6 +56,17 @@ PHASES = [0, 82, 164, 245]
 LINE1 = ("居住系サービス　共同生活援助（グループホーム）・共同生活介護（ケアホーム）　"
          "利用者数　23年度実績　5,921　24年度　見込み　6,374　実績　6,635　"
          "25年度　見込み　6,907　実績　7,321　26年度　見込み　7,441")
+# OXI_PB_LINES=3 makes the test paragraph wrap to THREE lines, so the line the
+# sweep puts at the page bottom (index 1) becomes a NON-LAST line at exactly the
+# same cursor and slack. That is the discriminator between "the centered box is
+# the rule for every typed-grid line" and S693's "non-last hairline -> full box,
+# non-last comfortable -> ink leniency": in the fine window nat_over is -2.5 to
+# -3.2, i.e. comfortable, so S693 predicts KEEP throughout while the centered box
+# predicts the same 2.9875 flip as the 2-line sweep.
+TAIL = ("　27年度　見込み　7,560　実績　7,684　28年度　見込み　7,802　実績　7,915"
+        "　29年度　見込み　8,031　実績　8,142　30年度　見込み　8,260")
+if os.environ.get("OXI_PB_LINES") == "3":
+    LINE1 = LINE1 + TAIL
 
 
 def _bottom_for(phase, natslack):

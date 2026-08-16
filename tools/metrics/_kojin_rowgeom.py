@@ -216,8 +216,51 @@ def cmp_lines():
                 i += 1
 
 
+def scan():
+    """Per-page median dy + line counts, to find where a drift STARTS.
+
+    A page whose median dy is the document's usual convention offset is aligned;
+    the first page that departs from it is where the fault is, and every page
+    after it is inheriting. (Reading a single mid-document page cannot tell those
+    two apart -- kojin's p3 table looked like a table bug for a whole session.)
+    """
+    import statistics
+    global PAGE
+    import fitz
+    doc = fitz.open(_ensure_pdf())
+    n = doc.page_count
+    print("%-5s %-7s %-7s %-9s %s" % ("page", "word_n", "oxi_n", "median_dy", "flag"))
+    base = None
+    for p in range(1, n + 1):
+        PAGE = p
+        try:
+            w, o = word_lines(p), oxi_lines(p)
+        except IndexError:
+            break
+        import difflib
+        wt = [_norm(x[3]) for x in w]
+        ot = [_norm(x[3]) for x in o]
+        dys = []
+        sm = difflib.SequenceMatcher(a=wt, b=ot, autojunk=False)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag != "equal":
+                continue
+            for k in range(i2 - i1):
+                dys.append(o[j1 + k][0] - w[i1 + k][0])
+        med = statistics.median(dys) if dys else float("nan")
+        if base is None and dys:
+            base = med
+        flag = ""
+        if dys and base is not None and abs(med - base) > 3.0:
+            flag = "<<< departs by %+.2f" % (med - base)
+        print("%-5d %-7d %-7d %-9.2f %s" % (p, len(w), len(o), med, flag))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "cmp"
+    if cmd == "scan":
+        scan()
+        sys.exit(0)
     if cmd == "word":
         for y, x0, x1 in word_rules():
             print("%8.2f  %7.1f..%-7.1f" % (y, x0, x1))

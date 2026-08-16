@@ -16221,8 +16221,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // push@14.5, centered 14.61 inside; natural 13.62 excluded).
                 // compat 11/14/15 all measured IDENTICAL (compat is NOT a
                 // discriminator here).
+                // S1155 (2026-08-16, opt-in OXI_S1155=1 while it is measured):
+                // the edge condition is not one either. Re-running the whole
+                // _pb_lastline fine sweep with the test paragraph wrapped to
+                // THREE lines -- same cursor, same slack, but the boundary line
+                // is now index 1 of 3, i.e. NON-last -- reproduces the 2-line
+                // table exactly: keep at boxover 2.950, SPLIT at 3.050, all four
+                // phases. So the centered box is the page-bottom threshold for
+                // every typed-grid line. That also subsumes S693: its non-last
+                // arm gives the full box for natslack < 1.0 (same verdict as
+                // centered) and the INK leniency for natslack in (1.0, 2.9875),
+                // where this sweep shows Word breaking. On that 3-line probe the
+                // default is 0/32 against Word (32 keeps where Word keeps 12);
+                // with S1155 it is 32/32.
+                // ★NOT default yet — ONE blocker: Phase 1 95 -> 94, tokyoshugyo
+                // PASS -> FAIL (wi 1152/1177, +1 page). The new break is at
+                // pi=205 line 2, and it is a KNOCK-ON, not a wrong call: Word
+                // puts ONLY line 0 of pi=205 on p26 while Oxi puts three, i.e.
+                // that page is already 21.63pt high before this rule runs.
+                // `_kojin_rowgeom.py scan` shows the whole document zig-zagging
+                // (+19 on p4-5, +21 on p18-19, -17 from p21, -35 on p27-28), and
+                // its HEAD is p4: an overlong Latin token (an e-gov URL). Word
+                // moves the whole token to the next line and only then breaks it
+                // at the margin; Oxi starts it on the partly-filled line and then
+                // breaks it at a punctuation opportunity, leaving line 2 a
+                // quarter empty -- one extra line, and every later page inherits.
+                // Fix that first; this rule is derived and waiting.
                 let s739_edge = (line_idx == 0 && !prev_keep_next)
-                    || (line_idx > 0 && line_idx + 1 == lines.len());
+                    || (line_idx > 0 && line_idx + 1 == lines.len())
+                    || std::env::var("OXI_S1155").ok().as_deref() == Some("1");
                 // ★ON-SLOT gate — FALSIFIED 2026-08-16 (S1153, removed by
                 // default, opt-back-in OXI_S1153_DISABLE). Its only evidence was
                 // kojin pi=52 "Word keeps at nat_over −0.35", and that line was
