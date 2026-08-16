@@ -11064,9 +11064,19 @@ fn apply_font_table_aliases(document: &mut crate::ir::Document) {
             // ＭＳ → 游ゴシック would otherwise change a JP mark's line height on
             // the tuned Phase-3 canaries (3a4f/model/ikujikaigo). The report's
             // target (Myriad Pro Light → Segoe UI Light) is Latin→Latin.
+            // S1149 (2026-08-16, opt-out OXI_S1149_DISABLE): the CJK exclusion
+            // above was defensive, not measured -- and Word does honour a CJK
+            // altName. technical__58f2a991 declares
+            // `AR丸ゴシック体M` with `<w:altName w:val="ＭＳ ゴシック"/>`, and
+            // Word's PDF embeds MS-Gothic for every one of those runs (the same
+            // document's other unresolvable CJK names all come back Yu Gothic,
+            // so the altName is what makes this one different). Without it the
+            // face fell to S1146's Yu Gothic, whose 1.673em turns each 11pt line
+            // into two 18pt grid cells where Word uses one: 1 page -> 2.
+            let s1149 = std::env::var("OXI_S1149_DISABLE").is_err();
             if !registry.supports_family(name)
                 && registry.supports_family(alt)
-                && !registry.get(alt).is_cjk_83_64_font()
+                && (s1149 || !registry.get(alt).is_cjk_83_64_font())
             {
                 alias.insert(name.clone(), alt.clone());
             }
