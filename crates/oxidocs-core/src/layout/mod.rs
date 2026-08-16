@@ -20471,7 +20471,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                             }
                         };
-                    if latin_wordwrap && !word_breaks.is_empty() {
+                    // S1157 (2026-08-17, default ON, opt-out
+                    // OXI_S1157_DISABLE): a token with NO internal break opportunity at
+                    // all never reached the branch below, so Oxi placed it whole
+                    // and let it run past the margin -- 640.5pt of token in a
+                    // 510.2pt column on _pb_longtok's `plain` arms, where Word
+                    // packs 97 characters and wraps the rest. Entering the branch
+                    // costs nothing for such a token: `bounds` becomes the single
+                    // whole-token segment below, and S1059's character packing
+                    // inside the segment loop does the work. Gated on the token
+                    // actually overflowing a full line, so anything that fits is
+                    // untouched. Gate: _pb_longtok 24/24 against Word (the plain
+                    // arms join the slashy ones at 97 characters), Phase 1 95/96
+                    // with zero per-doc change, all 238 SSIM sentinel documents
+                    // byte-identical. Not CJK-scoped -- an opportunity-free
+                    // overlong token overflowed in Latin documents too.
+                    let s1157_no_opp = latin_wordwrap
+                        && word_breaks.is_empty()
+                        && word_width_tw > available_tw
+                        && word_char_ws.len() >= word.chars().count()
+                        && std::env::var("OXI_S1157_DISABLE").is_err();
+                    if latin_wordwrap && (!word_breaks.is_empty() || s1157_no_opp) {
                         // LATIN-WORDWRAP split: the token is a maximal Latin run with
                         // internal break opportunities. (1) wrap the WHOLE token to a
                         // fresh line if it doesn't fit on the current one; (2) split it
