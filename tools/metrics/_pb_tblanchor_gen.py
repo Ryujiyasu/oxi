@@ -40,6 +40,11 @@ FACE = "ＭＳ 明朝"
 SZ_HP = 21                 # 10.5pt
 LEFT_TW = 1701             # page left margin, as in tokyoshugyo
 MARGIN_PT = LEFT_TW / 20.0
+# ★A docx with NO settings.xml does not mean "current Word": the absorption this
+# probe measures is a compatibilityMode <= 14 behaviour (S621), and the first run
+# here shipped no settings.xml at all, so every Word arm was really an old-mode
+# arm. tokyoshugyo itself declares compatibilityMode 11. Always state it.
+COMPAT = os.environ.get("OXI_PB_COMPAT", "11")
 
 # (label, floating?, cellMar_left_tw, tblpX_tw or None, tblInd_tw or None)
 ARMS = [
@@ -112,13 +117,27 @@ def gen():
               '<w:style w:type="paragraph" w:default="1" w:styleId="a">'
               '<w:name w:val="Normal"/><w:rPr><w:sz w:val="%d"/></w:rPr></w:style>'
               "</w:styles>" % (FACE, FACE, FACE, SZ_HP))
+    settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ' + NS +
+                '><w:compat><w:compatSetting w:name="compatibilityMode"'
+                ' w:uri="http://schemas.microsoft.com/office/word"'
+                ' w:val="%s"/></w:compat></w:settings>' % COMPAT)
+    ct = CT.replace("</Types>",
+                    '<Override PartName="/word/settings.xml" ContentType="application/'
+                    'vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
+                    "</Types>")
+    drels = DRELS.replace("</Relationships>",
+                          '<Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/'
+                          'officeDocument/2006/relationships/settings" Target="settings.xml"/>'
+                          "</Relationships>")
     with zipfile.ZipFile(docx(), "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", CT)
+        z.writestr("[Content_Types].xml", ct)
         z.writestr("_rels/.rels", RELS)
-        z.writestr("word/_rels/document.xml.rels", DRELS)
+        z.writestr("word/_rels/document.xml.rels", drels)
         z.writestr("word/styles.xml", styles)
+        z.writestr("word/settings.xml", settings)
         z.writestr("word/document.xml", doc)
-    print("wrote", docx(), len(ARMS), "arms; margin %.2fpt" % MARGIN_PT)
+    print("wrote", docx(), len(ARMS), "arms; margin %.2fpt; compat %s"
+          % (MARGIN_PT, COMPAT))
 
 
 def report(per, who):

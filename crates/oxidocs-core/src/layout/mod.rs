@@ -27036,7 +27036,50 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let table_width: f32 = col_widths.iter().sum();
 
         // Table positioning: tblpPr horizontal or inline alignment
-        let table_x = if let Some(ref pos) = table.style.position {
+        // S1158 (2026-08-17, default ON, opt-out OXI_S1158_DISABLE): a FLOATING
+        // table absorbs the leading cell margin exactly like a tblInd one. S621
+        // established the absorption but only along the non-positioned path
+        // below, so a `w:tblpPr` table keeps its BORDER on the margin and pushes
+        // its text in by cellMar. `_pb_tblanchor_gen.py`, 10 arms x compat
+        // {11, 15}, Word PDF, page margin 85.05:
+        //   compat 11  float cellMar 0/108/200/400 -> border 84.86 / 79.70 /
+        //              75.14 / 65.06 = margin - cellMar, text 85.10 = the margin
+        //              float tblpX=567             -> border 108.02, text 113.42
+        //   compat 15  every arm                   -> border 85.34, no absorption
+        // Oxi gives 85.05 for all six compat-11 float arms. tokyoshugyo (compat
+        // 11, horzAnchor=margin, no tblpX, default cellMar) is exactly arm 1:
+        // Word 79.70/85.10 vs Oxi 85.05/90.50, which costs its p17 block one
+        // character per line and hands p18-19 the +21pt.
+        // ★Also measured, NOT yet changed: with compat 11 and NO tblInd element
+        // at all Word does NOT absorb (border stays on the margin) while Oxi
+        // does -- S621 reads `indent.map_or(true, ..)`, i.e. it treats ABSENT as
+        // zero. Word's rule is "tblInd PRESENT (any value) or floating". Fixing
+        // that is a second, separate change: the ind567 arm shows the absorption
+        // for a non-zero tblInd already arrives through another path, so the two
+        // must not be stacked blind.
+        // Gate: probe 6/6 float arms match Word, Phase 1 95/96 with zero per-doc
+        // change, all 238 SSIM sentinel documents byte-identical (no compat-<=14
+        // floating table among them), and tokyoshugyo -- scored against its own
+        // Word PDF -- 0.8575 -> 0.8606 with p18 +0.1639, p19 +0.0559, p17 +0.0415
+        // and nothing regressed. Its p18-19 +21pt departure is gone.
+        let s1158_float_absorb = std::env::var("OXI_S1158_DISABLE").is_err()
+            && self.compat_mode <= 14
+            && table.style.position.is_some();
+        // The shift is the cell margin ALONE -- no border/2. Word's tblpX=567 arm
+        // lands at 113.42 - 5.40 = 108.02 and the non-floating tblInd=567 arm at
+        // the same 108.02, so both paths absorb exactly cellMar; adding half the
+        // border stroke put every float arm 0.25pt left of Word.
+        let s1158_shift = if s1158_float_absorb {
+            table
+                .style
+                .default_cell_margins
+                .as_ref()
+                .and_then(|m| m.left)
+                .unwrap_or(4.95)
+        } else {
+            0.0
+        };
+        let table_x = s1158_shift.mul_add(-1.0, if let Some(ref pos) = table.style.position {
             if let Some(ref h_align) = pos.h_align {
                 let (ref_left, ref_width) = match pos.h_anchor.as_deref() {
                     Some("page") => (0.0, page_width),
@@ -27114,7 +27157,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 Some("right") => start_x + content_width - table_width,
                 _ => start_x + table.style.indent.unwrap_or(0.0) - border_offset,
             }
-        };
+        });
 
         // Default cell padding from table style or OOXML default
         // COM-measured 2026-03-29: L/R=4.95pt (99tw), T/B=0pt
