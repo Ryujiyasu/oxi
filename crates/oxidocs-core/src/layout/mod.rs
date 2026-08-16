@@ -16566,14 +16566,69 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && (self.doc_body_has_real_cjk
                     || std::env::var("OXI_S897_DISABLE").is_ok());
             let s391_lrpb_break = if line_idx > 0 && !in_textbox && s391_on {
-                let has_lrpb_here = line.fragments.iter().any(|f| {
+                let lrpb_frag = |f: &LineFragment| {
                     f.char_offset == 0
                         && para
                             .runs
                             .get(f.run_index)
                             .map(|r| r.has_last_rendered_page_break)
                             .unwrap_or(false)
-                });
+                };
+                // S1151 (2026-08-16, default ON, opt-out OXI_S1151_DISABLE):
+                // the mark records where Word STARTED a page, so Word's break
+                // is a LINE BOUNDARY. When our wrap puts the mark mid-line the
+                // two boundaries around it are both candidates, and breaking
+                // BEFORE the line unconditionally (the pre-S1151 rule) throws
+                // the whole head of that line onto the next page. Snap to the
+                // NEARER boundary by advance width instead.
+                //   kojin  pi=20: 44 chars before the mark, 1 after -> break
+                //     AFTER. Word (its own PDF) keeps both lines of pi=20 on
+                //     p1; the old rule broke before, and every page from 2 on
+                //     ran 13.89pt low (the p3 table inherits the offset -- its
+                //     own row pitch is already exact at 38.40).
+                //   b837  pi=89: 34 chars before, 3 after -> break AFTER, and
+                //     Word likewise keeps BOTH of those lines on p6 (the old
+                //     rule kept only one).
+                //   3a4f  pi=42/113/190/223/785/904/933: 1-3 chars before,
+                //     23-40 after -> break BEFORE, unchanged.
+                // Marks that open their line (the common case: 6/6 b837, 7/7
+                // d77a, 13/20 3a4f, 4/5 kojin) are unaffected either way.
+                // Gate: Phase 1 95/96 with ZERO per-doc change; SSIM sentinel
+                // 1 of 238 changed bytes (b837 +0.0701 over 7 pages, nothing
+                // regressed); kojin (no cached reference, scored against its
+                // own Word PDF) 0.8431 -> 0.8581, p2 +0.1464 / p3 +0.1843.
+                // Requiring the mark to OPEN the line instead was tried first
+                // and is WRONG: it drops b837 pi=89 entirely (Phase 1
+                // PASS -> FAIL), because there the nearer boundary is the
+                // following one, not "no boundary at all".
+                let mark_in_head = |ln: &Line| -> Option<bool> {
+                    let i = ln.fragments.iter().position(lrpb_frag)?;
+                    let before: f32 = ln.fragments[..i].iter().map(|f| f.width).sum();
+                    let after: f32 = ln.fragments[i..].iter().map(|f| f.width).sum();
+                    Some(before <= after)
+                };
+                let s1151_on = std::env::var("OXI_S1151_DISABLE").is_err();
+                let has_lrpb_here = if s1151_on {
+                    mark_in_head(line) == Some(true)
+                        || (line_idx >= 1 && mark_in_head(&lines[line_idx - 1]) == Some(false))
+                } else {
+                    line.fragments.iter().any(lrpb_frag)
+                };
+                if std::env::var("OXI_DUMP_LRPB").is_ok() {
+                    if let Some(i) = line.fragments.iter().position(lrpb_frag) {
+                        let before: usize =
+                            line.fragments[..i].iter().map(|f| f.text.chars().count()).sum();
+                        let after: usize =
+                            line.fragments[i..].iter().map(|f| f.text.chars().count()).sum();
+                        let head: String = line.fragments[i].text.chars().take(12).collect();
+                        eprintln!(
+                            "[LRPB] pi={} line={}/{} cursor_y={:.2} chars_before={} chars_after={} head={} mark_text={:?}",
+                            body_para_index.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+                            line_idx, lines.len(), cursor.cursor_y, before, after,
+                            mark_in_head(line) == Some(true), head
+                        );
+                    }
+                }
                 let s394_max = std::env::var("OXI_S394_LRPB_MAX")
                     .ok()
                     .and_then(|v| v.parse::<usize>().ok())
