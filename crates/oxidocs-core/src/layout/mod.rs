@@ -20535,7 +20535,31 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // at «…/1856/travel_», 522.1 against a 523.3 margin, where Oxi
                         // moved the whole «travel_…send/» segment down and left 36pt
                         // empty). Shorter tokens keep the per-segment wrap.
-                        let s1059_overlong = !self.doc_body_has_real_cjk
+                        // S1156 (2026-08-17, default ON, opt-out
+                        // OXI_S1156_DISABLE): the same rule holds in a CJK
+                        // document -- the Latin-only gate was scope, not spec.
+                        // `_pb_longtok_gen.py` (24 arms, Word PDF, the faithful
+                        // w:hAnsi=ＭＳ 明朝 of tokyoshugyo's e-gov URL) has Word
+                        // packing a 120-char token to 97 chars per line — and to
+                        // the SAME 97 whether or not the token carries '/' every
+                        // ten characters, i.e. Word fills to the margin and does
+                        // not backtrack to the slash. Oxi breaks the slashy one
+                        // at 90 (the last '/'), which is where tokyoshugyo p4
+                        // loses its line and starts the document's whole zig-zag.
+                        // Gate: probe 90 -> 97 on all 12 slashy arms, Phase 1
+                        // 95/96 with zero per-doc change, all 238 SSIM sentinel
+                        // documents byte-identical (tokyoshugyo is not among
+                        // them), and tokyoshugyo itself -- scored against its own
+                        // Word PDF -- 0.8560 -> 0.8575 with p4 +0.0782, p5
+                        // +0.0527, p11 +0.0043 and nothing worse than -0.0001.
+                        // `_kojin_rowgeom.py scan` loses the +19 on p4-5 outright
+                        // and p27-28 come in from -35 to -17.
+                        // Still open: a token with NO break opportunity at all
+                        // (the probe's `plain` arms) never reaches this branch --
+                        // word_breaks is empty -- so Oxi still runs it 130pt past
+                        // the margin where Word packs 97 chars.
+                        let s1156_cjk = std::env::var("OXI_S1156_DISABLE").is_err();
+                        let s1059_overlong = (!self.doc_body_has_real_cjk || s1156_cjk)
                             && word_char_ws.len() >= total_chars
                             && word_width_tw > available_tw
                             && std::env::var("OXI_S1059_DISABLE").is_err();
@@ -20575,7 +20599,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // whole and let it run past the margin, costing an extra
                             // line (policies__000f7115 p5: Word 2 lines, Oxi 3).
                             // Segments that fit are untouched → byte-identical.
-                            let s1059 = !self.doc_body_has_real_cjk
+                            let s1059 = (!self.doc_body_has_real_cjk || s1156_cjk)
                                 && word_char_ws.len() >= total_chars
                                 && std::env::var("OXI_S1059_DISABLE").is_err();
                             let mut piece_start = seg_start;
