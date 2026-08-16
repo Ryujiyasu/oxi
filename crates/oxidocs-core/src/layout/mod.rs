@@ -16103,6 +16103,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s1113_pre_mult = s736_empty_tol
                 && std::env::var("OXI_S1113_DISABLE").is_err()
                 && (grid_pitch.is_none() || page.doc_grid_no_type);
+            // Set when the max-chain below actually selects the centered box,
+            // so S1154 can withdraw the half-twip tolerance in exactly that case.
+            let mut centered_box_is_threshold = false;
             let break_threshold = if s1113_pre_mult {
                 // auto carries a factor, atLeast/exact carry a length: only the
                 // former inflates the box, so only the former is divided out.
@@ -16220,17 +16223,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // discriminator here).
                 let s739_edge = (line_idx == 0 && !prev_keep_next)
                     || (line_idx > 0 && line_idx + 1 == lines.len());
-                // ★ON-SLOT gate: the centered-box rule is a property of lines
-                // SNAPPED to the page grid (the glyph centers within its slot).
-                // Apply it only when the cursor sits ON the grid phase (within
-                // 1pt of a slot boundary from page_top). kojin's pi=52 line
-                // lands 4.15pt OFF-phase (mixed snapped/unsnapped heights above)
-                // — the "Word keeps at nat_over −0.35" there is Oxi-geometry-
-                // relative; at Word's slot-aligned position the line fits its
-                // slot. A controlled PGothic (proportional) sweep ALSO measured
-                // centered (off-grid/proportional and compat were FALSIFIED as
-                // discriminators; the phase is the remaining structural
-                // difference between the probes and kojin's flip lines).
+                // ★ON-SLOT gate — FALSIFIED 2026-08-16 (S1153, removed by
+                // default, opt-back-in OXI_S1153_DISABLE). Its only evidence was
+                // kojin pi=52 "Word keeps at nat_over −0.35", and that line was
+                // sitting 13.89pt below where Word puts it because of the
+                // mid-line LRPB S1151 fixed; there is no such Word decision.
+                // _pb_lastline_gen.py sweeps slot phase and slack INDEPENDENTLY
+                // (the spacer sets the phase, the section's bottom margin sets
+                // the slack) and Word flips at the SAME slack for every phase:
+                //   phase 0.00 / 4.10 / 8.20 / 12.25 pt, all four
+                //   keep at boxover 2.950, SPLIT at boxover 3.050
+                // and the centered box predicts (BOX−NAT)/2 = 2.9875, i.e.
+                // inside that 0.1pt bracket. So the centered box is the rule at
+                // EVERY phase and the gate only kept the leniency alive off
+                // slot. 56 coarse + 32 fine arms, Word's own PDF.
+                // Gate: _pb_cjk2line 2/6 -> 6/6 and _pb_lastline 29/32 (32/32
+                // with S1154), Phase 1 95/96 with zero per-doc change, and all
+                // 238 SSIM sentinel documents BYTE-IDENTICAL — no corpus page
+                // currently sits off-slot at the centered-box boundary, which
+                // is why the gate could survive this long.
                 let s739_centered = if std::env::var("OXI_S739_DISABLE").is_err()
                     && s739_edge
                     && !page.doc_grid_no_type
@@ -16240,7 +16251,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let pitch = grid_pitch.unwrap_or(0.0);
                     let phase = (cursor.cursor_y - page_top).rem_euclid(pitch);
                     let on_slot = phase < 1.0 || phase > pitch - 1.0;
-                    if on_slot {
+                    if on_slot || std::env::var("OXI_S1153_DISABLE").is_err() {
                         (effective_lh + natural_lh) / 2.0
                     } else {
                         0.0
@@ -16256,11 +16267,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 } else {
                     0.0
                 };
-                (ink_lh + tgink_k)
+                let v = (ink_lh + tgink_k)
                     .max(atleast_floor)
                     .max(s739_centered)
                     .max(s779_floor)
-                    .min(effective_lh)
+                    .min(effective_lh);
+                centered_box_is_threshold = s739_centered > 0.0
+                    && (v - s739_centered).abs() < 1e-6;
+                v
             };
             // R7.53: first-line lenient check using `first_line_extra_content_h`.
             // S168 Phase B-2 (c): per-line lenient.
@@ -16289,7 +16303,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             //       a non-last line with comfortable margin (over < -1.0) keeps the
             //       leniency; only a hairline non-last line (over in (-1.0, 0)) breaks.
             // OXI_S693_OV overrides the -1.0 threshold for sweeping.
-            let break_threshold = if s693_nonlast {
+            // S1152 (2026-08-16, opt-in OXI_S1152=1) — FALSIFIED as a blanket
+            // rule, kept as the lever the scoped version will reuse. It makes a
+            // typed grid use the FULL grid box at the page bottom for EVERY
+            // line, last one included.
+            // Why it was tried: both observations S693's last-line leniency
+            // rests on were taken at drifted positions and are void. kojin
+            // pi=52 sat 13.89pt low behind the mid-line LRPB (S1151), and
+            // tokyoshugyo pi=205 sits 21.63pt low on p26 — Word puts only its
+            // line 0 on that page, so its «over -0.60 KEEP» is not a decision
+            // Word ever made. What survives is _pb_cjk2line_gen.py: 6 arms,
+            // self-authored, and Word splits 1+1 in EVERY one where Oxi's
+            // natural height still fits by 2.675pt. With S1152 the probe goes
+            // 2/6 -> 6/6.
+            // Why it cannot ship as written: Phase 1 95 -> 90 (34140, db9ca,
+            // ohnochingin, roudoujoken, tokyoshugyo all PASS -> FAIL), so the
+            // leniency is real for those pages and the probe's regime is
+            // narrower than "any typed-grid last line". The probe differs from
+            // them in BOTH slot phase (its exact-height spacer leaves the
+            // cursor off-slot) and natural/box ratio (10.375/16.35 = 0.63 vs
+            // 13.5/18 = 0.75); separating those needs a phase x slack sweep,
+            // which moves the bottom margin (slack alone) independently of the
+            // spacer (phase and slack together).
+            let s1152_full_box = std::env::var("OXI_S1152").ok().as_deref() == Some("1")
+                && !page.doc_grid_no_type
+                && !s548b_exact_full
+                && !s562b_empty_full;
+            let break_threshold = if s1152_full_box {
+                effective_lh
+            } else if s693_nonlast {
                 let nat_over = cursor.cursor_y + natural_lh - effective_break_bottom;
                 let ov_thr = std::env::var("OXI_S693_OV")
                     .ok()
@@ -16363,7 +16405,20 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // already-failing documents) — so the blast radius is three lines,
             // and round-to-twip and half-twip tolerance agree at all of them.
             // Same constant as S926: no second magic number.
-            let s967_tol = if std::env::var("OXI_S967_DISABLE").is_ok() {
+            // S1154 (2026-08-16, default ON, opt-out OXI_S1154_DISABLE): the
+            // centered box carries NO such tolerance. Its own value is a
+            // quarter-twip quantity ((327+207.5)/2 = 267.25tw for the probe
+            // face), so a half-twip slop swallows the whole flip: on
+            // _pb_lastline's 32 fine arms Word splits at over +0.0125 and the
+            // tolerance made Oxi keep 3 of them. Withdrawing it there takes the
+            // probe 29/32 -> 32/32; S967's own derivation (policies__00148f8d
+            // wi=906, Word KEEPS at +0.013) is a Latin natural-threshold case,
+            // which this leaves alone. Gate: Phase 1 95/96 unchanged and all
+            // 238 SSIM sentinel documents byte-identical, same as S1153.
+            let s967_tol = if std::env::var("OXI_S967_DISABLE").is_ok()
+                || (centered_box_is_threshold
+                    && std::env::var("OXI_S1154_DISABLE").is_err())
+            {
                 0.0
             } else {
                 0.025
