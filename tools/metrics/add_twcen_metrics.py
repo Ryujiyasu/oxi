@@ -102,6 +102,11 @@ FACES = [
     ("HGS明朝E", "C:/Windows/Fonts/HGRME.TTC#2", True),
     ("HG創英角ﾎﾟｯﾌﾟ体", "C:/Windows/Fonts/HGRPP1.TTC#0", True),
     ("HGP創英角ﾎﾟｯﾌﾟ体", "C:/Windows/Fonts/HGRPP1.TTC#1", True),
+    # S1148 (2026-08-16): MS UI Gothic -- the last hole the audit found. It is
+    # installed (msgothic.ttc face 1) and Word draws it at 1.29717em, but it
+    # was never in the table and its name carries no CJK characters, so
+    # S1146 routed it to Cambria (1.17237) -- the widest miss of the sweep.
+    ("MS UI Gothic", "C:/Windows/Fonts/msgothic.ttc#1", True),
 ]
 # the codepoint set every existing entry carries
 REF_FAMILY = "Verdana"

@@ -543,6 +543,7 @@ impl FontMetrics {
                     | "HGS明朝E"
                     | "HG創英角ﾎﾟｯﾌﾟ体"
                     | "HGP創英角ﾎﾟｯﾌﾟ体"
+                    | "MS UI Gothic"
             )
         }
     }
@@ -667,7 +668,7 @@ impl FontMetricsRegistry {
             "Montserrat", "Merriweather", "Nunito", "Roboto", "Source Sans Pro",
             "Avenir Next LT Pro", "PMingLiU", "Batang",
             "UD デジタル 教科書体 N-R", "UD デジタル 教科書体 NP-R", "UD デジタル 教科書体 NK-R", "UD デジタル 教科書体 N-B", "UD デジタル 教科書体 NP-B", "UD デジタル 教科書体 NK-B", "BIZ UDゴシック", "BIZ UDPゴシック", "BIZ UD明朝 Medium",
-            "HG丸ｺﾞｼｯｸM-PRO", "HGP創英角ｺﾞｼｯｸUB", "HGPｺﾞｼｯｸE", "HGP行書体", "HGS明朝E", "HG創英角ﾎﾟｯﾌﾟ体", "HGP創英角ﾎﾟｯﾌﾟ体",
+            "HG丸ｺﾞｼｯｸM-PRO", "HGP創英角ｺﾞｼｯｸUB", "HGPｺﾞｼｯｸE", "HGP行書体", "HGS明朝E", "HG創英角ﾎﾟｯﾌﾟ体", "HGP創英角ﾎﾟｯﾌﾟ体", "MS UI Gothic",
         ];
 
         for raw in raw_list {

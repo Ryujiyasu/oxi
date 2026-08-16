@@ -79,6 +79,13 @@ ARMS = [
     ("unk_cjk", "Zzquartz 未知書体", 20),
     ("msmincho_ps", "MS-Mincho", 20),
     ("msmincho_fw", "ＭＳ明朝", 20),
+    # close the audit: the four installed families the sweep left out on the
+    # assumption that normalize_family_name already handles them
+    ("msuigothic", "MS UI Gothic", 20),
+    ("yumincho", "Yu Mincho", 20),
+    ("yugothic", "Yu Gothic", 20),
+    ("yugothiclight", "Yu Gothic Light", 20),
+    ("hgmaru", "HG丸ｺﾞｼｯｸM-PRO", 20),
     # calibrate the CJK line-height multiplier against faces already in the
     # table: if Word = natural x 83/64 for these, Meiryo UI's measured
     # 1.65119 / 1.27002 = 1.30013 is the same law within quantisation.
