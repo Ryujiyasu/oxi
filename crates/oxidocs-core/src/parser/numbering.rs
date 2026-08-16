@@ -368,6 +368,22 @@ fn map_symbol_bullets(text: &str) -> String {
     }).collect()
 }
 
+/// Opt-out for S1159, restoring the pre-2026-08-17 hiragana sequences so the
+/// SSIM sentinel can A/B the change.
+fn s1159_disabled() -> bool {
+    std::env::var("OXI_S1159_DISABLE").is_ok()
+}
+
+/// Pick the n-th kana of a numbering sequence, wrapping past the end the way
+/// Word does (aiueo item 47 is ｱ again, not "47").
+fn kana_seq(n: u32, seq: &str) -> String {
+    let chars: Vec<char> = seq.chars().collect();
+    if n == 0 || chars.is_empty() {
+        return n.to_string();
+    }
+    chars[((n - 1) as usize) % chars.len()].to_string()
+}
+
 /// Format a number per ST_NumberFormat. Also used for PAGE-field rendering
 /// with the section's pgNumType format (S534: 3a4f footer numberInDash).
 pub(crate) fn format_number(n: u32, fmt: &str) -> String {
@@ -394,37 +410,41 @@ pub(crate) fn format_number(n: u32, fmt: &str) -> String {
                 n.to_string()
             }
         }
+        // S1159 (2026-08-17): all four kana formats are KATAKANA, and the
+        // non-FullWidth pair is HALF-WIDTH katakana. Measured on Word with
+        // tools/metrics/_pb_numfmt_gen.py (4 formats x 48 items, own
+        // numbering.xml, PDF truth) after tokyoshugyo's （エ）（オ）list came out
+        // as （え）（お）. Three things beyond the script were wrong too:
+        //   * half-width iroha keeps ヰ (25) and ヱ (43) FULL-width, because
+        //     half-width katakana has no such glyph — Word prints them wide;
+        //   * iroha runs to 48, ending in ン (the old table stopped at す, 47);
+        //   * past the end Word WRAPS (aiueo item 47 = ｱ / ア again), it does
+        //     not fall back to the decimal number.
+        // The strings below are transcribed from that probe's output.
         "aiueoFullWidth" | "aiueo" => {
-            // あ, い, う, え, お, か, き, く, け, こ, さ, し, す, せ, そ,
-            // た, ち, つ, て, と, な, に, ぬ, ね, の, は, ひ, ふ, へ, ほ,
-            // ま, み, む, め, も, や, ゆ, よ, ら, り, る, れ, ろ, わ, を, ん
-            const AIUEO: &[char] = &[
-                'あ','い','う','え','お','か','き','く','け','こ',
-                'さ','し','す','せ','そ','た','ち','つ','て','と',
-                'な','に','ぬ','ね','の','は','ひ','ふ','へ','ほ',
-                'ま','み','む','め','も','や','ゆ','よ',
-                'ら','り','る','れ','ろ','わ','を','ん',
-            ];
-            if n >= 1 && (n as usize) <= AIUEO.len() {
-                AIUEO[(n - 1) as usize].to_string()
-            } else {
-                n.to_string()
+            const AIUEO_FULL: &str = "アイウエオカキクケコサシスセソタチツテトナニヌネノ\
+                                      ハヒフヘホマミムメモヤユヨラリルレロワヲン";
+            const AIUEO_HALF: &str = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ\
+                                      ﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ";
+            const AIUEO_HIRAGANA: &str = "あいうえおかきくけこさしすせそたちつてとなにぬねの\
+                                          はひふへほまみむめもやゆよらりるれろわをん";
+            if s1159_disabled() {
+                return kana_seq(n, AIUEO_HIRAGANA);
             }
+            kana_seq(n, if fmt == "aiueo" { AIUEO_HALF } else { AIUEO_FULL })
         }
         "irohaFullWidth" | "iroha" => {
-            // い, ろ, は, に, ほ, へ, と, ち, り, ぬ, る, を, ...
-            const IROHA: &[char] = &[
-                'い','ろ','は','に','ほ','へ','と','ち','り','ぬ',
-                'る','を','わ','か','よ','た','れ','そ','つ','ね',
-                'な','ら','む','う','ゐ','の','お','く','や','ま',
-                'け','ふ','こ','え','て','あ','さ','き','ゆ','め',
-                'み','し','ゑ','ひ','も','せ','す',
-            ];
-            if n >= 1 && (n as usize) <= IROHA.len() {
-                IROHA[(n - 1) as usize].to_string()
-            } else {
-                n.to_string()
+            const IROHA_FULL: &str = "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰ\
+                                      ノオクヤマケフコエテアサキユメミシヱヒモセスン";
+            // ヰ and ヱ stay full-width: there is no half-width form.
+            const IROHA_HALF: &str = "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰ\
+                                      ﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽﾝ";
+            const IROHA_HIRAGANA: &str = "いろはにほへとちりぬるをわかよたれそつねならむうゐ\
+                                          のおくやまけふこえてあさきゆめみしゑひもせす";
+            if s1159_disabled() {
+                return kana_seq(n, IROHA_HIRAGANA);
             }
+            kana_seq(n, if fmt == "iroha" { IROHA_HALF } else { IROHA_FULL })
         }
         "lowerLetter" => {
             if n >= 1 && n <= 26 {
