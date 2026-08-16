@@ -50,7 +50,7 @@ EMPTIES = 7                # of those, empty paragraphs immediately before
 # third sweep: around the specimen's own position. cursor = 710.45 +
 # (tw-70)/20, so tw=327 reproduces its 723.30 (room 16.55, line box 16.35
 # -> line0 clears the bottom by 0.20 and Word still moves the paragraph).
-SPACERS = list(range(295, 366, 5))
+SPACERS = list(range(70, 116, 5))
 LINE1 = ("居住系サービス　共同生活援助（グループホーム）・共同生活介護（ケアホーム）　"
          "利用者数　23年度実績　5,921　24年度　見込み　6,374　実績　6,635　"
          "25年度　見込み　6,907　実績　7,321　26年度　見込み　7,441")
