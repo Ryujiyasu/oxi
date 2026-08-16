@@ -43,6 +43,10 @@ from _pb_pxgrid_gen import CT, DRELS, NS, RELS  # noqa: E402
 FACE = "HG丸ｺﾞｼｯｸM-PRO"
 SZ_HP = 16                 # 8pt, as in the specimen
 PITCH = 327                # twips = 16.35pt
+# kojin (the KEEP counterexample) uses a linesAndChars grid; this probe used
+# type=lines. OXI_PB_GRID switches it to test the regime as the discriminator.
+GRID_TYPE = os.environ.get("OXI_PB_GRID", "lines")
+CHAR_SPACE = int(os.environ.get("OXI_PB_CHARSPACE", "0"))
 FILLERS = 36               # grid lines before the spacer
 EMPTIES = 7                # of those, empty paragraphs immediately before
 # spacer heights in twips; 20tw = 1pt. The flip is expected somewhere in here.
@@ -50,7 +54,11 @@ EMPTIES = 7                # of those, empty paragraphs immediately before
 # third sweep: around the specimen's own position. cursor = 710.45 +
 # (tw-70)/20, so tw=327 reproduces its 723.30 (room 16.55, line box 16.35
 # -> line0 clears the bottom by 0.20 and Word still moves the paragraph).
-SPACERS = list(range(70, 116, 5))
+# fourth sweep: the LAST line's natural slack. slack = 2.675 - (tw-70)/20,
+# so tw 110..132 walks it from 0.675 down to -0.425 in 0.1pt steps. kojin
+# pi=52 (Word KEEPS) sits at slack 0.35 = tw 116.5; this probe's earlier
+# arms (slack 0.55..2.675) all BREAK, so the flip is in here.
+SPACERS = list(range(110, 134, 4))
 LINE1 = ("居住系サービス　共同生活援助（グループホーム）・共同生活介護（ケアホーム）　"
          "利用者数　23年度実績　5,921　24年度　見込み　6,374　実績　6,635　"
          "25年度　見込み　6,907　実績　7,321　26年度　見込み　7,441")
@@ -92,8 +100,8 @@ def gen():
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:code="9"/>'
            '<w:pgMar w:top="2041" w:right="851" w:bottom="2041" w:left="851" '
            'w:header="851" w:footer="992" w:gutter="0"/>'
-           '<w:docGrid w:type="lines" w:linePitch="%d"/></w:sectPr></w:body></w:document>'
-           % PITCH)
+           '<w:docGrid w:type="%s" w:linePitch="%d" w:charSpace="%d"/>'
+           "</w:sectPr></w:body></w:document>" % (GRID_TYPE, PITCH, CHAR_SPACE))
     # widowControl OFF in the default style, exactly like the specimen
     styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + NS + ">"
               "<w:docDefaults><w:rPrDefault><w:rPr>"
