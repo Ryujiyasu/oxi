@@ -78,7 +78,12 @@ def oxi_lines(layout):
     for pi, page in enumerate(layout["pages"], 1):
         rows = collections.OrderedDict()
         for e in page["elements"]:
-            if e["type"] != "text" or not (e.get("text") or ""):
+            # ★Whitespace-only lines are dropped on BOTH sides. The Word reader
+            # skips them (`txt.strip()`), so keeping Oxi's shifted every line of
+            # a page down by one and scored a page that matches exactly as a
+            # total miss -- c7b923e5's page 2 opens with an ideographic space in
+            # both engines.
+            if e["type"] != "text" or not (e.get("text") or "").strip():
                 continue
             key = (round(e["y"], 1), e.get("cell_row_idx"), e.get("cell_col_idx"))
             rows.setdefault(key, []).append(e)
@@ -167,6 +172,36 @@ def match_report(docx, envs, label, quiet=False):
     return tot["hit"], tot["word"], per_page
 
 
+def miss_report(docx, envs=""):
+    """Word's line next to Oxi's, wherever the two disagree.
+
+    Line agreement is the break's own score; this is what is left of it. Pages
+    are walked in parallel and the first divergence on each page is what matters
+    -- everything after it is that break repeated, so the head of each run is
+    printed with the character Word moved and Oxi kept (or the reverse)."""
+    _recs, layout = run_oxi(docx, tag="miss", envs=envs)
+    obypage = collections.defaultdict(list)
+    for o in oxi_lines(layout):
+        obypage[o["page"]].append(o)
+    wbypage = collections.defaultdict(list)
+    for w in word_lines(docx):
+        wbypage[w["page"]].append(w)
+    for pg in sorted(wbypage):
+        w, o = wbypage[pg], obypage.get(pg, [])
+        for i in range(min(len(w), len(o))):
+            wt, ot = norm(w[i]["text"]), norm(o[i]["text"])
+            if wt == ot:
+                continue
+            # what the two did differently at the break: the common prefix, then
+            # the first character each side put next
+            n = 0
+            while n < min(len(wt), len(ot)) and wt[n] == ot[n]:
+                n += 1
+            print("p%-2d L%-3d word %3d ch |%s|\n        %8s oxi  %3d ch |%s|   split after %d: word %r / oxi %r"
+                  % (pg, i, len(wt), wt[-14:], "", len(ot), ot[-14:], n,
+                     wt[n:n + 1], ot[n:n + 1]))
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     page = None
@@ -175,6 +210,10 @@ def main():
             page = int(a.split("=")[1] if "=" in a else args.pop())
     prefix = args[0] if args else "c7b923e5"
     docx = docx_for(prefix)
+
+    if "--miss" in sys.argv:
+        miss_report(docx)
+        return
 
     if "--match" in sys.argv:
         arms = [("base", "")]
