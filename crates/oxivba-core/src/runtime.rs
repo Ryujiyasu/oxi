@@ -3272,29 +3272,32 @@ fn call_builtin(
         name.as_str(),
         "abs"
             | "array"
+            | "asc"
+            | "ascw"
+            | "atn"
             | "cbool"
             | "cdate"
             | "cdbl"
+            | "choose"
             | "chr"
             | "chrw"
             | "clng"
+            | "cos"
             | "cstr"
-            | "asc"
-            | "ascw"
-            | "instr"
-            | "instrrev"
-            | "iif"
-            | "choose"
             | "dateadd"
             | "datediff"
             | "datepart"
             | "dateserial"
             | "datevalue"
             | "day"
-            | "switch"
+            | "exp"
+            | "filter"
             | "fix"
             | "hex"
             | "hour"
+            | "iif"
+            | "instr"
+            | "instrrev"
             | "int"
             | "isarray"
             | "isdate"
@@ -3303,29 +3306,35 @@ fn call_builtin(
             | "isnull"
             | "isnumeric"
             | "isobject"
+            | "join"
             | "lbound"
             | "lcase"
             | "left"
             | "len"
+            | "log"
             | "ltrim"
             | "mid"
             | "minute"
             | "month"
             | "oct"
             | "replace"
+            | "rgb"
             | "right"
             | "round"
             | "rtrim"
+            | "second"
+            | "sgn"
+            | "sin"
             | "space"
             | "split"
-            | "join"
+            | "sqr"
+            | "strcomp"
             | "string"
             | "strreverse"
+            | "switch"
+            | "tan"
             | "timeserial"
             | "timevalue"
-            | "sgn"
-            | "second"
-            | "sqr"
             | "trim"
             | "typename"
             | "ubound"
@@ -3359,6 +3368,130 @@ fn call_builtin(
                 | "year"
         ) {
             return call_date_builtin(&name, args, line);
+        }
+        if name == "strcomp" {
+            if !(2..=3).contains(&args.len()) {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("strcomp expects 2 or 3 arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            if matches!(args[0], Value::Null) || matches!(args[1], Value::Null) {
+                return Ok(Value::Null);
+            }
+            let left = text(&args[0])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+            let right = text(&args[1])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+            let text_compare = compare_mode(args.get(2), option_compare_text, line)?;
+            let (left, right) = if text_compare {
+                (left.to_lowercase(), right.to_lowercase())
+            } else {
+                (left, right)
+            };
+            let ordering = left.encode_utf16().cmp(right.encode_utf16());
+            return Ok(Value::Integer(match ordering {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }));
+        }
+        if name == "filter" {
+            if !(2..=4).contains(&args.len()) {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("filter expects 2 to 4 arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            let Value::Array(array) = &args[0] else {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "Filter requires a one-dimensional String array",
+                    line,
+                ));
+            };
+            if array.dimensions.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "Filter requires a one-dimensional String array",
+                    line,
+                ));
+            }
+            let needle = match &args[1] {
+                Value::String(value) => value.encode_utf16().collect::<Vec<_>>(),
+                Value::Null => {
+                    return Err(error(
+                        RuntimeErrorKind::TypeMismatch,
+                        "invalid use of Null",
+                        line,
+                    ));
+                }
+                value => text(value)
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+                    .encode_utf16()
+                    .collect(),
+            };
+            let include = match args.get(2) {
+                None | Some(Value::Missing) => true,
+                Some(Value::Null) => {
+                    return Err(error(
+                        RuntimeErrorKind::TypeMismatch,
+                        "invalid use of Null",
+                        line,
+                    ));
+                }
+                Some(value) => truthy(value)
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?,
+            };
+            let text_compare = compare_mode(args.get(3), option_compare_text, line)?;
+            let mut values = Vec::new();
+            for value in &array.values {
+                let Value::String(value) = value else {
+                    return Err(error(
+                        RuntimeErrorKind::TypeMismatch,
+                        "Filter source array must contain only Strings",
+                        line,
+                    ));
+                };
+                let source = value.encode_utf16().collect::<Vec<_>>();
+                if utf16_find(&source, &needle, 0, text_compare).is_some() == include {
+                    values.push(Value::String(value.clone()));
+                }
+            }
+            return Ok(Value::Array(ArrayValue {
+                dimensions: vec![ArrayDimension {
+                    lower_bound: 0,
+                    length: values.len(),
+                }],
+                values,
+                element_default: Box::new(Value::String(String::new())),
+                resizable: true,
+            }));
+        }
+        if name == "rgb" {
+            if args.len() != 3 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("rgb expects 3 arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            let mut components = [0_i64; 3];
+            for (component, value) in components.iter_mut().zip(args) {
+                let value = integer_argument(value, line)?;
+                if value < 0 {
+                    return Err(invalid_procedure_call(
+                        "RGB components cannot be negative".to_string(),
+                        line,
+                    ));
+                }
+                *component = value.min(255);
+            }
+            return Ok(Value::Integer(
+                components[0] + components[1] * 256 + components[2] * 65_536,
+            ));
         }
         if matches!(
             name.as_str(),
@@ -3630,6 +3763,19 @@ fn call_builtin(
                     .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
                 _ => Ok(numeric_literal(number(value).map_err(mismatch)?.abs())),
             },
+            "atn" | "cos" | "sin" | "tan" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => {
+                    let value = number(value).map_err(mismatch)?;
+                    Ok(Value::Double(match name.as_str() {
+                        "atn" => value.atan(),
+                        "cos" => value.cos(),
+                        "sin" => value.sin(),
+                        "tan" => value.tan(),
+                        _ => unreachable!(),
+                    }))
+                }
+            },
             "cbool" => match value {
                 Value::Null => Err(mismatch("invalid use of Null".to_string())),
                 _ => Ok(Value::Boolean(truthy(value).map_err(mismatch)?)),
@@ -3662,6 +3808,17 @@ fn call_builtin(
                     }))
                 }
             },
+            "exp" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => {
+                    let result = number(value).map_err(mismatch)?.exp();
+                    if result.is_finite() {
+                        Ok(Value::Double(result))
+                    } else {
+                        Err(error(RuntimeErrorKind::Overflow, "overflow in Exp", line))
+                    }
+                }
+            },
             "lcase" => match value {
                 Value::Null => Ok(Value::Null),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?.to_lowercase())),
@@ -3671,6 +3828,20 @@ fn call_builtin(
                 _ => Ok(Value::Integer(
                     text(value).map_err(mismatch)?.encode_utf16().count() as i64,
                 )),
+            },
+            "log" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => {
+                    let value = number(value).map_err(mismatch)?;
+                    if value <= 0.0 {
+                        Err(invalid_procedure_call(
+                            "Log requires a positive number".to_string(),
+                            line,
+                        ))
+                    } else {
+                        Ok(Value::Double(value.ln()))
+                    }
+                }
             },
             "sgn" => match value {
                 Value::Null => Ok(Value::Null),
@@ -6649,6 +6820,81 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5|13".to_string()));
+    }
+
+    #[test]
+    fn executes_transcendental_math_and_rgb_functions() {
+        let value = run(
+            "Public Function MathAndColor() As String\n\
+               MathAndColor = Round(4 * Atn(1), 6) & \"|\" & Sin(0) & \"|\" & Cos(0) & \"|\" & Tan(0) & \"|\" & Round(Log(Exp(2)), 6) & \"|\"\n\
+               MathAndColor = MathAndColor & RGB(255, 128, 1) & \"|\" & RGB(300, 0, 0)\n\
+             End Function\n",
+            "MathAndColor",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("3.141593|0|1|0|2|98559|255".to_string())
+        );
+    }
+
+    #[test]
+    fn filters_string_arrays_and_compares_strings_with_vba_modes() {
+        let value = run(
+            "Option Compare Text\n\
+             Public Function FilterAndCompare() As String\n\
+               Dim source As Variant\n\
+               Dim included As Variant\n\
+               Dim excluded As Variant\n\
+               source = Array(\"Alpha\", \"beta\", \"ALPINE\", \"gamma\")\n\
+               included = Filter(source, \"alp\", True, vbTextCompare)\n\
+               excluded = Filter(source, \"alp\", False, vbTextCompare)\n\
+               FilterAndCompare = Join(included, \"+\") & \"|\" & Join(excluded, \"+\") & \"|\"\n\
+               FilterAndCompare = FilterAndCompare & StrComp(\"A\", \"a\") & \"|\" & StrComp(\"A\", \"a\", vbBinaryCompare) & \"|\" & IsNull(StrComp(Null, \"a\"))\n\
+             End Function\n",
+            "FilterAndCompare",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("Alpha+ALPINE|beta+gamma|0|-1|True".to_string())
+        );
+    }
+
+    #[test]
+    fn math_filter_and_rgb_domain_errors_use_vba_numbers() {
+        let value = run(
+            "Public Function FunctionErrors() As String\n\
+               Dim logarithm As Long\n\
+               Dim exponential As Long\n\
+               Dim color As Long\n\
+               Dim filtering As Long\n\
+               Dim source As Variant\n\
+               source = Array(\"text\", 2)\n\
+               On Error Resume Next\n\
+               logarithm = Log(0)\n\
+               logarithm = Err.Number\n\
+               Err.Clear\n\
+               exponential = Exp(1000)\n\
+               exponential = Err.Number\n\
+               Err.Clear\n\
+               color = RGB(-1, 0, 0)\n\
+               color = Err.Number\n\
+               Err.Clear\n\
+               filtering = UBound(Filter(source, \"x\"))\n\
+               filtering = Err.Number\n\
+               FunctionErrors = logarithm & \"|\" & exponential & \"|\" & color & \"|\" & filtering\n\
+             End Function\n",
+            "FunctionErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|6|5|13".to_string()));
     }
 
     #[test]
