@@ -277,6 +277,16 @@ pub struct Shape {
     /// default is not exercised and is taken to be "rotate".
     #[serde(default = "default_rot_with_shape")]
     pub rot_with_shape: bool,
+    /// `a:blipFill/a:blip/a:alphaModFix/@amt` — the picture's opacity, in
+    /// percent-thousandths (7000 = 7%). None = the bare `<a:alphaModFix/>` the
+    /// corpus writes 3087 times, which carries no attribute and means opaque.
+    ///
+    /// 35 shapes on 22 slides in 5 decks (d12/d15/d30/d32/d38) declare a real
+    /// `amt`, from 1% to 80%. d32's title slide is a city map at **7%** -- a
+    /// dark texture in PowerPoint, a stark white overlay when the attribute is
+    /// ignored.
+    #[serde(default)]
+    pub image_alpha: Option<f32>,
     /// Custom geometry (`a:custGeom`) — the shape's outline as explicit paths
     /// instead of a named preset. None for a preset / picture / frame shape.
     ///

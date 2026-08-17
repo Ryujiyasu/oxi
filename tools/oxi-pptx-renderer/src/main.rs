@@ -1380,6 +1380,11 @@ fn tblcell_on() -> bool {
     std::env::var("OXI_TBLCELL_DISABLE").is_err()
 }
 
+/// `a:alphaModFix/@amt` scales a picture's opacity unless this is set.
+fn imgalpha_on() -> bool {
+    std::env::var("OXI_IMGALPHA_DISABLE").is_err()
+}
+
 /// Composite a solid fill at a constant opacity.
 ///
 /// Derived from PowerPoint: `<a:alpha val="N"/>` inside a solidFill is a
@@ -7236,7 +7241,20 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .unwrap_or((0.0, 0.0, 0.0, 0.0));
                         match image::load_from_memory(data) {
                             Ok(dyn_img) => {
-                                let rgba = dyn_img.to_rgba8();
+                                let mut rgba = dyn_img.to_rgba8();
+                                // `a:alphaModFix/@amt` scales the WHOLE
+                                // picture's opacity (d32's title map is a city
+                                // plan at 7%: a dark texture in PowerPoint, a
+                                // stark white overlay when it is ignored).
+                                if let Some(a) = sh.image_alpha.filter(|_| imgalpha_on()) {
+                                    if a < 1.0 {
+                                        for p in rgba.pixels_mut() {
+                                            p[3] = (p[3] as f32 * a).round().clamp(0.0, 255.0)
+                                                as u8;
+                                        }
+                                    }
+                                }
+                                let rgba = rgba;
                                 let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
                                 if iw <= 0 || ih <= 0 {
                                     continue;

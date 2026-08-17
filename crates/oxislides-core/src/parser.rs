@@ -781,6 +781,7 @@ fn parse_slide(
     // negative fillRect so the stretched image keeps its native aspect.
     let mut shape_src_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_rot_with_shape = true;
+    let mut shape_image_alpha: Option<f32> = None;
     let mut shape_fill_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_fill_color: Option<String> = None;
     let mut shape_fill_alpha: Option<f32> = None;
@@ -938,6 +939,7 @@ fn parse_slide(
                         shape_image_r_id = None;
                         shape_src_rect = None;
                         shape_rot_with_shape = true;
+                        shape_image_alpha = None;
                         shape_fill_rect = None;
                         shape_fill_color = None;
                         shape_fill_alpha = None;
@@ -1247,6 +1249,16 @@ fn parse_slide(
                         // shape still turns (PowerPoint render-truth, E5).
                         if get_attr(&e, "rotWithShape").as_deref() == Some("0") {
                             shape_rot_with_shape = false;
+                        }
+                    }
+                    // <a:alphaModFix amt=".."/> is self-closing, so it arrives
+                    // in the Empty arm; both arms carry the handler because a
+                    // producer may write either form.
+                    "alphaModFix" if in_shape && shape_is_image => {
+                        if let Some(v) = get_attr(&e, "amt") {
+                            if let Ok(a) = v.parse::<f32>() {
+                                shape_image_alpha = Some((a / 100000.0).clamp(0.0, 1.0));
+                            }
                         }
                     }
                     "blip" if in_shape && shape_is_image => {
@@ -1637,6 +1649,16 @@ fn parse_slide(
                             }
                         }
                     }
+                    // <a:alphaModFix amt=".."/> is self-closing, so it arrives
+                    // in the Empty arm; both arms carry the handler because a
+                    // producer may write either form.
+                    "alphaModFix" if in_shape && shape_is_image => {
+                        if let Some(v) = get_attr(&e, "amt") {
+                            if let Ok(a) = v.parse::<f32>() {
+                                shape_image_alpha = Some((a / 100000.0).clamp(0.0, 1.0));
+                            }
+                        }
+                    }
                     "blip" if in_shape && shape_is_image => {
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
@@ -2019,6 +2041,7 @@ fn parse_slide(
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
+                            image_alpha: shape_image_alpha,
                             custom_geometry: take_custom_geometry(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
@@ -2164,6 +2187,7 @@ fn parse_slide(
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
+                            image_alpha: shape_image_alpha,
                             custom_geometry: take_custom_geometry(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
@@ -2715,6 +2739,7 @@ fn parse_inherited_shapes(
                                         src_rect,
                                         fill_rect,
                                         rot_with_shape: true,
+                                        image_alpha: None,
                                         // The inheritance gate rejects custGeom
                                         // outright, so an inherited shape never
                                         // carries one.
