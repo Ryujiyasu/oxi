@@ -51,6 +51,7 @@ impl CellRange {
 enum HostObject {
     Range(CellRange),
     Worksheet(usize),
+    Worksheets,
     Workbook,
     Application,
 }
@@ -83,6 +84,7 @@ impl<'a> WorkbookHost<'a> {
             kind: match object {
                 HostObject::Range(_) => "Range",
                 HostObject::Worksheet(_) => "Worksheet",
+                HostObject::Worksheets => "Worksheets",
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
             }
@@ -111,6 +113,13 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    fn is_worksheets(&self, object: &ObjectRef) -> bool {
+        matches!(
+            self.objects.get(object.handle as usize),
+            Some(HostObject::Worksheets)
+        )
+    }
+
     fn is_application(&self, object: &ObjectRef) -> bool {
         matches!(
             self.objects.get(object.handle as usize),
@@ -121,6 +130,14 @@ impl<'a> WorkbookHost<'a> {
     fn worksheet_object(&mut self, value: &Value) -> Result<Value, String> {
         let sheet = self.worksheet_from_value(value)?;
         Ok(self.object(HostObject::Worksheet(sheet)))
+    }
+
+    fn worksheets_object_or_item(&mut self, args: &[Value]) -> Result<Value, String> {
+        match args {
+            [] => Ok(self.object(HostObject::Worksheets)),
+            [value] => self.worksheet_object(value),
+            _ => Err("Worksheets expects zero or one argument".to_string()),
+        }
     }
 
     fn worksheet_from_value(&self, value: &Value) -> Result<usize, String> {
@@ -395,8 +412,11 @@ impl Host for WorkbookHost<'_> {
             if (self.is_workbook(receiver) || self.is_application(receiver))
                 && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
             {
+                return self.worksheets_object_or_item(args).map(Some);
+            }
+            if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("item") {
                 let [value] = args else {
-                    return Err("Worksheets expects one sheet name or index".to_string());
+                    return Err("Worksheets.Item expects one sheet name or index".to_string());
                 };
                 return self.worksheet_object(value).map(Some);
             }
@@ -432,10 +452,7 @@ impl Host for WorkbookHost<'_> {
             return self.cells_object(self.active_sheet, args).map(Some);
         }
         if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
-            let [value] = args else {
-                return Err("Worksheets expects one sheet name or index".to_string());
-            };
-            return self.worksheet_object(value).map(Some);
+            return self.worksheets_object_or_item(args).map(Some);
         }
         if name.eq_ignore_ascii_case("activesheet") {
             return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
@@ -459,6 +476,20 @@ impl Host for WorkbookHost<'_> {
                 || name.eq_ignore_ascii_case("thisworkbook")
             {
                 return Ok(Some(self.object(HostObject::Workbook)));
+            }
+            if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
+                return Ok(Some(self.object(HostObject::Worksheets)));
+            }
+            return Ok(None);
+        }
+        if self.is_workbook(receiver)
+            && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
+        {
+            return Ok(Some(self.object(HostObject::Worksheets)));
+        }
+        if self.is_worksheets(receiver) {
+            if name.eq_ignore_ascii_case("count") {
+                return Ok(Some(Value::Integer(self.workbook.sheets.len() as i64)));
             }
             return Ok(None);
         }
@@ -506,6 +537,13 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
+        if self.is_worksheets(receiver) {
+            let mut worksheets = Vec::with_capacity(self.workbook.sheets.len());
+            for sheet in 0..self.workbook.sheets.len() {
+                worksheets.push(self.object(HostObject::Worksheet(sheet)));
+            }
+            return Ok(Some(worksheets));
+        }
         let Some(range) = self.range(receiver) else {
             return Ok(None);
         };
@@ -1035,5 +1073,44 @@ mod tests {
                 CellValue::Number(value) if value == expected
             ));
         }
+    }
+
+    #[test]
+    fn vba_iterates_and_indexes_worksheet_collections() {
+        let mut workbook = workbook();
+        workbook.sheets.push(Sheet {
+            name: "Data".to_string(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: 8.43,
+            default_row_height: 15.0,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        });
+        let module = parse_module(
+            "Public Function FillWorksheets() As String\n\
+               Dim ws As Worksheet\n\
+               For Each ws In ThisWorkbook.Worksheets\n\
+                 ws.Cells(1, 1).Value = ws.Index * 10\n\
+               Next ws\n\
+               FillWorksheets = Worksheets.Count & \"|\" & Application.Sheets.Item(2).Name & \"|\" & Worksheets(1).Range(\"A1\").Value + Worksheets.Item(2).Range(\"A1\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "FillWorksheets", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("2|Data|30".to_string()));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(10.0)
+        ));
+        assert!(matches!(
+            workbook.sheets[1].rows[0].cells[0].value,
+            CellValue::Number(20.0)
+        ));
     }
 }
