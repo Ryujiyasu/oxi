@@ -46,6 +46,10 @@ pub trait Host {
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String>;
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
+
+    fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -470,14 +474,27 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
         let collection = self.eval_expr(&loop_.collection, frame)?;
-        let Value::Array(array) = collection else {
-            return Err(error(
-                RuntimeErrorKind::TypeMismatch,
-                "For Each currently requires a VBA array",
-                Some(loop_.span.line),
-            ));
+        let values = match collection {
+            Value::Array(array) => array.values,
+            Value::Object(object) => {
+                self.host_enumerate(&object, loop_.span.line)?
+                    .ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::TypeMismatch,
+                            format!("VBA object is not enumerable: {}", object.kind),
+                            Some(loop_.span.line),
+                        )
+                    })?
+            }
+            _ => {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "For Each requires a VBA array or enumerable object",
+                    Some(loop_.span.line),
+                ))
+            }
         };
-        for value in array.values {
+        for value in values {
             self.tick(Some(loop_.span.line))?;
             self.assign(&loop_.item, value, frame, loop_.span.line)?;
             match self.exec_body(&loop_.body, frame)? {
@@ -961,6 +978,18 @@ impl<'a> Runtime<'a> {
             return Ok(false);
         };
         host.set(receiver, name, value)
+            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+    }
+
+    fn host_enumerate(
+        &mut self,
+        receiver: &ObjectRef,
+        line: u32,
+    ) -> Result<Option<Vec<Value>>, RuntimeError> {
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(None);
+        };
+        host.enumerate(receiver)
             .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
     }
 

@@ -504,6 +504,18 @@ impl Host for WorkbookHost<'_> {
         }
         Ok(false)
     }
+
+    fn enumerate(&mut self, receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
+        let Some(range) = self.range(receiver) else {
+            return Ok(None);
+        };
+        Self::range_cell_count(range)?;
+        let mut cells = Vec::new();
+        for address in range.addresses() {
+            cells.push(self.object(HostObject::Range(CellRange::single(address))));
+        }
+        Ok(Some(cells))
+    }
 }
 
 fn parse_range_reference(reference: &str) -> Result<((u32, u32), (u32, u32)), String> {
@@ -995,5 +1007,33 @@ mod tests {
             workbook.sheets[1].rows[1].cells[0].value,
             CellValue::Number(2.0)
         ));
+    }
+
+    #[test]
+    fn vba_iterates_range_cells_as_objects() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function UpdateCells() As Long\n\
+               Dim cell As Range\n\
+               Range(\"A1:A3\").Value = 1\n\
+               For Each cell In Range(\"A1:A3\")\n\
+                 cell.Value = cell.Value + cell.Row\n\
+                 UpdateCells = UpdateCells + cell.Value\n\
+               Next cell\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "UpdateCells", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::Integer(9));
+        for (row, expected) in workbook.sheets[0].rows.iter().zip([2.0, 3.0, 4.0]) {
+            assert!(matches!(
+                row.cells[0].value,
+                CellValue::Number(value) if value == expected
+            ));
+        }
     }
 }
