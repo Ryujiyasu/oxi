@@ -37,13 +37,15 @@ filt = sys.argv[1:]
 
 
 def find(base):
+    # EXACT match only. ssim_ab.py and ssim_direct_mean.py fall back to
+    # glob(prefix + "*.docx") when a base has no same-named document, and 290 of
+    # the 528 bases have none -- the fallback then pairs ONE document's render
+    # with ANOTHER's reference. Their dedup ("skip a docx already scored") hides
+    # most of it; a floor listing has no such protection, and `repro_A_default`
+    # scored 0.7898 that way and read as the third-worst document in the corpus.
+    # Refuse the guess.
     e = Path(DOCS) / (base + ".docx")
-    if e.exists():
-        return os.path.abspath(str(e))
-    import glob
-    c = sorted(p for p in glob.glob(os.path.join(DOCS, base.split("_")[0] + "*.docx"))
-               if not os.path.basename(p).startswith("~$"))
-    return os.path.abspath(c[0]) if c else None
+    return os.path.abspath(str(e)) if e.exists() else None
 
 
 def main():
@@ -52,10 +54,14 @@ def main():
         bases = [b for b in bases if any(b.startswith(f) or f in b for f in filt)]
     rows = []
     seen = set()
+    skipped = 0
     with tempfile.TemporaryDirectory() as tmp:
         for base in bases:
             d = find(base)
-            if not d or d in seen:
+            if not d:
+                skipped += 1
+                continue
+            if d in seen:
                 continue
             seen.add(d)
             wdir = Path(WORD_PNG_DIR) / base
