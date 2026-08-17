@@ -3602,6 +3602,27 @@ impl LayoutEngine {
                 Block::Paragraph(p) => p,
                 _ => continue, // tables/images in vertical sections: not yet supported
             };
+            // S1165 (2026-08-17, opt-out OXI_S1165_DISABLE): honour an explicit
+            // page break. This minimal vertical path (S679/S759) advances by
+            // CAPACITY alone and never looked at pageBreakBefore, so a vertical
+            // section ignored every explicit break: _pb_vertpitch_gen.py, whose
+            // nine arms each carry <w:pageBreakBefore/>, renders 9 pages in Word
+            // and 2 in Oxi (the arms just flow on, 5 columns apart). Nothing is
+            // emitted for a break at the very start, so a leading break cannot
+            // produce a blank first page.
+            if para.style.page_break_before
+                && !elements.is_empty()
+                && std::env::var("OXI_S1165_DISABLE").is_err()
+            {
+                push_separators(&mut elements);
+                pages_out.push(LayoutPage {
+                    width: page_w,
+                    height: page_h,
+                    elements: std::mem::take(&mut elements),
+                });
+                band = 0;
+                line_x = right - line_pitch;
+            }
             let style = para
                 .runs
                 .first()
@@ -3617,6 +3638,29 @@ impl LayoutEngine {
             // marginally worse than 1em for albalunaSS — left for a future
             // calibration pass with precise band geometry.)
             let char_adv = fs;
+            // S1166 (2026-08-17, opt-out OXI_S1166_DISABLE): the paragraph's own
+            // COLUMN WIDTH. The flat grid pitch was used for every paragraph, so
+            // `w:spacing w:line` did nothing in a vertical section.
+            // _pb_vertpitch_gen.py (9 arms, Word PDF; the width is read as
+            // (prev->this) + (this->next) so the glyph-centring convention
+            // cancels) gives, against a 12.8pt grid:
+            //     auto  x1.5 / x2 / x3   -> 19.20 / 25.68 / 38.40 = mult x pitch
+            //     exact 10 / 20 / 30pt   -> 10.08 / 19.92 / 30.00 = the value
+            //     atLeast 10 / 20pt      -> 12.72 / 19.92 = max(value, pitch)
+            // Same shape as a horizontal line height, except `auto` multiplies
+            // the GRID PITCH rather than the natural column width.
+            let line_pitch = if std::env::var("OXI_S1166_DISABLE").is_ok() {
+                line_pitch
+            } else {
+                match para.style.line_spacing_rule.as_deref() {
+                    Some("exact") => para.style.line_spacing.unwrap_or(line_pitch).max(0.0),
+                    Some("atLeast") => {
+                        para.style.line_spacing.unwrap_or(0.0).max(line_pitch)
+                    }
+                    // auto (or absent): a multiplier on the grid pitch.
+                    _ => line_pitch * para.style.line_spacing.unwrap_or(1.0).max(0.0),
+                }
+            };
 
             // Empty paragraph: occupies one (blank) line.
             if para_text.chars().all(|c| c.is_whitespace()) {
