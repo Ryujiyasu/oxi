@@ -27148,6 +27148,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // dropped at parse time -- gen2's TableGrid does carry
                 // <w:tblInd w:w="0"/>, so with that now inherited the two halves
                 // agree and gen2 keeps its absorption.
+                // (S1162 ATTEMPTED + REVERTED 2026-08-17: absorbing here for ANY
+                // tblInd value double-shifts, because the non-zero case already
+                // absorbs through S496's per-cell `lead_absorb` below. The real
+                // defect is the WIDTH, see S1163 there.)
                 let indent_zero = if std::env::var("OXI_S1160_DISABLE").is_err() {
                     table.style.indent.is_some_and(|v| v.abs() < 0.01)
                 } else {
@@ -28954,8 +28958,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     //     removing it drops the clamp+compression → over-wrap (0.56).
                     // See [[tokyoshugyo_wrap_not_cellheight]] (S713 "no-widen remains
                     // a follow-up") / [[tokumei_form_family_ssim]].
+                    // S1163 (2026-08-17, default ON, opt-out OXI_S1163_DISABLE):
+                    // the `auto` carve-out above is about the OVER-WIDE box that
+                    // S585c then clamps. A single-cell auto box that FITS is not
+                    // that case, and widening it puts its right border a cellMar
+                    // past Word: _pb_tblanchor plain_ind567 (tblW auto, grid
+                    // 400pt inside a 425pt column) measures Word 108.02..508.18
+                    // = the declared 400.16, Oxi 108.00..513.40 = 405.40. Keep the
+                    // widen only where the clamp needs it.
+                    // Gate: probe 10/10 on left border, text and RIGHT border;
+                    // Phase 1 95/96 with zero per-doc change; SSIM sentinel one
+                    // document changed -- e3c545_LOD_Handbook, one of the three
+                    // mode-14 leading-cell absorbers S496 was derived on, +0.0033
+                    // over 12 pages -- and nothing worse. tokyoshugyo, whose
+                    // 条文 boxes are the reason the widen exists, is untouched:
+                    // they overflow, so this carve-out does not reach them
+                    // (0.8607 -> 0.8607, all 90 pages identical).
+                    let s1163_fits = std::env::var("OXI_S1163_DISABLE").is_err()
+                        && table.style.width_type.as_deref() == Some("auto")
+                        && cell_w + pad_l <= content_width;
                     let s766_shift_whole = row.cells.len() == 1
-                        && matches!(table.style.width_type.as_deref(), Some("dxa") | Some("pct"))
+                        && (matches!(table.style.width_type.as_deref(), Some("dxa") | Some("pct"))
+                            || s1163_fits)
                         && std::env::var("OXI_S766_DISABLE").is_err();
                     if !s766_shift_whole {
                         cell_w += pad_l;

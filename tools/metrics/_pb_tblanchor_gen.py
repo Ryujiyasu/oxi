@@ -142,18 +142,20 @@ def gen():
 
 def report(per, who):
     print("== %s == (page margin %.2fpt)" % (who, MARGIN_PT))
-    print("%-13s %-5s %-7s %-7s %-9s %-9s %-9s %s"
-          % ("arm", "float", "cellMar", "tblpX", "border_x", "text_x", "b-margin", "predict"))
+    print("%-13s %-5s %-7s %-7s %-9s %-9s %-9s %-9s %s"
+          % ("arm", "float", "cellMar", "tblpX", "border_x", "text_x", "right_x",
+             "b-margin", "predict"))
     for ai, (label, fl, cm, px, ind) in enumerate(ARMS):
         g = per.get(ai) or {}
-        bx, tx = g.get("border"), g.get("text")
+        bx, tx, rx = g.get("border"), g.get("text"), g.get("right")
         # the hypothesis: border = margin + (tblpX or tblInd or 0) - cellMar_left
         pred = MARGIN_PT + (px or ind or 0) / 20.0 - cm / 20.0
-        print("%-13s %-5s %-7d %-7s %-9s %-9s %-9s %.2f"
+        print("%-13s %-5s %-7d %-7s %-9s %-9s %-9s %-9s %.2f"
               % (label, "yes" if fl else "no", cm,
                  str(px if px is not None else ("ind%d" % ind if ind is not None else "-")),
                  "%.2f" % bx if bx is not None else "-",
                  "%.2f" % tx if tx is not None else "-",
+                 "%.2f" % rx if rx is not None else "-",
                  "%+.2f" % (bx - MARGIN_PT) if bx is not None else "-", pred))
 
 
@@ -193,7 +195,8 @@ def pdf():
             for ln in b.get("lines", []):
                 if "M%02dX" % ai in "".join(s["text"] for s in ln["spans"]):
                     tx = ln["bbox"][0]
-        per[ai] = {"border": min(xs) if xs else None, "text": tx}
+        per[ai] = {"border": min(xs) if xs else None,
+                   "right": max(xs) if xs else None, "text": tx}
     report(per, "WORD")
 
 
@@ -218,7 +221,8 @@ def oxi(envs=""):
         tx = min((e["x"] for e in pg["elements"]
                   if e["type"] == "text" and (e.get("text") or "").startswith("M")),
                  default=None)
-        per[ai] = {"border": min(xs) if xs else None, "text": tx}
+        per[ai] = {"border": min(xs) if xs else None,
+                   "right": max(xs) if xs else None, "text": tx}
     report(per, "OXI " + (envs or "(default)"))
 
 
