@@ -130,11 +130,14 @@ def report(per, who):
         g = per.get(ai) or {}
         mx, bx = g.get("m"), g.get("b")
         bp = g.get("bp")
-        print("%-16s %-6.1f %-11s %-9s %-9s %-9s %s"
+        ax = g.get("a")
+        print("%-16s %-6.1f %-11s %-8s %-8s %-8s %-8s %-8s %s"
               % (label, sz / 2.0,
                  ("%d %s" % (line, rule)) if line else "single",
+                 "%.2f" % ax if ax is not None else "-",
                  "%.2f" % mx if mx is not None else "-",
                  "%.2f" % bx if bx is not None else "-",
+                 "%.2f" % (ax - mx) if (ax is not None and mx is not None) else "-",
                  "%.2f" % (mx - bx) if (mx is not None and bx is not None) else "-",
                  " ".join("%.2f" % v for v in (bp or []))))
 
@@ -143,13 +146,23 @@ def _collect(spans_per_page):
     per = {}
     for spans in spans_per_page:
         ai = None
+        # ★Vertical flows RIGHT to LEFT, and a marker that needs more than one
+        # column emits several spans. Take the RIGHTMOST (= the first column);
+        # assigning span-by-span kept the LAST one and made the exact/atLeast
+        # arms unreadable.
         for x, t in spans:
             m = re.search(r"M(\d\d)", t)
             if m:
                 ai = int(m.group(1))
-                per.setdefault(ai, {})["m"] = x
+                d = per.setdefault(ai, {})
+                d["m"] = max(d.get("m", -1e9), x)
+                d["mn"] = d.get("mn", 0) + 1
         if ai is None:
             continue
+        for x, t in spans:
+            if re.search(r"A%02dZ" % ai, t):
+                d = per.setdefault(ai, {})
+                d["a"] = max(d.get("a", -1e9), x)
         bs = sorted({round(x, 2) for x, t in spans if re.search(r"B%02d\d" % ai, t)},
                     reverse=True)
         if bs:
