@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    BinaryOp, DoStmt, ExitKind, Expr, ForStmt, Literal, LoopTest, Module, ModuleItem, ProcKind,
-    Procedure, Statement, TypeName, UnaryOp, VarDecl,
+    BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForStmt, Literal, LoopTest, Module, ModuleItem,
+    ProcKind, Procedure, SelectCaseStmt, Statement, TypeName, UnaryOp, VarDecl,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +32,7 @@ pub enum RuntimeErrorKind {
     ArgumentCount,
     UndefinedVariable,
     TypeMismatch,
+    Overflow,
     DivisionByZero,
     Unsupported,
     StepLimit,
@@ -248,6 +249,7 @@ impl<'a> Runtime<'a> {
             }
             Statement::For(loop_) => self.exec_for(loop_, frame),
             Statement::Do(loop_) => self.exec_do(loop_, frame),
+            Statement::SelectCase(select) => self.exec_select_case(select, frame),
             Statement::While {
                 condition,
                 body,
@@ -275,6 +277,59 @@ impl<'a> Runtime<'a> {
                 ),
                 line_of(other),
             )),
+        }
+    }
+
+    fn exec_select_case(
+        &mut self,
+        select: &SelectCaseStmt,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let subject = self.eval_expr(&select.subject, frame)?;
+        for case in &select.cases {
+            for label in &case.labels {
+                if self.case_matches(&subject, label, frame, select.span.line)? {
+                    return self.exec_body(&case.body, frame);
+                }
+            }
+        }
+        match &select.case_else {
+            Some(body) => self.exec_body(body, frame),
+            None => Ok(Flow::Continue),
+        }
+    }
+
+    fn case_matches(
+        &mut self,
+        subject: &Value,
+        label: &CaseLabel,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        let compare = |op, lhs, rhs| {
+            binary(op, lhs, rhs)
+                .map_err(|(kind, message)| error(kind, message, Some(line)))
+                .and_then(|value| {
+                    truthy(&value).map_err(|message| {
+                        error(RuntimeErrorKind::TypeMismatch, message, Some(line))
+                    })
+                })
+        };
+        match label {
+            CaseLabel::Value(value) => {
+                let value = self.eval_expr(value, frame)?;
+                compare(BinaryOp::Eq, subject.clone(), value)
+            }
+            CaseLabel::Range(lower, upper) => {
+                let lower = self.eval_expr(lower, frame)?;
+                let upper = self.eval_expr(upper, frame)?;
+                Ok(compare(BinaryOp::Ge, subject.clone(), lower)?
+                    && compare(BinaryOp::Le, subject.clone(), upper)?)
+            }
+            CaseLabel::Compare(op, value) => {
+                let value = self.eval_expr(value, frame)?;
+                compare(*op, subject.clone(), value)
+            }
         }
     }
 
@@ -484,10 +539,10 @@ impl<'a> Runtime<'a> {
                     })?;
                     values.push(self.eval_expr(value, frame)?);
                 }
-                self.call_procedure(name, values, Some(span.line))
+                self.call_named(name, values, Some(span.line))
             }
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                self.call_procedure(name, Vec::new(), Some(span.line))
+                self.call_named(name, Vec::new(), Some(span.line))
             }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
@@ -495,6 +550,23 @@ impl<'a> Runtime<'a> {
                 Some(expr.span().line),
             )),
         }
+    }
+
+    fn call_named(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        if self.module.items.iter().any(
+            |item| matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name)),
+        ) {
+            return self.call_procedure(name, args, line);
+        }
+        if let Some(result) = call_builtin(name, &args, line) {
+            return result;
+        }
+        self.call_procedure(name, args, line)
     }
 
     fn tick(&mut self, line: Option<u32>) -> Result<(), RuntimeError> {
@@ -517,6 +589,80 @@ fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) 
         message: message.into(),
         line,
     }
+}
+
+fn call_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+) -> Option<Result<Value, RuntimeError>> {
+    let name = name.to_ascii_lowercase();
+    let known = matches!(
+        name.as_str(),
+        "abs" | "cbool" | "cdbl" | "clng" | "cstr" | "lcase" | "len" | "trim" | "ucase"
+    );
+    if !known {
+        return None;
+    }
+    Some((|| {
+        if args.len() != 1 {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!("{name} expects 1 argument, received {}", args.len()),
+                line,
+            ));
+        }
+        let value = &args[0];
+        let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+        match name.as_str() {
+            "abs" => match value {
+                Value::Null => Ok(Value::Null),
+                Value::Integer(value) => value
+                    .checked_abs()
+                    .map(Value::Integer)
+                    .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
+                _ => Ok(numeric_literal(number(value).map_err(mismatch)?.abs())),
+            },
+            "cbool" => match value {
+                Value::Null => Err(mismatch("invalid use of Null".to_string())),
+                _ => Ok(Value::Boolean(truthy(value).map_err(mismatch)?)),
+            },
+            "cdbl" => Ok(Value::Double(number(value).map_err(mismatch)?)),
+            "clng" => {
+                let value = number(value).map_err(mismatch)?.round_ties_even();
+                if !(-2_147_483_648.0..=2_147_483_647.0).contains(&value) {
+                    Err(error(
+                        RuntimeErrorKind::Overflow,
+                        "overflow converting value to Long",
+                        line,
+                    ))
+                } else {
+                    Ok(Value::Integer(value as i64))
+                }
+            }
+            "cstr" => match value {
+                Value::Null => Err(mismatch("invalid use of Null".to_string())),
+                _ => Ok(Value::String(text(value))),
+            },
+            "lcase" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => Ok(Value::String(text(value).to_lowercase())),
+            },
+            "len" => match value {
+                Value::Null => Err(mismatch("invalid use of Null".to_string())),
+                _ => Ok(Value::Integer(text(value).encode_utf16().count() as i64)),
+            },
+            "trim" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => Ok(Value::String(text(value).trim_matches(' ').to_string())),
+            },
+            "ucase" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => Ok(Value::String(text(value).to_uppercase())),
+            },
+            _ => unreachable!(),
+        }
+    })())
 }
 
 fn key(name: &str) -> String {
@@ -709,6 +855,7 @@ fn line_of(statement: &Statement) -> Option<u32> {
         | Statement::Unknown { span, .. } => Some(span.line),
         Statement::Dim(decl) => Some(decl.span.line),
         Statement::If(branch) => Some(branch.span.line),
+        Statement::SelectCase(select) => Some(select.span.line),
         Statement::For(loop_) => Some(loop_.span.line),
         Statement::ForEach(loop_) => Some(loop_.span.line),
         Statement::Do(loop_) => Some(loop_.span.line),
@@ -720,7 +867,6 @@ fn line_of(statement: &Statement) -> Option<u32> {
 fn statement_name(statement: &Statement) -> &'static str {
     match statement {
         Statement::ForEach(_) => "For Each",
-        Statement::SelectCase(_) => "Select Case",
         Statement::SetAssign { .. } => "Set",
         Statement::With { .. } => "With",
         Statement::OnError(_) => "On Error",
@@ -847,6 +993,81 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::Integer(6));
+    }
+
+    #[test]
+    fn selects_value_range_comparison_and_else_cases() {
+        let source = "Public Function Band(value As Long) As String\n\
+               Select Case value\n\
+               Case 1, 2\n\
+                 Band = \"small\"\n\
+               Case 3 To 5\n\
+                 Band = \"medium\"\n\
+               Case Is >= 6\n\
+                 Band = \"large\"\n\
+               Case Else\n\
+                 Band = \"other\"\n\
+               End Select\n\
+             End Function\n";
+        assert_eq!(
+            run(source, "Band", vec![Value::Integer(2)]).unwrap(),
+            Value::String("small".to_string())
+        );
+        assert_eq!(
+            run(source, "Band", vec![Value::Integer(4)]).unwrap(),
+            Value::String("medium".to_string())
+        );
+        assert_eq!(
+            run(source, "Band", vec![Value::Integer(9)]).unwrap(),
+            Value::String("large".to_string())
+        );
+        assert_eq!(
+            run(source, "Band", vec![Value::Integer(0)]).unwrap(),
+            Value::String("other".to_string())
+        );
+    }
+
+    #[test]
+    fn executes_common_conversion_string_and_math_builtins() {
+        let value = run(
+            "Public Function Summary() As String\n\
+               Summary = UCase(Trim(\" oxi \")) & \"|\" & CStr(Len(\"A😀\")) & \"|\" & CStr(CLng(2.5)) & \"|\" & CStr(Abs(-3) + CDbl(\"2.5\")) & \"|\" & CStr(CBool(\"True\"))\n\
+             End Function\n",
+            "Summary",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("OXI|3|2|5.5|True".to_string()));
+    }
+
+    #[test]
+    fn a_user_procedure_shadows_a_builtin_name() {
+        let value = run(
+            "Private Function Len(value As String) As Long\n\
+               Len = 99\n\
+             End Function\n\
+             Public Function Probe() As Long\n\
+               Probe = Len(\"x\")\n\
+             End Function\n",
+            "Probe",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(99));
+    }
+
+    #[test]
+    fn reports_builtin_argument_errors_at_the_call_site() {
+        let failure = run(
+            "Public Function Broken() As Long\n\
+               Broken = Len()\n\
+             End Function\n",
+            "Broken",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
+        assert_eq!(failure.line, Some(2));
     }
 
     #[test]
