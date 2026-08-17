@@ -263,6 +263,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes Excel's process-global user-interface animation state",
     },
     Rule {
+        pattern: "Application.EnableLivePreview",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global live-preview user interface",
+    },
+    Rule {
+        pattern: "Application.EnableMacroAnimations",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes whether Excel shows user-interface animations while a macro runs",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -3121,6 +3133,39 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("user-interface animation state"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn live_preview_and_macro_animations_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseAnimatedUi()\n\
+             Application.EnableLivePreview = False\n\
+             Application.EnableLivePreview = True\n\
+             Application.EnableMacroAnimations = False\n\
+             Application.EnableMacroAnimations = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.EnableLivePreview"), Some(&2));
+        assert_eq!(
+            a.api_names.get("Application.EnableMacroAnimations"),
+            Some(&2)
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("live-preview user interface"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("while a macro runs"))
                 .count(),
             2
         );
