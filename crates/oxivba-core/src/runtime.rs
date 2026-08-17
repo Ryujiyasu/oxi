@@ -3293,6 +3293,11 @@ fn call_builtin(
             | "exp"
             | "filter"
             | "fix"
+            | "format"
+            | "formatcurrency"
+            | "formatdatetime"
+            | "formatnumber"
+            | "formatpercent"
             | "hex"
             | "hour"
             | "iif"
@@ -3348,6 +3353,12 @@ fn call_builtin(
         return None;
     }
     Some((|| {
+        if matches!(
+            name.as_str(),
+            "format" | "formatcurrency" | "formatdatetime" | "formatnumber" | "formatpercent"
+        ) {
+            return call_format_builtin(&name, args, line);
+        }
         if matches!(
             name.as_str(),
             "cdate"
@@ -3883,6 +3894,470 @@ fn call_builtin(
             _ => unreachable!(),
         }
     })())
+}
+
+fn call_format_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+) -> Result<Value, RuntimeError> {
+    let count_error = || {
+        error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("invalid argument count for {name}: {}", args.len()),
+            line,
+        )
+    };
+    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    match name {
+        "format" => {
+            if !(1..=4).contains(&args.len()) {
+                return Err(count_error());
+            }
+            let pattern = match args.get(1) {
+                None | Some(Value::Missing) => "".to_string(),
+                Some(value) => text(value).map_err(mismatch)?,
+            };
+            let first_day = first_day_of_week(args.get(2), line)?;
+            let first_week = first_week_of_year(args.get(3), line)?;
+            format_value(&args[0], &pattern, first_day, first_week)
+                .map(Value::String)
+                .map_err(mismatch)
+        }
+        "formatdatetime" => {
+            if !(1..=2).contains(&args.len()) {
+                return Err(count_error());
+            }
+            let mode = match args.get(1) {
+                None | Some(Value::Missing) => 0,
+                Some(value) => integer_argument(value, line)?,
+            };
+            let pattern = match mode {
+                0 => "General Date",
+                1 => "Long Date",
+                2 => "Short Date",
+                3 => "Long Time",
+                4 => "Short Time",
+                _ => {
+                    return Err(invalid_procedure_call(
+                        format!("invalid date format: {mode}"),
+                        line,
+                    ))
+                }
+            };
+            format_date(
+                value_date_serial(&args[0]).map_err(mismatch)?,
+                pattern,
+                1,
+                1,
+            )
+            .map(Value::String)
+            .map_err(mismatch)
+        }
+        "formatnumber" | "formatpercent" | "formatcurrency" => {
+            if !(1..=5).contains(&args.len()) {
+                return Err(count_error());
+            }
+            if matches!(args[0], Value::Null) {
+                return Ok(Value::String(String::new()));
+            }
+            let value = number(&args[0]).map_err(mismatch)?;
+            let digits = match args.get(1) {
+                None | Some(Value::Missing) => 2,
+                Some(value) => integer_argument(value, line)?,
+            };
+            if !(-1..=15).contains(&digits) {
+                return Err(invalid_procedure_call(
+                    "invalid decimal places".to_string(),
+                    line,
+                ));
+            }
+            let leading = tristate(args.get(2), true, line)?;
+            let parens = tristate(args.get(3), false, line)?;
+            let grouping = tristate(args.get(4), true, line)?;
+            let percent = name == "formatpercent";
+            let mut result = fixed_number(
+                value * if percent { 100.0 } else { 1.0 },
+                if digits == -1 { 2 } else { digits as usize },
+                grouping,
+                leading,
+                parens,
+            );
+            if percent {
+                result.push('%');
+            } else if name == "formatcurrency" {
+                result = currency_symbol(result);
+            }
+            Ok(Value::String(result))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn tristate(value: Option<&Value>, default: bool, line: Option<u32>) -> Result<bool, RuntimeError> {
+    match value {
+        None | Some(Value::Missing) => Ok(default),
+        Some(value) => match integer_argument(value, line)? {
+            -2 => Ok(default),
+            -1 => Ok(true),
+            0 => Ok(false),
+            value => Err(invalid_procedure_call(
+                format!("invalid tristate: {value}"),
+                line,
+            )),
+        },
+    }
+}
+
+fn format_value(
+    value: &Value,
+    pattern: &str,
+    first_day: i64,
+    first_week: i64,
+) -> Result<String, String> {
+    if matches!(value, Value::Null) {
+        return Ok(String::new());
+    }
+    if pattern.is_empty() {
+        return text(value);
+    }
+    let lower = pattern.to_ascii_lowercase();
+    let named_date = matches!(
+        lower.as_str(),
+        "general date"
+            | "long date"
+            | "medium date"
+            | "short date"
+            | "long time"
+            | "medium time"
+            | "short time"
+    );
+    let custom_date = lower.contains("yyyy")
+        || lower.contains("ddd")
+        || lower.contains("am/pm")
+        || lower.contains("hh")
+        || lower.contains("nn")
+        || (lower.contains('/') && lower.contains('d'))
+        || (lower.contains(':') && lower.contains('h'));
+    if named_date || custom_date {
+        return format_date(value_date_serial(value)?, pattern, first_day, first_week);
+    }
+    if let Value::String(value) = value {
+        return Ok(match pattern {
+            "<" => value.to_lowercase(),
+            ">" => value.to_uppercase(),
+            _ if pattern.contains('@') => pattern.replace('@', value),
+            _ => value.clone(),
+        });
+    }
+    let value = number(value)?;
+    Ok(match lower.as_str() {
+        "general number" => text(&numeric_literal(value))?,
+        "currency" => currency_symbol(fixed_number(value, 2, true, true, true)),
+        "fixed" => fixed_number(value, 2, false, true, false),
+        "standard" => fixed_number(value, 2, true, true, false),
+        "percent" => format!("{}%", fixed_number(value * 100.0, 2, false, true, false)),
+        "scientific" => format!("{value:.2E}"),
+        "yes/no" => if value == 0.0 { "No" } else { "Yes" }.to_string(),
+        "true/false" => if value == 0.0 { "False" } else { "True" }.to_string(),
+        "on/off" => if value == 0.0 { "Off" } else { "On" }.to_string(),
+        _ => custom_number(value, pattern),
+    })
+}
+
+fn format_date(
+    serial: f64,
+    pattern: &str,
+    first_day: i64,
+    first_week: i64,
+) -> Result<String, String> {
+    let parts = serial_date_parts(serial)?;
+    let lower = pattern.to_ascii_lowercase();
+    match lower.as_str() {
+        "general date" => {
+            let has_date = serial.floor() != 0.0;
+            let has_time = serial.rem_euclid(1.0) != 0.0;
+            return Ok(match (has_date, has_time) {
+                (true, true) => format!(
+                    "{}/{}/{} {}",
+                    parts.month,
+                    parts.day,
+                    parts.year,
+                    clock(parts, true)
+                ),
+                (false, true) => clock(parts, true),
+                _ => format!("{}/{}/{}", parts.month, parts.day, parts.year),
+            });
+        }
+        "long date" => {
+            return Ok(format!(
+                "{}, {} {}, {}",
+                weekday_name(serial),
+                month_name(parts.month),
+                parts.day,
+                parts.year
+            ))
+        }
+        "medium date" => {
+            return Ok(format!(
+                "{}-{}-{:02}",
+                parts.day,
+                &month_name(parts.month)[..3],
+                parts.year.rem_euclid(100)
+            ))
+        }
+        "short date" => return Ok(format!("{}/{}/{}", parts.month, parts.day, parts.year)),
+        "long time" => return Ok(clock(parts, true)),
+        "medium time" => return Ok(clock(parts, false)),
+        "short time" => return Ok(format!("{:02}:{:02}", parts.hour, parts.minute)),
+        _ => {}
+    }
+    let has_ampm = lower.contains("am/pm") || lower.contains("a/p");
+    let mut output = String::new();
+    let mut cursor = 0;
+    let mut after_hour = false;
+    let bytes = pattern.as_bytes();
+    while cursor < pattern.len() {
+        if bytes[cursor] == b'"' {
+            cursor += 1;
+            while cursor < pattern.len() && bytes[cursor] != b'"' {
+                let character = pattern[cursor..].chars().next().unwrap();
+                output.push(character);
+                cursor += character.len_utf8();
+            }
+            cursor += usize::from(cursor < pattern.len());
+            continue;
+        }
+        if bytes[cursor] == b'\\' && cursor + 1 < pattern.len() {
+            cursor += 1;
+            let character = pattern[cursor..].chars().next().unwrap();
+            output.push(character);
+            cursor += character.len_utf8();
+            continue;
+        }
+        let remaining = &lower[cursor..];
+        let (length, replacement) = if remaining.starts_with("am/pm") {
+            (5, if parts.hour < 12 { "AM" } else { "PM" }.to_string())
+        } else if remaining.starts_with("a/p") {
+            (3, if parts.hour < 12 { "A" } else { "P" }.to_string())
+        } else if remaining.starts_with("yyyy") {
+            (4, format!("{:04}", parts.year))
+        } else if remaining.starts_with("mmmm") {
+            (4, month_name(parts.month).to_string())
+        } else if remaining.starts_with("dddd") {
+            (4, weekday_name(serial).to_string())
+        } else if remaining.starts_with("mmm") {
+            (3, month_name(parts.month)[..3].to_string())
+        } else if remaining.starts_with("ddd") {
+            (3, weekday_name(serial)[..3].to_string())
+        } else if remaining.starts_with("yy") {
+            (2, format!("{:02}", parts.year.rem_euclid(100)))
+        } else if remaining.starts_with("dd") {
+            (2, format!("{:02}", parts.day))
+        } else if remaining.starts_with("hh") {
+            after_hour = true;
+            (2, format!("{:02}", hour_value(parts.hour, has_ampm)))
+        } else if remaining.starts_with("nn") {
+            (2, format!("{:02}", parts.minute))
+        } else if remaining.starts_with("ss") {
+            (2, format!("{:02}", parts.second))
+        } else if remaining.starts_with("ww") {
+            (
+                2,
+                week_of_year(serial.floor() as i64, parts.year, first_day, first_week)?.to_string(),
+            )
+        } else if remaining.starts_with("mm") {
+            let value = if after_hour {
+                parts.minute
+            } else {
+                parts.month
+            };
+            after_hour = false;
+            (2, format!("{value:02}"))
+        } else {
+            let character = remaining.chars().next().unwrap();
+            let replacement = match character {
+                'q' => ((parts.month - 1) / 3 + 1).to_string(),
+                'm' => {
+                    let value = if after_hour {
+                        parts.minute
+                    } else {
+                        parts.month
+                    };
+                    after_hour = false;
+                    value.to_string()
+                }
+                'd' => parts.day.to_string(),
+                'y' => (serial.floor() as i64 - date_serial(parts.year, 1, 1)?.floor() as i64 + 1)
+                    .to_string(),
+                'h' => {
+                    after_hour = true;
+                    hour_value(parts.hour, has_ampm).to_string()
+                }
+                'n' => parts.minute.to_string(),
+                's' => parts.second.to_string(),
+                'w' => weekday_number(serial.floor() as i64, first_day).to_string(),
+                _ => {
+                    output.push(pattern[cursor..].chars().next().unwrap());
+                    cursor += pattern[cursor..].chars().next().unwrap().len_utf8();
+                    continue;
+                }
+            };
+            (character.len_utf8(), replacement)
+        };
+        output.push_str(&replacement);
+        cursor += length;
+    }
+    Ok(output)
+}
+
+fn month_name(month: u32) -> &'static str {
+    const NAMES: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    NAMES[month as usize - 1]
+}
+
+fn weekday_name(serial: f64) -> &'static str {
+    const NAMES: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    NAMES[weekday_number(serial.floor() as i64, 1) as usize - 1]
+}
+
+fn hour_value(hour: u32, meridiem: bool) -> u32 {
+    if !meridiem {
+        return hour;
+    }
+    let hour = hour % 12;
+    if hour == 0 {
+        12
+    } else {
+        hour
+    }
+}
+
+fn clock(parts: DateParts, seconds: bool) -> String {
+    let suffix = if parts.hour < 12 { "AM" } else { "PM" };
+    if seconds {
+        format!(
+            "{}:{:02}:{:02} {suffix}",
+            hour_value(parts.hour, true),
+            parts.minute,
+            parts.second
+        )
+    } else {
+        format!(
+            "{}:{:02} {suffix}",
+            hour_value(parts.hour, true),
+            parts.minute
+        )
+    }
+}
+
+fn fixed_number(value: f64, digits: usize, grouping: bool, leading: bool, parens: bool) -> String {
+    let negative = value < 0.0;
+    let raw = format!("{:.*}", digits, value.abs());
+    let (whole, fraction) = raw.split_once('.').unwrap_or((&raw, ""));
+    let mut whole = if grouping {
+        group_number(whole)
+    } else {
+        whole.to_string()
+    };
+    if !leading && whole == "0" && digits > 0 {
+        whole.clear();
+    }
+    let mut result = if digits == 0 {
+        whole
+    } else {
+        format!("{whole}.{fraction}")
+    };
+    if negative {
+        result = if parens {
+            format!("({result})")
+        } else {
+            format!("-{result}")
+        };
+    }
+    result
+}
+
+fn currency_symbol(mut value: String) -> String {
+    if value.starts_with('(') {
+        value.insert(1, '$');
+    } else if let Some(rest) = value.strip_prefix('-') {
+        value = format!("-${rest}");
+    } else {
+        value.insert(0, '$');
+    }
+    value
+}
+
+fn group_number(value: &str) -> String {
+    let mut result = String::new();
+    for (index, character) in value.chars().enumerate() {
+        if index > 0 && (value.len() - index).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(character);
+    }
+    result
+}
+
+fn custom_number(value: f64, pattern: &str) -> String {
+    let percent = pattern.contains('%');
+    let decimal = pattern.find('.');
+    let digits = decimal
+        .map(|index| {
+            pattern[index + 1..]
+                .chars()
+                .filter(|c| matches!(c, '0' | '#'))
+                .count()
+        })
+        .unwrap_or(0);
+    let required = decimal
+        .map(|index| pattern[index + 1..].chars().filter(|c| *c == '0').count())
+        .unwrap_or(0);
+    let whole_pattern = &pattern[..decimal.unwrap_or(pattern.len())];
+    let mut result = fixed_number(
+        value * if percent { 100.0 } else { 1.0 },
+        digits,
+        whole_pattern.contains(','),
+        whole_pattern.contains('0'),
+        false,
+    );
+    let mut displayed_digits = digits;
+    while displayed_digits > required && result.ends_with('0') && result.contains('.') {
+        result.pop();
+        displayed_digits -= 1;
+    }
+    if result.ends_with('.') {
+        result.pop();
+    }
+    if percent {
+        result.push('%');
+    }
+    if pattern.starts_with('$') {
+        result.insert(0, '$');
+    }
+    result
 }
 
 fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -4837,6 +5312,14 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbfirstjan1" => Value::Integer(1),
         "vbfirstfourdays" => Value::Integer(2),
         "vbfirstfullweek" => Value::Integer(3),
+        "vbgeneraldate" => Value::Integer(0),
+        "vblongdate" => Value::Integer(1),
+        "vbshortdate" => Value::Integer(2),
+        "vblongtime" => Value::Integer(3),
+        "vbshorttime" => Value::Integer(4),
+        "vbusedefault" => Value::Integer(-2),
+        "vbtrue" => Value::Integer(-1),
+        "vbfalse" => Value::Integer(0),
         "vbcrlf" | "vbnewline" => Value::String("\r\n".to_string()),
         "vbcr" => Value::String("\r".to_string()),
         "vblf" => Value::String("\n".to_string()),
@@ -6938,6 +7421,72 @@ mod tests {
             value,
             Value::String("2024-2-29|29|1|1|60|1|1|1|5:45".to_string())
         );
+    }
+
+    #[test]
+    fn executes_vba_named_and_custom_format_patterns() {
+        let value = run(
+            "Public Function FormatPatterns() As String\n\
+               Dim stamp As Date\n\
+               stamp = DateSerial(1993, 1, 27) + TimeSerial(17, 4, 23)\n\
+               FormatPatterns = Format(stamp, \"yyyy-mm-dd hh:nn:ss\") & \"|\" & Format(stamp, \"dddd, mmm d yyyy\") & \"|\"\n\
+               FormatPatterns = FormatPatterns & Format(TimeSerial(17, 4, 23), \"hh:mm:ss AM/PM\") & \"|\" & Format(TimeSerial(17, 4, 23), \"h:m:s\") & \"|\"\n\
+               FormatPatterns = FormatPatterns & Format(5459.4, \"##,##0.00\") & \"|\" & Format(334.9, \"###0.00##\") & \"|\" & Format(5, \"0.00%\") & \"|\"\n\
+               FormatPatterns = FormatPatterns & Format(1234.5, \"Standard\") & \"|\" & Format(\"HELLO\", \"<\") & \"|\" & Format(\"This is it\", \">\")\n\
+             End Function\n",
+            "FormatPatterns",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "1993-01-27 17:04:23|Wednesday, Jan 27 1993|05:04:23 PM|17:4:23|5,459.40|334.90|500.00%|1,234.50|hello|THIS IS IT"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn executes_vba_format_helper_functions_and_constants() {
+        let value = run(
+            "Public Function FormatHelpers() As String\n\
+               FormatHelpers = FormatNumber(1234.5, 2) & \"|\" & FormatPercent(0.125, 1) & \"|\"\n\
+               FormatHelpers = FormatHelpers & FormatCurrency(-1234.5, 2, vbUseDefault, vbTrue, vbTrue) & \"|\"\n\
+               FormatHelpers = FormatHelpers & FormatDateTime(DateSerial(1993, 1, 27), vbShortDate) & \"|\" & FormatDateTime(TimeSerial(17, 4, 23), vbLongTime)\n\
+             End Function\n",
+            "FormatHelpers",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("1,234.50|12.5%|($1,234.50)|1/27/1993|5:04:23 PM".to_string())
+        );
+    }
+
+    #[test]
+    fn format_helpers_raise_vba_error_five_for_invalid_modes() {
+        let value = run(
+            "Public Function FormatErrors() As String\n\
+               Dim dateMode As Long\n\
+               Dim tristateMode As Long\n\
+               On Error Resume Next\n\
+               dateMode = FormatDateTime(DateSerial(2024, 1, 1), 5)\n\
+               dateMode = Err.Number\n\
+               Err.Clear\n\
+               tristateMode = FormatNumber(1, 2, 1)\n\
+               tristateMode = Err.Number\n\
+               FormatErrors = dateMode & \"|\" & tristateMode\n\
+             End Function\n",
+            "FormatErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5".to_string()));
     }
 
     #[test]
