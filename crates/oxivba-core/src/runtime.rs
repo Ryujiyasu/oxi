@@ -272,6 +272,22 @@ impl<'a> Runtime<'a> {
                 self.assign(target, value, frame, span.line)?;
                 Ok(Flow::Continue)
             }
+            Statement::SetAssign {
+                target,
+                value,
+                span,
+            } => {
+                let value = self.eval_expr(value, frame)?;
+                if !matches!(value, Value::Object(_)) {
+                    return Err(error(
+                        RuntimeErrorKind::TypeMismatch,
+                        "Set requires an object value",
+                        Some(span.line),
+                    ));
+                }
+                self.assign(target, value, frame, span.line)?;
+                Ok(Flow::Continue)
+            }
             Statement::Dim(decl) => {
                 self.declare_locals(decl, frame)?;
                 Ok(Flow::Continue)
@@ -1507,6 +1523,38 @@ mod tests {
         assert_eq!(value, Value::Integer(42));
         assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(40)));
         assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn set_binds_a_host_object_to_a_local_variable() {
+        let module = parse_module(
+            "Public Function WriteThroughObject() As Long\n\
+               Dim cell As Object\n\
+               Set cell = Range(\"A1\")\n\
+               cell.Value = 42\n\
+               WriteThroughObject = cell.Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "WriteThroughObject", vec![], &mut host).unwrap();
+        assert_eq!(value, Value::Integer(42));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn set_rejects_scalar_values() {
+        let failure = run(
+            "Public Sub InvalidSet()\n\
+               Dim value As Object\n\
+               Set value = 42\n\
+             End Sub\n",
+            "InvalidSet",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::TypeMismatch);
+        assert_eq!(failure.line, Some(3));
     }
 
     #[test]

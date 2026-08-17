@@ -12,10 +12,16 @@ struct CellAddress {
     column: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum HostObject {
+    Cell(CellAddress),
+    Worksheet(usize),
+}
+
 struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
-    objects: Vec<CellAddress>,
+    objects: Vec<HostObject>,
 }
 
 impl<'a> WorkbookHost<'a> {
@@ -32,19 +38,72 @@ impl<'a> WorkbookHost<'a> {
         })
     }
 
-    fn object(&mut self, address: CellAddress) -> Value {
+    fn object(&mut self, object: HostObject) -> Value {
         let handle = self.objects.len() as u64;
-        self.objects.push(address);
+        self.objects.push(object);
         Value::Object(ObjectRef {
             handle,
-            kind: "Range".to_string(),
+            kind: match object {
+                HostObject::Cell(_) => "Range",
+                HostObject::Worksheet(_) => "Worksheet",
+            }
+            .to_string(),
         })
     }
 
     fn address(&self, object: &ObjectRef) -> Option<CellAddress> {
-        (object.kind == "Range")
-            .then(|| self.objects.get(object.handle as usize).copied())
-            .flatten()
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Cell(address)) => Some(*address),
+            _ => None,
+        }
+    }
+
+    fn worksheet(&self, object: &ObjectRef) -> Option<usize> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Worksheet(sheet)) => Some(*sheet),
+            _ => None,
+        }
+    }
+
+    fn worksheet_from_value(&self, value: &Value) -> Result<usize, String> {
+        match value {
+            Value::String(name) => self
+                .workbook
+                .sheets
+                .iter()
+                .position(|sheet| sheet.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| format!("worksheet not found: {name}")),
+            Value::Integer(index) => self.worksheet_from_number(*index as f64),
+            Value::Double(index) => self.worksheet_from_number(*index),
+            _ => Err("Worksheets expects a sheet name or one-based index".to_string()),
+        }
+    }
+
+    fn worksheet_from_number(&self, index: f64) -> Result<usize, String> {
+        if !index.is_finite() || index.fract() != 0.0 || index < 1.0 {
+            return Err("worksheet index must be a positive integer".to_string());
+        }
+        let index = index as usize - 1;
+        (index < self.workbook.sheets.len())
+            .then_some(index)
+            .ok_or_else(|| format!("worksheet index is out of range: {}", index + 1))
+    }
+
+    fn range_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        let [Value::String(reference)] = args else {
+            return Err("Range expects one cell reference".to_string());
+        };
+        let (column, row) = parse_a1_reference(reference)?;
+        Ok(self.object(HostObject::Cell(CellAddress { sheet, row, column })))
+    }
+
+    fn cells_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        let [row, column] = args else {
+            return Err("Cells expects row and column".to_string());
+        };
+        let row = positive_index(row, "row")?;
+        let column = positive_index(column, "column")? - 1;
+        Ok(self.object(HostObject::Cell(CellAddress { sheet, row, column })))
     }
 
     fn value(&self, address: CellAddress) -> Value {
@@ -108,36 +167,46 @@ impl Host for WorkbookHost<'_> {
         name: &str,
         args: &[Value],
     ) -> Result<Option<Value>, String> {
-        if receiver.is_some() {
+        if let Some(receiver) = receiver {
+            let Some(sheet) = self.worksheet(receiver) else {
+                return Ok(None);
+            };
+            if name.eq_ignore_ascii_case("range") {
+                return self.range_object(sheet, args).map(Some);
+            }
+            if name.eq_ignore_ascii_case("cells") {
+                return self.cells_object(sheet, args).map(Some);
+            }
             return Ok(None);
         }
         if name.eq_ignore_ascii_case("range") {
-            let [Value::String(reference)] = args else {
-                return Err("Range expects one cell reference".to_string());
-            };
-            let (column, row) = parse_a1_reference(reference)?;
-            return Ok(Some(self.object(CellAddress {
-                sheet: self.active_sheet,
-                row,
-                column,
-            })));
+            return self.range_object(self.active_sheet, args).map(Some);
         }
         if name.eq_ignore_ascii_case("cells") {
-            let [row, column] = args else {
-                return Err("Cells expects row and column".to_string());
+            return self.cells_object(self.active_sheet, args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
+            let [value] = args else {
+                return Err("Worksheets expects one sheet name or index".to_string());
             };
-            let row = positive_index(row, "row")?;
-            let column = positive_index(column, "column")? - 1;
-            return Ok(Some(self.object(CellAddress {
-                sheet: self.active_sheet,
-                row,
-                column,
-            })));
+            let sheet = self.worksheet_from_value(value)?;
+            return Ok(Some(self.object(HostObject::Worksheet(sheet))));
         }
         Ok(None)
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if let Some(sheet) = self.worksheet(receiver) {
+            if name.eq_ignore_ascii_case("name") {
+                return Ok(Some(Value::String(
+                    self.workbook.sheets[sheet].name.clone(),
+                )));
+            }
+            if name.eq_ignore_ascii_case("index") {
+                return Ok(Some(Value::Integer(sheet as i64 + 1)));
+            }
+            return Ok(None);
+        }
         let Some(address) = self.address(receiver) else {
             return Ok(None);
         };
@@ -385,5 +454,52 @@ mod tests {
         assert!(parse_a1_reference("A1:B2").is_err());
         assert!(positive_index(&Value::Integer(0), "row").is_err());
         assert!(positive_index(&Value::Double(1.5), "row").is_err());
+    }
+
+    #[test]
+    fn vba_accesses_worksheets_by_name_and_one_based_index() {
+        let mut workbook = workbook();
+        workbook.sheets.push(Sheet {
+            name: "Data".to_string(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: 8.43,
+            default_row_height: 15.0,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        });
+        let module = parse_module(
+            "Public Function FillSheets() As Long\n\
+               Dim ws As Worksheet\n\
+               Set ws = Worksheets(\"Data\")\n\
+               ws.Range(\"A1\").Value = 40\n\
+               Worksheets(2).Cells(2, 1).Value = 2\n\
+               FillSheets = ws.Range(\"A1\").Value + ws.Cells(2, 1).Value\n\
+             End Function\n\
+             Public Function SheetIdentity() As String\n\
+               Dim ws As Worksheet\n\
+               Set ws = Sheets(2)\n\
+               SheetIdentity = ws.Name & \"|\" & ws.Index\n\
+             End Function\n",
+        )
+        .unwrap();
+        let (total, identity) = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let mut runtime = oxivba_core::Runtime::new(&module).with_host(&mut host);
+            let total = runtime.call("FillSheets", vec![]).unwrap();
+            let identity = runtime.call("SheetIdentity", vec![]).unwrap();
+            (total, identity)
+        };
+        assert_eq!(total, Value::Integer(42));
+        assert_eq!(identity, Value::String("Data|2".to_string()));
+        assert!(matches!(
+            workbook.sheets[1].rows[0].cells[0].value,
+            CellValue::Number(value) if value == 40.0
+        ));
+        assert!(matches!(
+            workbook.sheets[1].rows[1].cells[0].value,
+            CellValue::Number(value) if value == 2.0
+        ));
     }
 }
