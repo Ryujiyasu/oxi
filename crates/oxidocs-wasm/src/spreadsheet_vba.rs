@@ -51,6 +51,8 @@ impl CellRange {
 enum HostObject {
     Range(CellRange),
     Worksheet(usize),
+    Workbook,
+    Application,
 }
 
 struct WorkbookHost<'a> {
@@ -81,6 +83,8 @@ impl<'a> WorkbookHost<'a> {
             kind: match object {
                 HostObject::Range(_) => "Range",
                 HostObject::Worksheet(_) => "Worksheet",
+                HostObject::Workbook => "Workbook",
+                HostObject::Application => "Application",
             }
             .to_string(),
         })
@@ -98,6 +102,25 @@ impl<'a> WorkbookHost<'a> {
             Some(HostObject::Worksheet(sheet)) => Some(*sheet),
             _ => None,
         }
+    }
+
+    fn is_workbook(&self, object: &ObjectRef) -> bool {
+        matches!(
+            self.objects.get(object.handle as usize),
+            Some(HostObject::Workbook)
+        )
+    }
+
+    fn is_application(&self, object: &ObjectRef) -> bool {
+        matches!(
+            self.objects.get(object.handle as usize),
+            Some(HostObject::Application)
+        )
+    }
+
+    fn worksheet_object(&mut self, value: &Value) -> Result<Value, String> {
+        let sheet = self.worksheet_from_value(value)?;
+        Ok(self.object(HostObject::Worksheet(sheet)))
     }
 
     fn worksheet_from_value(&self, value: &Value) -> Result<usize, String> {
@@ -360,7 +383,22 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("cells") {
                     return self.cells_object(sheet, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("activate") {
+                    if !args.is_empty() {
+                        return Err("Worksheet.Activate does not accept arguments".to_string());
+                    }
+                    self.active_sheet = sheet;
+                    return Ok(Some(Value::Empty));
+                }
                 return Ok(None);
+            }
+            if (self.is_workbook(receiver) || self.is_application(receiver))
+                && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
+            {
+                let [value] = args else {
+                    return Err("Worksheets expects one sheet name or index".to_string());
+                };
+                return self.worksheet_object(value).map(Some);
             }
             if let Some(range) = self.range(receiver) {
                 if name.eq_ignore_ascii_case("cells") {
@@ -397,13 +435,33 @@ impl Host for WorkbookHost<'_> {
             let [value] = args else {
                 return Err("Worksheets expects one sheet name or index".to_string());
             };
-            let sheet = self.worksheet_from_value(value)?;
-            return Ok(Some(self.object(HostObject::Worksheet(sheet))));
+            return self.worksheet_object(value).map(Some);
+        }
+        if name.eq_ignore_ascii_case("activesheet") {
+            return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
+        }
+        if name.eq_ignore_ascii_case("thisworkbook") || name.eq_ignore_ascii_case("activeworkbook")
+        {
+            return Ok(Some(self.object(HostObject::Workbook)));
+        }
+        if name.eq_ignore_ascii_case("application") {
+            return Ok(Some(self.object(HostObject::Application)));
         }
         Ok(None)
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if self.is_application(receiver) {
+            if name.eq_ignore_ascii_case("activesheet") {
+                return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
+            }
+            if name.eq_ignore_ascii_case("activeworkbook")
+                || name.eq_ignore_ascii_case("thisworkbook")
+            {
+                return Ok(Some(self.object(HostObject::Workbook)));
+            }
+            return Ok(None);
+        }
         if let Some(sheet) = self.worksheet(receiver) {
             if name.eq_ignore_ascii_case("name") {
                 return Ok(Some(Value::String(
@@ -898,5 +956,44 @@ mod tests {
         ));
         assert_eq!(workbook.sheets[0].rows[0].index, 3);
         assert_eq!(workbook.sheets[0].rows[0].cells[0].col, 2);
+    }
+
+    #[test]
+    fn vba_uses_active_sheet_and_workbook_context() {
+        let mut workbook = workbook();
+        workbook.sheets.push(Sheet {
+            name: "Data".to_string(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: 8.43,
+            default_row_height: 15.0,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        });
+        let module = parse_module(
+            "Public Function UseContext() As String\n\
+               ThisWorkbook.Worksheets(\"Data\").Activate\n\
+               Range(\"A1\").Value = 40\n\
+               Application.ActiveSheet.Cells(2, 1).Value = 2\n\
+               UseContext = ActiveSheet.Name & \"|\" & ActiveWorkbook.Worksheets(2).Range(\"A1\").Value + ActiveWorkbook.Sheets(2).Cells(2, 1).Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "UseContext", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("Data|42".to_string()));
+        assert!(workbook.sheets[0].rows.is_empty());
+        assert!(matches!(
+            workbook.sheets[1].rows[0].cells[0].value,
+            CellValue::Number(40.0)
+        ));
+        assert!(matches!(
+            workbook.sheets[1].rows[1].cells[0].value,
+            CellValue::Number(2.0)
+        ));
     }
 }
