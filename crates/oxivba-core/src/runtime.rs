@@ -711,6 +711,7 @@ impl<'a> Runtime<'a> {
                 span,
             } => {
                 let value = self.eval_expr(value, frame)?;
+                let value = self.let_value(value, span.line)?;
                 self.assign(target, value, frame, span.line)?;
                 Ok(Flow::Continue)
             }
@@ -719,7 +720,12 @@ impl<'a> Runtime<'a> {
                 value,
                 span,
             } => {
-                let value = self.eval_expr(value, frame)?;
+                let value = match value {
+                    Expr::EvaluateShortcut { text, .. } => {
+                        self.evaluate_shortcut(text, span.line, true)?
+                    }
+                    _ => self.eval_expr(value, frame)?,
+                };
                 if !matches!(value, Value::Object(_) | Value::Nothing) {
                     return Err(error(
                         RuntimeErrorKind::TypeMismatch,
@@ -1593,6 +1599,26 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<(), RuntimeError> {
         match target {
+            Expr::EvaluateShortcut { text, .. } => {
+                let receiver = match self.evaluate_shortcut(text, line, true)? {
+                    Value::Object(receiver) => receiver,
+                    _ => {
+                        return Err(error(
+                            RuntimeErrorKind::TypeMismatch,
+                            "Evaluate assignment target is not an object",
+                            Some(line),
+                        ))
+                    }
+                };
+                match self.host_set(&receiver, "Value", value, line)? {
+                    true => Ok(()),
+                    false => Err(error(
+                        RuntimeErrorKind::Unsupported,
+                        "evaluated object has no writable default Value property",
+                        Some(line),
+                    )),
+                }
+            }
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
                 let implicit_variant = self.lookup_slot(frame, name).is_none();
                 let mut value = match self.fixed_string_width(frame, name) {
@@ -1702,6 +1728,7 @@ impl<'a> Runtime<'a> {
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
+            Expr::EvaluateShortcut { text, span } => self.evaluate_shortcut(text, span.line, false),
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
                 if let Some(value) = self.read_variable(frame, name, span.line)? {
                     return Ok(value);
@@ -2154,7 +2181,11 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<ObjectRef, RuntimeError> {
-        let value = self.eval_expr(expr, frame).map_err(|failure| {
+        let value = match expr {
+            Expr::EvaluateShortcut { text, .. } => self.evaluate_shortcut(text, line, true),
+            _ => self.eval_expr(expr, frame),
+        }
+        .map_err(|failure| {
             if failure.kind == RuntimeErrorKind::ProcedureNotFound {
                 error(
                     RuntimeErrorKind::Unsupported,
@@ -2177,6 +2208,52 @@ impl<'a> Runtime<'a> {
                 "VBA member access requires an object",
                 Some(line),
             )),
+        }
+    }
+
+    fn evaluate_shortcut(
+        &mut self,
+        text: &str,
+        line: u32,
+        object_context: bool,
+    ) -> Result<Value, RuntimeError> {
+        let value = self
+            .host_call(None, "Evaluate", &[Value::String(text.to_string())], line)?
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::Unsupported,
+                    "Evaluate requires a configured VBA host",
+                    Some(line),
+                )
+            })?;
+        if object_context {
+            return match value {
+                Value::Object(_) => Ok(value),
+                _ => Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "evaluated expression does not return an object",
+                    Some(line),
+                )),
+            };
+        }
+        self.let_value(value, line)
+    }
+
+    fn let_value(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
+        match value {
+            Value::Object(receiver) => self.host_get(&receiver, "Value", line)?.ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::TypeMismatch,
+                    format!("{} has no default scalar Value property", receiver.kind),
+                    Some(line),
+                )
+            }),
+            Value::Nothing => Err(error(
+                RuntimeErrorKind::ObjectVariableNotSet,
+                "object variable or With block variable not set",
+                Some(line),
+            )),
+            value => Ok(value),
         }
     }
 
@@ -4029,9 +4106,9 @@ mod tests {
                 }
                 return Ok(None);
             }
-            if name.eq_ignore_ascii_case("range") {
+            if name.eq_ignore_ascii_case("range") || name.eq_ignore_ascii_case("evaluate") {
                 let [Value::String(address)] = args else {
-                    return Err("Range expects one A1 address".to_string());
+                    return Err(format!("{name} expects one A1 address"));
                 };
                 let address = address.to_ascii_uppercase();
                 let column = address
@@ -4322,6 +4399,28 @@ mod tests {
         assert_eq!(value, Value::Integer(42));
         assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(40)));
         assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn evaluates_bracket_shortcuts_in_value_object_and_assignment_contexts() {
+        let module = parse_module(
+            "Public Function ShortcutProbe() As String\n\
+               Dim cell As Object\n\
+               Dim copied As Long\n\
+               [A1] = 40\n\
+               Set cell = [A1]\n\
+               [A2] = [A1] + 2\n\
+               copied = Range(\"A2\")\n\
+               ShortcutProbe = cell.Value & \"|\" & [A2] & \"|\" & copied\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let result = execute_with_host(&module, "ShortcutProbe", vec![], &mut host).unwrap();
+
+        assert_eq!(result, Value::String("40|42|42".to_string()));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(40)));
+        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(42)));
     }
 
     #[test]

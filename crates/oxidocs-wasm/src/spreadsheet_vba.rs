@@ -214,6 +214,46 @@ impl<'a> WorkbookHost<'a> {
         })))
     }
 
+    fn evaluate_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        let [Value::String(expression)] = args else {
+            return Err("Evaluate expects one String expression".to_string());
+        };
+        let expression = expression
+            .trim()
+            .strip_prefix('=')
+            .unwrap_or(expression.trim());
+        let expression = expression
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(expression)
+            .trim();
+        let (sheet, reference) = match expression.rsplit_once('!') {
+            Some((sheet_name, reference)) => {
+                let mut sheet_name = sheet_name.trim();
+                if let Some(workbook_end) = sheet_name.rfind(']') {
+                    sheet_name = &sheet_name[workbook_end + 1..];
+                }
+                let sheet_name = if sheet_name.starts_with('\'')
+                    && sheet_name.ends_with('\'')
+                    && sheet_name.len() >= 2
+                {
+                    sheet_name[1..sheet_name.len() - 1].replace("''", "'")
+                } else {
+                    sheet_name.to_string()
+                };
+                let sheet = self
+                    .workbook
+                    .sheets
+                    .iter()
+                    .position(|candidate| candidate.name.eq_ignore_ascii_case(&sheet_name))
+                    .ok_or_else(|| format!("worksheet not found: {sheet_name}"))?;
+                (sheet, reference.trim())
+            }
+            None => (sheet, expression),
+        };
+        self.range_object(sheet, &[Value::String(reference.to_string())])
+    }
+
     fn used_range_object(&mut self, sheet: usize) -> Result<Value, String> {
         let worksheet = self
             .workbook
@@ -788,6 +828,9 @@ impl Host for WorkbookHost<'_> {
     ) -> Result<Option<Value>, String> {
         if let Some(receiver) = receiver {
             if let Some(sheet) = self.worksheet(receiver) {
+                if name.eq_ignore_ascii_case("evaluate") {
+                    return self.evaluate_object(sheet, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("range") {
                     return self.range_object(sheet, args).map(Some);
                 }
@@ -823,6 +866,9 @@ impl Host for WorkbookHost<'_> {
                 && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
             {
                 return self.worksheets_object_or_item(args).map(Some);
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("evaluate") {
+                return self.evaluate_object(self.active_sheet, args).map(Some);
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("rows") {
                 return self
@@ -903,6 +949,9 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("range") {
             return self.range_object(self.active_sheet, args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("evaluate") {
+            return self.evaluate_object(self.active_sheet, args).map(Some);
         }
         if name.eq_ignore_ascii_case("cells") {
             return self.cells_object(self.active_sheet, args).map(Some);
@@ -1191,7 +1240,8 @@ fn parse_range_reference(reference: &str) -> Result<((u32, u32), (u32, u32)), St
 }
 
 fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
-    let reference = reference.trim();
+    let reference = reference.trim().replace('$', "");
+    let reference = reference.as_str();
     if reference.is_empty() || reference.contains(':') || reference.contains('!') {
         return Err(format!(
             "only a single-sheet cell reference is supported: {reference}"
@@ -1607,6 +1657,45 @@ mod tests {
             workbook.sheets[1].rows[1].cells[0].value,
             CellValue::Number(value) if value == 2.0
         ));
+    }
+
+    #[test]
+    fn vba_evaluates_bracket_and_explicit_a1_references() {
+        let mut workbook = workbook();
+        workbook.sheets.push(Sheet {
+            name: "Data Sheet".to_string(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: 8.43,
+            default_row_height: 15.0,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        });
+        let module = parse_module(
+            "Public Function EvaluateReferences() As String\n\
+               Dim target As Range\n\
+               Dim item As Variant\n\
+               Dim total As Long\n\
+               [A1:B2] = 5\n\
+               Evaluate(\"$C$1\").Value = 20\n\
+               ['Data Sheet'!A1] = 30\n\
+               Set target = ['Data Sheet'!$B$2]\n\
+               target.Value = 40\n\
+               For Each item In [A1:B2]\n\
+                 total = total + item\n\
+               Next item\n\
+               EvaluateReferences = total & \"|\" & [C1] & \"|\" & Worksheets(\"Data Sheet\").Range(\"A1\").Value & \"|\" & target.Value\n\
+             End Function\n",
+        )
+        .unwrap();
+
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "EvaluateReferences", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("20|20|30|40".to_string()));
     }
 
     #[test]
