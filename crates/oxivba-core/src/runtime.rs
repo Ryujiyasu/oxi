@@ -825,8 +825,9 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        let option_compare_text = self.option_compare_text();
         let compare = |op, lhs, rhs| {
-            binary(op, lhs, rhs)
+            binary(op, lhs, rhs, option_compare_text)
                 .map_err(|(kind, message)| error(kind, message, Some(line)))
                 .and_then(|value| {
                     truthy(&value).map_err(|message| {
@@ -1239,6 +1240,16 @@ impl<'a> Runtime<'a> {
             .unwrap_or(0)
     }
 
+    fn option_compare_text(&self) -> bool {
+        self.module.items.iter().any(|item| {
+            matches!(
+                item,
+                ModuleItem::Option(ModuleOption::Compare(mode), _)
+                    if mode.eq_ignore_ascii_case("text")
+            )
+        })
+    }
+
     fn lookup_slot(&self, frame: &Frame, name: &str) -> Option<ValueSlot> {
         let name = key(name);
         frame
@@ -1409,6 +1420,9 @@ impl<'a> Runtime<'a> {
                 if let Some(value) = self.read_variable(frame, name, span.line)? {
                     return Ok(value);
                 }
+                if let Some(value) = builtin_constant(name) {
+                    return Ok(value);
+                }
                 if name.eq_ignore_ascii_case("err") {
                     return Ok(Value::Object(ObjectRef {
                         handle: u64::MAX,
@@ -1434,7 +1448,7 @@ impl<'a> Runtime<'a> {
             Expr::Binary { op, lhs, rhs, span } => {
                 let lhs = self.eval_expr(lhs, frame)?;
                 let rhs = self.eval_expr(rhs, frame)?;
-                binary(*op, lhs, rhs)
+                binary(*op, lhs, rhs, self.option_compare_text())
                     .map_err(|(kind, message)| error(kind, message, Some(span.line)))
             }
             Expr::TypeOf {
@@ -1816,7 +1830,7 @@ impl<'a> Runtime<'a> {
         ) {
             return self.call_procedure(name, args, line);
         }
-        if let Some(result) = call_builtin(name, &args, line) {
+        if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
         }
         if let Some(value) = self.host_call(None, name, &args, line.unwrap_or(0))? {
@@ -2430,6 +2444,7 @@ fn call_builtin(
     name: &str,
     args: &[Value],
     line: Option<u32>,
+    option_compare_text: bool,
 ) -> Option<Result<Value, RuntimeError>> {
     let name = name.to_ascii_lowercase();
     let known = matches!(
@@ -2438,8 +2453,14 @@ fn call_builtin(
             | "array"
             | "cbool"
             | "cdbl"
+            | "chr"
+            | "chrw"
             | "clng"
             | "cstr"
+            | "asc"
+            | "ascw"
+            | "instr"
+            | "instrrev"
             | "isarray"
             | "isempty"
             | "ismissing"
@@ -2448,7 +2469,18 @@ fn call_builtin(
             | "isobject"
             | "lbound"
             | "lcase"
+            | "left"
             | "len"
+            | "ltrim"
+            | "mid"
+            | "replace"
+            | "right"
+            | "rtrim"
+            | "space"
+            | "split"
+            | "join"
+            | "string"
+            | "strreverse"
             | "trim"
             | "typename"
             | "ubound"
@@ -2459,6 +2491,28 @@ fn call_builtin(
         return None;
     }
     Some((|| {
+        if matches!(
+            name.as_str(),
+            "asc"
+                | "ascw"
+                | "chr"
+                | "chrw"
+                | "instr"
+                | "instrrev"
+                | "join"
+                | "left"
+                | "ltrim"
+                | "mid"
+                | "replace"
+                | "right"
+                | "rtrim"
+                | "space"
+                | "split"
+                | "string"
+                | "strreverse"
+        ) {
+            return call_string_builtin(&name, args, line, option_compare_text);
+        }
         if name == "array" {
             return Ok(Value::Array(ArrayValue {
                 dimensions: vec![ArrayDimension {
@@ -2614,6 +2668,504 @@ fn call_builtin(
     })())
 }
 
+fn call_string_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+    option_compare_text: bool,
+) -> Result<Value, RuntimeError> {
+    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    let wrong_count = |expected: &str| {
+        error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("{name} expects {expected}, received {}", args.len()),
+            line,
+        )
+    };
+    let nullable_text = |value: &Value| -> Result<Option<String>, RuntimeError> {
+        match value {
+            Value::Null => Ok(None),
+            _ => text(value).map(Some).map_err(mismatch),
+        }
+    };
+
+    match name {
+        "ltrim" | "rtrim" | "strreverse" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let Some(value) = nullable_text(&args[0])? else {
+                return Ok(Value::Null);
+            };
+            Ok(Value::String(match name {
+                "ltrim" => value.trim_start_matches(' ').to_string(),
+                "rtrim" => value.trim_end_matches(' ').to_string(),
+                "strreverse" => value.chars().rev().collect(),
+                _ => unreachable!(),
+            }))
+        }
+        "asc" | "ascw" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let value = nullable_text(&args[0])?
+                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+            let unit = value.encode_utf16().next().ok_or_else(|| {
+                invalid_procedure_call(format!("{name} requires a non-empty String"), line)
+            })?;
+            let value = if name == "ascw" {
+                i64::from(unit as i16)
+            } else {
+                i64::from(unit)
+            };
+            Ok(Value::Integer(value))
+        }
+        "chr" | "chrw" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let value = integer_argument(&args[0], line)?;
+            let valid = (name == "chrw" && (-32_768..=65_535).contains(&value))
+                || (name == "chr" && (0..=255).contains(&value));
+            let unit = if valid {
+                value as u16
+            } else {
+                return Err(invalid_procedure_call(
+                    format!("character code is out of range for {name}"),
+                    line,
+                ));
+            };
+            Ok(Value::String(String::from_utf16_lossy(&[unit])))
+        }
+        "left" | "right" => {
+            if args.len() != 2 {
+                return Err(wrong_count("2 arguments"));
+            }
+            let Some(value) = nullable_text(&args[0])? else {
+                return Ok(Value::Null);
+            };
+            let length = nonnegative_length(&args[1], line)?;
+            let units = value.encode_utf16().collect::<Vec<_>>();
+            let length = length.min(units.len());
+            let selected = if name == "left" {
+                &units[..length]
+            } else {
+                &units[units.len() - length..]
+            };
+            Ok(Value::String(String::from_utf16_lossy(selected)))
+        }
+        "mid" => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(wrong_count("2 or 3 arguments"));
+            }
+            let Some(value) = nullable_text(&args[0])? else {
+                return Ok(Value::Null);
+            };
+            let start = positive_position(&args[1], line)?;
+            let units = value.encode_utf16().collect::<Vec<_>>();
+            if start > units.len() {
+                return Ok(Value::String(String::new()));
+            }
+            let available = units.len() - start;
+            let length = if args.len() == 3 {
+                nonnegative_length(&args[2], line)?.min(available)
+            } else {
+                available
+            };
+            Ok(Value::String(String::from_utf16_lossy(
+                &units[start..start + length],
+            )))
+        }
+        "instr" => {
+            if !(2..=4).contains(&args.len()) {
+                return Err(wrong_count("2 to 4 arguments"));
+            }
+            let (start, source_index, needle_index, compare_index) = if args.len() == 2 {
+                (0, 0, 1, None)
+            } else {
+                (
+                    positive_position(&args[0], line)?,
+                    1,
+                    2,
+                    (args.len() == 4).then_some(3),
+                )
+            };
+            let Some(source) = nullable_text(&args[source_index])? else {
+                return Ok(Value::Null);
+            };
+            let Some(needle) = nullable_text(&args[needle_index])? else {
+                return Ok(Value::Null);
+            };
+            let compare = compare_mode(
+                compare_index.map(|index| &args[index]),
+                option_compare_text,
+                line,
+            )?;
+            let source = source.encode_utf16().collect::<Vec<_>>();
+            let needle = needle.encode_utf16().collect::<Vec<_>>();
+            Ok(Value::Integer(
+                utf16_find(&source, &needle, start, compare)
+                    .map(|offset| offset as i64 + 1)
+                    .unwrap_or(0),
+            ))
+        }
+        "instrrev" => {
+            if !(2..=4).contains(&args.len()) {
+                return Err(wrong_count("2 to 4 arguments"));
+            }
+            let Some(source) = nullable_text(&args[0])? else {
+                return Ok(Value::Null);
+            };
+            let Some(needle) = nullable_text(&args[1])? else {
+                return Ok(Value::Null);
+            };
+            let source = source.encode_utf16().collect::<Vec<_>>();
+            let needle = needle.encode_utf16().collect::<Vec<_>>();
+            let start = match args.get(2) {
+                None | Some(Value::Missing) => source.len(),
+                Some(value) => {
+                    let value = integer_argument(value, line)?;
+                    if value == -1 {
+                        source.len()
+                    } else if value < 1 {
+                        return Err(invalid_procedure_call(
+                            "InStrRev start must be positive or -1".to_string(),
+                            line,
+                        ));
+                    } else {
+                        usize::try_from(value)
+                            .unwrap_or(usize::MAX)
+                            .min(source.len())
+                    }
+                }
+            };
+            let compare = compare_mode(args.get(3), option_compare_text, line)?;
+            Ok(Value::Integer(
+                utf16_rfind(&source, &needle, start, compare)
+                    .map(|offset| offset as i64 + 1)
+                    .unwrap_or(0),
+            ))
+        }
+        "replace" => {
+            if !(3..=6).contains(&args.len()) {
+                return Err(wrong_count("3 to 6 arguments"));
+            }
+            let source = nullable_text(&args[0])?
+                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+            let needle = nullable_text(&args[1])?
+                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+            let replacement = nullable_text(&args[2])?
+                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+            let start = match args.get(3) {
+                None | Some(Value::Missing) => 0,
+                Some(value) => positive_position(value, line)?,
+            };
+            let count = match args.get(4) {
+                None | Some(Value::Missing) => usize::MAX,
+                Some(value) => {
+                    let value = integer_argument(value, line)?;
+                    if value == -1 {
+                        usize::MAX
+                    } else if value < 0 {
+                        return Err(invalid_procedure_call(
+                            "Replace count must be nonnegative or -1".to_string(),
+                            line,
+                        ));
+                    } else {
+                        usize::try_from(value).unwrap_or(usize::MAX)
+                    }
+                }
+            };
+            let compare = compare_mode(args.get(5), option_compare_text, line)?;
+            Ok(Value::String(utf16_replace(
+                &source,
+                &needle,
+                &replacement,
+                start,
+                count,
+                compare,
+            )))
+        }
+        "split" => {
+            if !(1..=4).contains(&args.len()) {
+                return Err(wrong_count("1 to 4 arguments"));
+            }
+            let source = nullable_text(&args[0])?
+                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+            let delimiter = match args.get(1) {
+                None | Some(Value::Missing) => " ".to_string(),
+                Some(value) => nullable_text(value)?
+                    .ok_or_else(|| mismatch("invalid use of Null".to_string()))?,
+            };
+            let limit = match args.get(2) {
+                None | Some(Value::Missing) => usize::MAX,
+                Some(value) => {
+                    let value = integer_argument(value, line)?;
+                    if value == -1 {
+                        usize::MAX
+                    } else if value < 0 {
+                        return Err(invalid_procedure_call(
+                            "Split limit must be nonnegative or -1".to_string(),
+                            line,
+                        ));
+                    } else {
+                        usize::try_from(value).unwrap_or(usize::MAX)
+                    }
+                }
+            };
+            let compare = compare_mode(args.get(3), option_compare_text, line)?;
+            let values = utf16_split(&source, &delimiter, limit, compare)
+                .into_iter()
+                .map(Value::String)
+                .collect::<Vec<_>>();
+            Ok(Value::Array(ArrayValue {
+                dimensions: vec![ArrayDimension {
+                    lower_bound: 0,
+                    length: values.len(),
+                }],
+                values,
+                element_default: Box::new(Value::String(String::new())),
+            }))
+        }
+        "join" => {
+            if !(1..=2).contains(&args.len()) {
+                return Err(wrong_count("1 or 2 arguments"));
+            }
+            let Value::Array(array) = &args[0] else {
+                return Err(mismatch("Join requires an array".to_string()));
+            };
+            if array.dimensions.len() != 1 {
+                return Err(mismatch(
+                    "Join requires a one-dimensional array".to_string(),
+                ));
+            }
+            let delimiter = match args.get(1) {
+                None | Some(Value::Missing) => " ".to_string(),
+                Some(value) => nullable_text(value)?
+                    .ok_or_else(|| mismatch("invalid use of Null".to_string()))?,
+            };
+            let values = array
+                .values
+                .iter()
+                .map(|value| text(value).map_err(mismatch))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::String(values.join(&delimiter)))
+        }
+        "space" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let length = nonnegative_length(&args[0], line)?;
+            if length > 1_000_000 {
+                return Err(error(
+                    RuntimeErrorKind::Overflow,
+                    "Space result exceeds the browser runtime limit",
+                    line,
+                ));
+            }
+            Ok(Value::String(" ".repeat(length)))
+        }
+        "string" => {
+            if args.len() != 2 {
+                return Err(wrong_count("2 arguments"));
+            }
+            let length = nonnegative_length(&args[0], line)?;
+            if length > 1_000_000 {
+                return Err(error(
+                    RuntimeErrorKind::Overflow,
+                    "String result exceeds the browser runtime limit",
+                    line,
+                ));
+            }
+            let character = match &args[1] {
+                Value::String(value) => value.chars().next().ok_or_else(|| {
+                    invalid_procedure_call("String requires a character".to_string(), line)
+                })?,
+                value => {
+                    let code = integer_argument(value, line)?;
+                    char::from_u32((code & 0xff) as u32).unwrap_or('\u{fffd}')
+                }
+            };
+            Ok(Value::String(character.to_string().repeat(length)))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn builtin_constant(name: &str) -> Option<Value> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "vbbinarycompare" => Value::Integer(0),
+        "vbtextcompare" => Value::Integer(1),
+        "vbusecompareoption" => Value::Integer(-1),
+        "vbcrlf" | "vbnewline" => Value::String("\r\n".to_string()),
+        "vbcr" => Value::String("\r".to_string()),
+        "vblf" => Value::String("\n".to_string()),
+        "vbtab" => Value::String("\t".to_string()),
+        "vbback" => Value::String("\u{8}".to_string()),
+        "vbformfeed" => Value::String("\u{c}".to_string()),
+        "vbverticaltab" => Value::String("\u{b}".to_string()),
+        "vbnullstring" => Value::String(String::new()),
+        _ => return None,
+    })
+}
+
+fn integer_argument(value: &Value, line: Option<u32>) -> Result<i64, RuntimeError> {
+    let value = number(value)
+        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+        .round_ties_even();
+    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        Err(error(
+            RuntimeErrorKind::Overflow,
+            "numeric argument is outside the supported integer range",
+            line,
+        ))
+    } else {
+        Ok(value as i64)
+    }
+}
+
+fn nonnegative_length(value: &Value, line: Option<u32>) -> Result<usize, RuntimeError> {
+    let value = integer_argument(value, line)?;
+    usize::try_from(value)
+        .map_err(|_| invalid_procedure_call("String length cannot be negative".to_string(), line))
+}
+
+fn positive_position(value: &Value, line: Option<u32>) -> Result<usize, RuntimeError> {
+    let value = integer_argument(value, line)?;
+    if value < 1 {
+        Err(invalid_procedure_call(
+            "String position must be positive".to_string(),
+            line,
+        ))
+    } else {
+        Ok(usize::try_from(value - 1).unwrap_or(usize::MAX))
+    }
+}
+
+fn compare_mode(
+    value: Option<&Value>,
+    option_compare_text: bool,
+    line: Option<u32>,
+) -> Result<bool, RuntimeError> {
+    let mode = match value {
+        None | Some(Value::Missing) => return Ok(option_compare_text),
+        Some(value) => integer_argument(value, line)?,
+    };
+    match mode {
+        -1 => Ok(option_compare_text),
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(invalid_procedure_call(
+            format!("invalid VBA comparison mode: {mode}"),
+            line,
+        )),
+    }
+}
+
+fn invalid_procedure_call(message: String, line: Option<u32>) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::UserDefined,
+        message,
+        line,
+        vba_number: Some(5),
+        vba_source: Some("VBA".to_string()),
+    }
+}
+
+fn utf16_equal(left: &[u16], right: &[u16], text_compare: bool) -> bool {
+    if left == right {
+        return true;
+    }
+    text_compare
+        && String::from_utf16_lossy(left).to_lowercase()
+            == String::from_utf16_lossy(right).to_lowercase()
+}
+
+fn utf16_find(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<usize> {
+    if start > source.len() {
+        return None;
+    }
+    if needle.is_empty() {
+        return Some(start);
+    }
+    source[start..]
+        .windows(needle.len())
+        .position(|window| utf16_equal(window, needle, text_compare))
+        .map(|offset| start + offset)
+}
+
+fn utf16_rfind(source: &[u16], needle: &[u16], start: usize, text_compare: bool) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(start.min(source.len()));
+    }
+    if needle.len() > source.len() || start == 0 {
+        return None;
+    }
+    let last_start = start.saturating_sub(1).min(source.len() - needle.len());
+    (0..=last_start).rev().find(|offset| {
+        utf16_equal(
+            &source[*offset..*offset + needle.len()],
+            needle,
+            text_compare,
+        )
+    })
+}
+
+fn utf16_replace(
+    source: &str,
+    needle: &str,
+    replacement: &str,
+    start: usize,
+    count: usize,
+    text_compare: bool,
+) -> String {
+    let source = source.encode_utf16().collect::<Vec<_>>();
+    if start >= source.len() {
+        return String::new();
+    }
+    let needle = needle.encode_utf16().collect::<Vec<_>>();
+    let replacement = replacement.encode_utf16().collect::<Vec<_>>();
+    if needle.is_empty() || count == 0 {
+        return String::from_utf16_lossy(&source[start..]);
+    }
+    let mut result = Vec::new();
+    let mut cursor = start;
+    let mut replaced = 0;
+    while replaced < count {
+        let Some(found) = utf16_find(&source, &needle, cursor, text_compare) else {
+            break;
+        };
+        result.extend_from_slice(&source[cursor..found]);
+        result.extend_from_slice(&replacement);
+        cursor = found + needle.len();
+        replaced += 1;
+    }
+    result.extend_from_slice(&source[cursor..]);
+    String::from_utf16_lossy(&result)
+}
+
+fn utf16_split(source: &str, delimiter: &str, limit: usize, text_compare: bool) -> Vec<String> {
+    if source.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    if delimiter.is_empty() || limit == 1 {
+        return vec![source.to_string()];
+    }
+    let source = source.encode_utf16().collect::<Vec<_>>();
+    let delimiter = delimiter.encode_utf16().collect::<Vec<_>>();
+    let mut values = Vec::new();
+    let mut cursor = 0;
+    while values.len().saturating_add(1) < limit {
+        let Some(found) = utf16_find(&source, &delimiter, cursor, text_compare) else {
+            break;
+        };
+        values.push(String::from_utf16_lossy(&source[cursor..found]));
+        cursor = found + delimiter.len();
+    }
+    values.push(String::from_utf16_lossy(&source[cursor..]));
+    values
+}
+
 fn key(name: &str) -> String {
     name.to_ascii_lowercase()
 }
@@ -2753,7 +3305,12 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     }
 }
 
-fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKind, String)> {
+fn binary(
+    op: BinaryOp,
+    lhs: Value,
+    rhs: Value,
+    option_compare_text: bool,
+) -> Result<Value, (RuntimeErrorKind, String)> {
     use BinaryOp::*;
     if op == Is {
         return match (lhs, rhs) {
@@ -2847,10 +3404,156 @@ fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKi
             }))
         }
         Is => unreachable!(),
-        Like => Err((
-            RuntimeErrorKind::Unsupported,
-            format!("operator {op:?} is not executable yet"),
+        Like => Ok(Value::Boolean(
+            like_pattern(
+                &text(&lhs).map_err(mismatch)?,
+                &text(&rhs).map_err(mismatch)?,
+                option_compare_text,
+            )
+            .map_err(|message| (RuntimeErrorKind::TypeMismatch, message))?,
         )),
+    }
+}
+
+#[derive(Debug)]
+enum LikeToken {
+    Literal(char),
+    AnyOne,
+    AnyMany,
+    Digit,
+    Class {
+        negated: bool,
+        ranges: Vec<(char, char)>,
+    },
+}
+
+fn like_pattern(value: &str, pattern: &str, text_compare: bool) -> Result<bool, String> {
+    let tokens = parse_like_pattern(pattern)?;
+    let value = value.chars().collect::<Vec<_>>();
+    let mut memo = BTreeMap::new();
+    Ok(like_matches(&value, &tokens, 0, 0, text_compare, &mut memo))
+}
+
+fn parse_like_pattern(pattern: &str) -> Result<Vec<LikeToken>, String> {
+    let characters = pattern.chars().collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < characters.len() {
+        match characters[index] {
+            '?' => tokens.push(LikeToken::AnyOne),
+            '*' => tokens.push(LikeToken::AnyMany),
+            '#' => tokens.push(LikeToken::Digit),
+            '[' => {
+                let close = characters[index + 1..]
+                    .iter()
+                    .position(|character| *character == ']')
+                    .map(|offset| index + 1 + offset)
+                    .ok_or_else(|| "invalid Like pattern: missing ]".to_string())?;
+                let mut cursor = index + 1;
+                let negated = cursor < close && characters[cursor] == '!';
+                if negated {
+                    cursor += 1;
+                }
+                if cursor == close {
+                    return Err("invalid Like pattern: empty character list".to_string());
+                }
+                let mut ranges = Vec::new();
+                while cursor < close {
+                    let start = characters[cursor];
+                    if cursor + 2 < close && characters[cursor + 1] == '-' {
+                        let end = characters[cursor + 2];
+                        ranges.push((start, end));
+                        cursor += 3;
+                    } else {
+                        ranges.push((start, start));
+                        cursor += 1;
+                    }
+                }
+                tokens.push(LikeToken::Class { negated, ranges });
+                index = close;
+            }
+            character => tokens.push(LikeToken::Literal(character)),
+        }
+        index += 1;
+    }
+    Ok(tokens)
+}
+
+fn like_matches(
+    value: &[char],
+    pattern: &[LikeToken],
+    value_index: usize,
+    pattern_index: usize,
+    text_compare: bool,
+    memo: &mut BTreeMap<(usize, usize), bool>,
+) -> bool {
+    if let Some(result) = memo.get(&(value_index, pattern_index)) {
+        return *result;
+    }
+    let result = match pattern.get(pattern_index) {
+        None => value_index == value.len(),
+        Some(LikeToken::AnyMany) => {
+            like_matches(
+                value,
+                pattern,
+                value_index,
+                pattern_index + 1,
+                text_compare,
+                memo,
+            ) || (value_index < value.len()
+                && like_matches(
+                    value,
+                    pattern,
+                    value_index + 1,
+                    pattern_index,
+                    text_compare,
+                    memo,
+                ))
+        }
+        Some(token) if value_index < value.len() => {
+            let character = value[value_index];
+            let matches = match token {
+                LikeToken::Literal(expected) => {
+                    like_character_equal(character, *expected, text_compare)
+                }
+                LikeToken::AnyOne => true,
+                LikeToken::Digit => character.is_ascii_digit(),
+                LikeToken::Class { negated, ranges } => {
+                    let found = ranges.iter().any(|(start, end)| {
+                        let character = like_fold(character, text_compare);
+                        let start = like_fold(*start, text_compare);
+                        let end = like_fold(*end, text_compare);
+                        start <= character && character <= end
+                    });
+                    found != *negated
+                }
+                LikeToken::AnyMany => unreachable!(),
+            };
+            matches
+                && like_matches(
+                    value,
+                    pattern,
+                    value_index + 1,
+                    pattern_index + 1,
+                    text_compare,
+                    memo,
+                )
+        }
+        Some(_) => false,
+    };
+    memo.insert((value_index, pattern_index), result);
+    result
+}
+
+fn like_character_equal(left: char, right: char, text_compare: bool) -> bool {
+    left == right || (text_compare && left.to_lowercase().eq(right.to_lowercase()))
+}
+
+fn like_fold(value: char, text_compare: bool) -> char {
+    if text_compare {
+        value.to_lowercase().next().unwrap_or(value)
+    } else {
+        value
     }
 }
 
@@ -4026,6 +4729,84 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::String("OXI|3|2|5.5|True".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_string_slicing_search_and_replacement_functions() {
+        let value = run(
+            "Option Compare Text\n\
+             Public Function TextTools() As String\n\
+               Dim source As String\n\
+               source = \"A😀B\"\n\
+               TextTools = Left(source, 3) & \"|\" & Mid(source, 2, 2) & \"|\" & Right(source, 1) & \"|\" & Len(source) & \"|\"\n\
+               TextTools = TextTools & InStr(1, \"日本ABC\", \"abc\", vbUseCompareOption) & \"|\" & InStrRev(\"abAB\", \"ab\", -1, vbTextCompare) & \"|\"\n\
+               TextTools = TextTools & Replace(\"xx-A-a\", \"a\", \"!\", 4, 1, vbTextCompare)\n\
+             End Function\n",
+            "TextTools",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("A😀|😀|B|4|3|3|!-a".to_string()));
+    }
+
+    #[test]
+    fn splits_joins_and_constructs_vba_strings() {
+        let value = run(
+            "Public Function BuildText() As String\n\
+               Dim parts As Variant\n\
+               Dim emptyParts As Variant\n\
+               parts = Split(\"alpha|beta|gamma\", \"|\", 2)\n\
+               emptyParts = Split(\"\")\n\
+               BuildText = Join(parts, \"+\") & \"|\" & parts(1) & \"|\" & LBound(emptyParts) & \"|\" & UBound(emptyParts) & \"|\"\n\
+               BuildText = BuildText & LTrim(\"  left\") & \"|\" & RTrim(\"right  \") & \"|\" & StrReverse(\"abc\") & \"|\"\n\
+               BuildText = BuildText & String(3, \"xy\") & \"|\" & Len(Space(4)) & \"|\" & ChrW(12354) & \"|\" & AscW(\"あ\") & vbTab & \"done\"\n\
+             End Function\n",
+            "BuildText",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "alpha+beta|gamma|beta|gamma|0|-1|left|right|cba|xxx|4|あ|12354\tdone".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn string_functions_propagate_null_and_raise_vba_error_five() {
+        let value = run(
+            "Public Function StringErrors() As String\n\
+               Dim failure As Long\n\
+               On Error Resume Next\n\
+               StringErrors = Left(\"abc\", -1)\n\
+               failure = Err.Number\n\
+               Err.Clear\n\
+               StringErrors = failure & \"|\" & IsNull(Left(Null, 1)) & \"|\" & IsNull(InStr(Null, \"x\"))\n\
+             End Function\n",
+            "StringErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|True|True".to_string()));
+    }
+
+    #[test]
+    fn matches_vba_like_patterns_with_option_compare() {
+        let value = run(
+            "Option Compare Text\n\
+             Public Function PatternSummary() As String\n\
+               PatternSummary = (\"Invoice-42\" Like \"invoice-##\") & \"|\" & (\"ABCxyz\" Like \"[A-C]*[!0-9]\") & \"|\" & (\"fileX\" Like \"file#\") & \"|\" & (\"anything\" Like \"*\")\n\
+             End Function\n",
+            "PatternSummary",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("True|True|False|True".to_string()));
     }
 
     #[test]
