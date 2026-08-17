@@ -391,6 +391,7 @@ impl<'a> WorkbookHost<'a> {
                 .map(|address| self.cell_value(address))
                 .collect(),
             element_default: Box::new(Value::Empty),
+            resizable: true,
         }))
     }
 
@@ -426,6 +427,7 @@ impl<'a> WorkbookHost<'a> {
                 .map(|address| self.cell_formula(address))
                 .collect(),
             element_default: Box::new(Value::String(String::new())),
+            resizable: true,
         }))
     }
 
@@ -1377,6 +1379,7 @@ enum OutputValue {
     Array {
         lower_bound: i64,
         dimensions: Vec<OutputArrayDimension>,
+        resizable: bool,
         values: Vec<OutputValue>,
     },
     Object {
@@ -1406,6 +1409,7 @@ impl From<Value> for OutputValue {
                         length: dimension.length,
                     })
                     .collect(),
+                resizable: value.resizable,
                 values: value.values.into_iter().map(OutputValue::from).collect(),
             },
             Value::Object(value) => Self::Object {

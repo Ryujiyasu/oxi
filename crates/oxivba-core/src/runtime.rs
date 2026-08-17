@@ -68,6 +68,9 @@ pub struct ArrayValue {
     pub dimensions: Vec<ArrayDimension>,
     pub values: Vec<Value>,
     pub element_default: Box<Value>,
+    /// `true` for dynamic arrays and arrays stored in a Variant. Fixed-size
+    /// declaration arrays cannot be deallocated or resized.
+    pub resizable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +159,7 @@ pub struct Runtime<'a> {
     module_constants: BTreeSet<String>,
     module_auto_new: BTreeMap<String, String>,
     module_fixed_strings: BTreeMap<String, usize>,
+    module_variants: BTreeSet<String>,
     static_values: BTreeMap<(String, String), ValueSlot>,
     module_initialized: bool,
     internal_objects: BTreeMap<u64, InternalObject>,
@@ -169,6 +173,7 @@ struct Frame {
     constants: BTreeSet<String>,
     auto_new: BTreeMap<String, String>,
     fixed_strings: BTreeMap<String, usize>,
+    variants: BTreeSet<String>,
     static_procedure: bool,
     with_objects: Vec<ObjectRef>,
     error_mode: ErrorMode,
@@ -233,6 +238,7 @@ impl<'a> Runtime<'a> {
             module_constants: BTreeSet::new(),
             module_auto_new: BTreeMap::new(),
             module_fixed_strings: BTreeMap::new(),
+            module_variants: BTreeSet::new(),
             static_values: BTreeMap::new(),
             module_initialized: false,
             internal_objects: BTreeMap::new(),
@@ -269,6 +275,7 @@ impl<'a> Runtime<'a> {
             self.module_constants.clear();
             self.module_auto_new.clear();
             self.module_fixed_strings.clear();
+            self.module_variants.clear();
             self.internal_objects.clear();
             self.next_internal_handle = 1_u64 << 63;
             self.module_initialized = false;
@@ -290,9 +297,16 @@ impl<'a> Runtime<'a> {
                         }
                         let value =
                             self.declared_value(variable, &mut frame, declaration.span.line)?;
-                        if variable.type_name.fixed_length.is_some() {
+                        if variable.array_bounds.is_none()
+                            && variable.type_name.fixed_length.is_some()
+                        {
                             self.module_fixed_strings
                                 .insert(name.clone(), string_width(&value));
+                        }
+                        if variable.array_bounds.is_none()
+                            && variable.type_name.name.eq_ignore_ascii_case("variant")
+                        {
+                            self.module_variants.insert(name.clone());
                         }
                         self.module_values
                             .insert(name.clone(), Rc::new(RefCell::new(value)));
@@ -387,6 +401,7 @@ impl<'a> Runtime<'a> {
                 }],
                 values: values.collect(),
                 element_default: Box::new(default_value(&param_array.type_name)),
+                resizable: false,
             })));
         } else if received < fixed_count
             && procedure.params[received..]
@@ -422,6 +437,7 @@ impl<'a> Runtime<'a> {
             constants: BTreeSet::new(),
             auto_new: BTreeMap::new(),
             fixed_strings: BTreeMap::new(),
+            variants: BTreeSet::new(),
             static_procedure: procedure.is_static,
             with_objects: Vec::new(),
             error_mode: ErrorMode::Disabled,
@@ -437,12 +453,25 @@ impl<'a> Runtime<'a> {
                 BoundArgument::Reference(value) => value,
             };
             frame.values.insert(key(&param.name), value);
+            if !param.is_array
+                && param.mode != ParamMode::ParamArray
+                && param.type_name.name.eq_ignore_ascii_case("variant")
+            {
+                frame.variants.insert(key(&param.name));
+            }
         }
         if !matches!(procedure.kind, ProcKind::Sub) {
             frame.values.insert(
                 frame.procedure_name.clone(),
                 Rc::new(RefCell::new(default_return_value(procedure))),
             );
+            if procedure
+                .return_type
+                .as_ref()
+                .is_none_or(|type_name| type_name.name.eq_ignore_ascii_case("variant"))
+            {
+                frame.variants.insert(frame.procedure_name.clone());
+            }
         }
         self.declare_procedure_locals(&procedure.body, &mut frame)?;
 
@@ -605,6 +634,7 @@ impl<'a> Runtime<'a> {
                 constants: BTreeSet::new(),
                 auto_new: BTreeMap::new(),
                 fixed_strings: BTreeMap::new(),
+                variants: BTreeSet::new(),
                 static_procedure: false,
                 with_objects: Vec::new(),
                 error_mode: ErrorMode::Disabled,
@@ -714,6 +744,12 @@ impl<'a> Runtime<'a> {
                 }
                 Ok(Flow::Continue)
             }
+            Statement::Erase { targets, span } => {
+                for target in targets {
+                    self.erase_array(target, frame, span.line)?;
+                }
+                Ok(Flow::Continue)
+            }
             Statement::MidAssign(statement) => {
                 self.exec_mid_assign(statement, frame)?;
                 Ok(Flow::Continue)
@@ -815,6 +851,29 @@ impl<'a> Runtime<'a> {
                 line_of(other),
             )),
         }
+    }
+
+    fn erase_array(
+        &mut self,
+        target: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<(), RuntimeError> {
+        let value = self.eval_expr(target, frame)?;
+        let Value::Array(mut array) = value else {
+            return Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "Erase target must contain an array",
+                Some(line),
+            ));
+        };
+        if array.resizable {
+            array.dimensions.clear();
+            array.values.clear();
+        } else {
+            array.values.fill(*array.element_default.clone());
+        }
+        self.assign(target, Value::Array(array), frame, line)
     }
 
     fn exec_mid_assign(
@@ -1154,10 +1213,15 @@ impl<'a> Runtime<'a> {
                     decl.span.line,
                 )?))
             };
-            if variable.type_name.fixed_length.is_some() {
+            if variable.array_bounds.is_none() && variable.type_name.fixed_length.is_some() {
                 frame
                     .fixed_strings
                     .insert(name.clone(), string_width(&slot.borrow()));
+            }
+            if variable.array_bounds.is_none()
+                && variable.type_name.name.eq_ignore_ascii_case("variant")
+            {
+                frame.variants.insert(name.clone());
             }
             frame.values.insert(name.clone(), slot);
             if variable.type_name.is_new {
@@ -1225,7 +1289,9 @@ impl<'a> Runtime<'a> {
             return self.new_object(&variable.type_name.name, line);
         }
         match &variable.array_bounds {
-            Some(bounds) => self.make_array(bounds, &variable.type_name, frame, line),
+            Some(bounds) => {
+                self.make_array(bounds, &variable.type_name, frame, line, bounds.is_empty())
+            }
             None => match &variable.value {
                 Some(expr) => {
                     let value = self.eval_expr(expr, frame)?;
@@ -1286,7 +1352,12 @@ impl<'a> Runtime<'a> {
             return Err(constant_assignment_error(&item.name, line));
         }
         let existing_slot = self.lookup_slot(frame, &item.name);
-        let mut replacement = match self.make_array(bounds, &item.type_name, frame, line)? {
+        if let Some(existing) = &existing_slot {
+            if matches!(&*existing.borrow(), Value::Array(array) if !array.resizable) {
+                return Err(fixed_array_error(&item.name, Some(line)));
+            }
+        }
+        let mut replacement = match self.make_array(bounds, &item.type_name, frame, line, true)? {
             Value::Array(array) => array,
             _ => unreachable!(),
         };
@@ -1343,6 +1414,7 @@ impl<'a> Runtime<'a> {
         element_type: &TypeName,
         frame: &mut Frame,
         line: u32,
+        resizable: bool,
     ) -> Result<Value, RuntimeError> {
         if bounds.is_empty() {
             return Ok(Value::Array(ArrayValue {
@@ -1353,6 +1425,7 @@ impl<'a> Runtime<'a> {
                     frame,
                     line,
                 )?),
+                resizable,
             }));
         }
         let mut dimensions = Vec::with_capacity(bounds.len());
@@ -1401,6 +1474,7 @@ impl<'a> Runtime<'a> {
             dimensions,
             values: vec![default.clone(); total_len],
             element_default: Box::new(default),
+            resizable,
         }))
     }
 
@@ -1502,6 +1576,15 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn is_variant_variable(&self, frame: &Frame, name: &str) -> bool {
+        let name = key(name);
+        if frame.values.contains_key(&name) {
+            frame.variants.contains(&name)
+        } else {
+            self.module_variants.contains(&name)
+        }
+    }
+
     fn assign(
         &mut self,
         target: &Expr,
@@ -1511,10 +1594,16 @@ impl<'a> Runtime<'a> {
     ) -> Result<(), RuntimeError> {
         match target {
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
-                let value = match self.fixed_string_width(frame, name) {
+                let implicit_variant = self.lookup_slot(frame, name).is_none();
+                let mut value = match self.fixed_string_width(frame, name) {
                     Some(width) => coerce_string_width(value, width, Some(line))?,
                     None => value,
                 };
+                if implicit_variant || self.is_variant_variable(frame, name) {
+                    if let Value::Array(array) = &mut value {
+                        array.resizable = true;
+                    }
+                }
                 let name = key(name);
                 if let Some(existing) = frame.values.get(&name) {
                     if frame.constants.contains(&name) {
@@ -1527,6 +1616,9 @@ impl<'a> Runtime<'a> {
                     }
                     *existing.borrow_mut() = value;
                 } else {
+                    if implicit_variant {
+                        frame.variants.insert(name.clone());
+                    }
                     frame.values.insert(name, Rc::new(RefCell::new(value)));
                 }
                 Ok(())
@@ -1943,6 +2035,7 @@ impl<'a> Runtime<'a> {
                     }],
                     values,
                     element_default: Box::new(default_value(&parameter.type_name)),
+                    resizable: false,
                 })));
                 continue;
             }
@@ -2365,6 +2458,7 @@ fn empty_frame() -> Frame {
         constants: BTreeSet::new(),
         auto_new: BTreeMap::new(),
         fixed_strings: BTreeMap::new(),
+        variants: BTreeSet::new(),
         static_procedure: false,
         with_objects: Vec::new(),
         error_mode: ErrorMode::Disabled,
@@ -2738,6 +2832,7 @@ fn call_builtin(
                 }],
                 values: args.to_vec(),
                 element_default: Box::new(Value::Empty),
+                resizable: true,
             }));
         }
         if name == "ismissing" {
@@ -3142,6 +3237,7 @@ fn call_string_builtin(
                 }],
                 values,
                 element_default: Box::new(Value::String(String::new())),
+                resizable: true,
             }))
         }
         "join" => {
@@ -3285,6 +3381,16 @@ fn invalid_procedure_call(message: String, line: Option<u32>) -> RuntimeError {
         message,
         line,
         vba_number: Some(5),
+        vba_source: Some("VBA".to_string()),
+    }
+}
+
+fn fixed_array_error(name: &str, line: Option<u32>) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::UserDefined,
+        message: format!("this array is fixed or temporarily locked: {name}"),
+        line,
+        vba_number: Some(10),
         vba_source: Some("VBA".to_string()),
     }
 }
@@ -3833,6 +3939,9 @@ fn line_of(statement: &Statement) -> Option<u32> {
         Statement::Assign { span, .. }
         | Statement::SetAssign { span, .. }
         | Statement::ReDim { span, .. }
+        | Statement::Erase { span, .. }
+        | Statement::MidAssign(MidAssignStmt { span, .. })
+        | Statement::AlignedAssign(AlignedAssignStmt { span, .. })
         | Statement::Call { span, .. }
         | Statement::Resume { span, .. }
         | Statement::GoTo { span, .. }
@@ -5242,7 +5351,8 @@ mod tests {
 
         let failure = run(
             "Public Sub Broken()\n\
-               Dim values(1 To 2, 1 To 2) As Long\n\
+               Dim values() As Long\n\
+               ReDim values(1 To 2, 1 To 2)\n\
                ReDim Preserve values(1 To 3, 1 To 2)\n\
              End Sub\n",
             "Broken",
@@ -5271,7 +5381,8 @@ mod tests {
     fn redim_preserve_rejects_a_changed_lower_bound() {
         let failure = run(
             "Public Sub Broken()\n\
-               Dim values(1 To 2) As Long\n\
+               Dim values() As Long\n\
+               ReDim values(1 To 2)\n\
                ReDim Preserve values(0 To 3)\n\
              End Sub\n",
             "Broken",
@@ -5279,7 +5390,69 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(failure.kind, RuntimeErrorKind::SubscriptOutOfRange);
-        assert_eq!(failure.line, Some(3));
+        assert_eq!(failure.line, Some(4));
+    }
+
+    #[test]
+    fn erase_resets_fixed_arrays_and_rejects_redim_with_error_ten() {
+        let value = run(
+            "Public Function FixedErase() As String\n\
+               Dim numbers(1 To 2) As Long\n\
+               Dim labels(0 To 1) As String * 3\n\
+               Dim objects(1 To 1) As Object\n\
+               Dim failure As Long\n\
+               numbers(1) = 10\n\
+               numbers(2) = 20\n\
+               labels(0) = \"abc\"\n\
+               Erase numbers, labels, objects\n\
+               On Error Resume Next\n\
+               ReDim numbers(1 To 3)\n\
+               failure = Err.Number\n\
+               On Error GoTo 0\n\
+               FixedErase = numbers(1) & \"|\" & numbers(2) & \"|\" & LBound(numbers) & \"|\" & UBound(numbers) & \"|[\" & labels(0) & \"]|\" & (objects(1) Is Nothing) & \"|\" & failure\n\
+             End Function\n",
+            "FixedErase",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("0|0|1|2|[   ]|True|10".to_string()));
+    }
+
+    #[test]
+    fn erase_deallocates_dynamic_and_variant_arrays_until_redim() {
+        let value = run(
+            "Public Function DynamicErase() As String\n\
+               Dim dynamicValues() As Long\n\
+               Dim fixedValues(1 To 2) As Long\n\
+               Dim variantValues As Variant\n\
+               Dim firstFailure As Long\n\
+               Dim secondFailure As Long\n\
+               Dim ignored As Long\n\
+               ReDim dynamicValues(2 To 3)\n\
+               dynamicValues(2) = 20\n\
+               fixedValues(1) = 7\n\
+               variantValues = fixedValues\n\
+               Erase dynamicValues, variantValues\n\
+               On Error Resume Next\n\
+               ignored = LBound(dynamicValues)\n\
+               firstFailure = Err.Number\n\
+               Err.Clear\n\
+               ignored = UBound(variantValues)\n\
+               secondFailure = Err.Number\n\
+               On Error GoTo 0\n\
+               ReDim dynamicValues(5 To 5)\n\
+               ReDim variantValues(1 To 1)\n\
+               dynamicValues(5) = 30\n\
+               variantValues(1) = 40\n\
+               DynamicErase = firstFailure & \"|\" & secondFailure & \"|\" & dynamicValues(5) & \"|\" & variantValues(1)\n\
+             End Function\n",
+            "DynamicErase",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("9|9|30|40".to_string()));
     }
 
     #[test]
