@@ -1617,6 +1617,33 @@ mod tests {
     }
 
     #[test]
+    fn vba_recovers_from_spreadsheet_host_errors() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function RecoverRange() As String\n\
+               Dim failure As Long\n\
+               On Error Resume Next\n\
+               Range(\"not-an-address\").Value = 1\n\
+               failure = Err.Number\n\
+               On Error GoTo 0\n\
+               Range(\"A1\").Value = 42\n\
+               RecoverRange = failure & \"|\" & Range(\"A1\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "RecoverRange", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("1004|42".to_string()));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(42.0)
+        ));
+    }
+
+    #[test]
     fn vba_inspects_ranges_and_uses_relative_cells() {
         let mut workbook = workbook();
         let module = parse_module(

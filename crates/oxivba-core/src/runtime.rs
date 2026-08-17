@@ -13,8 +13,9 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use crate::ast::{
     Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForEachStmt, ForStmt,
-    Literal, LoopTest, Module, ModuleItem, ModuleOption, ParamMode, ProcKind, Procedure,
-    SelectCaseStmt, Statement, TypeName, UnaryOp, VarDecl, VarItem,
+    Literal, LoopTest, Module, ModuleItem, ModuleOption, OnBranchKind, OnError, ParamMode,
+    ProcKind, Procedure, ResumeTarget, SelectCaseStmt, Statement, TypeName, UnaryOp, VarDecl,
+    VarItem,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,6 +81,7 @@ pub enum RuntimeErrorKind {
     Overflow,
     SubscriptOutOfRange,
     Host,
+    UserDefined,
     DivisionByZero,
     Unsupported,
     StepLimit,
@@ -91,6 +93,10 @@ pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
     pub message: String,
     pub line: Option<u32>,
+    /// Exact number supplied to `Err.Raise`, when this originated as a VBA
+    /// user error rather than one of the runtime's built-in failures.
+    pub vba_number: Option<i64>,
+    pub vba_source: Option<String>,
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -128,8 +134,30 @@ pub struct Runtime<'a> {
 
 struct Frame {
     procedure_name: String,
+    source_name: String,
     values: BTreeMap<String, ValueSlot>,
     with_objects: Vec<ObjectRef>,
+    error_mode: ErrorMode,
+    error_state: ErrorState,
+    error_handler_active: bool,
+    error_statement: Option<usize>,
+    current_statement: usize,
+    gosub_returns: Vec<usize>,
+}
+
+#[derive(Clone)]
+enum ErrorMode {
+    Disabled,
+    ResumeNext,
+    Goto(String),
+}
+
+#[derive(Clone, Default)]
+struct ErrorState {
+    number: i64,
+    description: String,
+    source: String,
+    line: Option<u32>,
 }
 
 type ValueSlot = Rc<RefCell<Value>>;
@@ -143,6 +171,10 @@ enum Flow {
     Continue,
     Exit(ExitKind),
     End,
+    Jump(String),
+    GoSub(String),
+    Return,
+    Resume(ResumeTarget),
 }
 
 impl<'a> Runtime<'a> {
@@ -241,8 +273,15 @@ impl<'a> Runtime<'a> {
 
         let mut frame = Frame {
             procedure_name: key(&procedure.name),
+            source_name: procedure.name.clone(),
             values: BTreeMap::new(),
             with_objects: Vec::new(),
+            error_mode: ErrorMode::Disabled,
+            error_state: ErrorState::default(),
+            error_handler_active: false,
+            error_statement: None,
+            current_statement: 0,
+            gosub_returns: Vec::new(),
         };
         for (param, argument) in procedure.params.iter().zip(args) {
             let value = match argument {
@@ -259,7 +298,7 @@ impl<'a> Runtime<'a> {
         }
 
         self.depth += 1;
-        let flow = self.exec_body(&procedure.body, &mut frame);
+        let flow = self.exec_procedure_body(&procedure.body, &mut frame);
         self.depth -= 1;
         let ended = match flow? {
             Flow::Continue
@@ -269,6 +308,27 @@ impl<'a> Runtime<'a> {
                 return Err(error(
                     RuntimeErrorKind::Unsupported,
                     format!("unmatched Exit {kind:?}"),
+                    Some(procedure.span.line),
+                ))
+            }
+            Flow::Jump(label) | Flow::GoSub(label) => {
+                return Err(error(
+                    RuntimeErrorKind::UndefinedVariable,
+                    format!("VBA label not found: {label}"),
+                    Some(procedure.span.line),
+                ))
+            }
+            Flow::Return => {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    "Return without GoSub",
+                    Some(procedure.span.line),
+                ))
+            }
+            Flow::Resume(_) => {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    "Resume without an active error handler",
                     Some(procedure.span.line),
                 ))
             }
@@ -284,6 +344,77 @@ impl<'a> Runtime<'a> {
             value
         };
         Ok(value)
+    }
+
+    fn exec_procedure_body(
+        &mut self,
+        body: &[Statement],
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let mut labels = BTreeMap::new();
+        for (index, statement) in body.iter().enumerate() {
+            match statement {
+                Statement::Label { name, .. } => {
+                    labels.entry(key(name)).or_insert(index);
+                }
+                Statement::LineNumber { value, .. } => {
+                    labels.entry(value.to_string()).or_insert(index);
+                }
+                _ => {}
+            }
+        }
+
+        let mut pc = 0;
+        while pc < body.len() {
+            frame.current_statement = pc;
+            match self.exec_body(&body[pc..=pc], frame)? {
+                Flow::Continue => pc += 1,
+                Flow::Jump(label) => {
+                    pc = label_destination(&labels, &label, line_of(&body[pc]))?;
+                }
+                Flow::GoSub(label) => {
+                    frame.gosub_returns.push(pc + 1);
+                    pc = label_destination(&labels, &label, line_of(&body[pc]))?;
+                }
+                Flow::Return => {
+                    pc = frame.gosub_returns.pop().ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::Unsupported,
+                            "Return without GoSub",
+                            line_of(&body[pc]),
+                        )
+                    })?;
+                }
+                Flow::Resume(target) => {
+                    if !frame.error_handler_active {
+                        return Err(error(
+                            RuntimeErrorKind::Unsupported,
+                            "Resume without an active error handler",
+                            line_of(&body[pc]),
+                        ));
+                    }
+                    let failed = frame.error_statement.ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::Unsupported,
+                            "Resume has no failed statement",
+                            line_of(&body[pc]),
+                        )
+                    })?;
+                    frame.error_handler_active = false;
+                    frame.error_statement = None;
+                    frame.error_state = ErrorState::default();
+                    pc = match target {
+                        ResumeTarget::Same => failed,
+                        ResumeTarget::Next => failed.saturating_add(1),
+                        ResumeTarget::Label(label) => {
+                            label_destination(&labels, &label, line_of(&body[pc]))?
+                        }
+                    };
+                }
+                flow => return Ok(flow),
+            }
+        }
+        Ok(Flow::Continue)
     }
 
     fn find_procedure(&self, name: &str, line: Option<u32>) -> Result<Procedure, RuntimeError> {
@@ -320,8 +451,15 @@ impl<'a> Runtime<'a> {
         if let Some(default) = &parameter.default {
             let mut frame = Frame {
                 procedure_name: String::new(),
+                source_name: String::new(),
                 values: BTreeMap::new(),
                 with_objects: Vec::new(),
+                error_mode: ErrorMode::Disabled,
+                error_state: ErrorState::default(),
+                error_handler_active: false,
+                error_statement: None,
+                current_statement: 0,
+                gosub_returns: Vec::new(),
             };
             return self.eval_expr(default, &mut frame);
         }
@@ -335,12 +473,47 @@ impl<'a> Runtime<'a> {
     fn exec_body(&mut self, body: &[Statement], frame: &mut Frame) -> Result<Flow, RuntimeError> {
         for statement in body {
             self.tick(line_of(statement))?;
-            let flow = self.exec_statement(statement, frame)?;
+            let flow = match self.exec_statement(statement, frame) {
+                Ok(flow) => flow,
+                Err(failure) => self.handle_runtime_error(failure, frame)?,
+            };
             if !matches!(flow, Flow::Continue) {
                 return Ok(flow);
             }
         }
         Ok(Flow::Continue)
+    }
+
+    fn handle_runtime_error(
+        &mut self,
+        failure: RuntimeError,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        if matches!(
+            failure.kind,
+            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth
+        ) || frame.error_handler_active
+        {
+            return Err(failure);
+        }
+        frame.error_state = ErrorState {
+            number: runtime_error_number(&failure),
+            description: failure.message.clone(),
+            source: failure
+                .vba_source
+                .clone()
+                .unwrap_or_else(|| frame.source_name.clone()),
+            line: failure.line,
+        };
+        match frame.error_mode.clone() {
+            ErrorMode::Disabled => Err(failure),
+            ErrorMode::ResumeNext => Ok(Flow::Continue),
+            ErrorMode::Goto(label) => {
+                frame.error_handler_active = true;
+                frame.error_statement = Some(frame.current_statement);
+                Ok(Flow::Jump(label))
+            }
+        }
     }
 
     fn exec_statement(
@@ -431,6 +604,33 @@ impl<'a> Runtime<'a> {
                 frame.with_objects.pop();
                 result
             }
+            Statement::OnError(mode) => {
+                frame.error_mode = match mode {
+                    OnError::Goto { label, .. } => ErrorMode::Goto(label.clone()),
+                    OnError::Disable { .. } => ErrorMode::Disabled,
+                    OnError::ResumeNext { .. } => ErrorMode::ResumeNext,
+                };
+                if matches!(mode, OnError::Disable { .. }) {
+                    frame.error_handler_active = false;
+                    frame.error_statement = None;
+                }
+                Ok(Flow::Continue)
+            }
+            Statement::OnBranch(branch) => {
+                let selector = self.array_index(&branch.selector, frame, branch.span.line)?;
+                if selector < 1 || selector as usize > branch.labels.len() {
+                    return Ok(Flow::Continue);
+                }
+                let label = branch.labels[selector as usize - 1].clone();
+                Ok(match branch.kind {
+                    OnBranchKind::GoTo => Flow::Jump(label),
+                    OnBranchKind::GoSub => Flow::GoSub(label),
+                })
+            }
+            Statement::Resume { target, .. } => Ok(Flow::Resume(target.clone())),
+            Statement::GoTo { label, .. } => Ok(Flow::Jump(label.clone())),
+            Statement::GoSub { label, .. } => Ok(Flow::GoSub(label.clone())),
+            Statement::Return { .. } => Ok(Flow::Return),
             Statement::Call { target, .. } => {
                 self.eval_call(target, frame)?;
                 Ok(Flow::Continue)
@@ -855,6 +1055,9 @@ impl<'a> Runtime<'a> {
                 object, name, span, ..
             } => {
                 let receiver = self.eval_object(object, frame, span.line)?;
+                if is_err_object(&receiver) {
+                    return err_set(frame, name, value, span.line);
+                }
                 match self.host_set(&receiver, name, value, span.line)? {
                     true => Ok(()),
                     false => Err(error(
@@ -889,6 +1092,12 @@ impl<'a> Runtime<'a> {
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
                 if let Some(value) = frame.values.get(&key(name)) {
                     return Ok(value.borrow().clone());
+                }
+                if name.eq_ignore_ascii_case("err") {
+                    return Ok(Value::Object(ObjectRef {
+                        handle: u64::MAX,
+                        kind: "Err".to_string(),
+                    }));
                 }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
                     return Ok(value);
@@ -933,6 +1142,9 @@ impl<'a> Runtime<'a> {
                 object, name, span, ..
             } => {
                 let receiver = self.eval_object(object, frame, span.line)?;
+                if is_err_object(&receiver) {
+                    return err_property(frame, name, span.line);
+                }
                 self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
                     error(
                         RuntimeErrorKind::Unsupported,
@@ -982,14 +1194,10 @@ impl<'a> Runtime<'a> {
                 }
                 let mut values = Vec::with_capacity(args.len());
                 for argument in args {
-                    let value = argument.value.as_ref().ok_or_else(|| {
-                        error(
-                            RuntimeErrorKind::Unsupported,
-                            "omitted arguments are not executable yet",
-                            Some(span.line),
-                        )
-                    })?;
-                    values.push(self.eval_expr(value, frame)?);
+                    values.push(match argument.value.as_ref() {
+                        Some(value) => self.eval_expr(value, frame)?,
+                        None => Value::Missing,
+                    });
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
@@ -997,6 +1205,9 @@ impl<'a> Runtime<'a> {
                     }
                     Expr::Member { object, name, .. } => {
                         let receiver = self.eval_object(object, frame, span.line)?;
+                        if is_err_object(&receiver) {
+                            return err_call(frame, name, &values, span.line);
+                        }
                         self.host_call(Some(&receiver), name, &values, span.line)?
                             .ok_or_else(|| {
                                 error(
@@ -1037,6 +1248,9 @@ impl<'a> Runtime<'a> {
                 object, name, span, ..
             } => {
                 let receiver = self.eval_object(object, frame, span.line)?;
+                if is_err_object(&receiver) {
+                    return err_call(frame, name, &[], span.line);
+                }
                 self.host_call(Some(&receiver), name, &[], span.line)?
                     .ok_or_else(|| {
                         error(
@@ -1383,7 +1597,148 @@ fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) 
         kind,
         message: message.into(),
         line,
+        vba_number: None,
+        vba_source: None,
     }
+}
+
+fn raised_error(number: i64, source: String, description: String, line: u32) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::UserDefined,
+        message: description,
+        line: Some(line),
+        vba_number: Some(number),
+        vba_source: Some(source),
+    }
+}
+
+fn runtime_error_number(failure: &RuntimeError) -> i64 {
+    failure.vba_number.unwrap_or(match failure.kind {
+        RuntimeErrorKind::ProcedureNotFound | RuntimeErrorKind::UndefinedVariable => 35,
+        RuntimeErrorKind::ArgumentCount => 450,
+        RuntimeErrorKind::TypeMismatch => 13,
+        RuntimeErrorKind::Overflow => 6,
+        RuntimeErrorKind::SubscriptOutOfRange => 9,
+        RuntimeErrorKind::Host => 1004,
+        RuntimeErrorKind::UserDefined => 513,
+        RuntimeErrorKind::DivisionByZero => 11,
+        RuntimeErrorKind::Unsupported => 445,
+        RuntimeErrorKind::StepLimit => 6,
+        RuntimeErrorKind::CallDepth => 28,
+    })
+}
+
+fn label_destination(
+    labels: &BTreeMap<String, usize>,
+    label: &str,
+    line: Option<u32>,
+) -> Result<usize, RuntimeError> {
+    labels
+        .get(&key(label))
+        .map(|index| index + 1)
+        .ok_or_else(|| {
+            error(
+                RuntimeErrorKind::UndefinedVariable,
+                format!("VBA label not found: {label}"),
+                line,
+            )
+        })
+}
+
+fn is_err_object(object: &ObjectRef) -> bool {
+    object.handle == u64::MAX && object.kind == "Err"
+}
+
+fn err_property(frame: &Frame, name: &str, line: u32) -> Result<Value, RuntimeError> {
+    if name.eq_ignore_ascii_case("number") {
+        Ok(Value::Integer(frame.error_state.number))
+    } else if name.eq_ignore_ascii_case("description") {
+        Ok(Value::String(frame.error_state.description.clone()))
+    } else if name.eq_ignore_ascii_case("source") {
+        Ok(Value::String(frame.error_state.source.clone()))
+    } else if name.eq_ignore_ascii_case("erl") {
+        Ok(Value::Integer(frame.error_state.line.unwrap_or(0) as i64))
+    } else if name.eq_ignore_ascii_case("helpfile") {
+        Ok(Value::String(String::new()))
+    } else if name.eq_ignore_ascii_case("helpcontext") || name.eq_ignore_ascii_case("lastdllerror")
+    {
+        Ok(Value::Integer(0))
+    } else {
+        Err(error(
+            RuntimeErrorKind::Unsupported,
+            format!("Err property is not available: {name}"),
+            Some(line),
+        ))
+    }
+}
+
+fn err_set(frame: &mut Frame, name: &str, value: Value, line: u32) -> Result<(), RuntimeError> {
+    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
+    if name.eq_ignore_ascii_case("number") {
+        frame.error_state.number = number(&value).map_err(mismatch)?.round_ties_even() as i64;
+    } else if name.eq_ignore_ascii_case("description") {
+        frame.error_state.description = text(&value).map_err(mismatch)?;
+    } else if name.eq_ignore_ascii_case("source") {
+        frame.error_state.source = text(&value).map_err(mismatch)?;
+    } else {
+        return Err(error(
+            RuntimeErrorKind::Unsupported,
+            format!("Err property is not writable: {name}"),
+            Some(line),
+        ));
+    }
+    Ok(())
+}
+
+fn err_call(
+    frame: &mut Frame,
+    name: &str,
+    args: &[Value],
+    line: u32,
+) -> Result<Value, RuntimeError> {
+    if name.eq_ignore_ascii_case("clear") {
+        if !args.is_empty() {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!("Err.Clear expects 0 arguments, received {}", args.len()),
+                Some(line),
+            ));
+        }
+        frame.error_state = ErrorState::default();
+        return Ok(Value::Empty);
+    }
+    if name.eq_ignore_ascii_case("raise") {
+        if !(1..=5).contains(&args.len()) {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "Err.Raise expects 1 to 5 arguments, received {}",
+                    args.len()
+                ),
+                Some(line),
+            ));
+        }
+        let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, Some(line));
+        let number = number(&args[0]).map_err(mismatch)?.round_ties_even() as i64;
+        let source = args
+            .get(1)
+            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
+            .map(|value| text(value).map_err(mismatch))
+            .transpose()?
+            .unwrap_or_else(|| frame.source_name.clone());
+        let description = args
+            .get(2)
+            .filter(|value| !matches!(value, Value::Missing | Value::Empty))
+            .map(|value| text(value).map_err(mismatch))
+            .transpose()?
+            .unwrap_or_else(|| format!("VBA error {number}"));
+        return Err(raised_error(number, source, description, line));
+    }
+    Err(error(
+        RuntimeErrorKind::Unsupported,
+        format!("Err method is not available: {name}"),
+        Some(line),
+    ))
 }
 
 fn expr_name(expr: &Expr) -> Option<&str> {
@@ -1770,9 +2125,15 @@ fn line_of(statement: &Statement) -> Option<u32> {
         | Statement::SetAssign { span, .. }
         | Statement::ReDim { span, .. }
         | Statement::Call { span, .. }
+        | Statement::Resume { span, .. }
+        | Statement::GoTo { span, .. }
+        | Statement::GoSub { span, .. }
+        | Statement::Return { span }
         | Statement::Exit { span, .. }
         | Statement::End { span }
+        | Statement::Stop { span }
         | Statement::Comment { span, .. }
+        | Statement::Directive { span, .. }
         | Statement::Label { span, .. }
         | Statement::LineNumber { span, .. }
         | Statement::Unknown { span, .. } => Some(span.line),
@@ -1783,6 +2144,13 @@ fn line_of(statement: &Statement) -> Option<u32> {
         Statement::ForEach(loop_) => Some(loop_.span.line),
         Statement::Do(loop_) => Some(loop_.span.line),
         Statement::While { span, .. } => Some(span.line),
+        Statement::With { span, .. } => Some(span.line),
+        Statement::OnError(mode) => Some(match mode {
+            OnError::Goto { span, .. }
+            | OnError::Disable { span }
+            | OnError::ResumeNext { span } => span.line,
+        }),
+        Statement::OnBranch(branch) => Some(branch.span.line),
         _ => None,
     }
 }
@@ -1998,6 +2366,165 @@ mod tests {
         assert_eq!(failure.kind, RuntimeErrorKind::Unsupported);
         assert_eq!(failure.line, Some(2));
         assert!(failure.message.contains("outside a With block"));
+    }
+
+    #[test]
+    fn on_error_resume_next_records_and_clears_err_properties() {
+        let value = run(
+            "Public Function InlineErrors() As String\n\
+               Dim first As Long\n\
+               Dim second As Long\n\
+               Dim value As Long\n\
+               On Error Resume Next\n\
+               value = 1 / 0\n\
+               first = Err.Number\n\
+               Err.Clear\n\
+               value = \"not a number\" + 1\n\
+               second = Err.Number\n\
+               InlineErrors = first & \"|\" & second & \"|\" & Err.Description\n\
+             End Function\n",
+            "InlineErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("11|13|type mismatch converting String to number".to_string())
+        );
+    }
+
+    #[test]
+    fn on_error_goto_handles_an_error_raised_by_a_called_procedure() {
+        let value = run(
+            "Private Sub Explode()\n\
+               Err.Raise 1001, \"Worker\", \"boom\"\n\
+             End Sub\n\
+             Public Function CatchCall() As String\n\
+               On Error GoTo Failed\n\
+               Explode\n\
+               CatchCall = \"not reached\"\n\
+               Exit Function\n\
+             Failed:\n\
+               CatchCall = Err.Number & \"|\" & Err.Source & \"|\" & Err.Description\n\
+             End Function\n",
+            "CatchCall",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("1001|Worker|boom".to_string()));
+    }
+
+    #[test]
+    fn resume_next_continues_after_the_failed_statement() {
+        let value = run(
+            "Public Function ResumeNextProbe() As Long\n\
+               Dim value As Long\n\
+               value = 1\n\
+               On Error GoTo Failed\n\
+               value = 1 / 0\n\
+               value = value + 4\n\
+               ResumeNextProbe = value\n\
+               Exit Function\n\
+             Failed:\n\
+               Resume Next\n\
+             End Function\n",
+            "ResumeNextProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(5));
+    }
+
+    #[test]
+    fn resume_retries_and_resume_label_redirects_execution() {
+        let retry = run(
+            "Public Function RetryProbe() As Long\n\
+               Dim attempts As Long\n\
+               On Error GoTo Failed\n\
+               If attempts = 0 Then Err.Raise 77\n\
+               RetryProbe = attempts\n\
+               Exit Function\n\
+             Failed:\n\
+               attempts = attempts + 1\n\
+               Resume\n\
+             End Function\n",
+            "RetryProbe",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(retry, Value::Integer(1));
+
+        let redirected = run(
+            "Public Function RedirectProbe() As Long\n\
+               On Error GoTo Failed\n\
+               Err.Raise 88\n\
+               RedirectProbe = 1\n\
+               Exit Function\n\
+             Continued:\n\
+               RedirectProbe = 42\n\
+               Exit Function\n\
+             Failed:\n\
+               Resume Continued\n\
+             End Function\n",
+            "RedirectProbe",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(redirected, Value::Integer(42));
+    }
+
+    #[test]
+    fn an_error_in_an_active_handler_unwinds_to_the_callers_handler() {
+        let value = run(
+            "Private Sub Inner()\n\
+               On Error GoTo InnerFailed\n\
+               Err.Raise 100\n\
+               Exit Sub\n\
+             InnerFailed:\n\
+               Err.Raise 200, \"InnerHandler\", \"handler failed\"\n\
+             End Sub\n\
+             Public Function Outer() As String\n\
+               On Error GoTo OuterFailed\n\
+               Inner\n\
+               Outer = \"not reached\"\n\
+               Exit Function\n\
+             OuterFailed:\n\
+               Outer = Err.Number & \"|\" & Err.Source\n\
+             End Function\n",
+            "Outer",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("200|InnerHandler".to_string()));
+    }
+
+    #[test]
+    fn goto_computed_goto_and_gosub_return_share_the_label_dispatcher() {
+        let value = run(
+            "Public Function JumpProbe() As Long\n\
+               Dim value As Long\n\
+               value = 1\n\
+               GoSub AddTen\n\
+               On 2 GoTo Wrong, Finished\n\
+             Wrong:\n\
+               value = 999\n\
+             Finished:\n\
+               JumpProbe = value\n\
+               Exit Function\n\
+             AddTen:\n\
+               value = value + 10\n\
+               Return\n\
+             End Function\n",
+            "JumpProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(11));
     }
 
     #[test]
