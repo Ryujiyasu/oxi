@@ -4,8 +4,8 @@
 
 //! VBA source analysis.
 //!
-//! The goal is not to run VBA. It is to answer, for a body of macros nobody has
-//! read in years, three questions:
+//! The first goal is to answer, for a body of macros nobody has read in years,
+//! three questions:
 //!
 //! 1. Which of these files are copies or variants of one another?
 //! 2. What does each one actually use?
@@ -14,7 +14,9 @@
 //! All three are answerable from source text alone — no Excel, no COM, no
 //! Windows. That is the whole reason this crate takes VBA *text* as its input
 //! rather than an `.xlsm` file: extraction has several existing solutions,
-//! while the analysis layer has none.
+//! while the analysis layer has none. The same syntax tree now also feeds a
+//! small host-independent interpreter for pure VBA code. Excel's object model
+//! will be supplied separately by a browser host adapter.
 //!
 //! # Status
 //!
@@ -30,9 +32,11 @@ pub mod ast;
 pub mod fingerprint;
 pub mod lexer;
 pub mod parser;
+pub mod runtime;
 
 pub use analysis::{analyse, Analysis, Class, Finding};
 pub use ast::{Expr, Module, ModuleItem, Procedure, Statement};
 pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity, Strength};
 pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 pub use parser::parse_module;
+pub use runtime::{execute, Runtime, RuntimeError, RuntimeErrorKind, Value};

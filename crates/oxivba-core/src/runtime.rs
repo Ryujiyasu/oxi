@@ -1,0 +1,731 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+//! Host-independent execution of pure VBA procedures.
+//!
+//! This first browser-runtime slice supports scalar values, local variables,
+//! arithmetic, comparisons, `If`, and calls between VBA procedures. Office
+//! objects, arrays, `ByRef`, file I/O, and events fail explicitly rather than
+//! being approximated.
+
+use std::collections::BTreeMap;
+
+use crate::ast::{
+    BinaryOp, ExitKind, Expr, Literal, Module, ModuleItem, ProcKind, Procedure, Statement,
+    TypeName, UnaryOp, VarDecl,
+};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Empty,
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Double(f64),
+    String(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeErrorKind {
+    ProcedureNotFound,
+    ArgumentCount,
+    UndefinedVariable,
+    TypeMismatch,
+    DivisionByZero,
+    Unsupported,
+    StepLimit,
+    CallDepth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeError {
+    pub kind: RuntimeErrorKind,
+    pub message: String,
+    pub line: Option<u32>,
+}
+
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.line {
+            Some(line) => write!(f, "line {line}: {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeError {}
+
+pub fn execute(module: &Module, procedure: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Runtime::new(module).call(procedure, args)
+}
+
+pub struct Runtime<'a> {
+    module: &'a Module,
+    steps: usize,
+    max_steps: usize,
+    depth: usize,
+    max_depth: usize,
+}
+
+struct Frame {
+    procedure_name: String,
+    values: BTreeMap<String, Value>,
+}
+
+enum Flow {
+    Continue,
+    Exit(ExitKind),
+    End,
+}
+
+impl<'a> Runtime<'a> {
+    pub fn new(module: &'a Module) -> Self {
+        Self {
+            module,
+            steps: 0,
+            max_steps: 100_000,
+            depth: 0,
+            max_depth: 128,
+        }
+    }
+
+    pub fn with_limits(mut self, max_steps: usize, max_depth: usize) -> Self {
+        self.max_steps = max_steps;
+        self.max_depth = max_depth;
+        self
+    }
+
+    pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        self.steps = 0;
+        self.depth = 0;
+        self.call_procedure(name, args, None)
+    }
+
+    fn call_procedure(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        if self.depth >= self.max_depth {
+            return Err(error(
+                RuntimeErrorKind::CallDepth,
+                "VBA call-depth limit exceeded",
+                line,
+            ));
+        }
+        let procedure = self
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) => Some(p.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::ProcedureNotFound,
+                    format!("VBA procedure not found: {name}"),
+                    line,
+                )
+            })?;
+        if args.len() != procedure.params.len() {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "{} expects {} argument(s), received {}",
+                    procedure.name,
+                    procedure.params.len(),
+                    args.len()
+                ),
+                line,
+            ));
+        }
+
+        let mut frame = Frame {
+            procedure_name: key(&procedure.name),
+            values: BTreeMap::new(),
+        };
+        for (param, value) in procedure.params.iter().zip(args) {
+            if param.is_array {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    "array parameters are not executable yet",
+                    Some(procedure.span.line),
+                ));
+            }
+            frame.values.insert(key(&param.name), value);
+        }
+        if !matches!(procedure.kind, ProcKind::Sub) {
+            frame.values.insert(
+                frame.procedure_name.clone(),
+                default_return_value(&procedure),
+            );
+        }
+
+        self.depth += 1;
+        let flow = self.exec_body(&procedure.body, &mut frame);
+        self.depth -= 1;
+        match flow? {
+            Flow::Continue
+            | Flow::Exit(ExitKind::Sub | ExitKind::Function | ExitKind::Property) => {}
+            Flow::End => return Ok(Value::Empty),
+            Flow::Exit(kind) => {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    format!("unmatched Exit {kind:?}"),
+                    Some(procedure.span.line),
+                ))
+            }
+        }
+        if matches!(procedure.kind, ProcKind::Sub) {
+            Ok(Value::Empty)
+        } else {
+            Ok(frame
+                .values
+                .remove(&frame.procedure_name)
+                .unwrap_or(Value::Empty))
+        }
+    }
+
+    fn exec_body(&mut self, body: &[Statement], frame: &mut Frame) -> Result<Flow, RuntimeError> {
+        for statement in body {
+            self.tick(line_of(statement))?;
+            let flow = self.exec_statement(statement, frame)?;
+            if !matches!(flow, Flow::Continue) {
+                return Ok(flow);
+            }
+        }
+        Ok(Flow::Continue)
+    }
+
+    fn exec_statement(
+        &mut self,
+        statement: &Statement,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        match statement {
+            Statement::Assign {
+                target,
+                value,
+                span,
+            } => {
+                let value = self.eval_expr(value, frame)?;
+                self.assign(target, value, frame, span.line)?;
+                Ok(Flow::Continue)
+            }
+            Statement::Dim(decl) => {
+                self.declare_locals(decl, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::If(branch) => {
+                if truthy(&self.eval_expr(&branch.condition, frame)?).map_err(|message| {
+                    error(
+                        RuntimeErrorKind::TypeMismatch,
+                        message,
+                        Some(branch.span.line),
+                    )
+                })? {
+                    self.exec_body(&branch.then_body, frame)
+                } else {
+                    for (condition, body) in &branch.else_ifs {
+                        if truthy(&self.eval_expr(condition, frame)?).map_err(|message| {
+                            error(
+                                RuntimeErrorKind::TypeMismatch,
+                                message,
+                                Some(branch.span.line),
+                            )
+                        })? {
+                            return self.exec_body(body, frame);
+                        }
+                    }
+                    match &branch.else_body {
+                        Some(body) => self.exec_body(body, frame),
+                        None => Ok(Flow::Continue),
+                    }
+                }
+            }
+            Statement::Call { target, .. } => {
+                self.eval_call(target, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::Exit { what, .. } => Ok(Flow::Exit(*what)),
+            Statement::End { .. } => Ok(Flow::End),
+            Statement::Comment { .. } | Statement::Label { .. } | Statement::LineNumber { .. } => {
+                Ok(Flow::Continue)
+            }
+            Statement::Unknown { text, span } => Err(error(
+                RuntimeErrorKind::Unsupported,
+                format!("cannot execute unparsed VBA: {text}"),
+                Some(span.line),
+            )),
+            other => Err(error(
+                RuntimeErrorKind::Unsupported,
+                format!(
+                    "VBA statement is not executable yet: {}",
+                    statement_name(other)
+                ),
+                line_of(other),
+            )),
+        }
+    }
+
+    fn declare_locals(&mut self, decl: &VarDecl, frame: &mut Frame) -> Result<(), RuntimeError> {
+        for variable in &decl.items {
+            if variable.array_bounds.is_some() {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    "local arrays are not executable yet",
+                    Some(decl.span.line),
+                ));
+            }
+            let value = match &variable.value {
+                Some(expr) => self.eval_expr(expr, frame)?,
+                None => default_value(&variable.type_name),
+            };
+            frame.values.insert(key(&variable.name), value);
+        }
+        Ok(())
+    }
+
+    fn assign(
+        &self,
+        target: &Expr,
+        value: Value,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<(), RuntimeError> {
+        let name = match target {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => name,
+            _ => {
+                return Err(error(
+                    RuntimeErrorKind::Unsupported,
+                    "only scalar variable assignment is executable yet",
+                    Some(line),
+                ))
+            }
+        };
+        frame.values.insert(key(name), value);
+        Ok(())
+    }
+
+    fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        match expr {
+            Expr::Literal(literal, _) => Ok(literal_value(literal)),
+            Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
+                frame.values.get(&key(name)).cloned().ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::UndefinedVariable,
+                        format!("undefined VBA variable: {name}"),
+                        Some(span.line),
+                    )
+                })
+            }
+            Expr::Unary { op, operand, span } => {
+                let value = self.eval_expr(operand, frame)?;
+                unary(*op, value).map_err(|message| {
+                    error(RuntimeErrorKind::TypeMismatch, message, Some(span.line))
+                })
+            }
+            Expr::Binary { op, lhs, rhs, span } => {
+                let lhs = self.eval_expr(lhs, frame)?;
+                let rhs = self.eval_expr(rhs, frame)?;
+                binary(*op, lhs, rhs)
+                    .map_err(|(kind, message)| error(kind, message, Some(span.line)))
+            }
+            Expr::Index { .. } => self.eval_call(expr, frame),
+            _ => Err(error(
+                RuntimeErrorKind::Unsupported,
+                "VBA expression is not executable yet",
+                Some(expr.span().line),
+            )),
+        }
+    }
+
+    fn eval_call(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        match expr {
+            Expr::Index {
+                target, args, span, ..
+            } => {
+                let name = match target.as_ref() {
+                    Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => name,
+                    _ => {
+                        return Err(error(
+                            RuntimeErrorKind::Unsupported,
+                            "only calls to VBA procedures are executable yet",
+                            Some(span.line),
+                        ))
+                    }
+                };
+                let mut values = Vec::with_capacity(args.len());
+                for argument in args {
+                    let value = argument.value.as_ref().ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::Unsupported,
+                            "omitted arguments are not executable yet",
+                            Some(span.line),
+                        )
+                    })?;
+                    values.push(self.eval_expr(value, frame)?);
+                }
+                self.call_procedure(name, values, Some(span.line))
+            }
+            Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
+                self.call_procedure(name, Vec::new(), Some(span.line))
+            }
+            _ => Err(error(
+                RuntimeErrorKind::Unsupported,
+                "call target is not executable yet",
+                Some(expr.span().line),
+            )),
+        }
+    }
+
+    fn tick(&mut self, line: Option<u32>) -> Result<(), RuntimeError> {
+        self.steps += 1;
+        if self.steps > self.max_steps {
+            Err(error(
+                RuntimeErrorKind::StepLimit,
+                "VBA execution step limit exceeded",
+                line,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) -> RuntimeError {
+    RuntimeError {
+        kind,
+        message: message.into(),
+        line,
+    }
+}
+
+fn key(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+fn literal_value(literal: &Literal) -> Value {
+    match literal {
+        Literal::Number(value) | Literal::TypedNumber { value, .. } => numeric_literal(*value),
+        Literal::LargeInteger { digits, .. } => digits
+            .parse::<i64>()
+            .map(Value::Integer)
+            .unwrap_or_else(|_| Value::Double(digits.parse().unwrap_or(f64::INFINITY))),
+        Literal::Str(value) | Literal::Date(value) => Value::String(value.clone()),
+        Literal::Bool(value) => Value::Boolean(*value),
+        Literal::Empty | Literal::Nothing => Value::Empty,
+        Literal::Null => Value::Null,
+    }
+}
+
+fn numeric_literal(value: f64) -> Value {
+    if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        Value::Integer(value as i64)
+    } else {
+        Value::Double(value)
+    }
+}
+
+fn default_value(type_name: &TypeName) -> Value {
+    match type_name.name.to_ascii_lowercase().as_str() {
+        "boolean" => Value::Boolean(false),
+        "byte" | "integer" | "long" | "longlong" | "longptr" | "currency" => Value::Integer(0),
+        "single" | "double" | "decimal" => Value::Double(0.0),
+        "string" => Value::String(String::new()),
+        _ => Value::Empty,
+    }
+}
+
+fn default_return_value(procedure: &Procedure) -> Value {
+    procedure
+        .return_type
+        .as_ref()
+        .map(default_value)
+        .unwrap_or(Value::Empty)
+}
+
+fn number(value: &Value) -> Result<f64, String> {
+    match value {
+        Value::Empty | Value::Boolean(false) => Ok(0.0),
+        Value::Boolean(true) => Ok(-1.0),
+        Value::Integer(value) => Ok(*value as f64),
+        Value::Double(value) => Ok(*value),
+        Value::String(value) => value
+            .parse()
+            .map_err(|_| "type mismatch converting String to number".to_string()),
+        Value::Null => Err("invalid use of Null".to_string()),
+    }
+}
+
+fn truthy(value: &Value) -> Result<bool, String> {
+    match value {
+        Value::Empty | Value::Null | Value::Boolean(false) => Ok(false),
+        Value::Boolean(true) => Ok(true),
+        Value::Integer(value) => Ok(*value != 0),
+        Value::Double(value) => Ok(*value != 0.0),
+        Value::String(value) if value.is_empty() => Ok(false),
+        Value::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Value::String(value) => value
+            .parse::<f64>()
+            .map(|number| number != 0.0)
+            .map_err(|_| "type mismatch converting String to Boolean".to_string()),
+    }
+}
+
+fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
+    match op {
+        UnaryOp::Plus => Ok(Value::Double(number(&value)?)),
+        UnaryOp::Neg => Ok(Value::Double(-number(&value)?)),
+        UnaryOp::Not => match value {
+            Value::Boolean(value) => Ok(Value::Boolean(!value)),
+            Value::Integer(value) => Ok(Value::Integer(!value)),
+            other => Ok(Value::Boolean(!truthy(&other)?)),
+        },
+    }
+}
+
+fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKind, String)> {
+    use BinaryOp::*;
+    if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
+        return Ok(Value::Null);
+    }
+    let mismatch = |message| (RuntimeErrorKind::TypeMismatch, message);
+    let numbers = || {
+        Ok::<_, (RuntimeErrorKind, String)>((
+            number(&lhs).map_err(mismatch)?,
+            number(&rhs).map_err(mismatch)?,
+        ))
+    };
+    match op {
+        Concat => Ok(Value::String(format!("{}{}", text(&lhs), text(&rhs)))),
+        Add | Sub | Mul | Div | IntDiv | Mod | Pow => {
+            let (a, b) = numbers()?;
+            if matches!(op, Div | IntDiv | Mod) && b == 0.0 {
+                return Err((
+                    RuntimeErrorKind::DivisionByZero,
+                    "division by zero".to_string(),
+                ));
+            }
+            Ok(match op {
+                Add => numeric_result(a + b, &lhs, &rhs),
+                Sub => numeric_result(a - b, &lhs, &rhs),
+                Mul => numeric_result(a * b, &lhs, &rhs),
+                Div => Value::Double(a / b),
+                IntDiv => Value::Integer((a / b).trunc() as i64),
+                Mod => Value::Integer((a as i64) % (b as i64)),
+                Pow => Value::Double(a.powf(b)),
+                _ => unreachable!(),
+            })
+        }
+        Eq | Ne | Lt | Le | Gt | Ge => {
+            let ordering = match (&lhs, &rhs) {
+                (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+                _ => {
+                    let (a, b) = numbers()?;
+                    a.partial_cmp(&b)
+                }
+            };
+            let equal = lhs == rhs || ordering == Some(std::cmp::Ordering::Equal);
+            Ok(Value::Boolean(match op {
+                Eq => equal,
+                Ne => !equal,
+                Lt => ordering == Some(std::cmp::Ordering::Less),
+                Le => ordering != Some(std::cmp::Ordering::Greater),
+                Gt => ordering == Some(std::cmp::Ordering::Greater),
+                Ge => ordering != Some(std::cmp::Ordering::Less),
+                _ => unreachable!(),
+            }))
+        }
+        And | Or | Xor | Eqv | Imp => {
+            let a = truthy(&lhs).map_err(mismatch)?;
+            let b = truthy(&rhs).map_err(mismatch)?;
+            Ok(Value::Boolean(match op {
+                And => a && b,
+                Or => a || b,
+                Xor => a ^ b,
+                Eqv => a == b,
+                Imp => !a || b,
+                _ => unreachable!(),
+            }))
+        }
+        Is | Like => Err((
+            RuntimeErrorKind::Unsupported,
+            format!("operator {op:?} is not executable yet"),
+        )),
+    }
+}
+
+fn numeric_result(value: f64, lhs: &Value, rhs: &Value) -> Value {
+    if matches!(lhs, Value::Integer(_)) && matches!(rhs, Value::Integer(_)) && value.fract() == 0.0
+    {
+        Value::Integer(value as i64)
+    } else {
+        Value::Double(value)
+    }
+}
+
+fn text(value: &Value) -> String {
+    match value {
+        Value::Empty => String::new(),
+        Value::Null => "Null".to_string(),
+        Value::Boolean(true) => "True".to_string(),
+        Value::Boolean(false) => "False".to_string(),
+        Value::Integer(value) => value.to_string(),
+        Value::Double(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+    }
+}
+
+fn line_of(statement: &Statement) -> Option<u32> {
+    match statement {
+        Statement::Assign { span, .. }
+        | Statement::SetAssign { span, .. }
+        | Statement::Call { span, .. }
+        | Statement::Exit { span, .. }
+        | Statement::End { span }
+        | Statement::Comment { span, .. }
+        | Statement::Label { span, .. }
+        | Statement::LineNumber { span, .. }
+        | Statement::Unknown { span, .. } => Some(span.line),
+        Statement::Dim(decl) => Some(decl.span.line),
+        Statement::If(branch) => Some(branch.span.line),
+        _ => None,
+    }
+}
+
+fn statement_name(statement: &Statement) -> &'static str {
+    match statement {
+        Statement::For(_) => "For",
+        Statement::ForEach(_) => "For Each",
+        Statement::Do(_) => "Do",
+        Statement::While { .. } => "While",
+        Statement::SelectCase(_) => "Select Case",
+        Statement::SetAssign { .. } => "Set",
+        Statement::With { .. } => "With",
+        Statement::OnError(_) => "On Error",
+        _ => "host-dependent statement",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse_module;
+
+    fn run(source: &str, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let module = parse_module(source).unwrap();
+        execute(&module, name, args)
+    }
+
+    #[test]
+    fn executes_a_pure_function_with_locals_arithmetic_and_if() {
+        let value = run(
+            "Option Explicit\n\
+             Public Function NetPrice(total As Double, rate As Double, preferred As Boolean) As Double\n\
+             Dim result As Double\n\
+             If preferred Then\n\
+               result = total * (1 - rate)\n\
+             Else\n\
+               result = total\n\
+             End If\n\
+             NetPrice = result\n\
+             End Function\n",
+            "netprice",
+            vec![Value::Double(200.0), Value::Double(0.1), Value::Boolean(true)],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Double(180.0));
+    }
+
+    #[test]
+    fn calls_another_vba_function_case_insensitively() {
+        let value = run(
+            "Private Function Twice(value As Long) As Long\n\
+               Twice = value * 2\n\
+             End Function\n\
+             Public Function Invoice(value As Long) As Long\n\
+               Invoice = TWICE(value) + 1\n\
+             End Function\n",
+            "invoice",
+            vec![Value::Integer(20)],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(41));
+    }
+
+    #[test]
+    fn concatenates_strings_and_uses_vba_true_as_minus_one_in_arithmetic() {
+        let value = run(
+            "Public Function Label(ok As Boolean) As String\n\
+               Label = \"result=\" & (10 + ok)\n\
+             End Function\n",
+            "Label",
+            vec![Value::Boolean(true)],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("result=9".to_string()));
+    }
+
+    #[test]
+    fn unsupported_office_members_fail_explicitly() {
+        let failure = run(
+            "Public Function ReadCell() As Variant\n\
+               ReadCell = Range(\"A1\").Value\n\
+             End Function\n",
+            "ReadCell",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::Unsupported);
+        assert_eq!(failure.line, Some(2));
+    }
+
+    #[test]
+    fn reports_division_by_zero_with_a_source_line() {
+        let failure = run(
+            "Public Function Broken() As Double\n\
+               Broken = 1 / 0\n\
+             End Function\n",
+            "Broken",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::DivisionByZero);
+        assert_eq!(failure.line, Some(2));
+    }
+
+    #[test]
+    fn enforces_the_call_depth_limit() {
+        let module = parse_module(
+            "Public Function Recurse() As Long\n\
+               Recurse = Recurse()\n\
+             End Function\n",
+        )
+        .unwrap();
+        let failure = Runtime::new(&module)
+            .with_limits(100, 4)
+            .call("Recurse", vec![])
+            .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::CallDepth);
+        assert_eq!(failure.line, Some(2));
+    }
+
+    #[test]
+    fn rejects_the_wrong_argument_count() {
+        let failure = run(
+            "Public Function AddOne(value As Long) As Long\n\
+               AddOne = value + 1\n\
+             End Function\n",
+            "AddOne",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
+        assert_eq!(failure.line, None);
+    }
+}
