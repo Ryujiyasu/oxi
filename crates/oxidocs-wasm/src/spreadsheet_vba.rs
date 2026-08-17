@@ -21,6 +21,12 @@ struct CellRange {
     end_column: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RangeAxis {
+    Rows,
+    Columns,
+}
+
 impl CellRange {
     fn single(address: CellAddress) -> Self {
         Self {
@@ -50,6 +56,7 @@ impl CellRange {
 #[derive(Debug, Clone, Copy)]
 enum HostObject {
     Range(CellRange),
+    RangeCollection(CellRange, RangeAxis),
     Worksheet(usize),
     Worksheets,
     Workbook,
@@ -83,6 +90,8 @@ impl<'a> WorkbookHost<'a> {
             handle,
             kind: match object {
                 HostObject::Range(_) => "Range",
+                HostObject::RangeCollection(_, RangeAxis::Rows) => "Rows",
+                HostObject::RangeCollection(_, RangeAxis::Columns) => "Columns",
                 HostObject::Worksheet(_) => "Worksheet",
                 HostObject::Worksheets => "Worksheets",
                 HostObject::Workbook => "Workbook",
@@ -95,6 +104,13 @@ impl<'a> WorkbookHost<'a> {
     fn range(&self, object: &ObjectRef) -> Option<CellRange> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::Range(range)) => Some(*range),
+            _ => None,
+        }
+    }
+
+    fn range_collection(&self, object: &ObjectRef) -> Option<(CellRange, RangeAxis)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::RangeCollection(range, axis)) => Some((*range, *axis)),
             _ => None,
         }
     }
@@ -219,6 +235,56 @@ impl<'a> WorkbookHost<'a> {
                 column,
             }))),
         )
+    }
+
+    fn range_collection_object_or_item(
+        &mut self,
+        range: CellRange,
+        axis: RangeAxis,
+        args: &[Value],
+    ) -> Result<Value, String> {
+        match args {
+            [] => Ok(self.object(HostObject::RangeCollection(range, axis))),
+            [index] => self.range_collection_item(range, axis, index),
+            _ => Err(format!(
+                "Range.{} expects zero or one argument",
+                range_axis_name(axis)
+            )),
+        }
+    }
+
+    fn range_collection_item(
+        &mut self,
+        range: CellRange,
+        axis: RangeAxis,
+        index: &Value,
+    ) -> Result<Value, String> {
+        let offset = positive_index(index, range_axis_name(axis))? - 1;
+        let item = match axis {
+            RangeAxis::Rows => {
+                let row = range
+                    .start_row
+                    .checked_add(offset)
+                    .ok_or_else(|| "Range.Rows index is too large".to_string())?;
+                CellRange {
+                    start_row: row,
+                    end_row: row,
+                    ..range
+                }
+            }
+            RangeAxis::Columns => {
+                let column = range
+                    .start_column
+                    .checked_add(offset)
+                    .ok_or_else(|| "Range.Columns index is too large".to_string())?;
+                CellRange {
+                    start_column: column,
+                    end_column: column,
+                    ..range
+                }
+            }
+        };
+        Ok(self.object(HostObject::Range(item)))
     }
 
     fn cell_value(&self, address: CellAddress) -> Value {
@@ -420,6 +486,18 @@ impl Host for WorkbookHost<'_> {
                 };
                 return self.worksheet_object(value).map(Some);
             }
+            if let Some((range, axis)) = self.range_collection(receiver) {
+                if name.eq_ignore_ascii_case("item") {
+                    let [index] = args else {
+                        return Err(format!(
+                            "Range.{}.Item expects one index",
+                            range_axis_name(axis)
+                        ));
+                    };
+                    return self.range_collection_item(range, axis, index).map(Some);
+                }
+                return Ok(None);
+            }
             if let Some(range) = self.range(receiver) {
                 if name.eq_ignore_ascii_case("cells") {
                     return self.range_cells_object(range, args).map(Some);
@@ -433,6 +511,16 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("address") {
                     return range_address_from_args(range, args)
                         .map(Value::String)
+                        .map(Some);
+                }
+                if name.eq_ignore_ascii_case("rows") {
+                    return self
+                        .range_collection_object_or_item(range, RangeAxis::Rows, args)
+                        .map(Some);
+                }
+                if name.eq_ignore_ascii_case("columns") {
+                    return self
+                        .range_collection_object_or_item(range, RangeAxis::Columns, args)
                         .map(Some);
                 }
                 if name.eq_ignore_ascii_case("clearcontents") {
@@ -493,6 +581,16 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
+        if let Some((range, axis)) = self.range_collection(receiver) {
+            if name.eq_ignore_ascii_case("count") {
+                let count = match axis {
+                    RangeAxis::Rows => range.end_row - range.start_row + 1,
+                    RangeAxis::Columns => range.end_column - range.start_column + 1,
+                };
+                return Ok(Some(Value::Integer(i64::from(count))));
+            }
+            return Ok(None);
+        }
         if let Some(sheet) = self.worksheet(receiver) {
             if name.eq_ignore_ascii_case("name") {
                 return Ok(Some(Value::String(
@@ -522,6 +620,16 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("address") {
             return Ok(Some(Value::String(format_range_address(range, true, true))));
         }
+        if name.eq_ignore_ascii_case("rows") {
+            return Ok(Some(
+                self.object(HostObject::RangeCollection(range, RangeAxis::Rows)),
+            ));
+        }
+        if name.eq_ignore_ascii_case("columns") {
+            return Ok(Some(
+                self.object(HostObject::RangeCollection(range, RangeAxis::Columns)),
+            ));
+        }
         Ok(None)
     }
 
@@ -543,6 +651,22 @@ impl Host for WorkbookHost<'_> {
                 worksheets.push(self.object(HostObject::Worksheet(sheet)));
             }
             return Ok(Some(worksheets));
+        }
+        if let Some((range, axis)) = self.range_collection(receiver) {
+            Self::range_cell_count(range)?;
+            let count = match axis {
+                RangeAxis::Rows => range.end_row - range.start_row + 1,
+                RangeAxis::Columns => range.end_column - range.start_column + 1,
+            };
+            let mut items = Vec::with_capacity(count as usize);
+            for index in 1..=count {
+                items.push(self.range_collection_item(
+                    range,
+                    axis,
+                    &Value::Integer(i64::from(index)),
+                )?);
+            }
+            return Ok(Some(items));
         }
         let Some(range) = self.range(receiver) else {
             return Ok(None);
@@ -615,6 +739,13 @@ fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
         return Err(format!("Cells {label} must be a positive integer"));
     }
     Ok(number as u32)
+}
+
+fn range_axis_name(axis: RangeAxis) -> &'static str {
+    match axis {
+        RangeAxis::Rows => "Rows",
+        RangeAxis::Columns => "Columns",
+    }
 }
 
 fn integer_offset(value: &Value, label: &str) -> Result<i64, String> {
@@ -1112,5 +1243,37 @@ mod tests {
             workbook.sheets[1].rows[0].cells[0].value,
             CellValue::Number(20.0)
         ));
+    }
+
+    #[test]
+    fn vba_iterates_and_indexes_range_rows_and_columns() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function FillBands() As String\n\
+               Dim band As Range\n\
+               Range(\"A1:C2\").Value = 1\n\
+               For Each band In Range(\"A1:C2\").Rows\n\
+                 band.Value = band.Row * 10\n\
+               Next band\n\
+               For Each band In Range(\"A1:C2\").Columns\n\
+                 band.Cells(1, 1).Value = band.Column\n\
+               Next band\n\
+               FillBands = Range(\"A1:C2\").Rows.Count & \"|\" & Range(\"A1:C2\").Columns.Count & \"|\" & Range(\"A1:C2\").Rows.Item(2).Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "FillBands", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("2|3|A2:C2".to_string()));
+        let first_row = &workbook.sheets[0].rows[0];
+        assert!(matches!(first_row.cells[0].value, CellValue::Number(1.0)));
+        assert!(matches!(first_row.cells[1].value, CellValue::Number(2.0)));
+        assert!(matches!(first_row.cells[2].value, CellValue::Number(3.0)));
+        for cell in &workbook.sheets[0].rows[1].cells {
+            assert!(matches!(cell.value, CellValue::Number(20.0)));
+        }
     }
 }
