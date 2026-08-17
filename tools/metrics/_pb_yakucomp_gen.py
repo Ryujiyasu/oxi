@@ -52,7 +52,30 @@ def arm_text(n_yak):
     return "".join(out)
 
 
-ARMS = [0, 2, 4, 8, 16]
+# ★v1 learned only that Word does NOT compress when nothing demands it (all arms
+# 40 chars / 10.51pt, 約物 included, Oxi identical). The content width is 425.2pt
+# and 40 chars are 420.0, so no arm ever crossed the "one more character only
+# fits if something squeezes" boundary. v2 puts a 、 exactly at the boundary and
+# walks it across, with a variable number of EARLIER 約物 to share the squeeze.
+DEMAND = os.environ.get("OXI_PB_DEMAND")
+FILL = "本規程労働者就業関事項定関係者遵守義務履行責任範囲明確化目的作成周知徹底図"
+
+
+def demand_text(pos, n_prior):
+    """`pos` filler chars (with n_prior 約物 mixed in) then the trigger 、."""
+    body = []
+    step = max(2, pos // (n_prior + 1)) if n_prior else 0
+    for i in range(pos):
+        body.append(FILL[i % len(FILL)])
+        if n_prior and step and (i + 1) % step == 0 and                 sum(1 for c in body if c in "、。") < n_prior:
+            body.append("、")
+    return "".join(body[:pos]) + "、" + (FILL * 3)
+
+
+if DEMAND:
+    ARMS = [(p, k) for k in (0, 2, 4) for p in (38, 39, 40, 41)]
+else:
+    ARMS = [0, 2, 4, 8, 16]
 
 
 def docx():
@@ -73,7 +96,7 @@ def gen():
     body = []
     for ai, n in enumerate(ARMS):
         body.append(para("A%02dZ" % ai, "<w:pageBreakBefore/>" if ai else ""))
-        body.append(para(arm_text(n)))
+        body.append(para(demand_text(*n) if DEMAND else arm_text(n)))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838" w:code="9"/>'
@@ -88,8 +111,12 @@ def gen():
               '<w:style w:type="paragraph" w:default="1" w:styleId="a">'
               '<w:name w:val="Normal"/><w:rPr><w:sz w:val="%d"/></w:rPr></w:style>'
               "</w:styles>" % (FACE, FACE, FACE, SZ_HP))
+    # ★c7b923e5 (whose lines ARE flush to 0.11pt with no w:jc anywhere) declares
+    # <w:useFELayout/>; this probe did not, and Word left every arm ragged and
+    # uncompressed. OXI_PB_FE=1 adds it — the suspected discriminator.
+    fe = "<w:useFELayout/>" if os.environ.get("OXI_PB_FE") else ""
     settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ' + NS +
-                '><w:compat><w:compatSetting w:name="compatibilityMode"'
+                '>' + fe + '<w:compat><w:compatSetting w:name="compatibilityMode"'
                 ' w:uri="http://schemas.microsoft.com/office/word"'
                 ' w:val="%s"/></w:compat></w:settings>' % COMPAT)
     ct = CT.replace("</Types>",
@@ -112,14 +139,15 @@ def gen():
 
 def report(rows, who):
     print("== %s ==" % who)
-    print("%-6s %-6s %-7s %-9s %-9s %-9s %s"
+    print("%-10s %-6s %-7s %-9s %-9s %-9s %s"
           % ("arm", "nyak", "nchars", "line_w", "per_char", "yak_adv", "cjk_adv"))
     for n, r in rows:
+        lbl = ("p%d_k%d" % n) if isinstance(n, tuple) else str(n)
         if not r:
-            print("%-6d %-6d MISSING" % (n, n))
+            print("%-10s MISSING" % lbl)
             continue
-        print("%-6d %-6d %-7d %-9.2f %-9.3f %-9s %s"
-              % (n, r["nyak"], r["nch"], r["w"], r["w"] / max(1, r["nch"]),
+        print("%-10s %-6d %-7d %-9.2f %-9.3f %-9s %s"
+              % (lbl, r["nyak"], r["nch"], r["w"], r["w"] / max(1, r["nch"]),
                  "%.2f" % r["yak"] if r["yak"] else "-",
                  "%.2f" % r["cjk"] if r["cjk"] else "-"))
 
