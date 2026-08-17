@@ -20,6 +20,9 @@ use crate::ast::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Empty,
+    /// An omitted `Optional ... As Variant` argument. Unlike `Empty`, this is
+    /// observable through VBA's `IsMissing` function.
+    Missing,
     Null,
     Boolean(bool),
     Integer(i64),
@@ -176,13 +179,51 @@ impl<'a> Runtime<'a> {
         args: Vec<Value>,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
-        let args = args.into_iter().map(BoundArgument::Value).collect();
-        self.invoke_procedure(name, args, line)
+        let procedure = self.find_procedure(name, line)?;
+        let fixed_count = procedure
+            .params
+            .iter()
+            .position(|param| param.mode == ParamMode::ParamArray)
+            .unwrap_or(procedure.params.len());
+        if args.len() > fixed_count
+            && !procedure
+                .params
+                .last()
+                .is_some_and(|param| param.mode == ParamMode::ParamArray)
+        {
+            return Err(argument_count_error(&procedure, args.len(), line));
+        }
+
+        let received = args.len();
+        let mut values = args.into_iter();
+        let mut bound = Vec::with_capacity(procedure.params.len());
+        for param in &procedure.params[..fixed_count] {
+            match values.next() {
+                Some(value) => bound.push(BoundArgument::Value(value)),
+                None => bound.push(BoundArgument::Value(
+                    self.omitted_parameter_value(param, line)?,
+                )),
+            }
+        }
+        if let Some(param_array) = procedure.params.get(fixed_count) {
+            bound.push(BoundArgument::Value(Value::Array(ArrayValue {
+                lower_bound: 0,
+                values: values.collect(),
+                element_default: Box::new(default_value(&param_array.type_name)),
+            })));
+        } else if received < fixed_count
+            && procedure.params[received..]
+                .iter()
+                .any(|param| !param.optional)
+        {
+            return Err(argument_count_error(&procedure, received, line));
+        }
+        self.invoke_procedure(&procedure, bound, line)
     }
 
     fn invoke_procedure(
         &mut self,
-        name: &str,
+        procedure: &Procedure,
         args: Vec<BoundArgument>,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
@@ -193,32 +234,8 @@ impl<'a> Runtime<'a> {
                 line,
             ));
         }
-        let procedure = self
-            .module
-            .items
-            .iter()
-            .find_map(|item| match item {
-                ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) => Some(p.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                error(
-                    RuntimeErrorKind::ProcedureNotFound,
-                    format!("VBA procedure not found: {name}"),
-                    line,
-                )
-            })?;
         if args.len() != procedure.params.len() {
-            return Err(error(
-                RuntimeErrorKind::ArgumentCount,
-                format!(
-                    "{} expects {} argument(s), received {}",
-                    procedure.name,
-                    procedure.params.len(),
-                    args.len()
-                ),
-                line,
-            ));
+            return Err(argument_count_error(procedure, args.len(), line));
         }
 
         let mut frame = Frame {
@@ -235,7 +252,7 @@ impl<'a> Runtime<'a> {
         if !matches!(procedure.kind, ProcKind::Sub) {
             frame.values.insert(
                 frame.procedure_name.clone(),
-                Rc::new(RefCell::new(default_return_value(&procedure))),
+                Rc::new(RefCell::new(default_return_value(procedure))),
             );
         }
 
@@ -265,6 +282,51 @@ impl<'a> Runtime<'a> {
             value
         };
         Ok(value)
+    }
+
+    fn find_procedure(&self, name: &str, line: Option<u32>) -> Result<Procedure, RuntimeError> {
+        self.module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) => {
+                    Some(procedure.clone())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::ProcedureNotFound,
+                    format!("VBA procedure not found: {name}"),
+                    line,
+                )
+            })
+    }
+
+    fn omitted_parameter_value(
+        &mut self,
+        parameter: &crate::ast::Param,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        if !parameter.optional {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!("required argument is missing: {}", parameter.name),
+                line,
+            ));
+        }
+        if let Some(default) = &parameter.default {
+            let mut frame = Frame {
+                procedure_name: String::new(),
+                values: BTreeMap::new(),
+            };
+            return self.eval_expr(default, &mut frame);
+        }
+        if parameter.type_name.name.eq_ignore_ascii_case("variant") {
+            Ok(Value::Missing)
+        } else {
+            Ok(default_value(&parameter.type_name))
+        }
     }
 
     fn exec_body(&mut self, body: &[Statement], frame: &mut Frame) -> Result<Flow, RuntimeError> {
@@ -955,40 +1017,98 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
-        let procedure = self
-            .module
-            .items
+        let procedure = self.find_procedure(name, line)?;
+        let param_array_index = procedure
+            .params
             .iter()
-            .find_map(|item| match item {
-                ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) => {
-                    Some(procedure.clone())
+            .position(|param| param.mode == ParamMode::ParamArray);
+        let mut assigned = vec![None; procedure.params.len()];
+        let mut param_array_args = Vec::new();
+        let mut next_positional = 0;
+        let mut saw_named = false;
+        for (argument_index, argument) in args.iter().enumerate() {
+            if let Some(argument_name) = &argument.name {
+                saw_named = true;
+                let parameter_index = procedure
+                    .params
+                    .iter()
+                    .position(|param| param.name.eq_ignore_ascii_case(argument_name))
+                    .ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::ArgumentCount,
+                            format!("named argument not found: {argument_name}"),
+                            line,
+                        )
+                    })?;
+                if Some(parameter_index) == param_array_index {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        "ParamArray cannot be supplied as a named argument",
+                        line,
+                    ));
                 }
-                _ => None,
-            })
-            .expect("the caller checked that the procedure exists");
-        if args.len() != procedure.params.len() {
-            return Err(error(
-                RuntimeErrorKind::ArgumentCount,
-                format!(
-                    "{} expects {} argument(s), received {}",
-                    procedure.name,
-                    procedure.params.len(),
-                    args.len()
-                ),
-                line,
-            ));
+                if assigned[parameter_index].replace(argument_index).is_some() {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!("argument supplied more than once: {argument_name}"),
+                        line,
+                    ));
+                }
+                continue;
+            }
+            if saw_named {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    "positional argument cannot follow a named argument",
+                    line,
+                ));
+            }
+            while next_positional < procedure.params.len() && assigned[next_positional].is_some() {
+                next_positional += 1;
+            }
+            if Some(next_positional) == param_array_index {
+                param_array_args.push(argument_index);
+            } else if next_positional < procedure.params.len() {
+                assigned[next_positional] = Some(argument_index);
+                next_positional += 1;
+            } else {
+                return Err(argument_count_error(&procedure, args.len(), line));
+            }
         }
 
-        let mut bound = Vec::with_capacity(args.len());
+        let mut bound = Vec::with_capacity(procedure.params.len());
         let mut copybacks = Vec::<(ValueSlot, i64, ValueSlot)>::new();
-        for (argument, parameter) in args.iter().zip(&procedure.params) {
-            let expression = argument.value.as_ref().ok_or_else(|| {
-                error(
-                    RuntimeErrorKind::Unsupported,
-                    "omitted arguments are not executable yet",
-                    line,
-                )
-            })?;
+        for (parameter_index, parameter) in procedure.params.iter().enumerate() {
+            if parameter.mode == ParamMode::ParamArray {
+                let mut values = Vec::with_capacity(param_array_args.len());
+                for argument_index in &param_array_args {
+                    let argument = &args[*argument_index];
+                    let value = match &argument.value {
+                        Some(expression) => self.eval_expr(expression, frame)?,
+                        None => Value::Missing,
+                    };
+                    values.push(value);
+                }
+                bound.push(BoundArgument::Value(Value::Array(ArrayValue {
+                    lower_bound: 0,
+                    values,
+                    element_default: Box::new(default_value(&parameter.type_name)),
+                })));
+                continue;
+            }
+            let Some(argument_index) = assigned[parameter_index] else {
+                bound.push(BoundArgument::Value(
+                    self.omitted_parameter_value(parameter, line)?,
+                ));
+                continue;
+            };
+            let argument = &args[argument_index];
+            let Some(expression) = argument.value.as_ref() else {
+                bound.push(BoundArgument::Value(
+                    self.omitted_parameter_value(parameter, line)?,
+                ));
+                continue;
+            };
             if parameter.mode == ParamMode::ByRef && !force_by_value && !argument.force_by_value {
                 if let Some(name) = expr_name(expression) {
                     if let Some(value) = frame.values.get(&key(name)) {
@@ -1025,7 +1145,7 @@ impl<'a> Runtime<'a> {
             bound.push(BoundArgument::Value(self.eval_expr(expression, frame)?));
         }
 
-        let result = self.invoke_procedure(name, bound, line)?;
+        let result = self.invoke_procedure(&procedure, bound, line)?;
         for (array, index, value) in copybacks {
             let value = value.borrow().clone();
             let mut array = array.borrow_mut();
@@ -1244,6 +1364,7 @@ fn call_builtin(
             | "cdbl"
             | "clng"
             | "cstr"
+            | "ismissing"
             | "lbound"
             | "lcase"
             | "len"
@@ -1261,6 +1382,16 @@ fn call_builtin(
                 values: args.to_vec(),
                 element_default: Box::new(Value::Empty),
             }));
+        }
+        if name == "ismissing" {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("ismissing expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            return Ok(Value::Boolean(matches!(args[0], Value::Missing)));
         }
         if matches!(name.as_str(), "lbound" | "ubound") {
             if !(1..=2).contains(&args.len()) {
@@ -1398,6 +1529,19 @@ fn default_return_value(procedure: &Procedure) -> Value {
         .unwrap_or(Value::Empty)
 }
 
+fn argument_count_error(procedure: &Procedure, received: usize, line: Option<u32>) -> RuntimeError {
+    error(
+        RuntimeErrorKind::ArgumentCount,
+        format!(
+            "{} cannot bind {} supplied argument(s) to {} parameter(s)",
+            procedure.name,
+            received,
+            procedure.params.len()
+        ),
+        line,
+    )
+}
+
 fn number(value: &Value) -> Result<f64, String> {
     match value {
         Value::Empty | Value::Boolean(false) => Ok(0.0),
@@ -1408,6 +1552,7 @@ fn number(value: &Value) -> Result<f64, String> {
             .parse()
             .map_err(|_| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
+        Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Array(_) => Err("type mismatch converting array to number".to_string()),
         Value::Object(_) => Err("type mismatch converting object to number".to_string()),
     }
@@ -1428,6 +1573,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
             .map_err(|_| "type mismatch converting String to Boolean".to_string()),
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
         Value::Object(_) => Err("type mismatch converting object to Boolean".to_string()),
+        Value::Missing => Err("invalid use of Missing".to_string()),
     }
 }
 
@@ -1445,8 +1591,8 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
 
 fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKind, String)> {
     use BinaryOp::*;
-    if matches!(lhs, Value::Array(_) | Value::Object(_))
-        || matches!(rhs, Value::Array(_) | Value::Object(_))
+    if matches!(lhs, Value::Array(_) | Value::Object(_) | Value::Missing)
+        || matches!(rhs, Value::Array(_) | Value::Object(_) | Value::Missing)
     {
         return Err((
             RuntimeErrorKind::TypeMismatch,
@@ -1538,6 +1684,7 @@ fn numeric_result(value: f64, lhs: &Value, rhs: &Value) -> Value {
 fn text(value: &Value) -> Result<String, String> {
     Ok(match value {
         Value::Empty => String::new(),
+        Value::Missing => return Err("invalid use of Missing".to_string()),
         Value::Null => "Null".to_string(),
         Value::Boolean(true) => "True".to_string(),
         Value::Boolean(false) => "False".to_string(),
@@ -1880,6 +2027,139 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::Integer(0));
+    }
+
+    #[test]
+    fn binds_optional_omitted_and_named_arguments() {
+        let value = run(
+            "Private Function Describe(ByVal number As Long, Optional label As String = \"item\", Optional count As Long = 3) As String\n\
+               Describe = label & \"=\" & (number * count)\n\
+             End Function\n\
+             Public Function OptionalProbe() As String\n\
+               OptionalProbe = Describe(2) & \"|\" & Describe(4, , 5) & \"|\" & Describe(count:=2, number:=6, label:=\"named\")\n\
+             End Function\n",
+            "OptionalProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("item=6|item=20|named=12".to_string()));
+    }
+
+    #[test]
+    fn named_byref_arguments_alias_the_matching_caller_variables() {
+        let value = run(
+            "Private Sub ReplaceBoth(ByRef first As Long, ByRef second As Long)\n\
+               first = 10\n\
+               second = 20\n\
+             End Sub\n\
+             Public Function NamedByRefProbe() As Long\n\
+               Dim leftValue As Long\n\
+               Dim rightValue As Long\n\
+               ReplaceBoth second:=rightValue, first:=leftValue\n\
+               NamedByRefProbe = leftValue * 100 + rightValue\n\
+             End Function\n",
+            "NamedByRefProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(1020));
+    }
+
+    #[test]
+    fn collects_paramarray_values_and_supports_an_empty_paramarray() {
+        let value = run(
+            "Private Function SumMany(ByVal base As Long, ParamArray values() As Variant) As Long\n\
+               Dim item As Variant\n\
+               SumMany = base\n\
+               For Each item In values\n\
+                 SumMany = SumMany + item\n\
+               Next\n\
+             End Function\n\
+             Public Function ParamArrayProbe() As Long\n\
+               ParamArrayProbe = SumMany(10) * 100 + SumMany(10, 1, 2, 3)\n\
+             End Function\n",
+            "ParamArrayProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(1016));
+    }
+
+    #[test]
+    fn ismissing_distinguishes_an_omitted_optional_variant_from_empty() {
+        let value = run(
+            "Private Function MissingFlag(Optional value As Variant) As Long\n\
+               If IsMissing(value) Then\n\
+                 MissingFlag = 1\n\
+               Else\n\
+                 MissingFlag = 0\n\
+               End If\n\
+             End Function\n\
+             Public Function MissingProbe() As Long\n\
+               Dim emptyValue As Variant\n\
+               MissingProbe = MissingFlag() * 10 + MissingFlag(emptyValue)\n\
+             End Function\n",
+            "MissingProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(10));
+    }
+
+    #[test]
+    fn direct_runtime_calls_apply_optional_and_paramarray_binding() {
+        let optional = run(
+            "Public Function AddDefault(ByVal value As Long, Optional amount As Long = 5) As Long\n\
+               AddDefault = value + amount\n\
+             End Function\n",
+            "AddDefault",
+            vec![Value::Integer(7)],
+        )
+        .unwrap();
+        assert_eq!(optional, Value::Integer(12));
+
+        let param_array = run(
+            "Public Function CountValues(ParamArray values() As Variant) As Long\n\
+               CountValues = UBound(values) - LBound(values) + 1\n\
+             End Function\n",
+            "CountValues",
+            vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+        )
+        .unwrap();
+        assert_eq!(param_array, Value::Integer(3));
+    }
+
+    #[test]
+    fn rejects_unknown_and_duplicate_named_arguments() {
+        let unknown = run(
+            "Private Sub Target(Optional value As Long = 1)\n\
+             End Sub\n\
+             Public Sub Probe()\n\
+               Target missing:=2\n\
+             End Sub\n",
+            "Probe",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(unknown.kind, RuntimeErrorKind::ArgumentCount);
+        assert!(unknown.message.contains("named argument not found"));
+
+        let duplicate = run(
+            "Private Sub Target(Optional value As Long = 1)\n\
+             End Sub\n\
+             Public Sub Probe()\n\
+               Target value:=2, value:=3\n\
+             End Sub\n",
+            "Probe",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(duplicate.kind, RuntimeErrorKind::ArgumentCount);
+        assert!(duplicate.message.contains("more than once"));
     }
 
     #[test]

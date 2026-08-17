@@ -1269,6 +1269,7 @@ fn from_cell_value(value: &CellValue) -> Value {
 fn to_cell_value(value: Value) -> Result<CellValue, String> {
     match value {
         Value::Empty | Value::Null => Ok(CellValue::Empty),
+        Value::Missing => Err("an omitted VBA argument cannot be assigned to a cell".to_string()),
         Value::Boolean(value) => Ok(CellValue::Boolean(value)),
         Value::Integer(value) => Ok(CellValue::Number(value as f64)),
         Value::Double(value) => Ok(CellValue::Number(value)),
@@ -1281,6 +1282,7 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
 fn to_formula(value: Value) -> Result<String, String> {
     match value {
         Value::Empty | Value::Null => Ok(String::new()),
+        Value::Missing => Err("an omitted VBA argument cannot be used as a formula".to_string()),
         Value::String(value) => Ok(value),
         _ => Err("a spreadsheet formula must be a String".to_string()),
     }
@@ -1315,6 +1317,7 @@ impl From<InputValue> for Value {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 enum OutputValue {
     Empty,
+    Missing,
     Null,
     Boolean(bool),
     Integer(i64),
@@ -1334,6 +1337,7 @@ impl From<Value> for OutputValue {
     fn from(value: Value) -> Self {
         match value {
             Value::Empty => Self::Empty,
+            Value::Missing => Self::Missing,
             Value::Null => Self::Null,
             Value::Boolean(value) => Self::Boolean(value),
             Value::Integer(value) => Self::Integer(value),
