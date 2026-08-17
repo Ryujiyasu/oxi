@@ -6,15 +6,15 @@
 //!
 //! This first browser-runtime slice supports scalar values, local variables,
 //! arithmetic, comparisons, branches, loops, and calls between VBA procedures.
-//! Office objects, multidimensional arrays, `ByRef`, file I/O, and events fail
-//! explicitly rather than being approximated.
+//! Office objects require a host adapter. Multidimensional arrays, file I/O,
+//! and events fail explicitly rather than being approximated.
 
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use crate::ast::{
     Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForEachStmt, ForStmt,
-    Literal, LoopTest, Module, ModuleItem, ModuleOption, ProcKind, Procedure, SelectCaseStmt,
-    Statement, TypeName, UnaryOp, VarDecl, VarItem,
+    Literal, LoopTest, Module, ModuleItem, ModuleOption, ParamMode, ProcKind, Procedure,
+    SelectCaseStmt, Statement, TypeName, UnaryOp, VarDecl, VarItem,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,7 +125,14 @@ pub struct Runtime<'a> {
 
 struct Frame {
     procedure_name: String,
-    values: BTreeMap<String, Value>,
+    values: BTreeMap<String, ValueSlot>,
+}
+
+type ValueSlot = Rc<RefCell<Value>>;
+
+enum BoundArgument {
+    Value(Value),
+    Reference(ValueSlot),
 }
 
 enum Flow {
@@ -169,6 +176,16 @@ impl<'a> Runtime<'a> {
         args: Vec<Value>,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
+        let args = args.into_iter().map(BoundArgument::Value).collect();
+        self.invoke_procedure(name, args, line)
+    }
+
+    fn invoke_procedure(
+        &mut self,
+        name: &str,
+        args: Vec<BoundArgument>,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
         if self.depth >= self.max_depth {
             return Err(error(
                 RuntimeErrorKind::CallDepth,
@@ -208,30 +225,27 @@ impl<'a> Runtime<'a> {
             procedure_name: key(&procedure.name),
             values: BTreeMap::new(),
         };
-        for (param, value) in procedure.params.iter().zip(args) {
-            if param.is_array {
-                return Err(error(
-                    RuntimeErrorKind::Unsupported,
-                    "array parameters are not executable yet",
-                    Some(procedure.span.line),
-                ));
-            }
+        for (param, argument) in procedure.params.iter().zip(args) {
+            let value = match argument {
+                BoundArgument::Value(value) => Rc::new(RefCell::new(value)),
+                BoundArgument::Reference(value) => value,
+            };
             frame.values.insert(key(&param.name), value);
         }
         if !matches!(procedure.kind, ProcKind::Sub) {
             frame.values.insert(
                 frame.procedure_name.clone(),
-                default_return_value(&procedure),
+                Rc::new(RefCell::new(default_return_value(&procedure))),
             );
         }
 
         self.depth += 1;
         let flow = self.exec_body(&procedure.body, &mut frame);
         self.depth -= 1;
-        match flow? {
+        let ended = match flow? {
             Flow::Continue
-            | Flow::Exit(ExitKind::Sub | ExitKind::Function | ExitKind::Property) => {}
-            Flow::End => return Ok(Value::Empty),
+            | Flow::Exit(ExitKind::Sub | ExitKind::Function | ExitKind::Property) => false,
+            Flow::End => true,
             Flow::Exit(kind) => {
                 return Err(error(
                     RuntimeErrorKind::Unsupported,
@@ -239,15 +253,18 @@ impl<'a> Runtime<'a> {
                     Some(procedure.span.line),
                 ))
             }
-        }
-        if matches!(procedure.kind, ProcKind::Sub) {
-            Ok(Value::Empty)
+        };
+        let value = if ended || matches!(procedure.kind, ProcKind::Sub) {
+            Value::Empty
         } else {
-            Ok(frame
+            let value = frame
                 .values
                 .remove(&frame.procedure_name)
-                .unwrap_or(Value::Empty))
-        }
+                .map(|value| value.borrow().clone())
+                .unwrap_or(Value::Empty);
+            value
+        };
+        Ok(value)
     }
 
     fn exec_body(&mut self, body: &[Statement], frame: &mut Frame) -> Result<Flow, RuntimeError> {
@@ -577,7 +594,9 @@ impl<'a> Runtime<'a> {
                     None => default_value(&variable.type_name),
                 },
             };
-            frame.values.insert(key(&variable.name), value);
+            frame
+                .values
+                .insert(key(&variable.name), Rc::new(RefCell::new(value)));
         }
         Ok(())
     }
@@ -601,20 +620,23 @@ impl<'a> Runtime<'a> {
             _ => unreachable!(),
         };
         if item.type_name.name.eq_ignore_ascii_case("variant") {
-            if let Some(Value::Array(existing)) = frame.values.get(&key(&item.name)) {
-                replacement.element_default = existing.element_default.clone();
-                replacement.values.fill(*existing.element_default.clone());
+            if let Some(existing) = frame.values.get(&key(&item.name)) {
+                if let Value::Array(existing) = &*existing.borrow() {
+                    replacement.element_default = existing.element_default.clone();
+                    replacement.values.fill(*existing.element_default.clone());
+                }
             }
         }
         if preserve {
-            let existing = frame.values.get(&key(&item.name)).ok_or_else(|| {
+            let existing = frame.values.get(&key(&item.name)).cloned().ok_or_else(|| {
                 error(
                     RuntimeErrorKind::UndefinedVariable,
                     format!("undefined VBA array: {}", item.name),
                     Some(line),
                 )
             })?;
-            let Value::Array(existing) = existing else {
+            let existing = existing.borrow();
+            let Value::Array(existing) = &*existing else {
                 return Err(error(
                     RuntimeErrorKind::TypeMismatch,
                     format!("ReDim Preserve target is not an array: {}", item.name),
@@ -635,9 +657,15 @@ impl<'a> Runtime<'a> {
                     existing.values[(index - existing.lower_bound) as usize].clone();
             }
         }
-        frame
-            .values
-            .insert(key(&item.name), Value::Array(replacement));
+        let replacement = Value::Array(replacement);
+        match frame.values.get(&key(&item.name)) {
+            Some(value) => *value.borrow_mut() = replacement,
+            None => {
+                frame
+                    .values
+                    .insert(key(&item.name), Rc::new(RefCell::new(replacement)));
+            }
+        }
         Ok(())
     }
 
@@ -715,7 +743,12 @@ impl<'a> Runtime<'a> {
     ) -> Result<(), RuntimeError> {
         match target {
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
-                frame.values.insert(key(name), value);
+                match frame.values.get(&key(name)) {
+                    Some(existing) => *existing.borrow_mut() = value,
+                    None => {
+                        frame.values.insert(key(name), Rc::new(RefCell::new(value)));
+                    }
+                }
                 Ok(())
             }
             Expr::Index { target, args, .. } => {
@@ -727,14 +760,15 @@ impl<'a> Runtime<'a> {
                     )
                 })?;
                 let index = self.single_array_argument(args, frame, line)?;
-                let array = frame.values.get_mut(&key(name)).ok_or_else(|| {
+                let array = frame.values.get(&key(name)).cloned().ok_or_else(|| {
                     error(
                         RuntimeErrorKind::UndefinedVariable,
                         format!("undefined VBA array: {name}"),
                         Some(line),
                     )
                 })?;
-                let Value::Array(array) = array else {
+                let mut array = array.borrow_mut();
+                let Value::Array(array) = &mut *array else {
                     return Err(error(
                         RuntimeErrorKind::TypeMismatch,
                         format!("VBA value is not an array: {name}"),
@@ -770,8 +804,8 @@ impl<'a> Runtime<'a> {
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                if let Some(value) = frame.values.get(&key(name)).cloned() {
-                    return Ok(value);
+                if let Some(value) = frame.values.get(&key(name)) {
+                    return Ok(value.borrow().clone());
                 }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
                     return Ok(value);
@@ -797,12 +831,16 @@ impl<'a> Runtime<'a> {
             Expr::Index {
                 target, args, span, ..
             } if expr_name(target).is_some_and(|name| {
-                matches!(frame.values.get(&key(name)), Some(Value::Array(_)))
+                frame
+                    .values
+                    .get(&key(name))
+                    .is_some_and(|value| matches!(&*value.borrow(), Value::Array(_)))
             }) =>
             {
                 let name = expr_name(target).unwrap();
                 let index = self.single_array_argument(args, frame, span.line)?;
-                let Value::Array(array) = frame.values.get(&key(name)).unwrap() else {
+                let value = frame.values.get(&key(name)).unwrap().borrow();
+                let Value::Array(array) = &*value else {
                     unreachable!()
                 };
                 Ok(array.values[array_offset(array, index, span.line)?].clone())
@@ -831,8 +869,24 @@ impl<'a> Runtime<'a> {
     fn eval_call(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
         match expr {
             Expr::Index {
-                target, args, span, ..
+                target,
+                args,
+                force_by_value,
+                span,
             } => {
+                if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
+                    if self.module.items.iter().any(|item| {
+                        matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name))
+                    }) {
+                        return self.call_user_procedure(
+                            name,
+                            args,
+                            *force_by_value,
+                            frame,
+                            Some(span.line),
+                        );
+                    }
+                }
                 let mut values = Vec::with_capacity(args.len());
                 for argument in args {
                     let value = argument.value.as_ref().ok_or_else(|| {
@@ -891,6 +945,101 @@ impl<'a> Runtime<'a> {
                 Some(expr.span().line),
             )),
         }
+    }
+
+    fn call_user_procedure(
+        &mut self,
+        name: &str,
+        args: &[Argument],
+        force_by_value: bool,
+        frame: &mut Frame,
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        let procedure = self
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) => {
+                    Some(procedure.clone())
+                }
+                _ => None,
+            })
+            .expect("the caller checked that the procedure exists");
+        if args.len() != procedure.params.len() {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "{} expects {} argument(s), received {}",
+                    procedure.name,
+                    procedure.params.len(),
+                    args.len()
+                ),
+                line,
+            ));
+        }
+
+        let mut bound = Vec::with_capacity(args.len());
+        let mut copybacks = Vec::<(ValueSlot, i64, ValueSlot)>::new();
+        for (argument, parameter) in args.iter().zip(&procedure.params) {
+            let expression = argument.value.as_ref().ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::Unsupported,
+                    "omitted arguments are not executable yet",
+                    line,
+                )
+            })?;
+            if parameter.mode == ParamMode::ByRef && !force_by_value && !argument.force_by_value {
+                if let Some(name) = expr_name(expression) {
+                    if let Some(value) = frame.values.get(&key(name)) {
+                        bound.push(BoundArgument::Reference(value.clone()));
+                        continue;
+                    }
+                }
+                if let Expr::Index { target, args, .. } = expression {
+                    let array = expr_name(target)
+                        .and_then(|name| frame.values.get(&key(name)))
+                        .filter(|value| matches!(&*value.borrow(), Value::Array(_)))
+                        .cloned();
+                    if let Some(array) = array {
+                        let index = self.single_array_argument(
+                            args,
+                            frame,
+                            line.unwrap_or(expression.span().line),
+                        )?;
+                        if let Some((_, _, value)) =
+                            copybacks.iter().find(|(existing, existing_index, _)| {
+                                Rc::ptr_eq(existing, &array) && *existing_index == index
+                            })
+                        {
+                            bound.push(BoundArgument::Reference(value.clone()));
+                            continue;
+                        }
+                        let value = Rc::new(RefCell::new(self.eval_expr(expression, frame)?));
+                        bound.push(BoundArgument::Reference(value.clone()));
+                        copybacks.push((array, index, value));
+                        continue;
+                    }
+                }
+            }
+            bound.push(BoundArgument::Value(self.eval_expr(expression, frame)?));
+        }
+
+        let result = self.invoke_procedure(name, bound, line)?;
+        for (array, index, value) in copybacks {
+            let value = value.borrow().clone();
+            let mut array = array.borrow_mut();
+            let Value::Array(array) = &mut *array else {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "ByRef array target is no longer an array",
+                    line,
+                ));
+            };
+            let offset = array_offset(array, index, line.unwrap_or(0))?;
+            array.values[offset] = value;
+        }
+        Ok(result)
     }
 
     fn call_named(
@@ -1642,6 +1791,95 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::Integer(41));
+    }
+
+    #[test]
+    fn byref_parameters_share_the_callers_storage_while_byval_does_not() {
+        let value = run(
+            "Private Sub Combine(ByRef firstValue As Long, ByRef secondValue As Long)\n\
+               firstValue = firstValue + 1\n\
+               secondValue = firstValue + secondValue\n\
+             End Sub\n\
+             Private Sub Replace(ByRef value As Long)\n\
+               value = 99\n\
+             End Sub\n\
+             Private Sub ReplaceCopy(ByVal value As Long)\n\
+               value = 88\n\
+             End Sub\n\
+             Public Function ProbeByRef() As String\n\
+               Dim shared As Long\n\
+               Dim copied As Long\n\
+               Dim bareCopied As Long\n\
+               shared = 1\n\
+               copied = 2\n\
+               bareCopied = 3\n\
+               Combine shared, shared\n\
+               ReplaceCopy copied\n\
+               Call Replace((copied))\n\
+               Replace (bareCopied)\n\
+               ProbeByRef = shared & \"|\" & copied & \"|\" & bareCopied\n\
+             End Function\n",
+            "ProbeByRef",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("4|2|3".to_string()));
+    }
+
+    #[test]
+    fn byref_array_parameters_and_elements_update_the_caller() {
+        let value = run(
+            "Private Sub Grow(ByRef values() As Long)\n\
+               values(1) = 10\n\
+               ReDim Preserve values(1 To 3)\n\
+               values(3) = 30\n\
+             End Sub\n\
+             Private Sub Increment(ByRef value As Long)\n\
+               value = value + 1\n\
+             End Sub\n\
+             Private Sub CombineElements(ByRef firstValue As Long, ByRef secondValue As Long)\n\
+               firstValue = firstValue + 1\n\
+               secondValue = firstValue + secondValue\n\
+             End Sub\n\
+             Public Function ArrayByRef() As Long\n\
+               Dim values() As Long\n\
+               ReDim values(1 To 2)\n\
+               values(2) = 20\n\
+               Grow values\n\
+               Increment values(2)\n\
+               CombineElements values(2), values(2)\n\
+               ArrayByRef = values(1) + values(2) + values(3) + UBound(values) * 100\n\
+             End Function\n",
+            "ArrayByRef",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(384));
+    }
+
+    #[test]
+    fn byref_aliases_remain_shared_through_recursive_calls() {
+        let value = run(
+            "Private Sub CountDown(ByRef value As Long)\n\
+               If value > 0 Then\n\
+                 value = value - 1\n\
+                 CountDown value\n\
+               End If\n\
+             End Sub\n\
+             Public Function RecursiveByRef() As Long\n\
+               Dim value As Long\n\
+               value = 4\n\
+               CountDown value\n\
+               RecursiveByRef = value\n\
+             End Function\n",
+            "RecursiveByRef",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(0));
     }
 
     #[test]
