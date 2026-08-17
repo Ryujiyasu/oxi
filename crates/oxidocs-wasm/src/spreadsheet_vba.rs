@@ -27,6 +27,17 @@ enum RangeAxis {
     Columns,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum EndDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+const MAX_WORKSHEET_ROW: u32 = 1_048_576;
+const MAX_WORKSHEET_COLUMN: u32 = 16_383;
+
 impl CellRange {
     fn single(address: CellAddress) -> Self {
         Self {
@@ -380,6 +391,76 @@ impl<'a> WorkbookHost<'a> {
         }))
     }
 
+    fn range_end(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let [direction] = args else {
+            return Err("Range.End expects one direction".to_string());
+        };
+        let direction = end_direction(direction)?;
+        let worksheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let start = CellAddress {
+            sheet: range.sheet,
+            row: range.start_row,
+            column: range.start_column,
+        };
+        let destination = match direction {
+            EndDirection::Up | EndDirection::Down => {
+                let mut occupied = worksheet
+                    .rows
+                    .iter()
+                    .filter(|row| {
+                        row.cells
+                            .iter()
+                            .any(|cell| cell.col == start.column && cell_has_content(cell))
+                    })
+                    .map(|row| row.index)
+                    .collect::<Vec<_>>();
+                occupied.sort_unstable();
+                occupied.dedup();
+                CellAddress {
+                    row: ctrl_arrow_destination(
+                        &occupied,
+                        start.row,
+                        1,
+                        MAX_WORKSHEET_ROW,
+                        matches!(direction, EndDirection::Down),
+                    ),
+                    ..start
+                }
+            }
+            EndDirection::Left | EndDirection::Right => {
+                let mut occupied = worksheet
+                    .rows
+                    .iter()
+                    .find(|row| row.index == start.row)
+                    .map(|row| {
+                        row.cells
+                            .iter()
+                            .filter(|cell| cell_has_content(cell))
+                            .map(|cell| cell.col)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                occupied.sort_unstable();
+                occupied.dedup();
+                CellAddress {
+                    column: ctrl_arrow_destination(
+                        &occupied,
+                        start.column,
+                        0,
+                        MAX_WORKSHEET_COLUMN,
+                        matches!(direction, EndDirection::Right),
+                    ),
+                    ..start
+                }
+            }
+        };
+        Ok(self.object(HostObject::Range(CellRange::single(destination))))
+    }
+
     fn offset_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let (row_offset, column_offset) = match args {
             [] => (0, 0),
@@ -637,6 +718,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("resize") {
                     return self.resize_range(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("end") {
+                    return self.range_end(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("address") {
                     return range_address_from_args(range, args)
                         .map(Value::String)
@@ -661,6 +745,11 @@ impl Host for WorkbookHost<'_> {
                 }
             }
             return Ok(None);
+        }
+        if args.is_empty() {
+            if let Some(value) = excel_constant(name) {
+                return Ok(Some(value));
+            }
         }
         if name.eq_ignore_ascii_case("range") {
             return self.range_object(self.active_sheet, args).map(Some);
@@ -825,6 +914,84 @@ impl Host for WorkbookHost<'_> {
     }
 }
 
+fn cell_has_content(cell: &Cell) -> bool {
+    cell.formula.is_some() || !matches!(&cell.value, CellValue::Empty)
+}
+
+fn ctrl_arrow_destination(
+    occupied: &[u32],
+    start: u32,
+    minimum: u32,
+    maximum: u32,
+    forward: bool,
+) -> u32 {
+    if start == if forward { maximum } else { minimum } {
+        return start;
+    }
+    let start_index = occupied.binary_search(&start).ok();
+    let neighbour = if forward { start + 1 } else { start - 1 };
+    let neighbour_index = occupied.binary_search(&neighbour).ok();
+    if let (Some(_), Some(mut index)) = (start_index, neighbour_index) {
+        let mut destination = neighbour;
+        if forward {
+            while occupied.get(index + 1) == Some(&(destination + 1)) {
+                index += 1;
+                destination += 1;
+            }
+        } else {
+            while index > 0 && occupied.get(index - 1) == Some(&(destination - 1)) {
+                index -= 1;
+                destination -= 1;
+            }
+        }
+        return destination;
+    }
+    if forward {
+        occupied
+            .iter()
+            .copied()
+            .find(|position| *position > start)
+            .unwrap_or(maximum)
+    } else {
+        occupied
+            .iter()
+            .rev()
+            .copied()
+            .find(|position| *position < start)
+            .unwrap_or(minimum)
+    }
+}
+
+fn end_direction(value: &Value) -> Result<EndDirection, String> {
+    let value = match value {
+        Value::Integer(value) => *value,
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        _ => return Err("Range.End direction must be an Excel direction constant".to_string()),
+    };
+    match value {
+        -4162 => Ok(EndDirection::Up),
+        -4121 => Ok(EndDirection::Down),
+        -4159 => Ok(EndDirection::Left),
+        -4161 => Ok(EndDirection::Right),
+        _ => Err(format!("unsupported Range.End direction: {value}")),
+    }
+}
+
+fn excel_constant(name: &str) -> Option<Value> {
+    let value = if name.eq_ignore_ascii_case("xlup") {
+        -4162
+    } else if name.eq_ignore_ascii_case("xldown") {
+        -4121
+    } else if name.eq_ignore_ascii_case("xltoleft") {
+        -4159
+    } else if name.eq_ignore_ascii_case("xltoright") {
+        -4161
+    } else {
+        return None;
+    };
+    Some(Value::Integer(value))
+}
+
 fn parse_range_reference(reference: &str) -> Result<((u32, u32), (u32, u32)), String> {
     let mut parts = reference.split(':');
     let start = parts.next().unwrap_or_default();
@@ -868,8 +1035,11 @@ fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
     let row = digits
         .parse::<u32>()
         .map_err(|_| format!("cell row is too large: {reference}"))?;
-    if row == 0 {
-        return Err(format!("cell rows are one-based: {reference}"));
+    if row == 0 || row > MAX_WORKSHEET_ROW {
+        return Err(format!("cell row is outside the worksheet: {reference}"));
+    }
+    if column == 0 || column - 1 > MAX_WORKSHEET_COLUMN {
+        return Err(format!("cell column is outside the worksheet: {reference}"));
     }
     Ok((column - 1, row))
 }
@@ -1136,6 +1306,8 @@ mod tests {
         assert_eq!(parse_a1_reference("AA12").unwrap(), (26, 12));
         assert_eq!(parse_range_reference("B2:A1").unwrap(), ((1, 2), (0, 1)));
         assert!(parse_a1_reference("A0").is_err());
+        assert!(parse_a1_reference("A1048577").is_err());
+        assert!(parse_a1_reference("XFE1").is_err());
         assert!(parse_a1_reference("A1:B2").is_err());
         assert!(parse_range_reference("A1:B2:C3").is_err());
         assert!(positive_index(&Value::Integer(0), "row").is_err());
@@ -1358,6 +1530,31 @@ mod tests {
         };
 
         assert_eq!(result, Value::String("D4:F7|4|3|A1".to_string()));
+    }
+
+    #[test]
+    fn vba_moves_to_range_edges_in_all_four_directions() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function InspectEnds() As String\n\
+               Range(\"A1:A3\").Value = 1\n\
+               Range(\"A5\").Value = 1\n\
+               Range(\"B7\").Formula = \"=1+1\"\n\
+               Range(\"C10:E10\").Value = 1\n\
+               Range(\"G10\").Value = 1\n\
+               InspectEnds = Range(\"A1\").End(xlDown).Address(False, False) & \"|\" & Range(\"A3\").End(xlDown).Address(False, False) & \"|\" & Range(\"A5\").End(xlDown).Address(False, False) & \"|\" & Range(\"A5\").End(xlUp).Address(False, False) & \"|\" & Range(\"A3\").End(xlUp).Address(False, False) & \"|\" & Range(\"C10\").End(xlToRight).Address(False, False) & \"|\" & Range(\"E10\").End(xlToRight).Address(False, False) & \"|\" & Range(\"G10\").End(xlToRight).Address(False, False) & \"|\" & Range(\"G10\").End(xlToLeft).Address(False, False) & \"|\" & Range(\"C10\").End(xlToLeft).Address(False, False) & \"|\" & Range(\"B1\").End(xlDown).Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "InspectEnds", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("A3|A5|A1048576|A3|A1|E10|G10|XFD10|E10|A10|B7".to_string())
+        );
     }
 
     #[test]
