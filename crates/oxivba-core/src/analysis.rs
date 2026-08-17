@@ -251,6 +251,18 @@ pub const RULES: &[Rule] = &[
         reason: "shows or hides Excel's process-global recent-files user interface",
     },
     Rule {
+        pattern: "Application.DisplayScrollBars",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "shows or hides Excel's process-global scroll-bar user interface",
+    },
+    Rule {
+        pattern: "Application.EnableAnimations",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global user-interface animation state",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -3069,6 +3081,46 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("recent-files user interface"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn application_scroll_bars_are_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseScrollBars()\n\
+             Application.DisplayScrollBars = False\n\
+             Application.DisplayScrollBars = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.DisplayScrollBars"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("scroll-bar user interface"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn application_animations_are_a_user_interface_dependency() {
+        let a = analyse_src(
+            "Public Sub ExerciseAnimations()\n\
+             Application.EnableAnimations = False\n\
+             Application.EnableAnimations = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.EnableAnimations"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("user-interface animation state"))
                 .count(),
             2
         );
