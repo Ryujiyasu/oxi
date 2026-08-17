@@ -560,6 +560,8 @@ struct JsCellEdit {
     row: u32,
     col: u32,
     new_value: String,
+    #[serde(default)]
+    value_type: Option<String>,
 }
 
 /// Edit a .xlsx file and return the modified bytes.
@@ -572,17 +574,28 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
     let mut editor = oxicells_core::XlsxEditor::new(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
 
-    let edits: Vec<oxicells_core::editor::CellEdit> = js_edits
-        .into_iter()
-        .map(|e| oxicells_core::editor::CellEdit {
-            sheet_index: e.sheet_index,
-            row: e.row,
-            col: e.col,
-            new_value: e.new_value,
-        })
-        .collect();
-
-    editor.apply_edits(&edits);
+    for edit in js_edits {
+        let value = match edit.value_type.as_deref() {
+            None | Some("string") => oxicells_core::editor::CellEditValue::String(edit.new_value),
+            Some("number") => oxicells_core::editor::CellEditValue::Number(
+                edit.new_value
+                    .parse()
+                    .map_err(|_| JsError::new("invalid numeric spreadsheet edit"))?,
+            ),
+            Some("boolean") => match edit.new_value.to_ascii_lowercase().as_str() {
+                "true" | "1" => oxicells_core::editor::CellEditValue::Boolean(true),
+                "false" | "0" => oxicells_core::editor::CellEditValue::Boolean(false),
+                _ => return Err(JsError::new("invalid boolean spreadsheet edit")),
+            },
+            Some("empty") => oxicells_core::editor::CellEditValue::Empty,
+            Some(other) => {
+                return Err(JsError::new(&format!(
+                    "unsupported spreadsheet edit type: {other}"
+                )))
+            }
+        };
+        editor.set_cell_value(edit.sheet_index, edit.row, edit.col, value);
+    }
 
     editor
         .save()

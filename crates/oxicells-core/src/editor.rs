@@ -37,11 +37,20 @@ pub struct CellEdit {
     pub new_value: String,
 }
 
+/// The OOXML value type to write for a cell edit.
+#[derive(Debug, Clone)]
+pub enum CellEditValue {
+    String(String),
+    Number(f64),
+    Boolean(bool),
+    Empty,
+}
+
 /// Round-trip xlsx editor.
 pub struct XlsxEditor {
     original_data: Vec<u8>,
     workbook: Workbook,
-    edits: HashMap<(usize, u32, u32), String>, // (sheet_idx, row, col) -> value
+    edits: HashMap<(usize, u32, u32), CellEditValue>, // (sheet_idx, row, col) -> value
 }
 
 /// Convert 0-based column to letter reference (0->A, 25->Z, 26->AA).
@@ -72,6 +81,16 @@ impl XlsxEditor {
     }
 
     pub fn set_cell(&mut self, sheet_index: usize, row: u32, col: u32, value: String) {
+        self.set_cell_value(sheet_index, row, col, CellEditValue::String(value));
+    }
+
+    pub fn set_cell_value(
+        &mut self,
+        sheet_index: usize,
+        row: u32,
+        col: u32,
+        value: CellEditValue,
+    ) {
         self.edits.insert((sheet_index, row, col), value);
     }
 
@@ -99,7 +118,8 @@ impl XlsxEditor {
             .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
 
         // Group edits by sheet index
-        let mut edits_by_sheet: HashMap<usize, HashMap<(u32, u32), &String>> = HashMap::new();
+        let mut edits_by_sheet: HashMap<usize, HashMap<(u32, u32), &CellEditValue>> =
+            HashMap::new();
         for ((si, row, col), val) in &self.edits {
             edits_by_sheet
                 .entry(*si)
@@ -108,7 +128,8 @@ impl XlsxEditor {
         }
 
         // Map sheet path -> edits for that sheet
-        let mut path_edits: HashMap<String, &HashMap<(u32, u32), &String>> = HashMap::new();
+        let mut path_edits: HashMap<String, &HashMap<(u32, u32), &CellEditValue>> =
+            HashMap::new();
         for (si, edits) in &edits_by_sheet {
             if let Some(path) = sheet_paths.get(*si) {
                 path_edits.insert(path.clone(), edits);
@@ -204,28 +225,54 @@ impl XlsxEditor {
     }
 }
 
-fn write_inline_string_cell(
+impl CellEditValue {
+    fn cell_type(&self) -> Option<&'static str> {
+        match self {
+            Self::String(_) => Some("str"),
+            Self::Boolean(_) => Some("b"),
+            Self::Number(_) | Self::Empty => None,
+        }
+    }
+
+    fn value_text(&self) -> Result<Option<String>, XlsxError> {
+        match self {
+            Self::String(value) => Ok(Some(value.clone())),
+            Self::Number(value) if value.is_finite() => Ok(Some(value.to_string())),
+            Self::Number(_) => Err(XlsxError::InvalidData(
+                "spreadsheet numbers must be finite".to_string(),
+            )),
+            Self::Boolean(value) => Ok(Some(if *value { "1" } else { "0" }.to_string())),
+            Self::Empty => Ok(None),
+        }
+    }
+}
+
+fn write_cell_value(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     row: u32,
     col: u32,
-    value: &str,
+    value: &CellEditValue,
 ) -> Result<(), XlsxError> {
     let reference = format!("{}{row}", col_to_letter(col));
     let mut cell = BytesStart::new("c");
     cell.push_attribute(("r", reference.as_str()));
-    cell.push_attribute(("t", "str"));
+    if let Some(cell_type) = value.cell_type() {
+        cell.push_attribute(("t", cell_type));
+    }
     writer
         .write_event(Event::Start(cell))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-    writer
-        .write_event(Event::Start(BytesStart::new("v")))
-        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-    writer
-        .write_event(Event::Text(BytesText::new(value)))
-        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-    writer
-        .write_event(Event::End(BytesEnd::new("v")))
-        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    if let Some(text) = value.value_text()? {
+        writer
+            .write_event(Event::Start(BytesStart::new("v")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        writer
+            .write_event(Event::Text(BytesText::new(&text)))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        writer
+            .write_event(Event::End(BytesEnd::new("v")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
     writer
         .write_event(Event::End(BytesEnd::new("c")))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
@@ -234,7 +281,7 @@ fn write_inline_string_cell(
 fn write_inserted_row(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     row: u32,
-    cells: BTreeMap<u32, String>,
+    cells: BTreeMap<u32, CellEditValue>,
 ) -> Result<(), XlsxError> {
     let row_text = row.to_string();
     let mut row_start = BytesStart::new("row");
@@ -243,7 +290,7 @@ fn write_inserted_row(
         .write_event(Event::Start(row_start))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     for (col, value) in cells {
-        write_inline_string_cell(writer, row, col, &value)?;
+        write_cell_value(writer, row, col, &value)?;
     }
     writer
         .write_event(Event::End(BytesEnd::new("row")))
@@ -251,14 +298,14 @@ fn write_inserted_row(
 }
 
 /// Patch worksheet XML, replacing or inserting cells at specified positions.
-/// Edited cells are written as inline string type (t="str") with `<v>` containing the text.
+/// Each edit is written with its corresponding OOXML scalar type.
 fn patch_worksheet_xml(
     xml: &str,
-    edits: &HashMap<(u32, u32), &String>,
+    edits: &HashMap<(u32, u32), &CellEditValue>,
 ) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut pending: BTreeMap<u32, BTreeMap<u32, String>> = BTreeMap::new();
+    let mut pending: BTreeMap<u32, BTreeMap<u32, CellEditValue>> = BTreeMap::new();
     for (&(row, col), value) in edits {
         pending
             .entry(row)
@@ -272,7 +319,7 @@ fn patch_worksheet_xml(
     let mut cell_col: u32;
     let mut cell_row: u32;
     let mut in_value = false;
-    let mut current_edit: Option<String> = None;
+    let mut current_edit: Option<CellEditValue> = None;
     let mut skip_value_text = false;
     let mut skip_replaced_content_depth = 0_u32;
 
@@ -316,7 +363,7 @@ fn patch_worksheet_xml(
                                 cells.range(..cell_col).map(|(&col, _)| col).collect();
                             for col in missing_cols {
                                 if let Some(value) = cells.remove(&col) {
-                                    write_inline_string_cell(
+                                    write_cell_value(
                                         &mut writer,
                                         cell_row,
                                         col,
@@ -329,17 +376,19 @@ fn patch_worksheet_xml(
                             current_edit = None;
                         }
 
-                        if current_edit.is_some() {
-                            // Rewrite the <c> element with t="str"
+                        if let Some(value) = &current_edit {
+                            // Rewrite the cell type while preserving its reference and style.
                             let mut new_start = BytesStart::new("c");
                             for attr in e.attributes().flatten() {
                                 let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                                 if key == "t" {
-                                    continue; // we'll set our own type
+                                    continue;
                                 }
                                 new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
                             }
-                            new_start.push_attribute(("t", "str"));
+                            if let Some(cell_type) = value.cell_type() {
+                                new_start.push_attribute(("t", cell_type));
+                            }
                             writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         } else {
                             writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -352,8 +401,13 @@ fn patch_worksheet_xml(
                         // Write <v> start
                         writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         // Write new value text
-                        if let Some(val) = &current_edit {
-                            writer.write_event(Event::Text(BytesText::new(val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        if let Some(text) = current_edit
+                            .as_ref()
+                            .map(CellEditValue::value_text)
+                            .transpose()?
+                            .flatten()
+                        {
+                            writer.write_event(Event::Text(BytesText::new(&text))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         }
                         continue;
                     }
@@ -371,7 +425,7 @@ fn patch_worksheet_xml(
                     "row" => {
                         if let Some(cells) = pending.remove(&current_row) {
                             for (col, value) in cells {
-                                write_inline_string_cell(
+                                write_cell_value(
                                     &mut writer,
                                     current_row,
                                     col,
@@ -385,9 +439,14 @@ fn patch_worksheet_xml(
                         if in_cell && current_edit.is_some() {
                             // If the original cell had no <v>, we need to add one
                             if !in_value {
-                                if let Some(val) = &current_edit {
+                                if let Some(text) = current_edit
+                                    .as_ref()
+                                    .map(CellEditValue::value_text)
+                                    .transpose()?
+                                    .flatten()
+                                {
                                     writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                                    writer.write_event(Event::Text(BytesText::new(val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                                    writer.write_event(Event::Text(BytesText::new(&text))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                                     writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                                 }
                             }
@@ -455,7 +514,7 @@ fn patch_worksheet_xml(
                             XlsxError::InvalidData(error.to_string())
                         })?;
                         for (col, value) in cells {
-                            write_inline_string_cell(&mut writer, row_num, col, &value)?;
+                            write_cell_value(&mut writer, row_num, col, &value)?;
                         }
                         writer.write_event(Event::End(BytesEnd::new("row"))).map_err(
                             |error| XlsxError::InvalidData(error.to_string()),
@@ -474,7 +533,7 @@ fn patch_worksheet_xml(
                             cells.range(..col).map(|(&column, _)| column).collect();
                         for missing_col in missing_cols {
                             if let Some(value) = cells.remove(&missing_col) {
-                                write_inline_string_cell(
+                                write_cell_value(
                                     &mut writer,
                                     row_num,
                                     missing_col,
@@ -485,20 +544,26 @@ fn patch_worksheet_xml(
                         edit = cells.remove(&col);
                     }
 
-                    if let Some(val) = edit {
-                        // Convert empty cell to cell with value
+                    if let Some(value) = edit {
+                        // Convert the empty cell while preserving its reference and style.
                         let mut new_start = BytesStart::new("c");
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "t" { continue; }
                             new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
                         }
-                        new_start.push_attribute(("t", "str"));
-                        writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                        writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                        writer.write_event(Event::Text(BytesText::new(&val))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                        writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                        writer.write_event(Event::End(BytesEnd::new("c"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        if let Some(cell_type) = value.cell_type() {
+                            new_start.push_attribute(("t", cell_type));
+                        }
+                        if let Some(text) = value.value_text()? {
+                            writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_event(Event::Text(BytesText::new(&text))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_event(Event::End(BytesEnd::new("c"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        } else {
+                            writer.write_event(Event::Empty(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        }
                         continue;
                     }
                 }
@@ -587,12 +652,28 @@ mod tests {
     }
 
     #[test]
+    fn test_editor_preserves_typed_cell_edits() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut editor = XlsxEditor::new(data).expect("should open");
+        editor.set_cell_value(0, 1, 20, CellEditValue::Number(12.5));
+        editor.set_cell_value(0, 1, 21, CellEditValue::Boolean(true));
+        editor.set_cell_value(0, 1, 22, CellEditValue::Empty);
+
+        let saved = editor.save().expect("should save");
+        let workbook = parse_xlsx(&saved).expect("should parse");
+        let row = &workbook.sheets[0].rows[0];
+        assert!(matches!(row.cells.iter().find(|cell| cell.col == 20).unwrap().value, crate::ir::CellValue::Number(12.5)));
+        assert!(matches!(row.cells.iter().find(|cell| cell.col == 21).unwrap().value, crate::ir::CellValue::Boolean(true)));
+        assert!(matches!(row.cells.iter().find(|cell| cell.col == 22).unwrap().value, crate::ir::CellValue::Empty));
+    }
+
+    #[test]
     fn worksheet_patch_orders_insertions_and_replaces_formula_content() {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><f>1+1</f><v>2</v></c><c r="C1" t="inlineStr"><is><t>old</t></is></c></row><row r="3"/></sheetData></worksheet>"#;
-        let formula_value = "9".to_string();
-        let middle_value = "middle".to_string();
-        let inline_value = "new".to_string();
-        let new_row_value = "row two".to_string();
+        let formula_value = CellEditValue::String("9".to_string());
+        let middle_value = CellEditValue::String("middle".to_string());
+        let inline_value = CellEditValue::String("new".to_string());
+        let new_row_value = CellEditValue::String("row two".to_string());
         let edits = HashMap::from([
             ((1, 0), &formula_value),
             ((1, 1), &middle_value),
@@ -620,7 +701,7 @@ mod tests {
     #[test]
     fn worksheet_patch_populates_an_empty_sheet_data_element() {
         let xml = r#"<worksheet><sheetData/></worksheet>"#;
-        let value = "first value".to_string();
+        let value = CellEditValue::String("first value".to_string());
         let edits = HashMap::from([((1, 0), &value)]);
 
         let patched = patch_worksheet_xml(xml, &edits).expect("should patch empty worksheet");

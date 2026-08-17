@@ -2387,6 +2387,38 @@ function workbookCellMap(workbook) {
     return cells;
 }
 
+function typedXlsxEdit(location, cell) {
+    const value = cell?.value;
+    let newValue = formatCellValue(value, cell?.style);
+    let valueType = 'string';
+    if (value && typeof value === 'object') {
+        if ('Number' in value) {
+            newValue = String(value.Number);
+            valueType = 'number';
+        } else if ('Boolean' in value) {
+            newValue = value.Boolean ? 'true' : 'false';
+            valueType = 'boolean';
+        } else if ('Empty' in value) {
+            newValue = '';
+            valueType = 'empty';
+        } else if ('String' in value) {
+            newValue = value.String;
+        } else if ('Error' in value) {
+            newValue = value.Error;
+        }
+    } else if (value === 'Empty' || value == null) {
+        newValue = '';
+        valueType = 'empty';
+    }
+    return {
+        sheet_index: location.sheet_index,
+        row: location.row,
+        col: location.col,
+        new_value: newValue,
+        value_type: valueType,
+    };
+}
+
 function recordVbaWorkbookChanges(before, after) {
     const previousCells = workbookCellMap(before);
     const nextCells = workbookCellMap(after);
@@ -2399,12 +2431,18 @@ function recordVbaWorkbookChanges(before, after) {
         if (previousValue === nextValue) continue;
 
         const location = next || previous;
-        xlsxVbaEdits.set(key, {
-            sheet_index: location.sheet_index,
-            row: location.row,
-            col: location.col,
-            new_value: next ? formatCellValue(next.cell.value, next.cell.style) : '',
-        });
+        xlsxVbaEdits.set(
+            key,
+            next
+                ? typedXlsxEdit(location, next.cell)
+                : {
+                    sheet_index: location.sheet_index,
+                    row: location.row,
+                    col: location.col,
+                    new_value: '',
+                    value_type: 'empty',
+                },
+        );
     }
 }
 
