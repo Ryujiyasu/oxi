@@ -3282,6 +3282,12 @@ fn call_builtin(
             | "ascw"
             | "instr"
             | "instrrev"
+            | "iif"
+            | "choose"
+            | "switch"
+            | "fix"
+            | "hex"
+            | "int"
             | "isarray"
             | "isempty"
             | "ismissing"
@@ -3294,18 +3300,23 @@ fn call_builtin(
             | "len"
             | "ltrim"
             | "mid"
+            | "oct"
             | "replace"
             | "right"
+            | "round"
             | "rtrim"
             | "space"
             | "split"
             | "join"
             | "string"
             | "strreverse"
+            | "sgn"
+            | "sqr"
             | "trim"
             | "typename"
             | "ubound"
             | "ucase"
+            | "val"
             | "vartype"
     );
     if !known {
@@ -3344,6 +3355,144 @@ fn call_builtin(
                 element_default: Box::new(Value::Empty),
                 resizable: true,
             }));
+        }
+        if name == "iif" {
+            if args.len() != 3 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("iif expects 3 arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            return match &args[0] {
+                Value::Null => Ok(Value::Null),
+                condition => Ok(
+                    if truthy(condition)
+                        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+                    {
+                        args[1].clone()
+                    } else {
+                        args[2].clone()
+                    },
+                ),
+            };
+        }
+        if name == "choose" {
+            if args.len() < 2 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!(
+                        "choose expects at least 2 arguments, received {}",
+                        args.len()
+                    ),
+                    line,
+                ));
+            }
+            if matches!(args[0], Value::Null) {
+                return Ok(Value::Null);
+            }
+            let index = integer_argument(&args[0], line)?;
+            return Ok(if index < 1 || index as usize >= args.len() {
+                Value::Null
+            } else {
+                args[index as usize].clone()
+            });
+        }
+        if name == "switch" {
+            if args.is_empty() || !args.len().is_multiple_of(2) {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!(
+                        "switch expects one or more expression/value pairs, received {} argument(s)",
+                        args.len()
+                    ),
+                    line,
+                ));
+            }
+            for pair in args.chunks_exact(2) {
+                if !matches!(pair[0], Value::Null)
+                    && truthy(&pair[0])
+                        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+                {
+                    return Ok(pair[1].clone());
+                }
+            }
+            return Ok(Value::Null);
+        }
+        if name == "round" {
+            if !(1..=2).contains(&args.len()) {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("round expects 1 or 2 arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            if matches!(args[0], Value::Null) {
+                return Ok(Value::Null);
+            }
+            let value = number(&args[0])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+            let places = match args.get(1) {
+                None | Some(Value::Missing) => 0,
+                Some(value) => integer_argument(value, line)?,
+            };
+            if !(0..=15).contains(&places) {
+                return Err(invalid_procedure_call(
+                    "Round decimal places must be between 0 and 15".to_string(),
+                    line,
+                ));
+            }
+            let scale = 10_f64.powi(places as i32);
+            return Ok(numeric_literal((value * scale).round_ties_even() / scale));
+        }
+        if matches!(name.as_str(), "hex" | "oct") {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("{name} expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            if matches!(args[0], Value::Null) {
+                return Ok(Value::Null);
+            }
+            let value = number(&args[0])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+                .round_ties_even();
+            if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
+                return Err(error(
+                    RuntimeErrorKind::Overflow,
+                    format!("overflow converting value with {name}"),
+                    line,
+                ));
+            }
+            let value = value as i32;
+            return Ok(Value::String(if name == "hex" {
+                format!("{:X}", value as u32)
+            } else {
+                format!("{:o}", value as u32)
+            }));
+        }
+        if name == "val" {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("val expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            if matches!(args[0], Value::Null) {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "invalid use of Null",
+                    line,
+                ));
+            }
+            let source = text(&args[0])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+            return parse_val(&source)
+                .map(numeric_literal)
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line));
         }
         if name == "ismissing" {
             if args.len() != 1 {
@@ -3465,6 +3614,17 @@ fn call_builtin(
                 Value::Null => Err(mismatch("invalid use of Null".to_string())),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?)),
             },
+            "fix" | "int" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => {
+                    let value = number(value).map_err(mismatch)?;
+                    Ok(numeric_literal(if name == "int" {
+                        value.floor()
+                    } else {
+                        value.trunc()
+                    }))
+                }
+            },
             "lcase" => match value {
                 Value::Null => Ok(Value::Null),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?.to_lowercase())),
@@ -3474,6 +3634,33 @@ fn call_builtin(
                 _ => Ok(Value::Integer(
                     text(value).map_err(mismatch)?.encode_utf16().count() as i64,
                 )),
+            },
+            "sgn" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => {
+                    let value = number(value).map_err(mismatch)?;
+                    Ok(Value::Integer(if value > 0.0 {
+                        1
+                    } else if value < 0.0 {
+                        -1
+                    } else {
+                        0
+                    }))
+                }
+            },
+            "sqr" => match value {
+                Value::Null => Ok(Value::Null),
+                _ => {
+                    let value = number(value).map_err(mismatch)?;
+                    if value < 0.0 {
+                        Err(invalid_procedure_call(
+                            "Sqr requires a nonnegative number".to_string(),
+                            line,
+                        ))
+                    } else {
+                        Ok(numeric_literal(value.sqrt()))
+                    }
+                }
             },
             "trim" => match value {
                 Value::Null => Ok(Value::Null),
@@ -3488,6 +3675,95 @@ fn call_builtin(
             _ => unreachable!(),
         }
     })())
+}
+
+fn parse_val(source: &str) -> Result<f64, String> {
+    let compact = source
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '\t' | '\r' | '\n'))
+        .collect::<String>();
+    let bytes = compact.as_bytes();
+    let mut cursor = 0;
+    let negative = match bytes.first() {
+        Some(b'+') => {
+            cursor = 1;
+            false
+        }
+        Some(b'-') => {
+            cursor = 1;
+            true
+        }
+        _ => false,
+    };
+    if bytes.get(cursor) == Some(&b'&') {
+        let radix = match bytes.get(cursor + 1).map(u8::to_ascii_uppercase) {
+            Some(b'H') => 16,
+            Some(b'O') => 8,
+            _ => return Ok(0.0),
+        };
+        let start = cursor + 2;
+        let mut end = start;
+        while bytes.get(end).is_some_and(|byte| match radix {
+            16 => byte.is_ascii_hexdigit(),
+            8 => matches!(byte, b'0'..=b'7'),
+            _ => false,
+        }) {
+            end += 1;
+        }
+        if end == start {
+            return Ok(0.0);
+        }
+        let digits = &compact[start..end];
+        let raw = u32::from_str_radix(digits, radix)
+            .map_err(|_| "Val radix literal is outside the supported Long range".to_string())?;
+        let signed = if negative {
+            -(i64::from(raw))
+        } else if (radix == 16 && digits.len() <= 4) || (radix == 8 && digits.len() <= 6) {
+            i64::from(raw as u16 as i16)
+        } else {
+            i64::from(raw as i32)
+        };
+        return Ok(signed as f64);
+    }
+
+    while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+        cursor += 1;
+    }
+    if bytes.get(cursor) == Some(&b'.') {
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+    }
+    if cursor == usize::from(matches!(bytes.first(), Some(b'+') | Some(b'-')))
+        || (cursor == 1 && bytes.first() == Some(&b'.'))
+        || (cursor == 2
+            && matches!(bytes.first(), Some(b'+') | Some(b'-'))
+            && bytes.get(1) == Some(&b'.'))
+    {
+        return Ok(0.0);
+    }
+    if matches!(
+        bytes.get(cursor).map(u8::to_ascii_uppercase),
+        Some(b'E' | b'D')
+    ) {
+        let exponent_start = cursor;
+        cursor += 1;
+        if matches!(bytes.get(cursor), Some(b'+') | Some(b'-')) {
+            cursor += 1;
+        }
+        let digits_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == digits_start {
+            cursor = exponent_start;
+        }
+    }
+    compact[..cursor]
+        .replace(['d', 'D'], "E")
+        .parse::<f64>()
+        .map_err(|_| "Val could not convert the numeric prefix".to_string())
 }
 
 fn call_string_builtin(
@@ -5732,6 +6008,77 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::String("OXI|3|2|5.5|True".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_numeric_rounding_radix_and_val_functions() {
+        let value = run(
+            "Public Function NumericBuiltins() As String\n\
+               NumericBuiltins = Round(2.5) & \"|\" & Round(3.5) & \"|\" & Round(0.12345, 4) & \"|\"\n\
+               NumericBuiltins = NumericBuiltins & Int(-8.4) & \"|\" & Fix(-8.4) & \"|\" & Sgn(-10) & \"|\" & Sgn(0) & \"|\" & Sgn(10) & \"|\" & Sqr(81) & \"|\"\n\
+               NumericBuiltins = NumericBuiltins & Hex(459) & \"|\" & Hex(-1) & \"|\" & Oct(459) & \"|\" & Oct(-1) & \"|\"\n\
+               NumericBuiltins = NumericBuiltins & Val(\"&HFFFF\") & \"|\" & Val(\" 16 15 198th Street\") & \"|\" & Val(\"-12.5E2x\")\n\
+             End Function\n",
+            "NumericBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "2|4|0.1234|-9|-8|-1|0|1|9|1CB|FFFFFFFF|713|37777777777|-1|1615198|-1250"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn executes_eager_iif_choose_and_switch_selection_functions() {
+        let value = run(
+            "Private hits As Long\n\
+             Private Function Mark(value As Long) As Long\n\
+               hits = hits + value\n\
+               Mark = value\n\
+             End Function\n\
+             Public Function SelectionBuiltins() As String\n\
+               Dim selected As Long\n\
+               selected = IIf(True, Mark(1), Mark(2))\n\
+               SelectionBuiltins = selected & \"|\" & hits & \"|\" & Choose(2, \"one\", \"two\", \"three\") & \"|\" & IsNull(Choose(0, 1, 2)) & \"|\"\n\
+               SelectionBuiltins = SelectionBuiltins & Switch(False, \"no\", 2 > 1, \"yes\", True, \"late\") & \"|\" & IsNull(Switch(False, 1, False, 2))\n\
+             End Function\n",
+            "SelectionBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("1|3|two|True|yes|True".to_string()));
+    }
+
+    #[test]
+    fn numeric_builtins_raise_vba_errors_for_invalid_domains() {
+        let value = run(
+            "Public Function NumericErrors() As String\n\
+               Dim squareRoot As Long\n\
+               Dim decimalPlaces As Long\n\
+               Dim nullVal As Long\n\
+               On Error Resume Next\n\
+               squareRoot = Sqr(-1)\n\
+               squareRoot = Err.Number\n\
+               Err.Clear\n\
+               decimalPlaces = Round(1.2, -1)\n\
+               decimalPlaces = Err.Number\n\
+               Err.Clear\n\
+               nullVal = Val(Null)\n\
+               nullVal = Err.Number\n\
+               NumericErrors = squareRoot & \"|\" & decimalPlaces & \"|\" & nullVal\n\
+             End Function\n",
+            "NumericErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5|13".to_string()));
     }
 
     #[test]
