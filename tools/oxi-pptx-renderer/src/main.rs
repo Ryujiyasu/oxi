@@ -1385,6 +1385,12 @@ fn imgalpha_on() -> bool {
     std::env::var("OXI_IMGALPHA_DISABLE").is_err()
 }
 
+/// The srcRect top crop is converted to StretchDIBits' bottom-up ySrc unless
+/// this is set, which restores the pre-S-SRCFLIP (vertically swapped) crop.
+fn srcrect_flip_on() -> bool {
+    std::env::var("OXI_SRCFLIP_DISABLE").is_err()
+}
+
 /// Composite a solid fill at a constant opacity.
 ///
 /// Derived from PowerPoint: `<a:alpha val="N"/>` inside a solidFill is a
@@ -7368,6 +7374,22 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     },
                                     ..Default::default()
                                 };
+                                // ★StretchDIBits measures ySrc from the
+                                // BOTTOM of the DIB even when the bitmap is
+                                // top-down (negative biHeight), so a srcRect
+                                // top crop must be converted. PowerPoint
+                                // render-truth (srcrect probe F2/F3,
+                                // 2026-08-18): with `b="50000"` PowerPoint
+                                // keeps the source's TOP half (rules land at
+                                // 0.20/0.40/0.60/0.80/1.00) while Oxi kept the
+                                // BOTTOM half -- t and b came out swapped, and
+                                // d30 slide 16's photo was the 1.15x vertical
+                                // zoom that produced.
+                                let sy_bottom_up = if srcrect_flip_on() {
+                                    (ih - (sy0 + shh)).max(0)
+                                } else {
+                                    sy0
+                                };
                                 let _ = StretchDIBits(
                                     mem_dc,
                                     dx,
@@ -7375,7 +7397,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     dw,
                                     dh,
                                     sx0,
-                                    sy0,
+                                    sy_bottom_up,
                                     sw,
                                     shh,
                                     Some(bgra.as_ptr() as *const _),
