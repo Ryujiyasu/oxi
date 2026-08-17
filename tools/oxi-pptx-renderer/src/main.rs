@@ -24,7 +24,7 @@
 mod font_adv;
 
 use oxislides_core::ir::{
-    MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment,
+    GeomCmd, MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment,
     SlideBackgroundImage, SlideBullet, SlideGradient,
 };
 use serde_json::{json, Value};
@@ -611,6 +611,157 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     true
 }
 
+/// Draw an `a:custGeom` outline as its real path instead of the bounding box.
+///
+/// Every deck in the dev corpus uses custGeom (11470 shapes on 628 of 886
+/// slides) and each one was previously painted as an axis-aligned slab of its
+/// fill colour. The path is built in the path's declared local space, mapped
+/// onto the shape box, then flipped and rotated about the box centre exactly
+/// like the preset path.
+///
+/// Returns false when the shape must keep the legacy rectangle: no custGeom, a
+/// translucent fill (the solid-brush path cannot composite along a bezier --
+/// same rule as the presets), or a path whose local space is degenerate.
+#[cfg(windows)]
+unsafe fn draw_custom_geometry_gdi(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    sh: &Shape,
+    scale: f64,
+) -> bool {
+    use windows::Win32::Foundation::{COLORREF, POINT};
+    use windows::Win32::Graphics::Gdi::*;
+
+    let geom = match sh.custom_geometry.as_ref() {
+        Some(g) if !g.unsupported && custgeom_on() => g,
+        _ => return false,
+    };
+    if sh.fill_color.is_some()
+        && sh
+            .fill_alpha
+            .filter(|_| fill_alpha_on())
+            .is_some_and(|a| a < 1.0)
+    {
+        return false;
+    }
+    let (w, h) = (sh.width.max(0.0), sh.height.max(0.0));
+    if w == 0.0 || h == 0.0 {
+        return true; // nothing to paint, but the box fallback must not run
+    }
+
+    let fill_brush = sh
+        .fill_color
+        .as_deref()
+        .and_then(parse_hex_rgb)
+        .map(|c| CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2))));
+    let border_w = sh.border_width.unwrap_or(0.0);
+    let border_pen = if border_w > 0.0 {
+        let c = sh
+            .border_color
+            .as_deref()
+            .and_then(parse_hex_rgb)
+            .unwrap_or((0, 0, 0));
+        Some(CreatePen(
+            PS_SOLID,
+            (border_w as f64 * scale).round().max(1.0) as i32,
+            COLORREF(colorref(c.0, c.1, c.2)),
+        ))
+    } else {
+        None
+    };
+
+    let mut drew = false;
+    for path in &geom.paths {
+        if path.commands.is_empty() {
+            continue;
+        }
+        // @w / @h are the path's own units. Both are declared on every corpus
+        // path; the schema's 0 means "already in the shape's EMU space".
+        let (sx, sy) = (
+            if path.w > 0.0 { w / path.w } else { 1.0 / 12700.0 },
+            if path.h > 0.0 { h / path.h } else { 1.0 / 12700.0 },
+        );
+        let map = |px: f32, py: f32| -> POINT {
+            let (mut lx, mut ly) = (px * sx, py * sy);
+            if sh.flip_h {
+                lx = w - lx;
+            }
+            if sh.flip_v {
+                ly = h - ly;
+            }
+            let (dx, dy) = (lx - w / 2.0, ly - h / 2.0);
+            let (sn, cs) = sh.rotation.to_radians().sin_cos();
+            POINT {
+                x: (((sh.x + w / 2.0 + dx * cs - dy * sn) as f64) * scale).round() as i32,
+                y: (((sh.y + h / 2.0 + dx * sn + dy * cs) as f64) * scale).round() as i32,
+            }
+        };
+
+        let brush = match (path.fill_none, fill_brush) {
+            (false, Some(b)) => b,
+            _ => HBRUSH(GetStockObject(NULL_BRUSH).0),
+        };
+        let old_brush = SelectObject(dc, brush);
+        let old_pen = match border_pen {
+            Some(pen) => SelectObject(dc, pen),
+            None => SelectObject(dc, GetStockObject(NULL_PEN)),
+        };
+
+        // PowerPoint render-truth (custgeom_fillrule probe, 2026-08-17, 5 arms
+        // exported by PowerPoint itself): a multi-subpath custGeom fills
+        // EVEN-ODD, not by non-zero winding. Two nested squares wound the SAME
+        // way leave a hole (C1) and a single self-intersecting pentagram is
+        // hollow at the centre (C3) -- both of which non-zero winding would
+        // fill -- while three nested squares fill the innermost again (C5).
+        // 901 of the corpus's 11470 custGeom shapes are multi-subpath and
+        // filled, so this is real ink. ALTERNATE is also GDI's default, but
+        // the DC is shared with every other draw path, so set it explicitly.
+        let old_fill_mode = SetPolyFillMode(dc, ALTERNATE);
+        let _ = BeginPath(dc);
+        let mut open = false;
+        for cmd in &path.commands {
+            match cmd {
+                GeomCmd::MoveTo(x, y) => {
+                    let p = map(*x, *y);
+                    let _ = MoveToEx(dc, p.x, p.y, None);
+                    open = true;
+                }
+                GeomCmd::LineTo(x, y) => {
+                    if open {
+                        let p = map(*x, *y);
+                        let _ = LineTo(dc, p.x, p.y);
+                    }
+                }
+                GeomCmd::CubicTo(x1, y1, x2, y2, x3, y3) => {
+                    if open {
+                        let _ = PolyBezierTo(dc, &[map(*x1, *y1), map(*x2, *y2), map(*x3, *y3)]);
+                    }
+                }
+                GeomCmd::Close => {
+                    if open {
+                        let _ = CloseFigure(dc);
+                        open = false;
+                    }
+                }
+            }
+        }
+        let _ = EndPath(dc);
+        let _ = StrokeAndFillPath(dc);
+        drew = true;
+
+        SetPolyFillMode(dc, old_fill_mode);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+    }
+
+    if let Some(pen) = border_pen {
+        let _ = DeleteObject(pen);
+    }
+    if let Some(brush) = fill_brush {
+        let _ = DeleteObject(brush);
+    }
+    drew
+}
+
 fn srgb_to_linear(c: f64) -> f64 {
     let c = c / 255.0;
     if c <= 0.04045 {
@@ -843,6 +994,12 @@ unsafe fn alpha_blit(
 /// `<a:alpha>` on a shape fill is composited unless this is set.
 fn fill_alpha_on() -> bool {
     std::env::var("OXI_FILLALPHA_DISABLE").is_err()
+}
+
+/// `a:custGeom` outlines are drawn as their real path unless this is set, in
+/// which case the shape keeps its pre-S-CUSTGEOM bounding-box rendering.
+fn custgeom_on() -> bool {
+    std::env::var("OXI_CUSTGEOM_DISABLE").is_err()
 }
 
 /// Composite a solid fill at a constant opacity.
@@ -1171,10 +1328,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                     continue;
                 }
 
-                // DrawingML preset geometry. Unsupported presets retain the
-                // legacy rectangular fallback below.
-                let drew_preset = matches!(&sh.content, ShapeContent::AutoShape { .. })
-                    && draw_preset_shape_gdi(mem_dc, sh, scale);
+                // DrawingML geometry: an explicit custGeom outline first (it is
+                // the shape's real boundary), then the named presets.
+                // Unsupported ones retain the legacy rectangular fallback below.
+                //
+                // custGeom is NOT gated on AutoShape the way the presets are: a
+                // shape with custom geometry has no prstGeom, so the parser
+                // classifies it as TextBox when it carries text and Placeholder
+                // when it does not -- gating on AutoShape would skip every one
+                // of them. Pictures keep their own draw path untouched.
+                let drew_preset = !matches!(&sh.content, ShapeContent::Image { .. })
+                    && (draw_custom_geometry_gdi(mem_dc, sh, scale)
+                        || (matches!(&sh.content, ShapeContent::AutoShape { .. })
+                            && draw_preset_shape_gdi(mem_dc, sh, scale)));
 
                 // Fill. A preset path fills itself, so this rectangular
                 // fallback only runs for the shapes it declined.

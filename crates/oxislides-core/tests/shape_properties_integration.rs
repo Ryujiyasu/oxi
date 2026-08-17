@@ -10,7 +10,7 @@
 //! (EMU→pt), run bold/italic/color/font, and paragraph alignment. A
 //! regression here silently corrupts slide rendering.
 
-use oxislides_core::ir::{ShapeContent, SlideAlignment};
+use oxislides_core::ir::{GeomCmd, ShapeContent, SlideAlignment};
 use oxislides_core::parser::parse_pptx;
 
 const PPTX: &[u8] = include_bytes!("../../../tests/fixtures/basic_test.pptx");
@@ -149,6 +149,66 @@ fn alignment_is_none_or_a_valid_variant() {
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// a:custGeom — explicit outline paths (S-CUSTGEOM, 2026-08-17)
+// ---------------------------------------------------------------------------
+
+const CUSTGEOM: &[u8] = include_bytes!("../../../tests/fixtures/custgeom_test.pptx");
+
+fn custgeom_shape() -> oxislides_core::ir::Shape {
+    let p = parse_pptx(CUSTGEOM).expect("custgeom_test.pptx must parse");
+    p.slides[0]
+        .shapes
+        .iter()
+        .find(|s| s.custom_geometry.is_some())
+        .expect("the fixture carries one custGeom shape")
+        .clone()
+}
+
+#[test]
+fn custgeom_path_space_and_commands_survive_parsing() {
+    let shape = custgeom_shape();
+    let geom = shape.custom_geometry.unwrap();
+    assert!(!geom.unsupported, "the fixture uses only modelled commands");
+    assert_eq!(geom.paths.len(), 1, "one a:path, as in every corpus custGeom");
+    let path = &geom.paths[0];
+    assert_eq!((path.w, path.h), (100.0, 200.0), "a:path @w/@h is the local space");
+    assert!(!path.fill_none);
+    // moveTo, lnTo, cubicBezTo, lnTo, close — the whole modelled vocabulary.
+    assert_eq!(path.commands.len(), 5);
+    assert!(matches!(path.commands[0], GeomCmd::MoveTo(50.0, 0.0)));
+    assert!(matches!(path.commands[1], GeomCmd::LineTo(100.0, 100.0)));
+    assert!(matches!(
+        path.commands[2],
+        GeomCmd::CubicTo(90.0, 150.0, 60.0, 200.0, 50.0, 200.0)
+    ));
+    assert!(matches!(path.commands[4], GeomCmd::Close));
+}
+
+#[test]
+fn custgeom_shape_keeps_its_box_and_fill() {
+    // The outline replaces the shape's rectangle only for DRAWING; the box and
+    // the fill colour a consumer paints it with are unchanged.
+    let shape = custgeom_shape();
+    assert!((shape.x - 100.0).abs() < 0.01, "1270000 EMU = 100pt, got {}", shape.x);
+    assert!((shape.width - 100.0).abs() < 0.01);
+    assert!((shape.height - 50.0).abs() < 0.01);
+    assert_eq!(shape.fill_color.as_deref(), Some("C00000"));
+    assert!(shape.shape_type.is_none(), "custGeom shapes carry no prstGeom");
+}
+
+#[test]
+fn preset_shapes_carry_no_custom_geometry() {
+    // basic_test's shapes are placeholders/presets: none must acquire a
+    // geometry, or the rectangular fallback would be skipped for them.
+    let p = pres();
+    for slide in &p.slides {
+        for shape in &slide.shapes {
+            assert!(shape.custom_geometry.is_none());
         }
     }
 }

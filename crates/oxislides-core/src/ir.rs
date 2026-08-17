@@ -227,6 +227,17 @@ pub struct Shape {
     /// placeholders; layout3 title uses "t", layout8/9 "b".
     #[serde(default)]
     pub anchor: Option<String>,
+    /// Custom geometry (`a:custGeom`) — the shape's outline as explicit paths
+    /// instead of a named preset. None for a preset / picture / frame shape.
+    ///
+    /// Corpus census (dev 40 decks / 886 slides, 2026-08-17): 11470 custGeom
+    /// shapes on 628 slides in 40/40 decks, i.e. every deck. The command
+    /// vocabulary they actually use is exactly four elements -- lnTo 341943 /
+    /// cubicBezTo 77615 / moveTo 21382 / close 20892 -- with `arcTo` and
+    /// `quadBezTo` appearing ZERO times, so only those four are modelled and a
+    /// path using anything else is refused whole (see `unsupported`).
+    #[serde(default)]
+    pub custom_geometry: Option<CustomGeometry>,
     /// Image source crop (a:blipFill/a:srcRect l,t,r,b), normalized to 0..1.
     /// Only meaningful for ShapeContent::Image. None = full source image.
     /// Word render-truth (01__Biology deck, 2026-08): a full-bleed background
@@ -242,6 +253,44 @@ pub struct Shape {
     /// native aspect (portrait 977x1350 into a 297x282pt box).
     #[serde(default)]
     pub fill_rect: Option<(f32, f32, f32, f32)>,
+}
+
+/// `a:custGeom` — one or more closed/open outlines in their own coordinate
+/// space. Every path declares the space it is drawn in (`w` x `h`), which the
+/// consumer maps onto the shape box; the corpus always declares both.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomGeometry {
+    pub paths: Vec<GeomPath>,
+    /// A path command outside the modelled vocabulary (`a:arcTo`,
+    /// `a:quadBezTo`) was seen. The geometry is then incomplete, so a consumer
+    /// must NOT draw it -- an outline missing one of its curves is worse ink
+    /// than the rectangle it replaces.
+    #[serde(default)]
+    pub unsupported: bool,
+}
+
+/// One `a:path`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeomPath {
+    /// `a:path/@w` / `@h`, the local coordinate space. 0 = the path is already
+    /// in the shape's own coordinates (ECMA-376 20.1.9.15).
+    pub w: f32,
+    pub h: f32,
+    /// `a:path/@fill="none"` — stroke this subpath but do not fill it (450 of
+    /// the corpus's 11470 geometries carry an explicit `fill`).
+    #[serde(default)]
+    pub fill_none: bool,
+    pub commands: Vec<GeomCmd>,
+}
+
+/// A path command, in the path's local coordinate space.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GeomCmd {
+    MoveTo(f32, f32),
+    LineTo(f32, f32),
+    /// Two control points followed by the end point.
+    CubicTo(f32, f32, f32, f32, f32, f32),
+    Close,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -17,6 +17,7 @@ use crate::ir::{
     default_chart_hole_size, default_chart_size_represents,
     default_chart_updown_gap,
     default_chart_type, default_l_ins, default_r_ins, default_t_ins, Chart, ChartSeries,
+    CustomGeometry, GeomCmd, GeomPath,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
     SlideParagraph,
@@ -421,6 +422,25 @@ fn resolve_slide_theme_colors(
     Some(colors)
 }
 
+/// Hand the accumulated `a:custGeom` paths to the shape being closed and reset
+/// the accumulator for the next one.
+///
+/// Returns None for a shape that had no custGeom, for one whose geometry used a
+/// command outside the modelled vocabulary, and for one whose paths carry no
+/// drawable segment -- in all three the consumer keeps its previous (bounding
+/// box) rendering rather than drawing a partial outline.
+fn take_custom_geometry(paths: &mut Vec<GeomPath>, unsupported: &mut bool) -> Option<CustomGeometry> {
+    let bad = std::mem::replace(unsupported, false);
+    let paths = std::mem::take(paths);
+    if bad || paths.iter().all(|p| p.commands.is_empty()) {
+        return None;
+    }
+    Some(CustomGeometry {
+        paths,
+        unsupported: false,
+    })
+}
+
 /// Parse a single slide XML into shapes.
 fn parse_slide(
     xml: &str,
@@ -670,6 +690,15 @@ fn parse_slide(
     let mut shape_prst: Option<String> = None;
     let mut in_prst_geom = false;
     let mut shape_adjustments: HashMap<String, f32> = HashMap::new();
+    // a:custGeom — explicit outline paths. `cg_pending` is the command being
+    // filled with its <a:pt> children (a cubicBezTo takes three of them, so the
+    // points cannot be turned into a command until its end tag).
+    let s_custgeom = std::env::var("OXI_CUSTGEOM_DISABLE").is_err();
+    let mut in_cust_geom = false;
+    let mut cg_paths: Vec<GeomPath> = Vec::new();
+    let mut cg_unsupported = false;
+    let mut cg_cur: Option<GeomPath> = None;
+    let mut cg_pending: Option<(&'static str, Vec<(f32, f32)>)> = None;
     let mut shape_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut shape_is_image = false;
     let mut shape_image_r_id: Option<String> = None;
@@ -812,6 +841,11 @@ fn parse_slide(
                         shape_prst = None;
                         in_prst_geom = false;
                         shape_adjustments.clear();
+                        cg_paths.clear();
+                        cg_unsupported = false;
+                        cg_cur = None;
+                        cg_pending = None;
+                        in_cust_geom = false;
                         shape_paragraphs.clear();
                         shape_is_image = name == "pic";
                         shape_image_r_id = None;
@@ -846,6 +880,11 @@ fn parse_slide(
                         shape_prst = None;
                         in_prst_geom = false;
                         shape_adjustments.clear();
+                        cg_paths.clear();
+                        cg_unsupported = false;
+                        cg_cur = None;
+                        cg_pending = None;
+                        in_cust_geom = false;
                         shape_paragraphs.clear();
                         shape_is_image = false;
                         shape_image_r_id = None;
@@ -952,6 +991,43 @@ fn parse_slide(
                             {
                                 shape_adjustments.insert(name, value);
                             }
+                        }
+                    }
+                    "custGeom" if in_shape && s_custgeom => {
+                        in_cust_geom = true;
+                        cg_paths.clear();
+                        cg_unsupported = false;
+                        cg_cur = None;
+                        cg_pending = None;
+                    }
+                    "path" if in_cust_geom => {
+                        cg_cur = Some(GeomPath {
+                            w: get_attr(&e, "w")
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or(0.0),
+                            h: get_attr(&e, "h")
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .unwrap_or(0.0),
+                            fill_none: get_attr(&e, "fill").as_deref() == Some("none"),
+                            commands: Vec::new(),
+                        });
+                    }
+                    "moveTo" | "lnTo" | "cubicBezTo" if in_cust_geom => {
+                        let kind = match name.as_str() {
+                            "moveTo" => "moveTo",
+                            "lnTo" => "lnTo",
+                            _ => "cubicBezTo",
+                        };
+                        cg_pending = Some((kind, Vec::new()));
+                    }
+                    // Outside the measured vocabulary: refuse the whole geometry
+                    // rather than draw an outline with a segment missing.
+                    "arcTo" | "quadBezTo" if in_cust_geom => {
+                        cg_unsupported = true;
+                    }
+                    "close" if in_cust_geom => {
+                        if let Some(p) = cg_cur.as_mut() {
+                            p.commands.push(GeomCmd::Close);
                         }
                     }
                     "ph" if in_shape => {
@@ -1271,6 +1347,27 @@ fn parse_slide(
                             }
                         }
                     }
+                    // Every custGeom point is self-closing, so the path data
+                    // arrives here and NOT in the Start arm; only the commands
+                    // that wrap them are Start events.
+                    "pt" if cg_pending.is_some() => {
+                        if let Some((_, pts)) = cg_pending.as_mut() {
+                            let x = get_attr(&e, "x").and_then(|v| v.parse::<f32>().ok());
+                            let y = get_attr(&e, "y").and_then(|v| v.parse::<f32>().ok());
+                            match (x, y) {
+                                (Some(x), Some(y)) => pts.push((x, y)),
+                                _ => cg_unsupported = true,
+                            }
+                        }
+                    }
+                    "close" if in_cust_geom => {
+                        if let Some(p) = cg_cur.as_mut() {
+                            p.commands.push(GeomCmd::Close);
+                        }
+                    }
+                    "arcTo" | "quadBezTo" if in_cust_geom => {
+                        cg_unsupported = true;
+                    }
                     "ph" if in_shape => {
                         shape_ph_type = match get_attr(&e, "type") {
                             Some(t) if !t.is_empty() => Some(t),
@@ -1545,6 +1642,42 @@ fn parse_slide(
                     "prstGeom" if in_prst_geom => {
                         in_prst_geom = false;
                     }
+                    "moveTo" | "lnTo" | "cubicBezTo" if in_cust_geom => {
+                        // The points are complete only at the end tag. A command
+                        // with the wrong arity is a shape we do not understand,
+                        // so it poisons the whole geometry rather than silently
+                        // dropping one segment.
+                        if let Some((kind, pts)) = cg_pending.take() {
+                            match (kind, pts.as_slice()) {
+                                ("moveTo", [(x, y)]) => {
+                                    if let Some(p) = cg_cur.as_mut() {
+                                        p.commands.push(GeomCmd::MoveTo(*x, *y));
+                                    }
+                                }
+                                ("lnTo", [(x, y)]) => {
+                                    if let Some(p) = cg_cur.as_mut() {
+                                        p.commands.push(GeomCmd::LineTo(*x, *y));
+                                    }
+                                }
+                                ("cubicBezTo", [(x1, y1), (x2, y2), (x3, y3)]) => {
+                                    if let Some(p) = cg_cur.as_mut() {
+                                        p.commands
+                                            .push(GeomCmd::CubicTo(*x1, *y1, *x2, *y2, *x3, *y3));
+                                    }
+                                }
+                                _ => cg_unsupported = true,
+                            }
+                        }
+                    }
+                    "path" if in_cust_geom => {
+                        if let Some(p) = cg_cur.take() {
+                            cg_paths.push(p);
+                        }
+                    }
+                    "custGeom" if in_cust_geom => {
+                        in_cust_geom = false;
+                        cg_pending = None;
+                    }
                     "solidFill" if in_solid_fill => {
                         in_solid_fill = false;
                     }
@@ -1683,6 +1816,10 @@ fn parse_slide(
                             anchor: resolved_anchor,
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
+                            custom_geometry: take_custom_geometry(
+                                &mut cg_paths,
+                                &mut cg_unsupported,
+                            ),
                         });
                         in_shape = false;
                     }
@@ -1801,6 +1938,10 @@ fn parse_slide(
                             anchor: None,
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
+                            custom_geometry: take_custom_geometry(
+                                &mut cg_paths,
+                                &mut cg_unsupported,
+                            ),
                         });
                     }
                     "r" if in_run => {
@@ -2347,6 +2488,10 @@ fn parse_inherited_shapes(
                                         anchor: None,
                                         src_rect,
                                         fill_rect,
+                                        // The inheritance gate rejects custGeom
+                                        // outright, so an inherited shape never
+                                        // carries one.
+                                        custom_geometry: None,
                                     });
                                 }
                             }
