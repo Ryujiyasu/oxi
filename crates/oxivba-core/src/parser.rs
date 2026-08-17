@@ -1628,16 +1628,16 @@ impl<'a> Parser<'a> {
         if !self.at_eol() {
             let mut then_body = Vec::new();
             let mut else_body = None;
-            while !self.at_eol() && !self.at_kw("else") {
+            while self.span().line == span.line && !self.at_eol() && !self.at_kw("else") {
                 let before = self.pos;
                 then_body.push(self.parse_statement());
                 if self.pos == before {
                     break;
                 }
             }
-            if self.eat_kw("else") {
+            if self.span().line == span.line && self.eat_kw("else") {
                 let mut body = Vec::new();
-                while !self.at_eol() {
+                while self.span().line == span.line && !self.at_eol() {
                     let before = self.pos;
                     body.push(self.parse_statement());
                     if self.pos == before {
@@ -1646,7 +1646,6 @@ impl<'a> Parser<'a> {
                 }
                 else_body = Some(body);
             }
-            self.end_statement();
             return Statement::If(IfStmt {
                 condition,
                 then_body,
@@ -2705,6 +2704,10 @@ mod tests {
             }
             other => panic!("expected If, got {other:?}"),
         }
+
+        let followed = only_proc("Sub T()\nIf a Then Exit For\nresult = 1\nEnd Sub");
+        assert_eq!(followed.body.len(), 2);
+        assert!(matches!(followed.body[1], Statement::Assign { .. }));
     }
 
     #[test]

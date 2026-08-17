@@ -5,15 +5,15 @@
 //! Host-independent execution of pure VBA procedures.
 //!
 //! This first browser-runtime slice supports scalar values, local variables,
-//! arithmetic, comparisons, `If`, and calls between VBA procedures. Office
-//! objects, arrays, `ByRef`, file I/O, and events fail explicitly rather than
-//! being approximated.
+//! arithmetic, comparisons, branches, loops, and calls between VBA procedures.
+//! Office objects, arrays, `ByRef`, file I/O, and events fail explicitly rather
+//! than being approximated.
 
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    BinaryOp, ExitKind, Expr, Literal, Module, ModuleItem, ProcKind, Procedure, Statement,
-    TypeName, UnaryOp, VarDecl,
+    BinaryOp, DoStmt, ExitKind, Expr, ForStmt, Literal, LoopTest, Module, ModuleItem, ProcKind,
+    Procedure, Statement, TypeName, UnaryOp, VarDecl,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,6 +246,13 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
+            Statement::For(loop_) => self.exec_for(loop_, frame),
+            Statement::Do(loop_) => self.exec_do(loop_, frame),
+            Statement::While {
+                condition,
+                body,
+                span,
+            } => self.exec_while(condition, body, frame, span.line),
             Statement::Call { target, .. } => {
                 self.eval_call(target, frame)?;
                 Ok(Flow::Continue)
@@ -269,6 +276,114 @@ impl<'a> Runtime<'a> {
                 line_of(other),
             )),
         }
+    }
+
+    fn exec_for(&mut self, loop_: &ForStmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
+        let from = self.eval_expr(&loop_.from, frame)?;
+        let to = self.eval_expr(&loop_.to, frame)?;
+        let step = match &loop_.step {
+            Some(step) => self.eval_expr(step, frame)?,
+            None => Value::Integer(1),
+        };
+        let limit = number(&to).map_err(|message| {
+            error(
+                RuntimeErrorKind::TypeMismatch,
+                message,
+                Some(loop_.span.line),
+            )
+        })?;
+        let increment = number(&step).map_err(|message| {
+            error(
+                RuntimeErrorKind::TypeMismatch,
+                message,
+                Some(loop_.span.line),
+            )
+        })?;
+        self.assign(&loop_.counter, from, frame, loop_.span.line)?;
+
+        loop {
+            self.tick(Some(loop_.span.line))?;
+            let current = self.eval_expr(&loop_.counter, frame)?;
+            let current_number = number(&current).map_err(|message| {
+                error(
+                    RuntimeErrorKind::TypeMismatch,
+                    message,
+                    Some(loop_.span.line),
+                )
+            })?;
+            if (increment >= 0.0 && current_number > limit)
+                || (increment < 0.0 && current_number < limit)
+            {
+                return Ok(Flow::Continue);
+            }
+            match self.exec_body(&loop_.body, frame)? {
+                Flow::Continue => {}
+                Flow::Exit(ExitKind::For) => return Ok(Flow::Continue),
+                flow => return Ok(flow),
+            }
+            let next = numeric_result(current_number + increment, &current, &step);
+            self.assign(&loop_.counter, next, frame, loop_.span.line)?;
+        }
+    }
+
+    fn exec_do(&mut self, loop_: &DoStmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
+        loop {
+            self.tick(Some(loop_.span.line))?;
+            if let Some(test) = &loop_.pre {
+                if !self.loop_continues(test, frame, loop_.span.line)? {
+                    return Ok(Flow::Continue);
+                }
+            }
+            match self.exec_body(&loop_.body, frame)? {
+                Flow::Continue => {}
+                Flow::Exit(ExitKind::Do) => return Ok(Flow::Continue),
+                flow => return Ok(flow),
+            }
+            if let Some(test) = &loop_.post {
+                if !self.loop_continues(test, frame, loop_.span.line)? {
+                    return Ok(Flow::Continue);
+                }
+            }
+        }
+    }
+
+    fn exec_while(
+        &mut self,
+        condition: &Expr,
+        body: &[Statement],
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<Flow, RuntimeError> {
+        loop {
+            self.tick(Some(line))?;
+            if !self.condition(condition, frame, line)? {
+                return Ok(Flow::Continue);
+            }
+            match self.exec_body(body, frame)? {
+                Flow::Continue => {}
+                flow => return Ok(flow),
+            }
+        }
+    }
+
+    fn loop_continues(
+        &mut self,
+        test: &LoopTest,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        let matched = self.condition(&test.condition, frame, line)?;
+        Ok(if test.until { !matched } else { matched })
+    }
+
+    fn condition(
+        &mut self,
+        condition: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        truthy(&self.eval_expr(condition, frame)?)
+            .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
     }
 
     fn declare_locals(&mut self, decl: &VarDecl, frame: &mut Frame) -> Result<(), RuntimeError> {
@@ -479,8 +594,8 @@ fn truthy(value: &Value) -> Result<bool, String> {
 
 fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     match op {
-        UnaryOp::Plus => Ok(Value::Double(number(&value)?)),
-        UnaryOp::Neg => Ok(Value::Double(-number(&value)?)),
+        UnaryOp::Plus => Ok(numeric_literal(number(&value)?)),
+        UnaryOp::Neg => Ok(numeric_literal(-number(&value)?)),
         UnaryOp::Not => match value {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
             Value::Integer(value) => Ok(Value::Integer(!value)),
@@ -594,16 +709,17 @@ fn line_of(statement: &Statement) -> Option<u32> {
         | Statement::Unknown { span, .. } => Some(span.line),
         Statement::Dim(decl) => Some(decl.span.line),
         Statement::If(branch) => Some(branch.span.line),
+        Statement::For(loop_) => Some(loop_.span.line),
+        Statement::ForEach(loop_) => Some(loop_.span.line),
+        Statement::Do(loop_) => Some(loop_.span.line),
+        Statement::While { span, .. } => Some(span.line),
         _ => None,
     }
 }
 
 fn statement_name(statement: &Statement) -> &'static str {
     match statement {
-        Statement::For(_) => "For",
         Statement::ForEach(_) => "For Each",
-        Statement::Do(_) => "Do",
-        Statement::While { .. } => "While",
         Statement::SelectCase(_) => "Select Case",
         Statement::SetAssign { .. } => "Set",
         Statement::With { .. } => "With",
@@ -669,6 +785,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::String("result=9".to_string()));
+    }
+
+    #[test]
+    fn executes_for_loops_with_positive_and_negative_steps() {
+        let value = run(
+            "Public Function SumSteps() As Long\n\
+               Dim total As Long\n\
+               Dim i As Long\n\
+               For i = 1 To 5\n\
+                 total = total + i\n\
+               Next i\n\
+               For i = 5 To 1 Step -2\n\
+                 total = total + i\n\
+               Next i\n\
+               SumSteps = total\n\
+             End Function\n",
+            "SumSteps",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(24));
+    }
+
+    #[test]
+    fn exit_for_only_leaves_the_nearest_for_loop() {
+        let value = run(
+            "Public Function FirstLarge() As Long\n\
+               Dim i As Long\n\
+               For i = 1 To 10\n\
+                 If i = 4 Then Exit For\n\
+               Next i\n\
+               FirstLarge = i\n\
+             End Function\n",
+            "FirstLarge",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(4));
+    }
+
+    #[test]
+    fn executes_while_and_do_loops_and_consumes_exit_do() {
+        let value = run(
+            "Public Function CountUp() As Long\n\
+               Dim n As Long\n\
+               While n < 2\n\
+                 n = n + 1\n\
+               Wend\n\
+               Do Until n = 4\n\
+                 n = n + 1\n\
+               Loop\n\
+               Do\n\
+                 n = n + 1\n\
+                 If n = 6 Then Exit Do\n\
+               Loop\n\
+               CountUp = n\n\
+             End Function\n",
+            "CountUp",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(6));
+    }
+
+    #[test]
+    fn stops_an_infinite_loop_at_the_step_limit() {
+        let module = parse_module(
+            "Public Sub Forever()\n\
+               Do\n\
+               Loop\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let failure = Runtime::new(&module)
+            .with_limits(5, 4)
+            .call("Forever", vec![])
+            .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::StepLimit);
+        assert_eq!(failure.line, Some(2));
     }
 
     #[test]
