@@ -158,6 +158,29 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    fn range_cells_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let [row, column] = args else {
+            return Err("Range.Cells expects row and column".to_string());
+        };
+        let row = positive_index(row, "row")? - 1;
+        let column = positive_index(column, "column")? - 1;
+        let row = range
+            .start_row
+            .checked_add(row)
+            .ok_or_else(|| "Range.Cells row is too large".to_string())?;
+        let column = range
+            .start_column
+            .checked_add(column)
+            .ok_or_else(|| "Range.Cells column is too large".to_string())?;
+        Ok(
+            self.object(HostObject::Range(CellRange::single(CellAddress {
+                sheet: range.sheet,
+                row,
+                column,
+            }))),
+        )
+    }
+
     fn cell_value(&self, address: CellAddress) -> Value {
         self.workbook
             .sheets
@@ -340,11 +363,19 @@ impl Host for WorkbookHost<'_> {
                 return Ok(None);
             }
             if let Some(range) = self.range(receiver) {
+                if name.eq_ignore_ascii_case("cells") {
+                    return self.range_cells_object(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("offset") {
                     return self.offset_range(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("resize") {
                     return self.resize_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("address") {
+                    return range_address_from_args(range, args)
+                        .map(Value::String)
+                        .map(Some);
                 }
                 if name.eq_ignore_ascii_case("clearcontents") {
                     if !args.is_empty() {
@@ -389,6 +420,18 @@ impl Host for WorkbookHost<'_> {
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
             return self.range_value(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("row") {
+            return Ok(Some(Value::Integer(i64::from(range.start_row))));
+        }
+        if name.eq_ignore_ascii_case("column") {
+            return Ok(Some(Value::Integer(i64::from(range.start_column) + 1)));
+        }
+        if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
+            return Self::range_cell_count(range).map(|count| Some(Value::Integer(count as i64)));
+        }
+        if name.eq_ignore_ascii_case("address") {
+            return Ok(Some(Value::String(format_range_address(range, true, true))));
         }
         Ok(None)
     }
@@ -481,6 +524,46 @@ fn integer_offset(value: &Value, label: &str) -> Result<i64, String> {
         ));
     }
     Ok(number as i64)
+}
+
+fn range_address_from_args(range: CellRange, args: &[Value]) -> Result<String, String> {
+    let (row_absolute, column_absolute) = match args {
+        [] => (true, true),
+        [row_absolute] => (boolean_argument(row_absolute, "row absolute")?, true),
+        [row_absolute, column_absolute] => (
+            boolean_argument(row_absolute, "row absolute")?,
+            boolean_argument(column_absolute, "column absolute")?,
+        ),
+        _ => return Err("Range.Address supports up to two arguments".to_string()),
+    };
+    Ok(format_range_address(range, row_absolute, column_absolute))
+}
+
+fn boolean_argument(value: &Value, label: &str) -> Result<bool, String> {
+    match value {
+        Value::Boolean(value) => Ok(*value),
+        Value::Integer(value) => Ok(*value != 0),
+        Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
+        _ => Err(format!("Range.Address {label} must be Boolean")),
+    }
+}
+
+fn format_range_address(range: CellRange, row_absolute: bool, column_absolute: bool) -> String {
+    let format_cell = |row: u32, column: u32| {
+        format!(
+            "{}{}{}{}",
+            if column_absolute { "$" } else { "" },
+            oxicells_core::editor::col_to_letter(column),
+            if row_absolute { "$" } else { "" },
+            row
+        )
+    };
+    let start = format_cell(range.start_row, range.start_column);
+    if range.is_single() {
+        start
+    } else {
+        format!("{start}:{}", format_cell(range.end_row, range.end_column))
+    }
 }
 
 fn from_cell_value(value: &CellValue) -> Value {
@@ -791,5 +874,29 @@ mod tests {
             workbook.sheets[0].rows[1].cells[2].value,
             CellValue::Number(7.0)
         ));
+    }
+
+    #[test]
+    fn vba_inspects_ranges_and_uses_relative_cells() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function InspectRange() As String\n\
+               Range(\"B2:C3\").Cells(2, 2).Value = 11\n\
+               InspectRange = Range(\"B2:C3\").Row & \"|\" & Range(\"B2:C3\").Column & \"|\" & Range(\"B2:C3\").Count & \"|\" & Range(\"B2:C3\").Address & \"|\" & Range(\"B2:C3\").Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "InspectRange", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("2|2|4|$B$2:$C$3|B2:C3".to_string()));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(11.0)
+        ));
+        assert_eq!(workbook.sheets[0].rows[0].index, 3);
+        assert_eq!(workbook.sheets[0].rows[0].cells[0].col, 2);
     }
 }
