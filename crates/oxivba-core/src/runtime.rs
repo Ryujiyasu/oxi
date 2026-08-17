@@ -3273,6 +3273,7 @@ fn call_builtin(
         "abs"
             | "array"
             | "cbool"
+            | "cdate"
             | "cdbl"
             | "chr"
             | "chrw"
@@ -3284,11 +3285,19 @@ fn call_builtin(
             | "instrrev"
             | "iif"
             | "choose"
+            | "dateadd"
+            | "datediff"
+            | "datepart"
+            | "dateserial"
+            | "datevalue"
+            | "day"
             | "switch"
             | "fix"
             | "hex"
+            | "hour"
             | "int"
             | "isarray"
+            | "isdate"
             | "isempty"
             | "ismissing"
             | "isnull"
@@ -3300,6 +3309,8 @@ fn call_builtin(
             | "len"
             | "ltrim"
             | "mid"
+            | "minute"
+            | "month"
             | "oct"
             | "replace"
             | "right"
@@ -3310,7 +3321,10 @@ fn call_builtin(
             | "join"
             | "string"
             | "strreverse"
+            | "timeserial"
+            | "timevalue"
             | "sgn"
+            | "second"
             | "sqr"
             | "trim"
             | "typename"
@@ -3318,11 +3332,34 @@ fn call_builtin(
             | "ucase"
             | "val"
             | "vartype"
+            | "weekday"
+            | "year"
     );
     if !known {
         return None;
     }
     Some((|| {
+        if matches!(
+            name.as_str(),
+            "cdate"
+                | "dateadd"
+                | "datediff"
+                | "datepart"
+                | "dateserial"
+                | "datevalue"
+                | "day"
+                | "hour"
+                | "isdate"
+                | "minute"
+                | "month"
+                | "second"
+                | "timeserial"
+                | "timevalue"
+                | "weekday"
+                | "year"
+        ) {
+            return call_date_builtin(&name, args, line);
+        }
         if matches!(
             name.as_str(),
             "asc"
@@ -3675,6 +3712,528 @@ fn call_builtin(
             _ => unreachable!(),
         }
     })())
+}
+
+fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+    let wrong_count = |expected: &str| {
+        error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("{name} expects {expected}, received {}", args.len()),
+            line,
+        )
+    };
+    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    match name {
+        "dateserial" | "timeserial" => {
+            if args.len() != 3 {
+                return Err(wrong_count("3 arguments"));
+            }
+            let mut parts = [0_i64; 3];
+            for (target, value) in parts.iter_mut().zip(args) {
+                *target = integer_argument(value, line)?;
+                if !(-32_768..=32_767).contains(target) {
+                    return Err(error(
+                        RuntimeErrorKind::Overflow,
+                        format!("{name} argument is outside the Integer range"),
+                        line,
+                    ));
+                }
+            }
+            let serial = if name == "dateserial" {
+                date_serial(parts[0], parts[1], parts[2])
+            } else {
+                Ok((parts[0] * 3_600 + parts[1] * 60 + parts[2]) as f64 / 86_400.0)
+            }
+            .map_err(|message| invalid_procedure_call(message, line))?;
+            Ok(Value::Double(serial))
+        }
+        "cdate" | "datevalue" | "timevalue" | "isdate" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let parsed = value_date_serial(&args[0]);
+            if name == "isdate" {
+                return Ok(Value::Boolean(parsed.is_ok()));
+            }
+            let serial = parsed.map_err(mismatch)?;
+            Ok(Value::Double(match name {
+                "datevalue" => serial.floor(),
+                "timevalue" => serial.rem_euclid(1.0),
+                _ => serial,
+            }))
+        }
+        "year" | "month" | "day" | "hour" | "minute" | "second" => {
+            if args.len() != 1 {
+                return Err(wrong_count("1 argument"));
+            }
+            let serial = value_date_serial(&args[0]).map_err(mismatch)?;
+            let parts = serial_date_parts(serial).map_err(mismatch)?;
+            Ok(Value::Integer(match name {
+                "year" => parts.year,
+                "month" => i64::from(parts.month),
+                "day" => i64::from(parts.day),
+                "hour" => i64::from(parts.hour),
+                "minute" => i64::from(parts.minute),
+                "second" => i64::from(parts.second),
+                _ => unreachable!(),
+            }))
+        }
+        "dateadd" => {
+            if args.len() != 3 {
+                return Err(wrong_count("3 arguments"));
+            }
+            let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
+            let amount = integer_argument(&args[1], line)?;
+            let serial = value_date_serial(&args[2]).map_err(mismatch)?;
+            date_add(&interval, amount, serial)
+                .map(Value::Double)
+                .map_err(|message| invalid_procedure_call(message, line))
+        }
+        "datediff" => {
+            if !(3..=5).contains(&args.len()) {
+                return Err(wrong_count("3 to 5 arguments"));
+            }
+            let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
+            let first = value_date_serial(&args[1]).map_err(mismatch)?;
+            let second = value_date_serial(&args[2]).map_err(mismatch)?;
+            let first_day = first_day_of_week(args.get(3), line)?;
+            first_week_of_year(args.get(4), line)?;
+            date_diff(&interval, first, second, first_day)
+                .map(Value::Integer)
+                .map_err(|message| invalid_procedure_call(message, line))
+        }
+        "datepart" => {
+            if !(2..=4).contains(&args.len()) {
+                return Err(wrong_count("2 to 4 arguments"));
+            }
+            let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
+            let serial = value_date_serial(&args[1]).map_err(mismatch)?;
+            let first_day = first_day_of_week(args.get(2), line)?;
+            let first_week = first_week_of_year(args.get(3), line)?;
+            date_part(&interval, serial, first_day, first_week)
+                .map(Value::Integer)
+                .map_err(|message| invalid_procedure_call(message, line))
+        }
+        "weekday" => {
+            if !(1..=2).contains(&args.len()) {
+                return Err(wrong_count("1 or 2 arguments"));
+            }
+            let serial = value_date_serial(&args[0]).map_err(mismatch)?;
+            let first_day = first_day_of_week(args.get(1), line)?;
+            Ok(Value::Integer(weekday_number(
+                serial.floor() as i64,
+                first_day,
+            )))
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DateParts {
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+}
+
+fn date_serial(year: i64, month: i64, day: i64) -> Result<f64, String> {
+    let year = match year {
+        0..=29 => year + 2_000,
+        30..=99 => year + 1_900,
+        _ => year,
+    };
+    let total_months = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(month - 1))
+        .ok_or_else(|| "DateSerial result is outside the supported range".to_string())?;
+    let normalized_year = total_months.div_euclid(12);
+    let normalized_month = total_months.rem_euclid(12) as u32 + 1;
+    let days = days_from_civil(normalized_year, normalized_month, 1)
+        .checked_add(day - 1)
+        .ok_or_else(|| "DateSerial result is outside the supported range".to_string())?;
+    let (result_year, _, _) = civil_from_days(days);
+    if !(100..=9_999).contains(&result_year) {
+        return Err("DateSerial result year must be between 100 and 9999".to_string());
+    }
+    Ok((days - ole_epoch_days()) as f64)
+}
+
+fn value_date_serial(value: &Value) -> Result<f64, String> {
+    let serial = match value {
+        Value::Integer(value) => *value as f64,
+        Value::Double(value) => *value,
+        Value::String(value) => parse_date_text(value)?,
+        Value::Empty => 0.0,
+        Value::Null => return Err("invalid use of Null".to_string()),
+        _ => return Err("value cannot be converted to a Date".to_string()),
+    };
+    if !serial.is_finite() {
+        return Err("Date value must be finite".to_string());
+    }
+    serial_date_parts(serial)?;
+    Ok(serial)
+}
+
+fn parse_date_text(source: &str) -> Result<f64, String> {
+    let source = source.trim().trim_matches('#').trim();
+    if source.is_empty() {
+        return Err("Date string is empty".to_string());
+    }
+    if let Ok(value) = source.parse::<f64>() {
+        return Ok(value);
+    }
+    if let Some(value) = parse_named_date_text(source) {
+        return value;
+    }
+    let mut pieces = source.split_whitespace();
+    let first = pieces.next().unwrap_or_default();
+    if first.contains(':') {
+        return parse_time_text(source);
+    }
+    let date = parse_date_part(first)?;
+    let time_text = pieces.collect::<Vec<_>>().join(" ");
+    if time_text.is_empty() {
+        Ok(date)
+    } else {
+        Ok(date + parse_time_text(&time_text)?)
+    }
+}
+
+fn parse_date_part(source: &str) -> Result<f64, String> {
+    let delimiter = if source.contains('/') {
+        '/'
+    } else if source.contains('-') {
+        '-'
+    } else {
+        return Err(format!("unsupported Date string: {source}"));
+    };
+    let values = source
+        .split(delimiter)
+        .map(|part| {
+            part.parse::<i64>()
+                .map_err(|_| format!("invalid Date component: {part}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.len() != 3 {
+        return Err(format!("Date requires three components: {source}"));
+    }
+    let (year, month, day) =
+        if delimiter == '-' && source.split('-').next().is_some_and(|v| v.len() == 4) {
+            (values[0], values[1], values[2])
+        } else {
+            (values[2], values[0], values[1])
+        };
+    strict_date_serial(year, month, day, source)
+}
+
+fn strict_date_serial(year: i64, month: i64, day: i64, source: &str) -> Result<f64, String> {
+    let serial = date_serial(year, month, day)?;
+    let parts = serial_date_parts(serial)?;
+    let expected_year = match year {
+        0..=29 => year + 2_000,
+        30..=99 => year + 1_900,
+        _ => year,
+    };
+    if parts.year != expected_year || i64::from(parts.month) != month || i64::from(parts.day) != day
+    {
+        return Err(format!("invalid calendar Date: {source}"));
+    }
+    Ok(serial)
+}
+
+fn parse_named_date_text(source: &str) -> Option<Result<f64, String>> {
+    let normalized = source.replace(',', " ");
+    let pieces = normalized.split_whitespace().collect::<Vec<_>>();
+    if pieces.len() < 3 {
+        return None;
+    }
+    let (year_text, month, day_text) = if let Some(month) = month_number(pieces[0]) {
+        (pieces[2], month, pieces[1])
+    } else if let Some(month) = month_number(pieces[1]) {
+        (pieces[2], month, pieces[0])
+    } else {
+        return None;
+    };
+    Some((|| {
+        let year = year_text
+            .parse::<i64>()
+            .map_err(|_| format!("invalid Date year: {year_text}"))?;
+        let day = day_text
+            .parse::<i64>()
+            .map_err(|_| format!("invalid Date day: {day_text}"))?;
+        let mut serial = strict_date_serial(year, i64::from(month), day, source)?;
+        if pieces.len() > 3 {
+            serial += parse_time_text(&pieces[3..].join(" "))?;
+        }
+        Ok(serial)
+    })())
+}
+
+fn month_number(name: &str) -> Option<u32> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "jan" | "january" => 1,
+        "feb" | "february" => 2,
+        "mar" | "march" => 3,
+        "apr" | "april" => 4,
+        "may" => 5,
+        "jun" | "june" => 6,
+        "jul" | "july" => 7,
+        "aug" | "august" => 8,
+        "sep" | "sept" | "september" => 9,
+        "oct" | "october" => 10,
+        "nov" | "november" => 11,
+        "dec" | "december" => 12,
+        _ => return None,
+    })
+}
+
+fn parse_time_text(source: &str) -> Result<f64, String> {
+    let upper = source.trim().to_ascii_uppercase();
+    let (clock, meridiem) = if let Some(clock) = upper.strip_suffix(" AM") {
+        (clock, Some(false))
+    } else if let Some(clock) = upper.strip_suffix(" PM") {
+        (clock, Some(true))
+    } else {
+        (upper.as_str(), None)
+    };
+    let values = clock
+        .split(':')
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| format!("invalid Time component: {part}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !(2..=3).contains(&values.len()) || values[1] > 59 || values.get(2).is_some_and(|v| *v > 59)
+    {
+        return Err(format!("invalid Time string: {source}"));
+    }
+    let mut hour = values[0];
+    if let Some(pm) = meridiem {
+        if !(1..=12).contains(&hour) {
+            return Err(format!("invalid 12-hour Time: {source}"));
+        }
+        hour = hour % 12 + if pm { 12 } else { 0 };
+    } else if hour > 23 {
+        return Err(format!("invalid 24-hour Time: {source}"));
+    }
+    Ok((hour * 3_600 + values[1] * 60 + values.get(2).copied().unwrap_or(0)) as f64 / 86_400.0)
+}
+
+fn serial_date_parts(serial: f64) -> Result<DateParts, String> {
+    let whole_days = serial.floor();
+    if whole_days < i64::MIN as f64 || whole_days > i64::MAX as f64 {
+        return Err("Date value is outside the supported range".to_string());
+    }
+    let days = ole_epoch_days()
+        .checked_add(whole_days as i64)
+        .ok_or_else(|| "Date value is outside the supported range".to_string())?;
+    let (year, month, day) = civil_from_days(days);
+    if !(100..=9_999).contains(&year) {
+        return Err("Date year must be between 100 and 9999".to_string());
+    }
+    let seconds = ((serial - whole_days) * 86_400.0).round() as i64;
+    if seconds == 86_400 {
+        let (year, month, day) = civil_from_days(days + 1);
+        return Ok(DateParts {
+            year,
+            month,
+            day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        });
+    }
+    Ok(DateParts {
+        year,
+        month,
+        day,
+        hour: (seconds / 3_600) as u32,
+        minute: ((seconds % 3_600) / 60) as u32,
+        second: (seconds % 60) as u32,
+    })
+}
+
+fn date_add(interval: &str, amount: i64, serial: f64) -> Result<f64, String> {
+    let result = match interval {
+        "yyyy" | "q" | "m" => {
+            let parts = serial_date_parts(serial)?;
+            let months = match interval {
+                "yyyy" => amount.checked_mul(12),
+                "q" => amount.checked_mul(3),
+                _ => Some(amount),
+            }
+            .ok_or_else(|| "DateAdd month interval overflow".to_string())?;
+            let total = parts.year * 12 + i64::from(parts.month) - 1 + months;
+            let year = total.div_euclid(12);
+            let month = total.rem_euclid(12) as u32 + 1;
+            let day = parts.day.min(days_in_month(year, month));
+            let date = date_serial(year, i64::from(month), i64::from(day))?;
+            date + serial.rem_euclid(1.0)
+        }
+        "y" | "d" | "w" => serial + amount as f64,
+        "ww" => serial + amount as f64 * 7.0,
+        "h" => serial + amount as f64 / 24.0,
+        "n" => serial + amount as f64 / 1_440.0,
+        "s" => serial + amount as f64 / 86_400.0,
+        _ => return Err(format!("unsupported Date interval: {interval}")),
+    };
+    serial_date_parts(result)?;
+    Ok(result)
+}
+
+fn date_diff(interval: &str, first: f64, second: f64, first_day: i64) -> Result<i64, String> {
+    let a = serial_date_parts(first)?;
+    let b = serial_date_parts(second)?;
+    Ok(match interval {
+        "yyyy" => b.year - a.year,
+        "q" => {
+            (b.year * 4 + i64::from((b.month - 1) / 3))
+                - (a.year * 4 + i64::from((a.month - 1) / 3))
+        }
+        "m" => (b.year * 12 + i64::from(b.month)) - (a.year * 12 + i64::from(a.month)),
+        "y" | "d" => second.floor() as i64 - first.floor() as i64,
+        "w" => (second.floor() as i64 - first.floor() as i64) / 7,
+        "ww" => {
+            week_boundary_index(second.floor() as i64, first_day)
+                - week_boundary_index(first.floor() as i64, first_day)
+        }
+        "h" => (second * 24.0).floor() as i64 - (first * 24.0).floor() as i64,
+        "n" => (second * 1_440.0).floor() as i64 - (first * 1_440.0).floor() as i64,
+        "s" => (second * 86_400.0).round() as i64 - (first * 86_400.0).round() as i64,
+        _ => return Err(format!("unsupported Date interval: {interval}")),
+    })
+}
+
+fn date_part(interval: &str, serial: f64, first_day: i64, first_week: i64) -> Result<i64, String> {
+    let parts = serial_date_parts(serial)?;
+    let day_number = serial.floor() as i64;
+    Ok(match interval {
+        "yyyy" => parts.year,
+        "q" => i64::from((parts.month - 1) / 3 + 1),
+        "m" => i64::from(parts.month),
+        "y" => {
+            days_from_civil(parts.year, parts.month, parts.day) - days_from_civil(parts.year, 1, 1)
+                + 1
+        }
+        "d" => i64::from(parts.day),
+        "w" => weekday_number(day_number, first_day),
+        "ww" => week_of_year(day_number, parts.year, first_day, first_week)?,
+        "h" => i64::from(parts.hour),
+        "n" => i64::from(parts.minute),
+        "s" => i64::from(parts.second),
+        _ => return Err(format!("unsupported Date interval: {interval}")),
+    })
+}
+
+fn first_day_of_week(value: Option<&Value>, line: Option<u32>) -> Result<i64, RuntimeError> {
+    let value = match value {
+        None | Some(Value::Missing) => 1,
+        Some(value) => integer_argument(value, line)?,
+    };
+    if !(0..=7).contains(&value) {
+        return Err(invalid_procedure_call(
+            "firstdayofweek must be between 0 and 7".to_string(),
+            line,
+        ));
+    }
+    Ok(if value == 0 { 1 } else { value })
+}
+
+fn first_week_of_year(value: Option<&Value>, line: Option<u32>) -> Result<i64, RuntimeError> {
+    let value = match value {
+        None | Some(Value::Missing) => 1,
+        Some(value) => integer_argument(value, line)?,
+    };
+    if !(0..=3).contains(&value) {
+        return Err(invalid_procedure_call(
+            "firstweekofyear must be between 0 and 3".to_string(),
+            line,
+        ));
+    }
+    Ok(if value == 0 { 1 } else { value })
+}
+
+fn weekday_number(day_number: i64, first_day: i64) -> i64 {
+    let sunday_based = (day_number + 6).rem_euclid(7) + 1;
+    (sunday_based - first_day).rem_euclid(7) + 1
+}
+
+fn week_boundary_index(day_number: i64, first_day: i64) -> i64 {
+    let anchor = (first_day - 1).rem_euclid(7) + 1;
+    (day_number - anchor).div_euclid(7)
+}
+
+fn week_of_year(
+    day_number: i64,
+    year: i64,
+    first_day: i64,
+    first_week: i64,
+) -> Result<i64, String> {
+    let start = first_week_start(year, first_day, first_week);
+    if day_number < start {
+        return week_of_year(day_number, year - 1, first_day, first_week);
+    }
+    let next_start = first_week_start(year + 1, first_day, first_week);
+    if day_number >= next_start {
+        return Ok((day_number - next_start).div_euclid(7) + 1);
+    }
+    Ok((day_number - start).div_euclid(7) + 1)
+}
+
+fn first_week_start(year: i64, first_day: i64, first_week: i64) -> i64 {
+    let january_first = days_from_civil(year, 1, 1) - ole_epoch_days();
+    let offset = weekday_number(january_first, first_day) - 1;
+    let containing_start = january_first - offset;
+    match first_week {
+        1 => containing_start,
+        2 if offset <= 3 => containing_start,
+        2 => containing_start + 7,
+        3 if offset == 0 => containing_start,
+        3 => containing_start + 7,
+        _ => containing_start,
+    }
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn ole_epoch_days() -> i64 {
+    days_from_civil(1899, 12, 30)
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let adjusted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month as u32, day as u32)
 }
 
 fn parse_val(source: &str) -> Result<f64, String> {
@@ -4096,6 +4655,17 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbbinarycompare" => Value::Integer(0),
         "vbtextcompare" => Value::Integer(1),
         "vbusecompareoption" => Value::Integer(-1),
+        "vbusesystem" => Value::Integer(0),
+        "vbsunday" => Value::Integer(1),
+        "vbmonday" => Value::Integer(2),
+        "vbtuesday" => Value::Integer(3),
+        "vbwednesday" => Value::Integer(4),
+        "vbthursday" => Value::Integer(5),
+        "vbfriday" => Value::Integer(6),
+        "vbsaturday" => Value::Integer(7),
+        "vbfirstjan1" => Value::Integer(1),
+        "vbfirstfourdays" => Value::Integer(2),
+        "vbfirstfullweek" => Value::Integer(3),
         "vbcrlf" | "vbnewline" => Value::String("\r\n".to_string()),
         "vbcr" => Value::String("\r".to_string()),
         "vblf" => Value::String("\n".to_string()),
@@ -6079,6 +6649,75 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5|13".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_date_serial_parsing_and_component_functions() {
+        let value = run(
+            "Public Function DateComponents() As String\n\
+               Dim stamp As Date\n\
+               stamp = DateSerial(2024, 2, 29) + TimeSerial(16, 35, 17)\n\
+               DateComponents = DateSerial(1899, 12, 30) & \"|\" & DateSerial(2024, 2, 29) & \"|\"\n\
+               DateComponents = DateComponents & Year(stamp) & \"-\" & Month(stamp) & \"-\" & Day(stamp) & \" \" & Hour(stamp) & \":\" & Minute(stamp) & \":\" & Second(stamp) & \"|\"\n\
+               DateComponents = DateComponents & Year(#2/29/2024 4:35:17 PM#) & \"|\" & Hour(TimeValue(\"4:35:17 PM\")) & \"|\" & Day(DateValue(\"2024-02-29\")) & \"|\" & Day(DateValue(\"February 12, 1969\")) & \"|\" & IsDate(\"not a date\")\n\
+             End Function\n",
+            "DateComponents",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("0|45351|2024-2-29 16:35:17|2024|16|29|12|False".to_string())
+        );
+    }
+
+    #[test]
+    fn executes_vba_dateadd_datediff_and_datepart_intervals() {
+        let value = run(
+            "Public Function DateIntervals() As String\n\
+               Dim monthEnd As Date\n\
+               monthEnd = DateAdd(\"m\", 1, DateSerial(2024, 1, 31))\n\
+               DateIntervals = Year(monthEnd) & \"-\" & Month(monthEnd) & \"-\" & Day(monthEnd) & \"|\"\n\
+               DateIntervals = DateIntervals & DateDiff(\"d\", DateSerial(2024, 1, 31), monthEnd) & \"|\" & DateDiff(\"yyyy\", DateSerial(2023, 12, 31), DateSerial(2024, 1, 1)) & \"|\"\n\
+               DateIntervals = DateIntervals & DatePart(\"q\", monthEnd) & \"|\" & DatePart(\"y\", monthEnd) & \"|\" & DatePart(\"w\", DateSerial(2024, 1, 1), vbMonday) & \"|\" & Weekday(DateSerial(2024, 1, 1), vbMonday) & \"|\" & DatePart(\"ww\", DateSerial(2024, 1, 1), vbMonday, vbFirstFourDays) & \"|\"\n\
+               DateIntervals = DateIntervals & Hour(TimeSerial(12 - 6, -15, 0)) & \":\" & Minute(TimeSerial(12 - 6, -15, 0))\n\
+             End Function\n",
+            "DateIntervals",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("2024-2-29|29|1|1|60|1|1|1|5:45".to_string())
+        );
+    }
+
+    #[test]
+    fn date_builtins_report_invalid_dates_and_intervals_as_vba_errors() {
+        let value = run(
+            "Public Function DateErrors() As String\n\
+               Dim badText As Long\n\
+               Dim badInterval As Long\n\
+               Dim badYear As Long\n\
+               On Error Resume Next\n\
+               badText = DateValue(\"2024-02-30\")\n\
+               badText = Err.Number\n\
+               Err.Clear\n\
+               badInterval = DateAdd(\"bad\", 1, DateSerial(2024, 1, 1))\n\
+               badInterval = Err.Number\n\
+               Err.Clear\n\
+               badYear = DateSerial(99, -32768, -32768)\n\
+               badYear = Err.Number\n\
+               DateErrors = badText & \"|\" & badInterval & \"|\" & badYear\n\
+             End Function\n",
+            "DateErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("13|5|5".to_string()));
     }
 
     #[test]
