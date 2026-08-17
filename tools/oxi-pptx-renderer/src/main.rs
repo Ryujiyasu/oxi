@@ -1070,6 +1070,65 @@ fn transform_picture(
     Some((out, min_x, min_y))
 }
 
+/// The pre-S-TBLCELL table rendering, kept so `OXI_TBLCELL_DISABLE` reproduces
+/// the shipped output exactly and the A/B is a real before-vs-after.
+#[cfg(windows)]
+unsafe fn draw_table_legacy(
+    mem_dc: windows::Win32::Graphics::Gdi::HDC,
+    pres: &Presentation,
+    sh: &Shape,
+    table: &oxislides_core::ir::Table,
+    x: i32,
+    y: i32,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+
+    let pen = CreatePen(PS_SOLID, (1.0 * scale).round() as i32, COLORREF(colorref(0, 0, 0)));
+    let old_pen = SelectObject(mem_dc, pen);
+    let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+    let mut cy = y;
+    for (r, row) in table.rows.iter().enumerate() {
+        let ph = (table.row_heights.get(r).copied().unwrap_or(0.0) as f64 * scale).round() as i32;
+        let mut cx = x;
+        for (c, cell) in row.iter().enumerate() {
+            let pw = (table.col_widths.get(c).copied().unwrap_or(0.0) as f64 * scale).round() as i32;
+            let _ = Rectangle(mem_dc, cx, cy, cx + pw, cy + ph);
+            let mut cursor_y = cy + (0.06 * scale).round() as i32;
+            for p in &cell.paragraphs {
+                let fs = p.runs.iter().filter_map(|r| r.font_size).fold(18.0, f32::max);
+                let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+                if text.trim().is_empty() {
+                    cursor_y += (fs as f64 * scale * 1.2).round() as i32;
+                    continue;
+                }
+                let family = p
+                    .runs
+                    .iter()
+                    .find_map(|r| r.font_family.clone())
+                    .unwrap_or_else(|| resolve_font(pres, sh));
+                let color = p.runs.iter().find_map(|r| r.color.clone());
+                draw_text_line(
+                    mem_dc,
+                    cx + (0.06 * scale).round() as i32,
+                    cursor_y,
+                    &text,
+                    fs,
+                    &family,
+                    color.as_deref(),
+                    scale,
+                );
+                cursor_y += (fs as f64 * scale * 1.2).round() as i32;
+            }
+            cx += pw;
+        }
+        cy += ph;
+    }
+    SelectObject(mem_dc, old_pen);
+    let _ = DeleteObject(pen);
+}
+
 fn srgb_to_linear(c: f64) -> f64 {
     let c = c / 255.0;
     if c <= 0.04045 {
@@ -1313,6 +1372,12 @@ fn custgeom_on() -> bool {
 /// A shape's `a:blipFill` is clipped to its outline unless this is set.
 fn blipclip_on() -> bool {
     std::env::var("OXI_BLIPCLIP_DISABLE").is_err()
+}
+
+/// Table cells honour their own fill / borders / margins / anchor and their
+/// runs' real font size unless this is set, which restores the legacy grid.
+fn tblcell_on() -> bool {
+    std::env::var("OXI_TBLCELL_DISABLE").is_err()
 }
 
 /// Composite a solid fill at a constant opacity.
@@ -1837,48 +1902,120 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         }
                     }
                     ShapeContent::Table { table } => {
-                        // Grid lines: one rectangle per cell (borrow the
-                        // black border pen already set above when border_w>0;
-                        // use a dedicated pen here so a borderless table still
-                        // shows its grid).
-                        let pen = CreatePen(
-                            PS_SOLID,
-                            (1.0 * scale).round() as i32,
-                            COLORREF(colorref(0, 0, 0)),
-                        );
-                        let old_pen = SelectObject(mem_dc, pen);
-                        let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                        // A DrawingML cell states its own fill, its four
+                        // borders, its margins and its anchor, so none of it
+                        // needs the table style resolved. The pre-S-TBLCELL
+                        // path ignored all of it: it stroked a black 1px
+                        // rectangle around every cell (PowerPoint draws the
+                        // few rules the cells actually declare, and an
+                        // invisible edge is written as alpha=0, not omitted)
+                        // and it sized text with `fold(18.0, f32::max)`, which
+                        // rendered an 8pt planner grid at 18pt.
+                        if !tblcell_on() {
+                            draw_table_legacy(mem_dc, pres, sh, table, x, y, scale);
+                            continue;
+                        }
                         let mut cy = y;
                         for (r, row) in table.rows.iter().enumerate() {
-                            let ph = table
-                                .row_heights
-                                .get(r)
-                                .copied()
-                                .unwrap_or(0.0) as f64
-                                * scale;
-                            let ph = ph.round() as i32;
+                            let ph = (table.row_heights.get(r).copied().unwrap_or(0.0) as f64
+                                * scale)
+                                .round() as i32;
                             let mut cx = x;
                             for (c, cell) in row.iter().enumerate() {
-                                let pw = table
-                                    .col_widths
-                                    .get(c)
-                                    .copied()
-                                    .unwrap_or(0.0) as f64
-                                    * scale;
-                                let pw = pw.round() as i32;
-                                let _ = Rectangle(mem_dc, cx, cy, cx + pw, cy + ph);
-                                // Cell text (top-left, minimal inset)
-                                let mut cursor_y = cy + (0.06 * scale).round() as i32;
-                                for p in &cell.paragraphs {
+                                let pw = (table.col_widths.get(c).copied().unwrap_or(0.0) as f64
+                                    * scale)
+                                    .round() as i32;
+                                let cell_rect = RECT {
+                                    left: cx,
+                                    top: cy,
+                                    right: cx + pw,
+                                    bottom: cy + ph,
+                                };
+                                if let Some((rr, gg, bb)) =
+                                    cell.fill_color.as_deref().and_then(parse_hex_rgb)
+                                {
+                                    // The corpus states cell washes as an alpha
+                                    // on the fill colour (every cell of d19
+                                    // slide 13 is 21355A at 15.6%), so painting
+                                    // it opaque puts a navy slab over the table.
+                                    match cell.fill_alpha.filter(|_| fill_alpha_on()) {
+                                        Some(a) if a < 1.0 => {
+                                            if a > 0.0 {
+                                                alpha_fill(mem_dc, &cell_rect, (rr, gg, bb), a);
+                                            }
+                                        }
+                                        _ => {
+                                            let brush =
+                                                CreateSolidBrush(COLORREF(colorref(rr, gg, bb)));
+                                            FillRect(mem_dc, &cell_rect, brush);
+                                            let _ = DeleteObject(brush);
+                                        }
+                                    }
+                                }
+                                // Borders, in the IR's L/R/T/B order. A side
+                                // with alpha 0 is declared invisible.
+                                for (side, border) in cell.borders.iter().enumerate() {
+                                    let Some(b) = border else { continue };
+                                    if b.alpha <= 0.0 || b.width <= 0.0 {
+                                        continue;
+                                    }
+                                    let Some((rr, gg, bb)) = parse_hex_rgb(&b.color) else {
+                                        continue;
+                                    };
+                                    let bpen = CreatePen(
+                                        PS_SOLID,
+                                        (b.width as f64 * scale).round().max(1.0) as i32,
+                                        COLORREF(colorref(rr, gg, bb)),
+                                    );
+                                    let old_bpen = SelectObject(mem_dc, bpen);
+                                    let (x0, y0, x1, y1) = match side {
+                                        0 => (cx, cy, cx, cy + ph),
+                                        1 => (cx + pw, cy, cx + pw, cy + ph),
+                                        2 => (cx, cy, cx + pw, cy),
+                                        _ => (cx, cy + ph, cx + pw, cy + ph),
+                                    };
+                                    let _ = MoveToEx(mem_dc, x0, y0, None);
+                                    let _ = LineTo(mem_dc, x1, y1);
+                                    SelectObject(mem_dc, old_bpen);
+                                    let _ = DeleteObject(bpen);
+                                }
+
+                                // Text: the cell's own margins, its anchor and
+                                // the paragraph's alignment, with the run's
+                                // real size.
+                                let left = cx + (cell.mar_l as f64 * scale).round() as i32;
+                                let right = cx + pw - (cell.mar_r as f64 * scale).round() as i32;
+                                let line_h = |p: &oxislides_core::ir::SlideParagraph| {
                                     let fs = p
                                         .runs
                                         .iter()
-                                        .filter_map(|r| r.font_size)
-                                        .fold(18.0, f32::max);
+                                        .find_map(|r| r.font_size)
+                                        .unwrap_or(18.0);
+                                    (fs, fs as f64 * scale * 1.2)
+                                };
+                                let total: f64 =
+                                    cell.paragraphs.iter().map(|p| line_h(p).1).sum();
+                                let inner_top = cy + (cell.mar_t as f64 * scale).round() as i32;
+                                let inner_bot = cy + ph - (cell.mar_b as f64 * scale).round() as i32;
+                                let mut cursor_y = match cell.anchor.as_deref() {
+                                    Some("ctr") => {
+                                        inner_top
+                                            + (((inner_bot - inner_top) as f64 - total) / 2.0)
+                                                .max(0.0)
+                                                .round() as i32
+                                    }
+                                    Some("b") => {
+                                        (inner_bot as f64 - total).round().max(inner_top as f64)
+                                            as i32
+                                    }
+                                    _ => inner_top,
+                                };
+                                for p in &cell.paragraphs {
+                                    let (fs, advance) = line_h(p);
                                     let text: String =
                                         p.runs.iter().map(|r| r.text.as_str()).collect();
                                     if text.trim().is_empty() {
-                                        cursor_y += (fs as f64 * scale * 1.2).round() as i32;
+                                        cursor_y += advance.round() as i32;
                                         continue;
                                     }
                                     let family = p
@@ -1887,9 +2024,23 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         .find_map(|r| r.font_family.clone())
                                         .unwrap_or_else(|| resolve_font(pres, sh));
                                     let color = p.runs.iter().find_map(|r| r.color.clone());
+                                    let bold = p.runs.iter().any(|r| r.bold);
+                                    let w = measure_text_width(
+                                        mem_dc, &text, fs, &family, bold, scale,
+                                    );
+                                    let tx = match p.alignment {
+                                        Some(SlideAlignment::Center) => {
+                                            left + (((right - left) as f64 - w) / 2.0).round()
+                                                as i32
+                                        }
+                                        Some(SlideAlignment::Right) => {
+                                            right - w.round() as i32
+                                        }
+                                        _ => left,
+                                    };
                                     draw_text_line(
                                         mem_dc,
-                                        cx + (0.06 * scale).round() as i32,
+                                        tx,
                                         cursor_y,
                                         &text,
                                         fs,
@@ -1897,14 +2048,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         color.as_deref(),
                                         scale,
                                     );
-                                    cursor_y += (fs as f64 * scale * 1.2).round() as i32;
+                                    cursor_y += advance.round() as i32;
                                 }
                                 cx += pw;
                             }
                             cy += ph;
                         }
-                        SelectObject(mem_dc, old_pen);
-                        let _ = DeleteObject(pen);
                     }
                     ShapeContent::Chart { chart } => {
                         // Step 2-4 + Step 5: clustered column chart. Geometry
@@ -7856,6 +8005,50 @@ fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
     } * mag;
     let div = (axis_max / step).round().max(1.0) as usize;
     (axis_max, div)
+}
+
+/// Measure `text` in device pixels with a font this call creates itself.
+///
+/// `gdi_measure_text_px` needs the caller to have selected the font already;
+/// the table path draws one cell at a time and has no font selected, so it
+/// needs the self-contained form.
+#[cfg(windows)]
+fn measure_text_width(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    bold: bool,
+    scale: f64,
+) -> f64 {
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
+
+    let height = (font_size as f64 * scale).round() as i32;
+    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -height,
+            0,
+            0,
+            0,
+            if bold { 700 } else { 400 },
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        );
+        let old = SelectObject(dc, font);
+        let w = gdi_measure_text_px(dc, text);
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        w as f64
+    }
 }
 
 /// Measure the width of `text` in device pixels (font must be selected).

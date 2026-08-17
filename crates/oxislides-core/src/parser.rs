@@ -17,7 +17,7 @@ use crate::ir::{
     default_chart_hole_size, default_chart_size_represents,
     default_chart_updown_gap,
     default_chart_type, default_l_ins, default_r_ins, default_t_ins, Chart, ChartSeries,
-    CustomGeometry, EmbeddedFont, GeomCmd, GeomPath,
+    CellBorder, CustomGeometry, EmbeddedFont, GeomCmd, GeomPath,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
     SlideParagraph,
@@ -863,6 +863,20 @@ fn parse_slide(
     let mut tbl_cur_row: Vec<TableCell> = Vec::new();
     let mut in_tbl_cell = false;
     let mut tbl_cur_cell_paragraphs: Vec<SlideParagraph> = Vec::new();
+    // a:tcPr — the cell's own fill, per-side borders, margins and anchor. The
+    // corpus states all of them explicitly (an INVISIBLE edge is written as a
+    // solidFill with <a:alpha val="0"/>, not as an absent element), so none of
+    // this needs the table style resolved.
+    let mut in_tc_pr = false;
+    let mut tc_ln_side: Option<usize> = None;
+    let mut tc_borders: [Option<CellBorder>; 4] = Default::default();
+    let mut tc_fill: Option<String> = None;
+    let mut tc_fill_alpha: Option<f32> = None;
+    let mut tc_mar = (default_l_ins(), default_r_ins(), default_t_ins(), default_b_ins());
+    let mut tc_anchor: Option<String> = None;
+    let mut tc_ln_width: f32 = 0.0;
+    let mut tc_ln_color: Option<String> = None;
+    let mut tc_ln_alpha: f32 = 1.0;
 
     // Chart state (a:graphicFrame -> a:graphicData uri=.../chart -> c:chart)
     let mut in_chart_graphic = false;
@@ -1036,7 +1050,61 @@ fn parse_slide(
                         tbl_cur_cell_paragraphs.clear();
                     }
                     "tcPr" if in_tbl_cell => {
-                        // Cell properties (fill, borders, spans) — parsed later.
+                        in_tc_pr = true;
+                        tc_borders = Default::default();
+                        tc_fill = None;
+                        tc_fill_alpha = None;
+                        tc_ln_side = None;
+                        tc_mar = (
+                            get_attr(&e, "marL").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_l_ins),
+                            get_attr(&e, "marR").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_r_ins),
+                            get_attr(&e, "marT").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_t_ins),
+                            get_attr(&e, "marB").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_b_ins),
+                        );
+                        tc_anchor = get_attr(&e, "anchor");
+                    }
+                    "lnL" | "lnR" | "lnT" | "lnB" if in_tc_pr => {
+                        tc_ln_side = Some(match name.as_str() {
+                            "lnL" => 0,
+                            "lnR" => 1,
+                            "lnT" => 2,
+                            _ => 3,
+                        });
+                        tc_ln_width = get_attr(&e, "w")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 12700.0)
+                            .unwrap_or(0.75);
+                        tc_ln_color = None;
+                        tc_ln_alpha = 1.0;
+                    }
+                    "srgbClr" | "schemeClr" if in_tc_pr => {
+                        if let Some(val) = get_attr(&e, "val") {
+                            let hex = if name == "srgbClr" {
+                                val
+                            } else {
+                                theme_colors
+                                    .get(&val)
+                                    .cloned()
+                                    .unwrap_or_else(|| scheme_color_to_hex(&val))
+                            };
+                            if tc_ln_side.is_some() {
+                                tc_ln_color = Some(hex);
+                            } else {
+                                tc_fill = Some(hex);
+                            }
+                        }
+                    }
+                    "alpha" if in_tc_pr => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(p) = v.parse::<f32>() {
+                                let a = (p / 100000.0).clamp(0.0, 1.0);
+                                if tc_ln_side.is_some() {
+                                    tc_ln_alpha = a;
+                                } else {
+                                    tc_fill_alpha = Some(a);
+                                }
+                            }
+                        }
                     }
                     "xfrm" if in_shape => {
                         // a:xfrm/@rot is in 60000ths of a degree; 60000 = 1 degree.
@@ -1389,10 +1457,65 @@ fn parse_slide(
                             }
                         }
                     }
+                    // Self-closing forms of the cell properties. quick-xml
+                    // routes <a:alpha val=".."/> and <a:srgbClr val=".."/> to
+                    // Event::Empty, so the Start-arm handlers above see NONE of
+                    // them -- the trap this file has hit before.
+                    "tcPr" if in_tbl_cell => {
+                        // An empty <a:tcPr .../> carries only its attributes.
+                        tc_borders = Default::default();
+                        tc_fill = None;
+                        tc_fill_alpha = None;
+                        tc_ln_side = None;
+                        tc_mar = (
+                            get_attr(&e, "marL").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_l_ins),
+                            get_attr(&e, "marR").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_r_ins),
+                            get_attr(&e, "marT").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_t_ins),
+                            get_attr(&e, "marB").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt).unwrap_or_else(default_b_ins),
+                        );
+                        tc_anchor = get_attr(&e, "anchor");
+                    }
+                    "srgbClr" | "schemeClr" if in_tc_pr => {
+                        if let Some(val) = get_attr(&e, "val") {
+                            let hex = if name == "srgbClr" {
+                                val
+                            } else {
+                                theme_colors
+                                    .get(&val)
+                                    .cloned()
+                                    .unwrap_or_else(|| scheme_color_to_hex(&val))
+                            };
+                            if tc_ln_side.is_some() {
+                                tc_ln_color = Some(hex);
+                            } else {
+                                tc_fill = Some(hex);
+                            }
+                        }
+                    }
+                    "alpha" if in_tc_pr => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(pv) = v.parse::<f32>() {
+                                let a = (pv / 100000.0).clamp(0.0, 1.0);
+                                if tc_ln_side.is_some() {
+                                    tc_ln_alpha = a;
+                                } else {
+                                    tc_fill_alpha = Some(a);
+                                }
+                            }
+                        }
+                    }
                     "tc" if in_tbl_row => {
                         // Self-closing cell — an empty cell.
                         tbl_cur_row.push(TableCell {
                             paragraphs: Vec::new(),
+                            fill_color: None,
+                            fill_alpha: None,
+                            borders: Default::default(),
+                            mar_l: default_l_ins(),
+                            mar_r: default_r_ins(),
+                            mar_t: default_t_ins(),
+                            mar_b: default_b_ins(),
+                            anchor: None,
                         });
                     }
                     "ln" if in_sp_pr => {
@@ -1934,11 +2057,33 @@ fn parse_slide(
                     "spcAft" if in_spc_aft => {
                         in_spc_aft = false;
                     }
+                    "lnL" | "lnR" | "lnT" | "lnB" if in_tc_pr => {
+                        if let (Some(side), Some(color)) = (tc_ln_side.take(), tc_ln_color.take()) {
+                            tc_borders[side] = Some(CellBorder {
+                                color,
+                                width: tc_ln_width,
+                                alpha: tc_ln_alpha,
+                            });
+                        }
+                        tc_ln_side = None;
+                    }
+                    "tcPr" if in_tc_pr => {
+                        in_tc_pr = false;
+                    }
                     "tc" if in_tbl_cell => {
                         in_tbl_cell = false;
                         tbl_cur_row.push(TableCell {
                             paragraphs: std::mem::take(&mut tbl_cur_cell_paragraphs),
+                            fill_color: tc_fill.take(),
+                            fill_alpha: tc_fill_alpha.take(),
+                            borders: std::mem::take(&mut tc_borders),
+                            mar_l: tc_mar.0,
+                            mar_r: tc_mar.1,
+                            mar_t: tc_mar.2,
+                            mar_b: tc_mar.3,
+                            anchor: tc_anchor.take(),
                         });
+                        tc_mar = (default_l_ins(), default_r_ins(), default_t_ins(), default_b_ins());
                     }
                     "tr" if in_tbl_row => {
                         in_tbl_row = false;

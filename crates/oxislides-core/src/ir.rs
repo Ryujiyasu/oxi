@@ -611,9 +611,56 @@ pub struct Table {
     pub rows: Vec<Vec<TableCell>>,
 }
 
+/// One side of a cell's border (`a:tcPr/a:lnL|lnR|lnT|lnB`).
+///
+/// The corpus writes these explicitly on every cell, including the ones that
+/// must NOT be drawn: an invisible edge is a `solidFill` whose colour carries
+/// `<a:alpha val="0"/>`, not an absent element. A consumer that ignores the
+/// alpha draws a full grid where PowerPoint draws a few rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellBorder {
+    /// RRGGBB, theme colours already resolved.
+    pub color: String,
+    /// `@w` in points (9525 EMU = 0.75pt is what the corpus writes).
+    pub width: f32,
+    /// 0.0 = fully transparent (do not draw), 1.0 = opaque.
+    #[serde(default = "default_border_alpha")]
+    pub alpha: f32,
+}
+
+pub fn default_border_alpha() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCell {
     pub paragraphs: Vec<SlideParagraph>,
+    /// `a:tcPr/a:solidFill` — the cell's own fill (the corpus states the
+    /// header and banded-row colours here rather than leaving them to the
+    /// table style).
+    #[serde(default)]
+    pub fill_color: Option<String>,
+    /// `<a:alpha>` inside that fill. The corpus leans on it hard: every cell of
+    /// d19 slide 13 is `21355A` at **15.6%**, which is a pale wash over the
+    /// page and a solid navy slab if the alpha is dropped.
+    #[serde(default)]
+    pub fill_alpha: Option<f32>,
+    /// Left / right / top / bottom, in that order.
+    #[serde(default)]
+    pub borders: [Option<CellBorder>; 4],
+    /// `a:tcPr/@marL|marR|marT|marB` in points (default 0.1 inch / 0.05 inch,
+    /// i.e. 7.2 / 3.6pt, the same defaults a text body uses).
+    #[serde(default = "default_l_ins")]
+    pub mar_l: f32,
+    #[serde(default = "default_r_ins")]
+    pub mar_r: f32,
+    #[serde(default = "default_t_ins")]
+    pub mar_t: f32,
+    #[serde(default = "default_b_ins")]
+    pub mar_b: f32,
+    /// `a:tcPr/@anchor` — vertical text anchor, as on a shape body.
+    #[serde(default)]
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
