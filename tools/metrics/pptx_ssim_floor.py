@@ -35,11 +35,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -57,6 +59,10 @@ PPTX_DIR = DEV / "pptx"
 PDF_DIR = DEV / "pdf"
 PNG_ROOT = DEV / "oxi_png"
 RESULT_ROOT = DEV / "ssim_floor"
+REF_ROOT = DEV / "ppt_png"
+# MuPDF keeps shared state, so the reference rasters are produced under
+# one lock and then reused from disk.
+LOCK = threading.Lock()
 OXI_EXE = REPO_ROOT / "tools" / "oxi-pptx-renderer" / "target" / "release" / "oxi-pptx-renderer.exe"
 DPI = 150
 
@@ -102,9 +108,30 @@ def render(pptx: Path, tag: str, env_pairs: dict[str, str], rerender: bool) -> d
     return {"deck": deck_id(pptx), "ok": True, "cached": False}
 
 
-def rgb_from_pdf(pdf: pymupdf.Document, index: int) -> np.ndarray:
-    pix = pdf[index].get_pixmap(matrix=pymupdf.Matrix(DPI / 72, DPI / 72), alpha=False)
-    return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+def reference_pages(pdf_path: Path) -> list[Path]:
+    """Rasterise the PowerPoint PDF once and cache the pages as PNG.
+
+    Rendering the reference inside the scoring loop made the harness
+    NON-DETERMINISTIC: two runs over BYTE-IDENTICAL Oxi PNGs disagreed by
+    3e-5 on d02, because the pages were rasterised concurrently and MuPDF's
+    state is shared. Caching removes the noise (an A/B is now exactly
+    reproducible) and makes every later run much cheaper, since the truth
+    side never changes.
+    """
+    cache = REF_ROOT / pdf_path.stem
+    pngs = sorted(cache.glob("p*.png"), key=lambda p: int(p.stem[1:]))
+    if pngs:
+        return pngs
+    cache.mkdir(parents=True, exist_ok=True)
+    with LOCK:
+        pdf = pymupdf.open(pdf_path)
+        try:
+            for index in range(pdf.page_count):
+                pix = pdf[index].get_pixmap(matrix=pymupdf.Matrix(DPI / 72, DPI / 72), alpha=False)
+                pix.save(cache / f"p{index + 1}.png")
+        finally:
+            pdf.close()
+    return sorted(cache.glob("p*.png"), key=lambda p: int(p.stem[1:]))
 
 
 def score(reference: np.ndarray, candidate: np.ndarray) -> float:
@@ -125,16 +152,15 @@ def measure(pptx: Path, tag: str) -> dict | None:
         return None
     png_dir = PNG_ROOT / tag / did
     pngs = sorted(png_dir.glob("slide_s*.png"), key=lambda p: int(p.stem.split("_s")[1]))
-    pdf = pymupdf.open(pdf_path)
+    refs = reference_pages(pdf_path)
     scores: list[float] = []
-    for index in range(pdf.page_count):
+    for index in range(len(refs)):
         if index >= len(pngs):
             break
-        reference = rgb_from_pdf(pdf, index)
+        reference = np.asarray(Image.open(refs[index]).convert("RGB"))
         candidate = np.asarray(Image.open(pngs[index]).convert("RGB"))
         scores.append(score(reference, candidate))
-    ppt_pages = pdf.page_count
-    pdf.close()
+    ppt_pages = len(refs)
     denominator = max(ppt_pages, len(pngs))
     worst = min(range(len(scores)), key=lambda i: scores[i]) if scores else None
     return {
@@ -151,12 +177,36 @@ def measure(pptx: Path, tag: str) -> dict | None:
     }
 
 
+def unchanged_vs(tag: str, other: str, deck: str) -> bool:
+    """True when this deck's renders are byte-identical between two tags."""
+    a = PNG_ROOT / tag / deck
+    b = PNG_ROOT / other / deck
+    if not a.is_dir() or not b.is_dir():
+        return False
+    an = sorted(p.name for p in a.glob("slide_s*.png"))
+    if an != sorted(p.name for p in b.glob("slide_s*.png")):
+        return False
+    return all(
+        hashlib.sha256((a / n).read_bytes()).digest()
+        == hashlib.sha256((b / n).read_bytes()).digest()
+        for n in an
+    )
+
+
 def run(args) -> dict:
     targets = decks(args.decks)
     if not targets:
         sys.exit("no decks matched")
     env_pairs = dict(pair.split("=", 1) for pair in args.env)
     print(f"decks={len(targets)} tag={args.tag} env={env_pairs or '-'}", flush=True)
+    # An A/B only needs the decks whose pixels moved: byte-identical renders
+    # score identically by construction, and SSIM over 886 slides is the whole
+    # cost of a run. Rows for the unchanged decks are taken from the reference
+    # result so the corpus number stays complete.
+    reuse: dict[str, dict] = {}
+    if args.vs:
+        prior = json.loads((RESULT_ROOT / f"{args.vs}.json").read_text(encoding="utf-8"))
+        reuse = {r["deck"]: r for r in prior["rows"]}
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = {
@@ -168,11 +218,21 @@ def run(args) -> dict:
                 print(f"  RENDER FAIL {info['deck']}: {info.get('error')}", flush=True)
 
     rows: list[dict] = []
+    to_score = targets
+    if reuse:
+        keep = [p for p in targets if deck_id(p) in reuse and unchanged_vs(args.tag, args.vs, deck_id(p))]
+        rows.extend(reuse[deck_id(p)] for p in keep)
+        to_score = [p for p in targets if p not in set(keep)]
+        print(
+            f"  reusing {len(keep)} byte-identical deck scores from '{args.vs}', "
+            f"scoring {len(to_score)}",
+            flush=True,
+        )
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         # skimage's SSIM releases the GIL inside numpy, so scoring threads do
         # overlap; the sequential version took longer to score 886 slides than
         # to render them.
-        futures = {pool.submit(measure, p, args.tag): p for p in targets}
+        futures = {pool.submit(measure, p, args.tag): p for p in to_score}
         for future in as_completed(futures):
             row = future.result()
             if row is None:
@@ -273,6 +333,11 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--json", default=None)
     parser.add_argument("--ab", nargs=2, metavar=("BEFORE", "AFTER"), default=None)
+    parser.add_argument(
+        "--vs",
+        default=None,
+        help="reuse this tag's scores for decks whose renders are byte-identical",
+    )
     args = parser.parse_args()
 
     if args.ab:

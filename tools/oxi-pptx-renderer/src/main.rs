@@ -628,12 +628,17 @@ unsafe fn draw_custom_geometry_gdi(
     sh: &Shape,
     scale: f64,
 ) -> bool {
-    use windows::Win32::Foundation::{COLORREF, POINT};
+    use windows::Win32::Foundation::COLORREF;
     use windows::Win32::Graphics::Gdi::*;
 
-    let geom = match sh.custom_geometry.as_ref() {
-        Some(g) if !g.unsupported && custgeom_on() => g,
-        _ => return false,
+    if sh.custom_geometry.is_some() && drawable_geometry(sh).is_none() && custgeom_on() {
+        // A geometry that exists but is not drawable (unsupported command,
+        // degenerate box, no segments) keeps the rectangular fallback.
+        return false;
+    }
+    let geom = match drawable_geometry(sh) {
+        Some(g) => g,
+        None => return false,
     };
     if sh.fill_color.is_some()
         && sh
@@ -642,10 +647,6 @@ unsafe fn draw_custom_geometry_gdi(
             .is_some_and(|a| a < 1.0)
     {
         return false;
-    }
-    let (w, h) = (sh.width.max(0.0), sh.height.max(0.0));
-    if w == 0.0 || h == 0.0 {
-        return true; // nothing to paint, but the box fallback must not run
     }
 
     let fill_brush = sh
@@ -674,28 +675,6 @@ unsafe fn draw_custom_geometry_gdi(
         if path.commands.is_empty() {
             continue;
         }
-        // @w / @h are the path's own units. Both are declared on every corpus
-        // path; the schema's 0 means "already in the shape's EMU space".
-        let (sx, sy) = (
-            if path.w > 0.0 { w / path.w } else { 1.0 / 12700.0 },
-            if path.h > 0.0 { h / path.h } else { 1.0 / 12700.0 },
-        );
-        let map = |px: f32, py: f32| -> POINT {
-            let (mut lx, mut ly) = (px * sx, py * sy);
-            if sh.flip_h {
-                lx = w - lx;
-            }
-            if sh.flip_v {
-                ly = h - ly;
-            }
-            let (dx, dy) = (lx - w / 2.0, ly - h / 2.0);
-            let (sn, cs) = sh.rotation.to_radians().sin_cos();
-            POINT {
-                x: (((sh.x + w / 2.0 + dx * cs - dy * sn) as f64) * scale).round() as i32,
-                y: (((sh.y + h / 2.0 + dx * sn + dy * cs) as f64) * scale).round() as i32,
-            }
-        };
-
         let brush = match (path.fill_none, fill_brush) {
             (false, Some(b)) => b,
             _ => HBRUSH(GetStockObject(NULL_BRUSH).0),
@@ -717,33 +696,7 @@ unsafe fn draw_custom_geometry_gdi(
         // the DC is shared with every other draw path, so set it explicitly.
         let old_fill_mode = SetPolyFillMode(dc, ALTERNATE);
         let _ = BeginPath(dc);
-        let mut open = false;
-        for cmd in &path.commands {
-            match cmd {
-                GeomCmd::MoveTo(x, y) => {
-                    let p = map(*x, *y);
-                    let _ = MoveToEx(dc, p.x, p.y, None);
-                    open = true;
-                }
-                GeomCmd::LineTo(x, y) => {
-                    if open {
-                        let p = map(*x, *y);
-                        let _ = LineTo(dc, p.x, p.y);
-                    }
-                }
-                GeomCmd::CubicTo(x1, y1, x2, y2, x3, y3) => {
-                    if open {
-                        let _ = PolyBezierTo(dc, &[map(*x1, *y1), map(*x2, *y2), map(*x3, *y3)]);
-                    }
-                }
-                GeomCmd::Close => {
-                    if open {
-                        let _ = CloseFigure(dc);
-                        open = false;
-                    }
-                }
-            }
-        }
+        emit_geom_path_gdi(dc, sh, path, scale);
         let _ = EndPath(dc);
         let _ = StrokeAndFillPath(dc);
         drew = true;
@@ -760,6 +713,133 @@ unsafe fn draw_custom_geometry_gdi(
         let _ = DeleteObject(brush);
     }
     drew
+}
+
+/// Emit ONE `a:path` into the DC's current path, WITHOUT painting it.
+///
+/// Shared by the outline draw and the fill clip so the two can never disagree
+/// about where the shape's boundary is.
+#[cfg(windows)]
+unsafe fn emit_geom_path_gdi(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    sh: &Shape,
+    path: &oxislides_core::ir::GeomPath,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::*;
+
+    let (w, h) = (sh.width.max(0.0), sh.height.max(0.0));
+    // @w / @h are the path's own units. Both are declared on every corpus
+    // path; the schema's 0 means "already in the shape's EMU space".
+    let (sx, sy) = (
+        if path.w > 0.0 { w / path.w } else { 1.0 / 12700.0 },
+        if path.h > 0.0 { h / path.h } else { 1.0 / 12700.0 },
+    );
+    let map = |px: f32, py: f32| -> POINT {
+        let (mut lx, mut ly) = (px * sx, py * sy);
+        if sh.flip_h {
+            lx = w - lx;
+        }
+        if sh.flip_v {
+            ly = h - ly;
+        }
+        let (dx, dy) = (lx - w / 2.0, ly - h / 2.0);
+        let (sn, cs) = sh.rotation.to_radians().sin_cos();
+        POINT {
+            x: (((sh.x + w / 2.0 + dx * cs - dy * sn) as f64) * scale).round() as i32,
+            y: (((sh.y + h / 2.0 + dx * sn + dy * cs) as f64) * scale).round() as i32,
+        }
+    };
+    let mut open = false;
+    for cmd in &path.commands {
+        match cmd {
+            GeomCmd::MoveTo(x, y) => {
+                let p = map(*x, *y);
+                let _ = MoveToEx(dc, p.x, p.y, None);
+                open = true;
+            }
+            GeomCmd::LineTo(x, y) => {
+                if open {
+                    let p = map(*x, *y);
+                    let _ = LineTo(dc, p.x, p.y);
+                }
+            }
+            GeomCmd::CubicTo(x1, y1, x2, y2, x3, y3) => {
+                if open {
+                    let _ = PolyBezierTo(dc, &[map(*x1, *y1), map(*x2, *y2), map(*x3, *y3)]);
+                }
+            }
+            GeomCmd::Close => {
+                if open {
+                    let _ = CloseFigure(dc);
+                    open = false;
+                }
+            }
+        }
+    }
+}
+
+/// The shape's drawable geometry, or None when it must keep the box fallback.
+fn drawable_geometry(sh: &Shape) -> Option<&oxislides_core::ir::CustomGeometry> {
+    match sh.custom_geometry.as_ref() {
+        Some(g)
+            if !g.unsupported
+                && custgeom_on()
+                && sh.width > 0.0
+                && sh.height > 0.0
+                && g.paths.iter().any(|p| !p.commands.is_empty()) =>
+        {
+            Some(g)
+        }
+        _ => None,
+    }
+}
+
+/// Clip the DC to the shape's outline for the duration of an image blit.
+///
+/// PowerPoint render-truth (`custgeom_blipfill` probe, 2026-08-17, exported by
+/// PowerPoint itself): a shape's `a:blipFill` is CLIPPED to the shape's own
+/// geometry, and `a:fillRect` insets/expands the DESTINATION inside that clip.
+///   - D2, a triangle path with fillRect 0: the box corners outside the
+///     triangle are BLANK, the interior carries the source's lower quadrants.
+///   - D3, a rect path with `r="-100000"`: the source's left half is stretched
+///     across the whole box (destination twice as wide) and the half that
+///     reaches past the box is GONE, not painted beside it.
+///   - D6, d28's literal `r="-145344" b="-574764"`: every interior sample is
+///     the source's top-left quadrant and nothing spills onto the page.
+/// Oxi already modelled fillRect; the missing clip is what let d28's bunting
+/// images (2.45 x 6.75 oversized) cover the page and put that deck at the
+/// corpus floor (0.5217).
+///
+/// 2141 of the corpus's shape-level blipFills are on custGeom shapes -- all of
+/// them -- so the geometry needed for the clip is exactly what is available.
+#[cfg(windows)]
+unsafe fn clip_to_geometry_gdi(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    sh: &Shape,
+    scale: f64,
+) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let geom = match drawable_geometry(sh) {
+        Some(g) if blipclip_on() => g,
+        _ => return false,
+    };
+    let _ = BeginPath(dc);
+    for path in &geom.paths {
+        emit_geom_path_gdi(dc, sh, path, scale);
+    }
+    let _ = EndPath(dc);
+    // Even-odd, the rule measured for custGeom fills, applies to the region a
+    // path becomes as well.
+    let old_mode = SetPolyFillMode(dc, ALTERNATE);
+    let ok = SelectClipPath(dc, RGN_COPY).as_bool();
+    SetPolyFillMode(dc, CREATE_POLYGON_RGN_MODE(old_mode));
+    if !ok {
+        let _ = SelectClipRgn(dc, None);
+    }
+    ok
 }
 
 fn srgb_to_linear(c: f64) -> f64 {
@@ -1000,6 +1080,11 @@ fn fill_alpha_on() -> bool {
 /// which case the shape keeps its pre-S-CUSTGEOM bounding-box rendering.
 fn custgeom_on() -> bool {
     std::env::var("OXI_CUSTGEOM_DISABLE").is_err()
+}
+
+/// A shape's `a:blipFill` is clipped to its outline unless this is set.
+fn blipclip_on() -> bool {
+    std::env::var("OXI_BLIPCLIP_DISABLE").is_err()
 }
 
 /// Composite a solid fill at a constant opacity.
@@ -6802,6 +6887,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .max(1);
                                 let dh = ((eh as f64 * (1.0 - dt - db)).round() as i32)
                                     .max(1);
+                                // A blipFill belongs to the SHAPE, so it is
+                                // clipped to the shape's outline -- both the
+                                // part of the box the outline does not cover
+                                // and the part a negative fillRect pushes
+                                // outside the box (S-BLIPCLIP render-truth).
+                                let clipped = clip_to_geometry_gdi(mem_dc, sh, scale);
                                 // A picture whose media carries transparency
                                 // has to be COMPOSITED over the page -- the
                                 // opaque blit below drops the alpha byte and
@@ -6852,6 +6943,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     DIB_RGB_COLORS,
                                     SRCCOPY,
                                 );
+                                }
+                                if clipped {
+                                    let _ = SelectClipRgn(mem_dc, None);
                                 }
                             }
                             Err(_) => {}
