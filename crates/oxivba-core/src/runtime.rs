@@ -4,12 +4,17 @@
 
 //! Host-independent execution of pure VBA procedures.
 //!
-//! This first browser-runtime slice supports scalar values, local variables,
-//! arithmetic, comparisons, branches, loops, and calls between VBA procedures.
-//! Office objects require a host adapter. Multidimensional arrays, file I/O,
-//! and events fail explicitly rather than being approximated.
+//! The browser runtime supports scalar and one-dimensional array values,
+//! procedure/module/static storage, structured and label-based control flow,
+//! error handlers, and calls between VBA procedures. Office objects require a
+//! host adapter. Multidimensional arrays, file I/O, and events fail explicitly
+//! rather than being approximated.
 
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use crate::ast::{
     Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForEachStmt, ForStmt,
@@ -130,12 +135,18 @@ pub struct Runtime<'a> {
     max_steps: usize,
     depth: usize,
     max_depth: usize,
+    module_values: BTreeMap<String, ValueSlot>,
+    module_constants: BTreeSet<String>,
+    static_values: BTreeMap<(String, String), ValueSlot>,
+    module_initialized: bool,
 }
 
 struct Frame {
     procedure_name: String,
     source_name: String,
     values: BTreeMap<String, ValueSlot>,
+    constants: BTreeSet<String>,
+    static_procedure: bool,
     with_objects: Vec<ObjectRef>,
     error_mode: ErrorMode,
     error_state: ErrorState,
@@ -186,6 +197,10 @@ impl<'a> Runtime<'a> {
             max_steps: 100_000,
             depth: 0,
             max_depth: 128,
+            module_values: BTreeMap::new(),
+            module_constants: BTreeSet::new(),
+            static_values: BTreeMap::new(),
+            module_initialized: false,
         }
     }
 
@@ -203,7 +218,85 @@ impl<'a> Runtime<'a> {
     pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         self.steps = 0;
         self.depth = 0;
+        self.initialize_module()?;
         self.call_procedure(name, args, None)
+    }
+
+    fn initialize_module(&mut self) -> Result<(), RuntimeError> {
+        if self.module_initialized {
+            return Ok(());
+        }
+        self.module_initialized = true;
+        let result = self.initialize_module_items();
+        if result.is_err() {
+            self.module_values.clear();
+            self.module_constants.clear();
+            self.module_initialized = false;
+        }
+        result
+    }
+
+    fn initialize_module_items(&mut self) -> Result<(), RuntimeError> {
+        let items = self.module.items.clone();
+        let mut frame = empty_frame();
+        for item in items {
+            match item {
+                ModuleItem::Variables(declaration) => {
+                    for variable in &declaration.items {
+                        let value =
+                            self.declared_value(variable, &mut frame, declaration.span.line)?;
+                        let name = key(&variable.name);
+                        self.module_values
+                            .insert(name.clone(), Rc::new(RefCell::new(value)));
+                        if declaration.is_const {
+                            self.module_constants.insert(name);
+                        }
+                    }
+                }
+                ModuleItem::Enum(definition) => {
+                    let mut next = 0_i64;
+                    for (name, expression) in definition.members {
+                        let value = match expression {
+                            Some(expression) => {
+                                let value = self.eval_expr(&expression, &mut frame)?;
+                                let value = number(&value).map_err(|message| {
+                                    error(
+                                        RuntimeErrorKind::TypeMismatch,
+                                        message,
+                                        Some(definition.span.line),
+                                    )
+                                })?;
+                                if !value.is_finite()
+                                    || value < i64::MIN as f64
+                                    || value > i64::MAX as f64
+                                {
+                                    return Err(error(
+                                        RuntimeErrorKind::Overflow,
+                                        "Enum value is outside the supported integer range",
+                                        Some(definition.span.line),
+                                    ));
+                                }
+                                value.round_ties_even() as i64
+                            }
+                            None => next,
+                        };
+                        let name = key(&name);
+                        self.module_values
+                            .insert(name.clone(), Rc::new(RefCell::new(Value::Integer(value))));
+                        self.module_constants.insert(name);
+                        next = value.checked_add(1).ok_or_else(|| {
+                            error(
+                                RuntimeErrorKind::Overflow,
+                                "Enum value overflow",
+                                Some(definition.span.line),
+                            )
+                        })?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn call_procedure(
@@ -275,6 +368,8 @@ impl<'a> Runtime<'a> {
             procedure_name: key(&procedure.name),
             source_name: procedure.name.clone(),
             values: BTreeMap::new(),
+            constants: BTreeSet::new(),
+            static_procedure: procedure.is_static,
             with_objects: Vec::new(),
             error_mode: ErrorMode::Disabled,
             error_state: ErrorState::default(),
@@ -296,6 +391,7 @@ impl<'a> Runtime<'a> {
                 Rc::new(RefCell::new(default_return_value(procedure))),
             );
         }
+        self.declare_procedure_locals(&procedure.body, &mut frame)?;
 
         self.depth += 1;
         let flow = self.exec_procedure_body(&procedure.body, &mut frame);
@@ -453,6 +549,8 @@ impl<'a> Runtime<'a> {
                 procedure_name: String::new(),
                 source_name: String::new(),
                 values: BTreeMap::new(),
+                constants: BTreeSet::new(),
+                static_procedure: false,
                 with_objects: Vec::new(),
                 error_mode: ErrorMode::Disabled,
                 error_state: ErrorState::default(),
@@ -857,20 +955,92 @@ impl<'a> Runtime<'a> {
 
     fn declare_locals(&mut self, decl: &VarDecl, frame: &mut Frame) -> Result<(), RuntimeError> {
         for variable in &decl.items {
-            let value = match &variable.array_bounds {
-                Some(bounds) => {
-                    self.make_array(bounds, &variable.type_name, frame, decl.span.line)?
+            let name = key(&variable.name);
+            if frame.values.contains_key(&name) {
+                continue;
+            }
+            let is_static = decl.is_static || frame.static_procedure;
+            let slot = if is_static {
+                let static_key = (frame.procedure_name.clone(), name.clone());
+                if let Some(value) = self.static_values.get(&static_key) {
+                    value.clone()
+                } else {
+                    let value = self.declared_value(variable, frame, decl.span.line)?;
+                    let value = Rc::new(RefCell::new(value));
+                    self.static_values.insert(static_key, value.clone());
+                    value
                 }
-                None => match &variable.value {
-                    Some(expr) => self.eval_expr(expr, frame)?,
-                    None => default_value(&variable.type_name),
-                },
+            } else {
+                Rc::new(RefCell::new(self.declared_value(
+                    variable,
+                    frame,
+                    decl.span.line,
+                )?))
             };
-            frame
-                .values
-                .insert(key(&variable.name), Rc::new(RefCell::new(value)));
+            frame.values.insert(name.clone(), slot);
+            if decl.is_const {
+                frame.constants.insert(name);
+            }
         }
         Ok(())
+    }
+
+    fn declare_procedure_locals(
+        &mut self,
+        body: &[Statement],
+        frame: &mut Frame,
+    ) -> Result<(), RuntimeError> {
+        for statement in body {
+            match statement {
+                Statement::Dim(declaration) => self.declare_locals(declaration, frame)?,
+                Statement::If(branch) => {
+                    self.declare_procedure_locals(&branch.then_body, frame)?;
+                    for (_, body) in &branch.else_ifs {
+                        self.declare_procedure_locals(body, frame)?;
+                    }
+                    if let Some(body) = &branch.else_body {
+                        self.declare_procedure_locals(body, frame)?;
+                    }
+                }
+                Statement::SelectCase(select) => {
+                    for case in &select.cases {
+                        self.declare_procedure_locals(&case.body, frame)?;
+                    }
+                    if let Some(body) = &select.case_else {
+                        self.declare_procedure_locals(body, frame)?;
+                    }
+                }
+                Statement::For(loop_) => {
+                    self.declare_procedure_locals(&loop_.body, frame)?;
+                }
+                Statement::ForEach(loop_) => {
+                    self.declare_procedure_locals(&loop_.body, frame)?;
+                }
+                Statement::Do(loop_) => {
+                    self.declare_procedure_locals(&loop_.body, frame)?;
+                }
+                Statement::While { body, .. } | Statement::With { body, .. } => {
+                    self.declare_procedure_locals(body, frame)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn declared_value(
+        &mut self,
+        variable: &VarItem,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        match &variable.array_bounds {
+            Some(bounds) => self.make_array(bounds, &variable.type_name, frame, line),
+            None => match &variable.value {
+                Some(expr) => self.eval_expr(expr, frame),
+                None => Ok(default_value(&variable.type_name)),
+            },
+        }
     }
 
     fn redim(
@@ -887,12 +1057,16 @@ impl<'a> Runtime<'a> {
                 Some(line),
             )
         })?;
+        if self.is_constant(frame, &item.name) {
+            return Err(constant_assignment_error(&item.name, line));
+        }
+        let existing_slot = self.lookup_slot(frame, &item.name);
         let mut replacement = match self.make_array(bounds, &item.type_name, frame, line)? {
             Value::Array(array) => array,
             _ => unreachable!(),
         };
         if item.type_name.name.eq_ignore_ascii_case("variant") {
-            if let Some(existing) = frame.values.get(&key(&item.name)) {
+            if let Some(existing) = &existing_slot {
                 if let Value::Array(existing) = &*existing.borrow() {
                     replacement.element_default = existing.element_default.clone();
                     replacement.values.fill(*existing.element_default.clone());
@@ -900,7 +1074,7 @@ impl<'a> Runtime<'a> {
             }
         }
         if preserve {
-            let existing = frame.values.get(&key(&item.name)).cloned().ok_or_else(|| {
+            let existing = existing_slot.clone().ok_or_else(|| {
                 error(
                     RuntimeErrorKind::UndefinedVariable,
                     format!("undefined VBA array: {}", item.name),
@@ -930,7 +1104,7 @@ impl<'a> Runtime<'a> {
             }
         }
         let replacement = Value::Array(replacement);
-        match frame.values.get(&key(&item.name)) {
+        match existing_slot {
             Some(value) => *value.borrow_mut() = replacement,
             None => {
                 frame
@@ -1006,6 +1180,24 @@ impl<'a> Runtime<'a> {
             .unwrap_or(0)
     }
 
+    fn lookup_slot(&self, frame: &Frame, name: &str) -> Option<ValueSlot> {
+        let name = key(name);
+        frame
+            .values
+            .get(&name)
+            .or_else(|| self.module_values.get(&name))
+            .cloned()
+    }
+
+    fn is_constant(&self, frame: &Frame, name: &str) -> bool {
+        let name = key(name);
+        if frame.values.contains_key(&name) {
+            frame.constants.contains(&name)
+        } else {
+            self.module_constants.contains(&name)
+        }
+    }
+
     fn assign(
         &mut self,
         target: &Expr,
@@ -1015,11 +1207,19 @@ impl<'a> Runtime<'a> {
     ) -> Result<(), RuntimeError> {
         match target {
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
-                match frame.values.get(&key(name)) {
-                    Some(existing) => *existing.borrow_mut() = value,
-                    None => {
-                        frame.values.insert(key(name), Rc::new(RefCell::new(value)));
+                let name = key(name);
+                if let Some(existing) = frame.values.get(&name) {
+                    if frame.constants.contains(&name) {
+                        return Err(constant_assignment_error(&name, line));
                     }
+                    *existing.borrow_mut() = value;
+                } else if let Some(existing) = self.module_values.get(&name) {
+                    if self.module_constants.contains(&name) {
+                        return Err(constant_assignment_error(&name, line));
+                    }
+                    *existing.borrow_mut() = value;
+                } else {
+                    frame.values.insert(name, Rc::new(RefCell::new(value)));
                 }
                 Ok(())
             }
@@ -1032,7 +1232,14 @@ impl<'a> Runtime<'a> {
                     )
                 })?;
                 let index = self.single_array_argument(args, frame, line)?;
-                let array = frame.values.get(&key(name)).cloned().ok_or_else(|| {
+                let name_key = key(name);
+                if (frame.values.contains_key(&name_key) && frame.constants.contains(&name_key))
+                    || (!frame.values.contains_key(&name_key)
+                        && self.module_constants.contains(&name_key))
+                {
+                    return Err(constant_assignment_error(name, line));
+                }
+                let array = self.lookup_slot(frame, name).ok_or_else(|| {
                     error(
                         RuntimeErrorKind::UndefinedVariable,
                         format!("undefined VBA array: {name}"),
@@ -1090,7 +1297,7 @@ impl<'a> Runtime<'a> {
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                if let Some(value) = frame.values.get(&key(name)) {
+                if let Some(value) = self.lookup_slot(frame, name) {
                     return Ok(value.borrow().clone());
                 }
                 if name.eq_ignore_ascii_case("err") {
@@ -1123,15 +1330,15 @@ impl<'a> Runtime<'a> {
             Expr::Index {
                 target, args, span, ..
             } if expr_name(target).is_some_and(|name| {
-                frame
-                    .values
-                    .get(&key(name))
+                self.lookup_slot(frame, name)
+                    .as_ref()
                     .is_some_and(|value| matches!(&*value.borrow(), Value::Array(_)))
             }) =>
             {
                 let name = expr_name(target).unwrap();
                 let index = self.single_array_argument(args, frame, span.line)?;
-                let value = frame.values.get(&key(name)).unwrap().borrow();
+                let value = self.lookup_slot(frame, name).unwrap();
+                let value = value.borrow();
                 let Value::Array(array) = &*value else {
                     unreachable!()
                 };
@@ -1383,16 +1590,17 @@ impl<'a> Runtime<'a> {
             };
             if parameter.mode == ParamMode::ByRef && !force_by_value && !argument.force_by_value {
                 if let Some(name) = expr_name(expression) {
-                    if let Some(value) = frame.values.get(&key(name)) {
-                        bound.push(BoundArgument::Reference(value.clone()));
-                        continue;
+                    if !self.is_constant(frame, name) {
+                        if let Some(value) = self.lookup_slot(frame, name) {
+                            bound.push(BoundArgument::Reference(value));
+                            continue;
+                        }
                     }
                 }
                 if let Expr::Index { target, args, .. } = expression {
                     let array = expr_name(target)
-                        .and_then(|name| frame.values.get(&key(name)))
-                        .filter(|value| matches!(&*value.borrow(), Value::Array(_)))
-                        .cloned();
+                        .and_then(|name| self.lookup_slot(frame, name))
+                        .filter(|value| matches!(&*value.borrow(), Value::Array(_)));
                     if let Some(array) = array {
                         let index = self.single_array_argument(
                             args,
@@ -1600,6 +1808,31 @@ fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) 
         vba_number: None,
         vba_source: None,
     }
+}
+
+fn empty_frame() -> Frame {
+    Frame {
+        procedure_name: String::new(),
+        source_name: String::new(),
+        values: BTreeMap::new(),
+        constants: BTreeSet::new(),
+        static_procedure: false,
+        with_objects: Vec::new(),
+        error_mode: ErrorMode::Disabled,
+        error_state: ErrorState::default(),
+        error_handler_active: false,
+        error_statement: None,
+        current_statement: 0,
+        gosub_returns: Vec::new(),
+    }
+}
+
+fn constant_assignment_error(name: &str, line: u32) -> RuntimeError {
+    error(
+        RuntimeErrorKind::Unsupported,
+        format!("VBA constant cannot be assigned: {name}"),
+        Some(line),
+    )
 }
 
 fn raised_error(number: i64, source: String, description: String, line: u32) -> RuntimeError {
@@ -2288,6 +2521,199 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::Double(180.0));
+    }
+
+    #[test]
+    fn module_variables_and_static_locals_persist_across_runtime_calls() {
+        let module = parse_module(
+            "Private moduleCount As Long\n\
+             Public Function NextModuleValue() As Long\n\
+               moduleCount = moduleCount + 1\n\
+               NextModuleValue = moduleCount\n\
+             End Function\n\
+             Public Function NextStaticValue() As Long\n\
+               Static localCount As Long\n\
+               localCount = localCount + 1\n\
+               NextStaticValue = localCount\n\
+             End Function\n\
+             Public Static Function NextProcedureStatic() As Long\n\
+               Dim procedureCount As Long\n\
+               procedureCount = procedureCount + 1\n\
+               NextProcedureStatic = procedureCount\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut runtime = Runtime::new(&module);
+
+        assert_eq!(
+            runtime.call("NextModuleValue", vec![]).unwrap(),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            runtime.call("NextModuleValue", vec![]).unwrap(),
+            Value::Integer(2)
+        );
+        assert_eq!(
+            runtime.call("NextStaticValue", vec![]).unwrap(),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            runtime.call("NextStaticValue", vec![]).unwrap(),
+            Value::Integer(2)
+        );
+        assert_eq!(
+            runtime.call("NextProcedureStatic", vec![]).unwrap(),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            runtime.call("NextProcedureStatic", vec![]).unwrap(),
+            Value::Integer(2)
+        );
+
+        let mut fresh_runtime = Runtime::new(&module);
+        assert_eq!(
+            fresh_runtime.call("NextModuleValue", vec![]).unwrap(),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            fresh_runtime.call("NextStaticValue", vec![]).unwrap(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn module_constants_and_enum_members_initialize_in_declaration_order() {
+        let value = run(
+            "Private Const InitialValue As Long = 10\n\
+             Private Const StepValue As Long = InitialValue + 2\n\
+             Private Enum WorkState\n\
+               Ready = StepValue\n\
+               Running\n\
+             End Enum\n\
+             Public Function DeclarationValues() As Long\n\
+               DeclarationValues = InitialValue + StepValue + Ready + Running\n\
+             End Function\n",
+            "DeclarationValues",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(47));
+    }
+
+    #[test]
+    fn module_arrays_and_scalars_can_be_mutated_byref_across_procedures() {
+        let value = run(
+            "Private values() As Long\n\
+             Private total As Long\n\
+             Private Sub Increment(ByRef value As Long)\n\
+               value = value + 1\n\
+             End Sub\n\
+             Private Sub Prepare()\n\
+               ReDim values(1 To 2)\n\
+               values(1) = 10\n\
+               values(2) = 20\n\
+               total = 5\n\
+             End Sub\n\
+             Private Sub UpdateGlobals()\n\
+               Increment values(2)\n\
+               Increment total\n\
+             End Sub\n\
+             Public Function GlobalByRefProbe() As Long\n\
+               Prepare\n\
+               UpdateGlobals\n\
+               GlobalByRefProbe = values(1) + values(2) + total * 100\n\
+             End Function\n",
+            "GlobalByRefProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(631));
+    }
+
+    #[test]
+    fn local_variables_shadow_module_variables_without_overwriting_them() {
+        let value = run(
+            "Private value As Long\n\
+             Private Sub SetModuleValue()\n\
+               value = 40\n\
+             End Sub\n\
+             Private Function LocalValue() As Long\n\
+               Dim value As Long\n\
+               value = 2\n\
+               LocalValue = value\n\
+             End Function\n\
+             Public Function ShadowProbe() As Long\n\
+               SetModuleValue\n\
+               ShadowProbe = value + LocalValue()\n\
+             End Function\n",
+            "ShadowProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(42));
+    }
+
+    #[test]
+    fn procedure_locals_are_scoped_before_their_declaration_executes() {
+        let value = run(
+            "Private value As Long\n\
+             Private Sub SetModuleValue()\n\
+               value = 40\n\
+             End Sub\n\
+             Private Function LateDeclaration() As Long\n\
+               LateDeclaration = value\n\
+               Dim value As Long\n\
+             End Function\n\
+             Private Function NestedDeclaration() As Long\n\
+               If False Then\n\
+                 Dim hidden As Long\n\
+               End If\n\
+               NestedDeclaration = hidden\n\
+             End Function\n\
+             Public Function ProcedureScopeProbe() As Long\n\
+               SetModuleValue\n\
+               ProcedureScopeProbe = LateDeclaration() + NestedDeclaration()\n\
+             End Function\n",
+            "ProcedureScopeProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(0));
+    }
+
+    #[test]
+    fn module_and_local_constants_reject_assignment() {
+        let module_failure = run(
+            "Private Const FixedValue As Long = 7\n\
+             Public Sub ChangeModuleConstant()\n\
+               FixedValue = 8\n\
+             End Sub\n",
+            "ChangeModuleConstant",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(module_failure.kind, RuntimeErrorKind::Unsupported);
+        assert!(module_failure
+            .message
+            .contains("constant cannot be assigned"));
+
+        let local_failure = run(
+            "Public Sub ChangeLocalConstant()\n\
+               Const FixedValue As Long = 7\n\
+               FixedValue = 8\n\
+             End Sub\n",
+            "ChangeLocalConstant",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(local_failure.kind, RuntimeErrorKind::Unsupported);
+        assert!(local_failure
+            .message
+            .contains("constant cannot be assigned"));
     }
 
     #[test]

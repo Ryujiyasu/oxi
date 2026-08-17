@@ -1644,6 +1644,41 @@ mod tests {
     }
 
     #[test]
+    fn vba_preserves_module_state_between_entry_point_calls() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Private runCount As Long\n\
+             Private target As Worksheet\n\
+             Public Sub InitializeState()\n\
+               Set target = Worksheets(1)\n\
+               runCount = 40\n\
+             End Sub\n\
+             Public Sub ApplyState()\n\
+               runCount = runCount + 1\n\
+               target.Range(\"A1\").Value = runCount\n\
+             End Sub\n\
+             Public Function ReadState() As Long\n\
+               ReadState = runCount + target.Range(\"A1\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let mut runtime = oxivba_core::Runtime::new(&module).with_host(&mut host);
+            runtime.call("InitializeState", vec![]).unwrap();
+            runtime.call("ApplyState", vec![]).unwrap();
+            runtime.call("ApplyState", vec![]).unwrap();
+            runtime.call("ReadState", vec![]).unwrap()
+        };
+
+        assert_eq!(result, Value::Integer(84));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(42.0)
+        ));
+    }
+
+    #[test]
     fn vba_inspects_ranges_and_uses_relative_cells() {
         let mut workbook = workbook();
         let module = parse_module(
