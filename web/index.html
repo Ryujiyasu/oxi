@@ -2391,7 +2391,10 @@ function typedXlsxEdit(location, cell) {
     const value = cell?.value;
     let newValue = formatCellValue(value, cell?.style);
     let valueType = 'string';
-    if (value && typeof value === 'object') {
+    if (cell?.formula) {
+        newValue = cell.formula;
+        valueType = 'formula';
+    } else if (value && typeof value === 'object') {
         if ('Number' in value) {
             newValue = String(value.Number);
             valueType = 'number';
@@ -2426,8 +2429,12 @@ function recordVbaWorkbookChanges(before, after) {
     for (const key of keys) {
         const previous = previousCells.get(key);
         const next = nextCells.get(key);
-        const previousValue = previous ? JSON.stringify(previous.cell.value) : null;
-        const nextValue = next ? JSON.stringify(next.cell.value) : null;
+        const previousValue = previous
+            ? JSON.stringify({ value: previous.cell.value, formula: previous.cell.formula || null })
+            : null;
+        const nextValue = next
+            ? JSON.stringify({ value: next.cell.value, formula: next.cell.formula || null })
+            : null;
         if (previousValue === nextValue) continue;
 
         const location = next || previous;

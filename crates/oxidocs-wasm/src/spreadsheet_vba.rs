@@ -324,6 +324,32 @@ impl<'a> WorkbookHost<'a> {
         }))
     }
 
+    fn cell_formula(&self, address: CellAddress) -> Value {
+        self.workbook
+            .sheets
+            .get(address.sheet)
+            .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+            .and_then(|cell| cell.formula.as_deref())
+            .map(|formula| Value::String(format!("={formula}")))
+            .unwrap_or_else(|| Value::String(String::new()))
+    }
+
+    fn range_formula(&self, range: CellRange) -> Result<Value, String> {
+        Self::range_cell_count(range)?;
+        if range.is_single() {
+            return Ok(self.cell_formula(range.addresses().next().unwrap()));
+        }
+        Ok(Value::Array(ArrayValue {
+            lower_bound: 1,
+            values: range
+                .addresses()
+                .map(|address| self.cell_formula(address))
+                .collect(),
+            element_default: Box::new(Value::String(String::new())),
+        }))
+    }
+
     fn offset_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let (row_offset, column_offset) = match args {
             [] => (0, 0),
@@ -426,6 +452,49 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    fn set_cell_formula(&mut self, address: CellAddress, formula: String) -> Result<(), String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(address.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        sheet.col_count = sheet.col_count.max(address.column as usize + 1);
+        let row = match sheet.rows.iter().position(|row| row.index == address.row) {
+            Some(position) => &mut sheet.rows[position],
+            None => {
+                sheet.rows.push(Row {
+                    index: address.row,
+                    cells: Vec::new(),
+                    height: None,
+                });
+                sheet.rows.sort_by_key(|row| row.index);
+                sheet
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.index == address.row)
+                    .unwrap()
+            }
+        };
+        let formula = formula.strip_prefix('=').unwrap_or(&formula).to_string();
+        let formula = (!formula.is_empty()).then_some(formula);
+        match row.cells.iter_mut().find(|cell| cell.col == address.column) {
+            Some(cell) => {
+                cell.value = CellValue::Empty;
+                cell.formula = formula;
+            }
+            None => {
+                row.cells.push(Cell {
+                    col: address.column,
+                    value: CellValue::Empty,
+                    style: CellStyle::default(),
+                    formula,
+                });
+                row.cells.sort_by_key(|cell| cell.col);
+            }
+        }
+        Ok(())
+    }
+
     fn set_range_value(&mut self, range: CellRange, value: Value) -> Result<(), String> {
         let count = Self::range_cell_count(range)?;
         match value {
@@ -446,6 +515,30 @@ impl<'a> WorkbookHost<'a> {
                     self.set_cell_value(address, value.clone())?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn set_range_formula(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        let count = Self::range_cell_count(range)?;
+        let formulas = match value {
+            Value::Array(array) => {
+                if array.values.len() != count {
+                    return Err(format!(
+                        "range formula assignment needs {count} values, but the array contains {}",
+                        array.values.len()
+                    ));
+                }
+                array
+                    .values
+                    .into_iter()
+                    .map(to_formula)
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            value => vec![to_formula(value)?; count],
+        };
+        for (address, formula) in range.addresses().zip(formulas) {
+            self.set_cell_formula(address, formula)?;
         }
         Ok(())
     }
@@ -608,6 +701,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
             return self.range_value(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
+            return self.range_formula(range).map(Some);
+        }
         if name.eq_ignore_ascii_case("row") {
             return Ok(Some(Value::Integer(i64::from(range.start_row))));
         }
@@ -639,6 +735,10 @@ impl Host for WorkbookHost<'_> {
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
             self.set_range_value(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
+            self.set_range_formula(range, value)?;
             return Ok(true);
         }
         Ok(false)
@@ -828,6 +928,14 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         Value::String(value) => Ok(CellValue::String(value)),
         Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
+    }
+}
+
+fn to_formula(value: Value) -> Result<String, String> {
+    match value {
+        Value::Empty | Value::Null => Ok(String::new()),
+        Value::String(value) => Ok(value),
+        _ => Err("a spreadsheet formula must be a String".to_string()),
     }
 }
 
@@ -1275,5 +1383,34 @@ mod tests {
         for cell in &workbook.sheets[0].rows[1].cells {
             assert!(matches!(cell.value, CellValue::Number(20.0)));
         }
+    }
+
+    #[test]
+    fn vba_reads_and_writes_range_formulas() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function WriteFormulas() As String\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Formula = \"=SUM(A1:A2)\"\n\
+               Range(\"B1:B2\").Formula2 = \"=A1*2\"\n\
+               WriteFormulas = Range(\"A3\").Formula & \"|\" & Range(\"B1\").Formula2\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "WriteFormulas", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("=SUM(A1:A2)|=A1*2".to_string()));
+        assert_eq!(
+            workbook.sheets[0].rows[2].cells[0].formula.as_deref(),
+            Some("SUM(A1:A2)")
+        );
+        assert_eq!(
+            workbook.sheets[0].rows[0].cells[1].formula.as_deref(),
+            Some("A1*2")
+        );
     }
 }

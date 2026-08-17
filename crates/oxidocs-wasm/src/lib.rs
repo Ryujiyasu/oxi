@@ -587,6 +587,9 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
                 "false" | "0" => oxicells_core::editor::CellEditValue::Boolean(false),
                 _ => return Err(JsError::new("invalid boolean spreadsheet edit")),
             },
+            Some("formula") => {
+                oxicells_core::editor::CellEditValue::Formula(edit.new_value)
+            }
             Some("empty") => oxicells_core::editor::CellEditValue::Empty,
             Some(other) => {
                 return Err(JsError::new(&format!(

@@ -43,6 +43,7 @@ pub enum CellEditValue {
     String(String),
     Number(f64),
     Boolean(bool),
+    Formula(String),
     Empty,
 }
 
@@ -230,7 +231,7 @@ impl CellEditValue {
         match self {
             Self::String(_) => Some("str"),
             Self::Boolean(_) => Some("b"),
-            Self::Number(_) | Self::Empty => None,
+            Self::Number(_) | Self::Formula(_) | Self::Empty => None,
         }
     }
 
@@ -242,9 +243,31 @@ impl CellEditValue {
                 "spreadsheet numbers must be finite".to_string(),
             )),
             Self::Boolean(value) => Ok(Some(if *value { "1" } else { "0" }.to_string())),
-            Self::Empty => Ok(None),
+            Self::Formula(_) | Self::Empty => Ok(None),
         }
     }
+
+    fn formula_text(&self) -> Option<&str> {
+        match self {
+            Self::Formula(value) => Some(value.strip_prefix('=').unwrap_or(value)),
+            _ => None,
+        }
+    }
+}
+
+fn write_formula(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    formula: &str,
+) -> Result<(), XlsxError> {
+    writer
+        .write_event(Event::Start(BytesStart::new("f")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    writer
+        .write_event(Event::Text(BytesText::new(formula)))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    writer
+        .write_event(Event::End(BytesEnd::new("f")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
 fn write_cell_value(
@@ -262,6 +285,9 @@ fn write_cell_value(
     writer
         .write_event(Event::Start(cell))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    if let Some(formula) = value.formula_text() {
+        write_formula(writer, formula)?;
+    }
     if let Some(text) = value.value_text()? {
         writer
             .write_event(Event::Start(BytesStart::new("v")))
@@ -390,6 +416,9 @@ fn patch_worksheet_xml(
                                 new_start.push_attribute(("t", cell_type));
                             }
                             writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            if let Some(formula) = value.formula_text() {
+                                write_formula(&mut writer, formula)?;
+                            }
                         } else {
                             writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         }
@@ -555,7 +584,11 @@ fn patch_worksheet_xml(
                         if let Some(cell_type) = value.cell_type() {
                             new_start.push_attribute(("t", cell_type));
                         }
-                        if let Some(text) = value.value_text()? {
+                        if let Some(formula) = value.formula_text() {
+                            writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            write_formula(&mut writer, formula)?;
+                            writer.write_event(Event::End(BytesEnd::new("c"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        } else if let Some(text) = value.value_text()? {
                             writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             writer.write_event(Event::Text(BytesText::new(&text))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -665,6 +698,39 @@ mod tests {
         assert!(matches!(row.cells.iter().find(|cell| cell.col == 20).unwrap().value, crate::ir::CellValue::Number(12.5)));
         assert!(matches!(row.cells.iter().find(|cell| cell.col == 21).unwrap().value, crate::ir::CellValue::Boolean(true)));
         assert!(matches!(row.cells.iter().find(|cell| cell.col == 22).unwrap().value, crate::ir::CellValue::Empty));
+    }
+
+    #[test]
+    fn test_editor_preserves_formula_edits() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut editor = XlsxEditor::new(data).expect("should open");
+        editor.set_cell_value(
+            0,
+            1,
+            23,
+            CellEditValue::Formula("=SUM(A2:A3)".to_string()),
+        );
+
+        let saved = editor.save().expect("should save");
+        let workbook = parse_xlsx(&saved).expect("should parse");
+        let cell = workbook.sheets[0].rows[0]
+            .cells
+            .iter()
+            .find(|cell| cell.col == 23)
+            .unwrap();
+        assert_eq!(cell.formula.as_deref(), Some("SUM(A2:A3)"));
+    }
+
+    #[test]
+    fn worksheet_patch_replaces_an_existing_formula() {
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><f>OLD()</f><v>1</v></c></row></sheetData></worksheet>"#;
+        let formula = CellEditValue::Formula("=SUM(B1:B2)".to_string());
+        let edits = HashMap::from([((1, 0), &formula)]);
+
+        let patched = patch_worksheet_xml(xml, &edits).expect("should replace formula");
+        assert!(patched.contains("<f>SUM(B1:B2)</f>"));
+        assert!(!patched.contains("OLD()"));
+        assert_eq!(patched.matches("<f>").count(), 1);
     }
 
     #[test]
