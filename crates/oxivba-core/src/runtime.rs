@@ -17,10 +17,10 @@ use std::{
 };
 
 use crate::ast::{
-    Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForEachStmt, ForStmt,
-    Literal, LoopTest, Module, ModuleItem, ModuleOption, OnBranchKind, OnError, ParamMode,
-    ProcKind, Procedure, ResumeTarget, SelectCaseStmt, Statement, TypeName, UnaryOp, VarDecl,
-    VarItem,
+    AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
+    Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
+    OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ResumeTarget, SelectCaseStmt, Statement,
+    TypeName, UnaryOp, VarDecl, VarItem,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +155,7 @@ pub struct Runtime<'a> {
     module_values: BTreeMap<String, ValueSlot>,
     module_constants: BTreeSet<String>,
     module_auto_new: BTreeMap<String, String>,
+    module_fixed_strings: BTreeMap<String, usize>,
     static_values: BTreeMap<(String, String), ValueSlot>,
     module_initialized: bool,
     internal_objects: BTreeMap<u64, InternalObject>,
@@ -167,6 +168,7 @@ struct Frame {
     values: BTreeMap<String, ValueSlot>,
     constants: BTreeSet<String>,
     auto_new: BTreeMap<String, String>,
+    fixed_strings: BTreeMap<String, usize>,
     static_procedure: bool,
     with_objects: Vec<ObjectRef>,
     error_mode: ErrorMode,
@@ -230,6 +232,7 @@ impl<'a> Runtime<'a> {
             module_values: BTreeMap::new(),
             module_constants: BTreeSet::new(),
             module_auto_new: BTreeMap::new(),
+            module_fixed_strings: BTreeMap::new(),
             static_values: BTreeMap::new(),
             module_initialized: false,
             internal_objects: BTreeMap::new(),
@@ -265,6 +268,7 @@ impl<'a> Runtime<'a> {
             self.module_values.clear();
             self.module_constants.clear();
             self.module_auto_new.clear();
+            self.module_fixed_strings.clear();
             self.internal_objects.clear();
             self.next_internal_handle = 1_u64 << 63;
             self.module_initialized = false;
@@ -286,6 +290,10 @@ impl<'a> Runtime<'a> {
                         }
                         let value =
                             self.declared_value(variable, &mut frame, declaration.span.line)?;
+                        if variable.type_name.fixed_length.is_some() {
+                            self.module_fixed_strings
+                                .insert(name.clone(), string_width(&value));
+                        }
                         self.module_values
                             .insert(name.clone(), Rc::new(RefCell::new(value)));
                         if declaration.is_const {
@@ -413,6 +421,7 @@ impl<'a> Runtime<'a> {
             values: BTreeMap::new(),
             constants: BTreeSet::new(),
             auto_new: BTreeMap::new(),
+            fixed_strings: BTreeMap::new(),
             static_procedure: procedure.is_static,
             with_objects: Vec::new(),
             error_mode: ErrorMode::Disabled,
@@ -595,6 +604,7 @@ impl<'a> Runtime<'a> {
                 values: BTreeMap::new(),
                 constants: BTreeSet::new(),
                 auto_new: BTreeMap::new(),
+                fixed_strings: BTreeMap::new(),
                 static_procedure: false,
                 with_objects: Vec::new(),
                 error_mode: ErrorMode::Disabled,
@@ -704,6 +714,14 @@ impl<'a> Runtime<'a> {
                 }
                 Ok(Flow::Continue)
             }
+            Statement::MidAssign(statement) => {
+                self.exec_mid_assign(statement, frame)?;
+                Ok(Flow::Continue)
+            }
+            Statement::AlignedAssign(statement) => {
+                self.exec_aligned_assign(statement, frame)?;
+                Ok(Flow::Continue)
+            }
             Statement::If(branch) => {
                 if truthy(&self.eval_expr(&branch.condition, frame)?).map_err(|message| {
                     error(
@@ -797,6 +815,119 @@ impl<'a> Runtime<'a> {
                 line_of(other),
             )),
         }
+    }
+
+    fn exec_mid_assign(
+        &mut self,
+        statement: &MidAssignStmt,
+        frame: &mut Frame,
+    ) -> Result<(), RuntimeError> {
+        let current = match self.eval_expr(&statement.target, frame)? {
+            Value::String(value) => value,
+            _ => {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "Mid statement target must be a String variable",
+                    Some(statement.span.line),
+                ))
+            }
+        };
+        let start_value = self.eval_expr(&statement.start, frame)?;
+        let start = positive_position(&start_value, Some(statement.span.line))?;
+        let requested = match &statement.length {
+            Some(length) => {
+                let value = self.eval_expr(length, frame)?;
+                Some(nonnegative_length(&value, Some(statement.span.line))?)
+            }
+            None => None,
+        };
+        let replacement = self.eval_expr(&statement.value, frame)?;
+        let replacement = match replacement {
+            Value::Null => {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "invalid use of Null",
+                    Some(statement.span.line),
+                ))
+            }
+            value => text(&value).map_err(|message| {
+                error(
+                    RuntimeErrorKind::TypeMismatch,
+                    message,
+                    Some(statement.span.line),
+                )
+            })?,
+        };
+        let mut current = current.encode_utf16().collect::<Vec<_>>();
+        if start >= current.len() {
+            return Err(invalid_procedure_call(
+                "Mid statement start exceeds the target String length".to_string(),
+                Some(statement.span.line),
+            ));
+        }
+        let replacement = replacement.encode_utf16().collect::<Vec<_>>();
+        let requested = requested.unwrap_or(replacement.len());
+        let count = requested.min(replacement.len()).min(current.len() - start);
+        current[start..start + count].copy_from_slice(&replacement[..count]);
+        self.assign(
+            &statement.target,
+            Value::String(String::from_utf16_lossy(&current)),
+            frame,
+            statement.span.line,
+        )
+    }
+
+    fn exec_aligned_assign(
+        &mut self,
+        statement: &AlignedAssignStmt,
+        frame: &mut Frame,
+    ) -> Result<(), RuntimeError> {
+        let current = match self.eval_expr(&statement.target, frame)? {
+            Value::String(value) => value,
+            _ => {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "LSet and RSet targets must be String variables",
+                    Some(statement.span.line),
+                ))
+            }
+        };
+        let width = expr_name(&statement.target)
+            .and_then(|name| self.fixed_string_width(frame, name))
+            .unwrap_or_else(|| current.encode_utf16().count());
+        let value = self.eval_expr(&statement.value, frame)?;
+        let value = match value {
+            Value::Null => {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "invalid use of Null",
+                    Some(statement.span.line),
+                ))
+            }
+            value => text(&value).map_err(|message| {
+                error(
+                    RuntimeErrorKind::TypeMismatch,
+                    message,
+                    Some(statement.span.line),
+                )
+            })?,
+        };
+        let mut value = value.encode_utf16().take(width).collect::<Vec<_>>();
+        let padding = width.saturating_sub(value.len());
+        match statement.kind {
+            AlignmentKind::Left => value.extend(std::iter::repeat_n(u16::from(b' '), padding)),
+            AlignmentKind::Right => {
+                let mut aligned = vec![u16::from(b' '); padding];
+                aligned.extend(value);
+                value = aligned;
+            }
+        }
+        self.assign(
+            &statement.target,
+            Value::String(String::from_utf16_lossy(&value)),
+            frame,
+            statement.span.line,
+        )
     }
 
     fn exec_select_case(
@@ -1023,6 +1154,11 @@ impl<'a> Runtime<'a> {
                     decl.span.line,
                 )?))
             };
+            if variable.type_name.fixed_length.is_some() {
+                frame
+                    .fixed_strings
+                    .insert(name.clone(), string_width(&slot.borrow()));
+            }
             frame.values.insert(name.clone(), slot);
             if variable.type_name.is_new {
                 frame
@@ -1091,10 +1227,45 @@ impl<'a> Runtime<'a> {
         match &variable.array_bounds {
             Some(bounds) => self.make_array(bounds, &variable.type_name, frame, line),
             None => match &variable.value {
-                Some(expr) => self.eval_expr(expr, frame),
-                None => Ok(default_value(&variable.type_name)),
+                Some(expr) => {
+                    let value = self.eval_expr(expr, frame)?;
+                    if variable.type_name.fixed_length.is_some() {
+                        let width = string_width(&self.declared_default_value(
+                            &variable.type_name,
+                            frame,
+                            line,
+                        )?);
+                        coerce_string_width(value, width, Some(line))
+                    } else {
+                        Ok(value)
+                    }
+                }
+                None => self.declared_default_value(&variable.type_name, frame, line),
             },
         }
+    }
+
+    fn declared_default_value(
+        &mut self,
+        type_name: &TypeName,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        let Some(length) = &type_name.fixed_length else {
+            return Ok(default_value(type_name));
+        };
+        let length = self.array_index(length, frame, line)?;
+        let length = usize::try_from(length)
+            .ok()
+            .filter(|length| *length <= 1_000_000)
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::Overflow,
+                    "fixed-length VBA String is outside the browser runtime limit",
+                    Some(line),
+                )
+            })?;
+        Ok(Value::String(" ".repeat(length)))
     }
 
     fn redim(
@@ -1177,7 +1348,11 @@ impl<'a> Runtime<'a> {
             return Ok(Value::Array(ArrayValue {
                 dimensions: Vec::new(),
                 values: Vec::new(),
-                element_default: Box::new(default_value(element_type)),
+                element_default: Box::new(self.declared_default_value(
+                    element_type,
+                    frame,
+                    line,
+                )?),
             }));
         }
         let mut dimensions = Vec::with_capacity(bounds.len());
@@ -1221,7 +1396,7 @@ impl<'a> Runtime<'a> {
                 length,
             });
         }
-        let default = default_value(element_type);
+        let default = self.declared_default_value(element_type, frame, line)?;
         Ok(Value::Array(ArrayValue {
             dimensions,
             values: vec![default.clone(); total_len],
@@ -1318,6 +1493,15 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn fixed_string_width(&self, frame: &Frame, name: &str) -> Option<usize> {
+        let name = key(name);
+        if frame.values.contains_key(&name) {
+            frame.fixed_strings.get(&name).copied()
+        } else {
+            self.module_fixed_strings.get(&name).copied()
+        }
+    }
+
     fn assign(
         &mut self,
         target: &Expr,
@@ -1327,6 +1511,10 @@ impl<'a> Runtime<'a> {
     ) -> Result<(), RuntimeError> {
         match target {
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                let value = match self.fixed_string_width(frame, name) {
+                    Some(width) => coerce_string_width(value, width, Some(line))?,
+                    None => value,
+                };
                 let name = key(name);
                 if let Some(existing) = frame.values.get(&name) {
                     if frame.constants.contains(&name) {
@@ -1373,6 +1561,12 @@ impl<'a> Runtime<'a> {
                         format!("VBA value is not an array: {name}"),
                         Some(line),
                     ));
+                };
+                let value = match array.element_default.as_ref() {
+                    Value::String(default) if !default.is_empty() => {
+                        coerce_string_width(value, default.encode_utf16().count(), Some(line))?
+                    }
+                    _ => value,
                 };
                 let offset = array_offset(array, &indices, line)?;
                 array.values[offset] = value;
@@ -1730,6 +1924,7 @@ impl<'a> Runtime<'a> {
 
         let mut bound = Vec::with_capacity(procedure.params.len());
         let mut copybacks = Vec::<(ValueSlot, Vec<i64>, ValueSlot)>::new();
+        let mut fixed_string_copybacks = Vec::<(ValueSlot, usize, ValueSlot)>::new();
         for (parameter_index, parameter) in procedure.params.iter().enumerate() {
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
@@ -1769,6 +1964,19 @@ impl<'a> Runtime<'a> {
                     if !self.is_constant(frame, name) {
                         self.read_variable(frame, name, expression.span().line)?;
                         if let Some(value) = self.lookup_slot(frame, name) {
+                            if let Some(width) = self.fixed_string_width(frame, name) {
+                                if let Some((_, _, shared)) = fixed_string_copybacks
+                                    .iter()
+                                    .find(|(existing, _, _)| Rc::ptr_eq(existing, &value))
+                                {
+                                    bound.push(BoundArgument::Reference(shared.clone()));
+                                    continue;
+                                }
+                                let temporary = Rc::new(RefCell::new(value.borrow().clone()));
+                                bound.push(BoundArgument::Reference(temporary.clone()));
+                                fixed_string_copybacks.push((value, width, temporary));
+                                continue;
+                            }
                             bound.push(BoundArgument::Reference(value));
                             continue;
                         }
@@ -1803,8 +2011,11 @@ impl<'a> Runtime<'a> {
         }
 
         let result = self.invoke_procedure(&procedure, bound, line)?;
+        for (target, width, value) in fixed_string_copybacks {
+            *target.borrow_mut() = coerce_string_width(value.borrow().clone(), width, line)?;
+        }
         for (array, indices, value) in copybacks {
-            let value = value.borrow().clone();
+            let mut value = value.borrow().clone();
             let mut array = array.borrow_mut();
             let Value::Array(array) = &mut *array else {
                 return Err(error(
@@ -1813,6 +2024,11 @@ impl<'a> Runtime<'a> {
                     line,
                 ));
             };
+            if let Value::String(default) = array.element_default.as_ref() {
+                if !default.is_empty() {
+                    value = coerce_string_width(value, default.encode_utf16().count(), line)?;
+                }
+            }
             let offset = array_offset(array, &indices, line.unwrap_or(0))?;
             array.values[offset] = value;
         }
@@ -2148,6 +2364,7 @@ fn empty_frame() -> Frame {
         values: BTreeMap::new(),
         constants: BTreeSet::new(),
         auto_new: BTreeMap::new(),
+        fixed_strings: BTreeMap::new(),
         static_procedure: false,
         with_objects: Vec::new(),
         error_mode: ErrorMode::Disabled,
@@ -3582,6 +3799,35 @@ fn text(value: &Value) -> Result<String, String> {
     })
 }
 
+fn string_width(value: &Value) -> usize {
+    match value {
+        Value::String(value) => value.encode_utf16().count(),
+        _ => 0,
+    }
+}
+
+fn coerce_string_width(
+    value: Value,
+    width: usize,
+    line: Option<u32>,
+) -> Result<Value, RuntimeError> {
+    let value = match value {
+        Value::Null => {
+            return Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "invalid use of Null",
+                line,
+            ))
+        }
+        value => {
+            text(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+        }
+    };
+    let mut value = value.encode_utf16().take(width).collect::<Vec<_>>();
+    value.resize(width, u16::from(b' '));
+    Ok(Value::String(String::from_utf16_lossy(&value)))
+}
+
 fn line_of(statement: &Statement) -> Option<u32> {
     match statement {
         Statement::Assign { span, .. }
@@ -4807,6 +5053,81 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("True|True|False|True".to_string()));
+    }
+
+    #[test]
+    fn executes_mid_lset_and_rset_string_assignments() {
+        let value = run(
+            "Public Function Rewrite() As String\n\
+               Dim value As String\n\
+               value = \"The dog jumps\"\n\
+               Mid$(value, 5, 3) = \"duck\"\n\
+               Rewrite = value & \"|\"\n\
+               Mid(value, 5) = \"cow jumped over\"\n\
+               Rewrite = Rewrite & value & \"|\"\n\
+               value = \"0123456789\"\n\
+               LSet value = \"<-Left\"\n\
+               Rewrite = Rewrite & \"[\" & value & \"]|\"\n\
+               RSet value = \"Right->\"\n\
+               Rewrite = Rewrite & \"[\" & value & \"]\"\n\
+             End Function\n",
+            "Rewrite",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("The duc jumps|The cow jumpe|[<-Left    ]|[   Right->]".to_string())
+        );
+    }
+
+    #[test]
+    fn preserves_fixed_length_strings_through_assignment_and_byref() {
+        let value = run(
+            "Private moduleText As String * 5\n\
+             Private Sub Expand(ByRef value As String)\n\
+               value = \"abcdefgh\"\n\
+             End Sub\n\
+             Public Function FixedStrings() As String\n\
+               Dim localText As String * 6\n\
+               Dim entries(1 To 2) As String * 4\n\
+               localText = \"ab\"\n\
+               Mid(localText, 3, 2) = \"XYZ\"\n\
+               RSet localText = \"Q\"\n\
+               Expand localText\n\
+               entries(1) = \"x\"\n\
+               Expand entries(2)\n\
+               moduleText = \"module-wide\"\n\
+               FixedStrings = \"[\" & localText & \"]|[\" & entries(1) & \"]|[\" & entries(2) & \"]|[\" & moduleText & \"]\"\n\
+             End Function\n",
+            "FixedStrings",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("[abcdef]|[x   ]|[abcd]|[modul]".to_string())
+        );
+    }
+
+    #[test]
+    fn mid_statement_reports_vba_error_five_for_an_invalid_start() {
+        let value = run(
+            "Public Function MidFailure() As Long\n\
+               Dim value As String\n\
+               value = \"abc\"\n\
+               On Error Resume Next\n\
+               Mid(value, 4) = \"x\"\n\
+               MidFailure = Err.Number\n\
+             End Function\n",
+            "MidFailure",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(5));
     }
 
     #[test]
