@@ -4,11 +4,11 @@
 
 //! Host-independent execution of pure VBA procedures.
 //!
-//! The browser runtime supports scalar and one-dimensional array values,
+//! The browser runtime supports scalar and multidimensional array values,
 //! procedure/module/static storage, structured and label-based control flow,
 //! error handlers, and calls between VBA procedures. Office objects require a
-//! host adapter. Multidimensional arrays, file I/O, and events fail explicitly
-//! rather than being approximated.
+//! host adapter. File I/O and events fail explicitly rather than being
+//! approximated.
 
 use std::{
     cell::RefCell,
@@ -65,17 +65,31 @@ pub trait Host {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrayValue {
-    pub lower_bound: i64,
+    pub dimensions: Vec<ArrayDimension>,
     pub values: Vec<Value>,
     pub element_default: Box<Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrayDimension {
+    pub lower_bound: i64,
+    pub length: usize,
+}
+
 impl ArrayValue {
-    pub fn upper_bound(&self) -> i64 {
-        match self.values.len().checked_sub(1) {
-            Some(offset) => self.lower_bound.saturating_add(offset as i64),
-            None => self.lower_bound.saturating_sub(1),
-        }
+    pub fn lower_bound(&self, dimension: usize) -> Option<i64> {
+        self.dimensions
+            .get(dimension.checked_sub(1)?)
+            .map(|dimension| dimension.lower_bound)
+    }
+
+    pub fn upper_bound(&self, dimension: usize) -> Option<i64> {
+        self.dimensions
+            .get(dimension.checked_sub(1)?)
+            .map(|dimension| match dimension.length.checked_sub(1) {
+                Some(offset) => dimension.lower_bound.saturating_add(offset as i64),
+                None => dimension.lower_bound.saturating_sub(1),
+            })
     }
 }
 
@@ -359,7 +373,10 @@ impl<'a> Runtime<'a> {
         }
         if let Some(param_array) = procedure.params.get(fixed_count) {
             bound.push(BoundArgument::Value(Value::Array(ArrayValue {
-                lower_bound: 0,
+                dimensions: vec![ArrayDimension {
+                    lower_bound: 0,
+                    length: received.saturating_sub(fixed_count),
+                }],
                 values: values.collect(),
                 element_default: Box::new(default_value(&param_array.type_name)),
             })));
@@ -1125,19 +1142,16 @@ impl<'a> Runtime<'a> {
                     Some(line),
                 ));
             };
-            if !existing.values.is_empty() && existing.lower_bound != replacement.lower_bound {
+            if !existing.dimensions.is_empty()
+                && !preservable_dimensions(&existing.dimensions, &replacement.dimensions)
+            {
                 return Err(error(
                     RuntimeErrorKind::SubscriptOutOfRange,
-                    "ReDim Preserve cannot change an array's lower bound",
+                    "ReDim Preserve can only resize an array's last dimension",
                     Some(line),
                 ));
             }
-            let first = existing.lower_bound.max(replacement.lower_bound);
-            let last = existing.upper_bound().min(replacement.upper_bound());
-            for index in first..=last {
-                replacement.values[(index - replacement.lower_bound) as usize] =
-                    existing.values[(index - existing.lower_bound) as usize].clone();
-            }
+            preserve_array_values(existing, &mut replacement);
         }
         let replacement = Value::Array(replacement);
         match existing_slot {
@@ -1160,47 +1174,56 @@ impl<'a> Runtime<'a> {
     ) -> Result<Value, RuntimeError> {
         if bounds.is_empty() {
             return Ok(Value::Array(ArrayValue {
-                lower_bound: self.option_base(),
+                dimensions: Vec::new(),
                 values: Vec::new(),
                 element_default: Box::new(default_value(element_type)),
             }));
         }
-        if bounds.len() != 1 {
-            return Err(error(
-                RuntimeErrorKind::Unsupported,
-                "only one-dimensional VBA arrays are executable yet",
-                Some(line),
-            ));
-        }
-        let bound = &bounds[0];
-        let lower = match &bound.lower {
-            Some(lower) => self.array_index(lower, frame, line)?,
-            None => self.option_base(),
-        };
-        let upper = self.array_index(&bound.upper, frame, line)?;
-        if upper < lower {
-            return Err(error(
-                RuntimeErrorKind::SubscriptOutOfRange,
-                format!("invalid VBA array bounds: {lower} To {upper}"),
-                Some(line),
-            ));
-        }
-        let len = upper
-            .checked_sub(lower)
-            .and_then(|value| value.checked_add(1))
-            .and_then(|value| usize::try_from(value).ok())
-            .filter(|len| *len <= 1_000_000)
-            .ok_or_else(|| {
-                error(
-                    RuntimeErrorKind::Overflow,
-                    "VBA array is too large for the browser runtime",
+        let mut dimensions = Vec::with_capacity(bounds.len());
+        let mut total_len = 1usize;
+        for bound in bounds {
+            let lower = match &bound.lower {
+                Some(lower) => self.array_index(lower, frame, line)?,
+                None => self.option_base(),
+            };
+            let upper = self.array_index(&bound.upper, frame, line)?;
+            if upper < lower {
+                return Err(error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    format!("invalid VBA array bounds: {lower} To {upper}"),
                     Some(line),
-                )
-            })?;
+                ));
+            }
+            let length = upper
+                .checked_sub(lower)
+                .and_then(|value| value.checked_add(1))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::Overflow,
+                        "VBA array dimension is too large for the browser runtime",
+                        Some(line),
+                    )
+                })?;
+            total_len = total_len
+                .checked_mul(length)
+                .filter(|len| *len <= 1_000_000)
+                .ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::Overflow,
+                        "VBA array is too large for the browser runtime",
+                        Some(line),
+                    )
+                })?;
+            dimensions.push(ArrayDimension {
+                lower_bound: lower,
+                length,
+            });
+        }
         let default = default_value(element_type);
         Ok(Value::Array(ArrayValue {
-            lower_bound: lower,
-            values: vec![default.clone(); len],
+            dimensions,
+            values: vec![default.clone(); total_len],
             element_default: Box::new(default),
         }))
     }
@@ -1317,7 +1340,7 @@ impl<'a> Runtime<'a> {
                         Some(line),
                     )
                 })?;
-                let index = self.single_array_argument(args, frame, line)?;
+                let indices = self.array_arguments(args, frame, line)?;
                 let name_key = key(name);
                 if (frame.values.contains_key(&name_key) && frame.constants.contains(&name_key))
                     || (!frame.values.contains_key(&name_key)
@@ -1340,7 +1363,7 @@ impl<'a> Runtime<'a> {
                         Some(line),
                     ));
                 };
-                let offset = array_offset(array, index, line)?;
+                let offset = array_offset(array, &indices, line)?;
                 array.values[offset] = value;
                 Ok(())
             }
@@ -1439,13 +1462,13 @@ impl<'a> Runtime<'a> {
             }) =>
             {
                 let name = expr_name(target).unwrap();
-                let index = self.single_array_argument(args, frame, span.line)?;
+                let indices = self.array_arguments(args, frame, span.line)?;
                 let value = self.lookup_slot(frame, name).unwrap();
                 let value = value.borrow();
                 let Value::Array(array) = &*value else {
                     unreachable!()
                 };
-                Ok(array.values[array_offset(array, index, span.line)?].clone())
+                Ok(array.values[array_offset(array, &indices, span.line)?].clone())
             }
             Expr::Index { .. } => self.eval_call(expr, frame),
             Expr::Member {
@@ -1692,7 +1715,7 @@ impl<'a> Runtime<'a> {
         }
 
         let mut bound = Vec::with_capacity(procedure.params.len());
-        let mut copybacks = Vec::<(ValueSlot, i64, ValueSlot)>::new();
+        let mut copybacks = Vec::<(ValueSlot, Vec<i64>, ValueSlot)>::new();
         for (parameter_index, parameter) in procedure.params.iter().enumerate() {
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
@@ -1705,7 +1728,10 @@ impl<'a> Runtime<'a> {
                     values.push(value);
                 }
                 bound.push(BoundArgument::Value(Value::Array(ArrayValue {
-                    lower_bound: 0,
+                    dimensions: vec![ArrayDimension {
+                        lower_bound: 0,
+                        length: values.len(),
+                    }],
                     values,
                     element_default: Box::new(default_value(&parameter.type_name)),
                 })));
@@ -1739,14 +1765,14 @@ impl<'a> Runtime<'a> {
                         .and_then(|name| self.lookup_slot(frame, name))
                         .filter(|value| matches!(&*value.borrow(), Value::Array(_)));
                     if let Some(array) = array {
-                        let index = self.single_array_argument(
+                        let indices = self.array_arguments(
                             args,
                             frame,
                             line.unwrap_or(expression.span().line),
                         )?;
                         if let Some((_, _, value)) =
-                            copybacks.iter().find(|(existing, existing_index, _)| {
-                                Rc::ptr_eq(existing, &array) && *existing_index == index
+                            copybacks.iter().find(|(existing, existing_indices, _)| {
+                                Rc::ptr_eq(existing, &array) && *existing_indices == indices
                             })
                         {
                             bound.push(BoundArgument::Reference(value.clone()));
@@ -1754,7 +1780,7 @@ impl<'a> Runtime<'a> {
                         }
                         let value = Rc::new(RefCell::new(self.eval_expr(expression, frame)?));
                         bound.push(BoundArgument::Reference(value.clone()));
-                        copybacks.push((array, index, value));
+                        copybacks.push((array, indices, value));
                         continue;
                     }
                 }
@@ -1763,7 +1789,7 @@ impl<'a> Runtime<'a> {
         }
 
         let result = self.invoke_procedure(&procedure, bound, line)?;
-        for (array, index, value) in copybacks {
+        for (array, indices, value) in copybacks {
             let value = value.borrow().clone();
             let mut array = array.borrow_mut();
             let Value::Array(array) = &mut *array else {
@@ -1773,7 +1799,7 @@ impl<'a> Runtime<'a> {
                     line,
                 ));
             };
-            let offset = array_offset(array, index, line.unwrap_or(0))?;
+            let offset = array_offset(array, &indices, line.unwrap_or(0))?;
             array.values[offset] = value;
         }
         Ok(result)
@@ -2029,27 +2055,31 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    fn single_array_argument(
+    fn array_arguments(
         &mut self,
         args: &[Argument],
         frame: &mut Frame,
         line: u32,
-    ) -> Result<i64, RuntimeError> {
-        if args.len() != 1 || args[0].name.is_some() {
-            return Err(error(
-                RuntimeErrorKind::SubscriptOutOfRange,
-                "one-dimensional VBA array requires exactly one index",
-                Some(line),
-            ));
+    ) -> Result<Vec<i64>, RuntimeError> {
+        let mut indices = Vec::with_capacity(args.len());
+        for argument in args {
+            if argument.name.is_some() {
+                return Err(error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    "VBA array indices cannot be named",
+                    Some(line),
+                ));
+            }
+            let index = argument.value.as_ref().ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    "VBA array index cannot be omitted",
+                    Some(line),
+                )
+            })?;
+            indices.push(self.array_index(index, frame, line)?);
         }
-        let index = args[0].value.as_ref().ok_or_else(|| {
-            error(
-                RuntimeErrorKind::SubscriptOutOfRange,
-                "VBA array index cannot be omitted",
-                Some(line),
-            )
-        })?;
-        self.array_index(index, frame, line)
+        Ok(indices)
     }
 
     fn array_index(
@@ -2318,19 +2348,82 @@ fn collection_index(
     })
 }
 
-fn array_offset(array: &ArrayValue, index: i64, line: u32) -> Result<usize, RuntimeError> {
-    if array.values.is_empty() || index < array.lower_bound || index > array.upper_bound() {
+fn array_offset(array: &ArrayValue, indices: &[i64], line: u32) -> Result<usize, RuntimeError> {
+    if indices.len() != array.dimensions.len() || indices.is_empty() {
         return Err(error(
             RuntimeErrorKind::SubscriptOutOfRange,
             format!(
-                "VBA array index {index} is outside {} To {}",
-                array.lower_bound,
-                array.upper_bound()
+                "VBA array has {} dimensions, but {} indices were supplied",
+                array.dimensions.len(),
+                indices.len()
             ),
             Some(line),
         ));
     }
-    Ok((index - array.lower_bound) as usize)
+    let mut offset = 0usize;
+    for (index, dimension) in indices.iter().zip(&array.dimensions) {
+        let upper = dimension
+            .length
+            .checked_sub(1)
+            .map(|offset| dimension.lower_bound.saturating_add(offset as i64))
+            .unwrap_or_else(|| dimension.lower_bound.saturating_sub(1));
+        if dimension.length == 0 || *index < dimension.lower_bound || *index > upper {
+            return Err(error(
+                RuntimeErrorKind::SubscriptOutOfRange,
+                format!(
+                    "VBA array index {index} is outside {} To {upper}",
+                    dimension.lower_bound
+                ),
+                Some(line),
+            ));
+        }
+        offset = offset
+            .checked_mul(dimension.length)
+            .and_then(|offset| offset.checked_add((*index - dimension.lower_bound) as usize))
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::Overflow,
+                    "VBA array offset overflow",
+                    Some(line),
+                )
+            })?;
+    }
+    Ok(offset)
+}
+
+fn preservable_dimensions(existing: &[ArrayDimension], replacement: &[ArrayDimension]) -> bool {
+    existing.len() == replacement.len()
+        && !existing.is_empty()
+        && existing
+            .iter()
+            .zip(replacement)
+            .enumerate()
+            .all(|(index, (old, new))| {
+                old.lower_bound == new.lower_bound
+                    && (index + 1 == existing.len() || old.length == new.length)
+            })
+}
+
+fn preserve_array_values(existing: &ArrayValue, replacement: &mut ArrayValue) {
+    let (Some(old_last), Some(new_last)) =
+        (existing.dimensions.last(), replacement.dimensions.last())
+    else {
+        return;
+    };
+    let shared = old_last.length.min(new_last.length);
+    if shared == 0 {
+        return;
+    }
+    let prefixes = existing.dimensions[..existing.dimensions.len() - 1]
+        .iter()
+        .map(|dimension| dimension.length)
+        .product::<usize>();
+    for prefix in 0..prefixes {
+        let old_start = prefix * old_last.length;
+        let new_start = prefix * new_last.length;
+        replacement.values[new_start..new_start + shared]
+            .clone_from_slice(&existing.values[old_start..old_start + shared]);
+    }
 }
 
 fn call_builtin(
@@ -2368,7 +2461,10 @@ fn call_builtin(
     Some((|| {
         if name == "array" {
             return Ok(Value::Array(ArrayValue {
-                lower_bound: 0,
+                dimensions: vec![ArrayDimension {
+                    lower_bound: 0,
+                    length: args.len(),
+                }],
                 values: args.to_vec(),
                 element_default: Box::new(Value::Empty),
             }));
@@ -2418,13 +2514,6 @@ fn call_builtin(
                     line,
                 ));
             }
-            if args.len() == 2 && number(&args[1]).ok().map(f64::round_ties_even) != Some(1.0) {
-                return Err(error(
-                    RuntimeErrorKind::SubscriptOutOfRange,
-                    "only array dimension 1 is supported",
-                    line,
-                ));
-            }
             let Value::Array(array) = &args[0] else {
                 return Err(error(
                     RuntimeErrorKind::TypeMismatch,
@@ -2432,11 +2521,34 @@ fn call_builtin(
                     line,
                 ));
             };
-            return Ok(Value::Integer(if name == "lbound" {
-                array.lower_bound
+            let dimension = if args.len() == 1 {
+                1
             } else {
-                array.upper_bound()
-            }));
+                let value = number(&args[1])
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+                let rounded = value.round_ties_even();
+                if !rounded.is_finite() || rounded < 1.0 || rounded > usize::MAX as f64 {
+                    return Err(error(
+                        RuntimeErrorKind::SubscriptOutOfRange,
+                        "array dimension is out of range",
+                        line,
+                    ));
+                }
+                rounded as usize
+            };
+            let bound = if name == "lbound" {
+                array.lower_bound(dimension)
+            } else {
+                array.upper_bound(dimension)
+            }
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    format!("array dimension {dimension} is out of range"),
+                    line,
+                )
+            })?;
+            return Ok(Value::Integer(bound));
         }
         if args.len() != 1 {
             return Err(error(
@@ -3986,6 +4098,56 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::Integer(17));
+    }
+
+    #[test]
+    fn indexes_multidimensional_arrays_and_reports_each_dimension_bound() {
+        let value = run(
+            "Private Sub Increment(ByRef value As Long)\n\
+               value = value + 1\n\
+             End Sub\n\
+             Public Function Matrix() As String\n\
+               Dim values(0 To 1, 2 To 4) As Long\n\
+               values(0, 2) = 7\n\
+               values(1, 4) = 9\n\
+               Increment values(1, 4)\n\
+               Matrix = values(0, 2) & \"|\" & values(1, 4) & \"|\" & LBound(values, 1) & \"|\" & UBound(values, 1) & \"|\" & LBound(values, 2) & \"|\" & UBound(values, 2)\n\
+             End Function\n",
+            "Matrix",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("7|10|0|1|2|4".to_string()));
+    }
+
+    #[test]
+    fn redim_preserve_resizes_only_the_last_dimension() {
+        let value = run(
+            "Public Function ResizeMatrix() As Long\n\
+               Dim values() As Long\n\
+               ReDim values(1 To 2, 3 To 4)\n\
+               values(1, 3) = 10\n\
+               values(2, 4) = 20\n\
+               ReDim Preserve values(1 To 2, 3 To 5)\n\
+               values(2, 5) = 30\n\
+               ResizeMatrix = values(1, 3) + values(2, 4) + values(2, 5)\n\
+             End Function\n",
+            "ResizeMatrix",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(60));
+
+        let failure = run(
+            "Public Sub Broken()\n\
+               Dim values(1 To 2, 1 To 2) As Long\n\
+               ReDim Preserve values(1 To 3, 1 To 2)\n\
+             End Sub\n",
+            "Broken",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::SubscriptOutOfRange);
     }
 
     #[test]

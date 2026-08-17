@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
-use oxivba_core::{execute_with_host, parse_module, ArrayValue, Host, ObjectRef, Value};
+use oxivba_core::{
+    execute_with_host, parse_module, ArrayDimension, ArrayValue, Host, ObjectRef, Value,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -374,7 +376,16 @@ impl<'a> WorkbookHost<'a> {
             return Ok(self.cell_value(range.addresses().next().unwrap()));
         }
         Ok(Value::Array(ArrayValue {
-            lower_bound: 1,
+            dimensions: vec![
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: (range.end_row - range.start_row + 1) as usize,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: (range.end_column - range.start_column + 1) as usize,
+                },
+            ],
             values: range
                 .addresses()
                 .map(|address| self.cell_value(address))
@@ -400,7 +411,16 @@ impl<'a> WorkbookHost<'a> {
             return Ok(self.cell_formula(range.addresses().next().unwrap()));
         }
         Ok(Value::Array(ArrayValue {
-            lower_bound: 1,
+            dimensions: vec![
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: (range.end_row - range.start_row + 1) as usize,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: (range.end_column - range.start_column + 1) as usize,
+                },
+            ],
             values: range
                 .addresses()
                 .map(|address| self.cell_formula(address))
@@ -683,6 +703,7 @@ impl<'a> WorkbookHost<'a> {
         let count = Self::range_cell_count(range)?;
         match value {
             Value::Array(array) => {
+                validate_range_array_shape(range, &array, "range assignment")?;
                 if array.values.len() != count {
                     return Err(format!(
                         "range assignment needs {count} values, but the array contains {}",
@@ -707,6 +728,7 @@ impl<'a> WorkbookHost<'a> {
         let count = Self::range_cell_count(range)?;
         let formulas = match value {
             Value::Array(array) => {
+                validate_range_array_shape(range, &array, "range formula assignment")?;
                 if array.values.len() != count {
                     return Err(format!(
                         "range formula assignment needs {count} values, but the array contains {}",
@@ -726,6 +748,33 @@ impl<'a> WorkbookHost<'a> {
         }
         Ok(())
     }
+}
+
+fn validate_range_array_shape(
+    range: CellRange,
+    array: &ArrayValue,
+    operation: &str,
+) -> Result<(), String> {
+    if array.dimensions.len() == 1 {
+        return Ok(());
+    }
+    let rows = (range.end_row - range.start_row + 1) as usize;
+    let columns = (range.end_column - range.start_column + 1) as usize;
+    if array.dimensions.len() == 2
+        && array.dimensions[0].length == rows
+        && array.dimensions[1].length == columns
+    {
+        return Ok(());
+    }
+    let shape = array
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.length.to_string())
+        .collect::<Vec<_>>()
+        .join(" x ");
+    Err(format!(
+        "{operation} needs a {rows} x {columns} array, but received {shape}"
+    ))
 }
 
 impl Host for WorkbookHost<'_> {
@@ -1327,6 +1376,7 @@ enum OutputValue {
     String(String),
     Array {
         lower_bound: i64,
+        dimensions: Vec<OutputArrayDimension>,
         values: Vec<OutputValue>,
     },
     Object {
@@ -1347,7 +1397,15 @@ impl From<Value> for OutputValue {
             Value::Double(value) => Self::Double(value),
             Value::String(value) => Self::String(value),
             Value::Array(value) => Self::Array {
-                lower_bound: value.lower_bound,
+                lower_bound: value.lower_bound(1).unwrap_or(0),
+                dimensions: value
+                    .dimensions
+                    .iter()
+                    .map(|dimension| OutputArrayDimension {
+                        lower_bound: dimension.lower_bound,
+                        length: dimension.length,
+                    })
+                    .collect(),
                 values: value.values.into_iter().map(OutputValue::from).collect(),
             },
             Value::Object(value) => Self::Object {
@@ -1356,6 +1414,12 @@ impl From<Value> for OutputValue {
             },
         }
     }
+}
+
+#[derive(Serialize)]
+struct OutputArrayDimension {
+    lower_bound: i64,
+    length: usize,
 }
 
 #[derive(Serialize)]
@@ -1466,14 +1530,14 @@ mod tests {
                For Each item In values\n\
                  total = total + item\n\
                Next item\n\
-               FillRange = total\n\
+               FillRange = total + values(1, 1) + values(2, 2) + UBound(values, 2)\n\
              End Function\n\
              Public Sub WriteArray()\n\
-               Dim values(1 To 4) As Long\n\
-               values(1) = 10\n\
-               values(2) = 20\n\
-               values(3) = 30\n\
-               values(4) = 40\n\
+               Dim values(1 To 2, 1 To 2) As Long\n\
+               values(1, 1) = 10\n\
+               values(1, 2) = 20\n\
+               values(2, 1) = 30\n\
+               values(2, 2) = 40\n\
                Range(\"C1:D2\").Value = values\n\
              End Sub\n",
         )
@@ -1483,7 +1547,7 @@ mod tests {
             let mut runtime = oxivba_core::Runtime::new(&module).with_host(&mut host);
             assert_eq!(
                 runtime.call("FillRange", vec![]).unwrap(),
-                Value::Integer(20)
+                Value::Integer(32)
             );
             assert_eq!(runtime.call("WriteArray", vec![]).unwrap(), Value::Empty);
         }
