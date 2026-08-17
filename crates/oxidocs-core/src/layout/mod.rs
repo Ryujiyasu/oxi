@@ -30359,6 +30359,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // S768 (opt-in): pure-Latin document → wrap at cell_w − cellMar
                                         // (Word's content area). See the estimate-side s768_latin_wrap comment.
                                         (wrap_cell_w - pad_l - pad_r).max(0.0)
+                                    } else if let Some(f) = std::env::var("OXI_CELLPAD")
+                                        .ok()
+                                        .map(|v| v.parse::<f32>().unwrap_or(1.0))
+                                    {
+                                        // OXI_CELLPAD (2026-08-18, opt-IN, default OFF =
+                                        // byte-identical): subtract the padding for EVERY cell
+                                        // rather than for the eight cases above. kojin's page-17
+                                        // table is the case the allowlist misses: a CJK jc=left
+                                        // cell, where `wrap_base = cell_w` leaves the budget
+                                        // pad_l+pad_r = 10.8pt too wide and Oxi draws «雇用保険被保»
+                                        // out to 210.25 past the cell's own right rule at 209.05,
+                                        // where Word wraps after five characters and stretches
+                                        // them to fill (measured 2026-08-18: Word's column
+                                        // positions match Oxi's within 0.1pt, so the geometry is
+                                        // right and only the budget is wrong).
+                                        // ★Held opt-in because the same narrowing is what the
+                                        // S559/S585c balance documents as over-correcting
+                                        // tokyoshugyo by +1x645 -- at Word's wrap width Oxi
+                                        // produces MORE lines, since it does not compress 約物
+                                        // inside cells the way Word does. Whether kojin behaves
+                                        // like tokyoshugyo is a measurement, not a deduction.
+                                        // ★The value is the FRACTION of the padding to take, so
+                                        // the sweep can ask whether a partial subtraction keeps
+                                        // kojin's gain without costing 04b88e/34140b the line
+                                        // that pushes a paragraph onto the next page.
+                                        (wrap_cell_w - (pad_l + pad_r) * f).max(0.0)
                                     } else {
                                         s1121_pad_in_base = false;
                                         cell_w
