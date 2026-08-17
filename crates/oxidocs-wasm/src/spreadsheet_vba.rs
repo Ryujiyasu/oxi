@@ -199,6 +199,36 @@ impl<'a> WorkbookHost<'a> {
         })))
     }
 
+    fn used_range_object(&mut self, sheet: usize) -> Result<Value, String> {
+        let worksheet = self
+            .workbook
+            .sheets
+            .get(sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let mut bounds = None::<(u32, u32, u32, u32)>;
+        for row in &worksheet.rows {
+            for cell in &row.cells {
+                bounds = Some(match bounds {
+                    Some((start_row, start_column, end_row, end_column)) => (
+                        start_row.min(row.index),
+                        start_column.min(cell.col),
+                        end_row.max(row.index),
+                        end_column.max(cell.col),
+                    ),
+                    None => (row.index, cell.col, row.index, cell.col),
+                });
+            }
+        }
+        let (start_row, start_column, end_row, end_column) = bounds.unwrap_or((1, 0, 1, 0));
+        Ok(self.object(HostObject::Range(CellRange {
+            sheet,
+            start_row,
+            start_column,
+            end_row,
+            end_column,
+        })))
+    }
+
     fn cells_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
         let [row, column] = args else {
             return Err("Cells expects row and column".to_string());
@@ -566,6 +596,12 @@ impl Host for WorkbookHost<'_> {
                     self.active_sheet = sheet;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("usedrange") {
+                    if !args.is_empty() {
+                        return Err("Worksheet.UsedRange does not accept arguments".to_string());
+                    }
+                    return self.used_range_object(sheet).map(Some);
+                }
                 return Ok(None);
             }
             if (self.is_workbook(receiver) || self.is_application(receiver))
@@ -645,6 +681,12 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("application") {
             return Ok(Some(self.object(HostObject::Application)));
         }
+        if name.eq_ignore_ascii_case("usedrange") {
+            if !args.is_empty() {
+                return Err("UsedRange does not accept arguments".to_string());
+            }
+            return self.used_range_object(self.active_sheet).map(Some);
+        }
         Ok(None)
     }
 
@@ -692,6 +734,9 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("index") {
                 return Ok(Some(Value::Integer(sheet as i64 + 1)));
+            }
+            if name.eq_ignore_ascii_case("usedrange") {
+                return self.used_range_object(sheet).map(Some);
             }
             return Ok(None);
         }
@@ -1284,6 +1329,35 @@ mod tests {
             workbook.sheets[1].rows[1].cells[0].value,
             CellValue::Number(2.0)
         ));
+    }
+
+    #[test]
+    fn vba_discovers_the_used_range_on_worksheets() {
+        let mut workbook = workbook();
+        workbook.sheets.push(Sheet {
+            name: "Empty".to_string(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: 8.43,
+            default_row_height: 15.0,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        });
+        let module = parse_module(
+            "Public Function InspectUsedRange() As String\n\
+               Range(\"D4\").Value = 1\n\
+               Range(\"F7\").Formula = \"=1+1\"\n\
+               InspectUsedRange = Worksheets(1).UsedRange.Address(False, False) & \"|\" & ActiveSheet.UsedRange.Rows.Count & \"|\" & UsedRange.Columns.Count & \"|\" & Worksheets(2).UsedRange.Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "InspectUsedRange", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("D4:F7|4|3|A1".to_string()));
     }
 
     #[test]
