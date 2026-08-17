@@ -140,8 +140,11 @@ pub struct Runtime<'a> {
     max_depth: usize,
     module_values: BTreeMap<String, ValueSlot>,
     module_constants: BTreeSet<String>,
+    module_auto_new: BTreeMap<String, String>,
     static_values: BTreeMap<(String, String), ValueSlot>,
     module_initialized: bool,
+    internal_objects: BTreeMap<u64, InternalObject>,
+    next_internal_handle: u64,
 }
 
 struct Frame {
@@ -149,6 +152,7 @@ struct Frame {
     source_name: String,
     values: BTreeMap<String, ValueSlot>,
     constants: BTreeSet<String>,
+    auto_new: BTreeMap<String, String>,
     static_procedure: bool,
     with_objects: Vec<ObjectRef>,
     error_mode: ErrorMode,
@@ -172,6 +176,15 @@ struct ErrorState {
     description: String,
     source: String,
     line: Option<u32>,
+}
+
+enum InternalObject {
+    Collection(Vec<CollectionEntry>),
+}
+
+struct CollectionEntry {
+    value: Value,
+    key: Option<String>,
 }
 
 type ValueSlot = Rc<RefCell<Value>>;
@@ -202,8 +215,11 @@ impl<'a> Runtime<'a> {
             max_depth: 128,
             module_values: BTreeMap::new(),
             module_constants: BTreeSet::new(),
+            module_auto_new: BTreeMap::new(),
             static_values: BTreeMap::new(),
             module_initialized: false,
+            internal_objects: BTreeMap::new(),
+            next_internal_handle: 1_u64 << 63,
         }
     }
 
@@ -234,6 +250,9 @@ impl<'a> Runtime<'a> {
         if result.is_err() {
             self.module_values.clear();
             self.module_constants.clear();
+            self.module_auto_new.clear();
+            self.internal_objects.clear();
+            self.next_internal_handle = 1_u64 << 63;
             self.module_initialized = false;
         }
         result
@@ -246,9 +265,13 @@ impl<'a> Runtime<'a> {
             match item {
                 ModuleItem::Variables(declaration) => {
                     for variable in &declaration.items {
+                        let name = key(&variable.name);
+                        if variable.type_name.is_new {
+                            self.module_auto_new
+                                .insert(name.clone(), variable.type_name.name.clone());
+                        }
                         let value =
                             self.declared_value(variable, &mut frame, declaration.span.line)?;
-                        let name = key(&variable.name);
                         self.module_values
                             .insert(name.clone(), Rc::new(RefCell::new(value)));
                         if declaration.is_const {
@@ -372,6 +395,7 @@ impl<'a> Runtime<'a> {
             source_name: procedure.name.clone(),
             values: BTreeMap::new(),
             constants: BTreeSet::new(),
+            auto_new: BTreeMap::new(),
             static_procedure: procedure.is_static,
             with_objects: Vec::new(),
             error_mode: ErrorMode::Disabled,
@@ -553,6 +577,7 @@ impl<'a> Runtime<'a> {
                 source_name: String::new(),
                 values: BTreeMap::new(),
                 constants: BTreeSet::new(),
+                auto_new: BTreeMap::new(),
                 static_procedure: false,
                 with_objects: Vec::new(),
                 error_mode: ErrorMode::Disabled,
@@ -981,6 +1006,11 @@ impl<'a> Runtime<'a> {
                 )?))
             };
             frame.values.insert(name.clone(), slot);
+            if variable.type_name.is_new {
+                frame
+                    .auto_new
+                    .insert(name.clone(), variable.type_name.name.clone());
+            }
             if decl.is_const {
                 frame.constants.insert(name);
             }
@@ -1037,6 +1067,9 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<Value, RuntimeError> {
+        if variable.type_name.is_new {
+            return self.new_object(&variable.type_name.name, line);
+        }
         match &variable.array_bounds {
             Some(bounds) => self.make_array(bounds, &variable.type_name, frame, line),
             None => match &variable.value {
@@ -1192,6 +1225,56 @@ impl<'a> Runtime<'a> {
             .cloned()
     }
 
+    fn read_variable(
+        &mut self,
+        frame: &Frame,
+        name: &str,
+        line: u32,
+    ) -> Result<Option<Value>, RuntimeError> {
+        let name_key = key(name);
+        let Some(slot) = self.lookup_slot(frame, name) else {
+            return Ok(None);
+        };
+        if matches!(&*slot.borrow(), Value::Nothing) {
+            let type_name = if frame.values.contains_key(&name_key) {
+                frame.auto_new.get(&name_key)
+            } else {
+                self.module_auto_new.get(&name_key)
+            }
+            .cloned();
+            if let Some(type_name) = type_name {
+                let value = self.new_object(&type_name, line)?;
+                *slot.borrow_mut() = value;
+            }
+        }
+        let value = slot.borrow().clone();
+        Ok(Some(value))
+    }
+
+    fn new_object(&mut self, type_name: &str, line: u32) -> Result<Value, RuntimeError> {
+        if !type_name.eq_ignore_ascii_case("collection") {
+            return Err(error(
+                RuntimeErrorKind::Unsupported,
+                format!("New is not available for VBA type: {type_name}"),
+                Some(line),
+            ));
+        }
+        let handle = self.next_internal_handle;
+        self.next_internal_handle = self.next_internal_handle.checked_add(1).ok_or_else(|| {
+            error(
+                RuntimeErrorKind::Overflow,
+                "VBA internal object handle overflow",
+                Some(line),
+            )
+        })?;
+        self.internal_objects
+            .insert(handle, InternalObject::Collection(Vec::new()));
+        Ok(Value::Object(ObjectRef {
+            handle,
+            kind: "Collection".to_string(),
+        }))
+    }
+
     fn is_constant(&self, frame: &Frame, name: &str) -> bool {
         let name = key(name);
         if frame.values.contains_key(&name) {
@@ -1300,8 +1383,8 @@ impl<'a> Runtime<'a> {
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                if let Some(value) = self.lookup_slot(frame, name) {
-                    return Ok(value.borrow().clone());
+                if let Some(value) = self.read_variable(frame, name, span.line)? {
+                    return Ok(value);
                 }
                 if name.eq_ignore_ascii_case("err") {
                     return Ok(Value::Object(ObjectRef {
@@ -1318,6 +1401,7 @@ impl<'a> Runtime<'a> {
                     Some(span.line),
                 ))
             }
+            Expr::New { type_name, span } => self.new_object(type_name, span.line),
             Expr::Unary { op, operand, span } => {
                 let value = self.eval_expr(operand, frame)?;
                 unary(*op, value).map_err(|message| {
@@ -1406,6 +1490,39 @@ impl<'a> Runtime<'a> {
                 span,
             } => {
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
+                    if self.lookup_slot(frame, name).is_some() {
+                        match self.read_variable(frame, name, span.line)? {
+                            Some(Value::Object(receiver)) => {
+                                let mut values = Vec::with_capacity(args.len());
+                                for argument in args {
+                                    values.push(match argument.value.as_ref() {
+                                        Some(value) => self.eval_expr(value, frame)?,
+                                        None => Value::Missing,
+                                    });
+                                }
+                                return self
+                                    .host_call(Some(&receiver), "Item", &values, span.line)?
+                                    .ok_or_else(|| {
+                                        error(
+                                            RuntimeErrorKind::Unsupported,
+                                            format!(
+                                                "default member is not available: {}.Item",
+                                                receiver.kind
+                                            ),
+                                            Some(span.line),
+                                        )
+                                    });
+                            }
+                            Some(Value::Nothing) => {
+                                return Err(error(
+                                    RuntimeErrorKind::ObjectVariableNotSet,
+                                    "object variable or With block variable not set",
+                                    Some(span.line),
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
                     if self.module.items.iter().any(|item| {
                         matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name))
                     }) {
@@ -1610,6 +1727,7 @@ impl<'a> Runtime<'a> {
             if parameter.mode == ParamMode::ByRef && !force_by_value && !argument.force_by_value {
                 if let Some(name) = expr_name(expression) {
                     if !self.is_constant(frame, name) {
+                        self.read_variable(frame, name, expression.span().line)?;
                         if let Some(value) = self.lookup_slot(frame, name) {
                             bound.push(BoundArgument::Reference(value));
                             continue;
@@ -1720,6 +1838,11 @@ impl<'a> Runtime<'a> {
         args: &[Value],
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if let Some(receiver) = receiver {
+            if self.internal_objects.contains_key(&receiver.handle) {
+                return self.internal_call(receiver, name, args, line).map(Some);
+            }
+        }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);
         };
@@ -1733,6 +1856,14 @@ impl<'a> Runtime<'a> {
         name: &str,
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if let Some(object) = self.internal_objects.get(&receiver.handle) {
+            return match (object, name.to_ascii_lowercase().as_str()) {
+                (InternalObject::Collection(entries), "count") => {
+                    Ok(Some(Value::Integer(entries.len() as i64)))
+                }
+                _ => Ok(None),
+            };
+        }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);
         };
@@ -1747,6 +1878,9 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
+        if self.internal_objects.contains_key(&receiver.handle) {
+            return Ok(false);
+        }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(false);
         };
@@ -1759,11 +1893,140 @@ impl<'a> Runtime<'a> {
         receiver: &ObjectRef,
         line: u32,
     ) -> Result<Option<Vec<Value>>, RuntimeError> {
+        if let Some(InternalObject::Collection(entries)) =
+            self.internal_objects.get(&receiver.handle)
+        {
+            return Ok(Some(
+                entries.iter().map(|entry| entry.value.clone()).collect(),
+            ));
+        }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);
         };
         host.enumerate(receiver)
             .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+    }
+
+    fn internal_call(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        let object = self
+            .internal_objects
+            .get_mut(&receiver.handle)
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::ObjectVariableNotSet,
+                    "internal VBA object is no longer available",
+                    Some(line),
+                )
+            })?;
+        match object {
+            InternalObject::Collection(entries) if name.eq_ignore_ascii_case("add") => {
+                if !(1..=4).contains(&args.len()) {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Collection.Add expects 1 to 4 arguments, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                let key_value = args
+                    .get(1)
+                    .filter(|value| !matches!(value, Value::Missing | Value::Empty));
+                let key = key_value
+                    .map(|value| {
+                        text(value).map_err(|message| {
+                            error(RuntimeErrorKind::TypeMismatch, message, Some(line))
+                        })
+                    })
+                    .transpose()?;
+                if key.as_ref().is_some_and(|key| {
+                    entries.iter().any(|entry| {
+                        entry
+                            .key
+                            .as_ref()
+                            .is_some_and(|existing| existing.eq_ignore_ascii_case(key))
+                    })
+                }) {
+                    return Err(raised_error(
+                        457,
+                        "Collection".to_string(),
+                        "this key is already associated with an element of this collection"
+                            .to_string(),
+                        line,
+                    ));
+                }
+                let before = args
+                    .get(2)
+                    .filter(|value| !matches!(value, Value::Missing | Value::Empty));
+                let after = args
+                    .get(3)
+                    .filter(|value| !matches!(value, Value::Missing | Value::Empty));
+                if before.is_some() && after.is_some() {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        "Collection.Add cannot specify both Before and After",
+                        Some(line),
+                    ));
+                }
+                let position = if let Some(before) = before {
+                    collection_index(entries, before, line)?
+                } else if let Some(after) = after {
+                    collection_index(entries, after, line)? + 1
+                } else {
+                    entries.len()
+                };
+                entries.insert(
+                    position,
+                    CollectionEntry {
+                        value: args[0].clone(),
+                        key,
+                    },
+                );
+                Ok(Value::Empty)
+            }
+            InternalObject::Collection(entries) if name.eq_ignore_ascii_case("item") => {
+                if args.len() != 1 {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Collection.Item expects 1 argument, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                Ok(entries[collection_index(entries, &args[0], line)?]
+                    .value
+                    .clone())
+            }
+            InternalObject::Collection(entries) if name.eq_ignore_ascii_case("remove") => {
+                if args.len() != 1 {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Collection.Remove expects 1 argument, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                let index = collection_index(entries, &args[0], line)?;
+                entries.remove(index);
+                Ok(Value::Empty)
+            }
+            InternalObject::Collection(_) => Err(error(
+                RuntimeErrorKind::Unsupported,
+                format!("Collection method is not available: {name}"),
+                Some(line),
+            )),
+        }
     }
 
     fn single_array_argument(
@@ -1840,6 +2103,7 @@ fn empty_frame() -> Frame {
         source_name: String::new(),
         values: BTreeMap::new(),
         constants: BTreeSet::new(),
+        auto_new: BTreeMap::new(),
         static_procedure: false,
         with_objects: Vec::new(),
         error_mode: ErrorMode::Disabled,
@@ -2012,6 +2276,44 @@ fn current_with_object(frame: &Frame, line: u32) -> Result<ObjectRef, RuntimeErr
             RuntimeErrorKind::Unsupported,
             "With member used outside a With block",
             Some(line),
+        )
+    })
+}
+
+fn collection_index(
+    entries: &[CollectionEntry],
+    selector: &Value,
+    line: u32,
+) -> Result<usize, RuntimeError> {
+    let index = match selector {
+        Value::Integer(value) => usize::try_from(*value)
+            .ok()
+            .and_then(|value| value.checked_sub(1)),
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => {
+            usize::try_from(*value as i64)
+                .ok()
+                .and_then(|value| value.checked_sub(1))
+        }
+        Value::String(key) => entries.iter().position(|entry| {
+            entry
+                .key
+                .as_ref()
+                .is_some_and(|existing| existing.eq_ignore_ascii_case(key))
+        }),
+        _ => {
+            return Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "Collection index must be a one-based number or String key",
+                Some(line),
+            ))
+        }
+    };
+    index.filter(|index| *index < entries.len()).ok_or_else(|| {
+        raised_error(
+            5,
+            "Collection".to_string(),
+            "invalid procedure call or argument".to_string(),
+            line,
         )
     })
 }
@@ -2929,6 +3231,90 @@ mod tests {
             value,
             Value::String("True|True|True|False|True|Variant()|8204".to_string())
         );
+    }
+
+    #[test]
+    fn collection_supports_keys_order_default_item_remove_and_enumeration() {
+        let value = run(
+            "Public Function CollectionProbe() As String\n\
+               Dim items As New Collection\n\
+               Dim item As Variant\n\
+               Dim joined As String\n\
+               items.Add \"second\", \"b\"\n\
+               items.Add \"first\", \"a\", 1\n\
+               items.Add \"third\", \"c\", , \"b\"\n\
+               CollectionProbe = items.Count & \"|\" & items(\"a\") & \"|\" & items.Item(2) & \"|\" & items(3) & \"|\"\n\
+               items.Remove \"b\"\n\
+               For Each item In items\n\
+                 joined = joined & item\n\
+               Next\n\
+               CollectionProbe = CollectionProbe & items.Count & \"|\" & joined & \"|\"\n\
+               Set items = Nothing\n\
+               items.Add \"reset\"\n\
+               CollectionProbe = CollectionProbe & items.Count & \"|\" & items(1)\n\
+             End Function\n",
+            "CollectionProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("3|first|second|third|2|firstthird|1|reset".to_string())
+        );
+    }
+
+    #[test]
+    fn new_collection_and_module_as_new_reactivate_after_nothing() {
+        let value = run(
+            "Private shared As New Collection\n\
+             Private Sub FillShared()\n\
+               shared.Add 20\n\
+               shared.Add 22\n\
+             End Sub\n\
+             Private Sub ClearShared()\n\
+               Set shared = Nothing\n\
+             End Sub\n\
+             Public Function CollectionLifetime() As Long\n\
+               Dim local As Collection\n\
+               Set local = New Collection\n\
+               local.Add 1\n\
+               FillShared\n\
+               CollectionLifetime = shared(1) + shared(2) + local.Count\n\
+               ClearShared\n\
+               shared.Add 5\n\
+               CollectionLifetime = CollectionLifetime * 10 + shared(1)\n\
+             End Function\n",
+            "CollectionLifetime",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::Integer(435));
+    }
+
+    #[test]
+    fn collection_reports_duplicate_and_missing_keys_with_vba_numbers() {
+        let value = run(
+            "Public Function CollectionErrors() As String\n\
+               Dim items As New Collection\n\
+               Dim duplicate As Long\n\
+               Dim missing As Long\n\
+               items.Add 1, \"key\"\n\
+               On Error Resume Next\n\
+               items.Add 2, \"KEY\"\n\
+               duplicate = Err.Number\n\
+               Err.Clear\n\
+               missing = items(\"absent\")\n\
+               missing = Err.Number\n\
+               CollectionErrors = duplicate & \"|\" & missing\n\
+             End Function\n",
+            "CollectionErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("457|5".to_string()));
     }
 
     #[test]

@@ -1717,6 +1717,40 @@ mod tests {
     }
 
     #[test]
+    fn vba_collections_store_key_and_enumerate_range_objects() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function CollectionRanges() As String\n\
+               Dim ranges As New Collection\n\
+               Dim cell As Variant\n\
+               Dim value As Long\n\
+               ranges.Add Range(\"A1\"), \"first\"\n\
+               ranges.Add Range(\"A2\"), \"second\"\n\
+               For Each cell In ranges\n\
+                 value = value + 10\n\
+                 cell.Value = value\n\
+               Next\n\
+               CollectionRanges = ranges.Count & \"|\" & ranges(\"first\").Value & \"|\" & ranges.Item(2).Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "CollectionRanges", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("2|10|20".to_string()));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(10.0)
+        ));
+        assert!(matches!(
+            workbook.sheets[0].rows[1].cells[0].value,
+            CellValue::Number(20.0)
+        ));
+    }
+
+    #[test]
     fn vba_inspects_ranges_and_uses_relative_cells() {
         let mut workbook = workbook();
         let module = parse_module(
