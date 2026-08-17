@@ -33,8 +33,11 @@ GDI = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release",
 sys.path.insert(0, HERE)
 from _pb_pxgrid_gen import CT, DRELS, NS, RELS  # noqa: E402
 
-FACE = "ＭＳ 明朝"
-SZ_HP = 28                 # 14pt, as in 1ec1's box heading
+FACE = os.environ.get("OXI_PB_FACE", "ＭＳ 明朝")
+# OXI_PB_SZ sweeps the font size so the 0.800 slope can be checked for size
+# dependence (MS Mincho's ascent fraction is 0.88, so 0.800 is not simply
+# ascent/(ascent+descent) and needs pinning).
+SZ_HP = int(os.environ.get("OXI_PB_SZ", "28"))   # half-points; 28 = 14pt (1ec1)
 COMPAT = os.environ.get("OXI_PB_COMPAT", "15")
 # (label, in_shape, line twips)
 ARMS = [("body_%d" % v, False, v) for v in (240, 360, 480, 600)]
