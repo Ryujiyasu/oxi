@@ -245,6 +245,60 @@ fn s475_max_compress_legacy(c: char, next: Option<char>, pair_pt: f32, solo_pt: 
     0.0
 }
 
+/// S1167 (2026-08-17) — a mark can only give back the aki it actually carries.
+///
+/// The S475 caps are stated for a FULLWIDTH mark, whose glyph fills the left
+/// half em and whose right half is blank: that blank half is what Word takes
+/// when it packs one more character onto the line. A PROPORTIONAL Japanese face
+/// has already spent it — MS PGothic ships 、。 at 0.664em and （）「」 at 0.5em —
+/// so there is nothing left to remove, and a cap written for the fullwidth case
+/// credits the break with width the render can never give back. Word agrees:
+/// in c7b923e5 (MS PGothic 10.5pt) its own PDF draws every 、 at 0.661em and
+/// every bracket at 0.5em, i.e. ZERO compression, while nedocontract (MS Mincho
+/// 12pt) draws 、 at 0.860em — compressed. Measured 2026-08-17, per-span, so the
+/// face is the one Word actually rendered rather than the one the run names.
+///
+/// So the credit is for a mark that still carries its em: a mark the face
+/// already ships narrower IS the compressed form, and Word takes nothing more
+/// from it. MS PGothic's 、 has 0.164em left above the half em, and Word takes
+/// none of it.
+///
+/// ★`em_pt` is the advance the SAME width source gives an IDEOGRAPH at this
+/// size, not `font_size`. The two differ: the measured tables quantise, so MS
+/// Mincho's 、 comes back as 7.900 at 8pt (0.987em) and 10.400 at 10.5pt
+/// (0.990em). Testing those against the nominal size called two fullwidth
+/// documents proportional and cost them their credit (459f05 -11, a47e6c -2);
+/// against the face's own ideograph they compare equal, because the same
+/// quantisation applies to both.
+///
+/// ★The comparison still needs a tolerance, because the em reference and the
+/// mark do not always come from the same table after all: for MS Mincho the
+/// measured map covers the kana and the marks (7.900 at 8pt) but NOT the
+/// ideographs, which fall back to the nominal 8.000. That is a 1.3% step
+/// between two things that are both a full em. A proportional face is nowhere
+/// near it — MS PGothic's mark is 0.664em — so the test reads "clearly under
+/// the em", swept via OXI_S1167_TOL.
+///
+/// The sweep (`_cb_tol_sweep.py`, every scoped document against its own Word
+/// PDF) is a plateau: at 1.0 the quantisation misfires and costs 459f05 11
+/// lines and a47e6c 2, while 0.95, 0.90 and 0.85 all give c7b923e5 its full
+/// +37 and leave every other document untouched. 0.90 is the middle of that
+/// plateau — the measured step is at 0.9875 above it and the proportional marks
+/// are at 0.664 and 0.5 below it.
+pub fn s475_aki_cap(cap: f32, natural_pt: f32, em_pt: f32) -> f32 {
+    if std::env::var("OXI_S1167_DISABLE").is_ok() {
+        return cap;
+    }
+    let tol: f32 = std::env::var("OXI_S1167_TOL")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.90);
+    if natural_pt < em_pt * tol {
+        return 0.0;
+    }
+    cap.min((natural_pt - em_pt * 0.5).max(0.0))
+}
+
 /// S492 (2026-06-03) — per-context MAX break compression (pt) for the paragraph-level
 /// demand break optimizer (OXI_S492_OPT). MEASURED render table (s474_break2 / S492g):
 /// closing punct + comma/period (YAKUMONO_CLOSING, incl. 、。，．) collapse up to a

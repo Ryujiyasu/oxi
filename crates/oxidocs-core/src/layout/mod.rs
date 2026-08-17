@@ -267,6 +267,29 @@ fn s713_cell_snap(pages: &mut [LayoutPage]) {
 /// this just REDISTRIBUTES it into the visible gaps (rx/wrap unchanged). The
 /// per-char advance = char_width + cs_render (matches the renderer). Returns
 /// None when neither flag is on or no boundary exists (caller pushes normally).
+/// S1167: the advance this face gives an IDEOGRAPH at `fs`, read through the
+/// same width source as the character being judged.
+///
+/// It is the yardstick for "does this mark still carry its em", and it has to
+/// come from the same table, because the measured tables quantise: MS Mincho's
+/// characters come back as 7.900 at 8pt, so the nominal 8.0 calls every one of
+/// them narrow. Probing several common kanji and taking the SMALLEST is what
+/// makes that work — a kanji the table lacks falls back to the nominal size and
+/// would otherwise be the answer, while the ones it has agree with each other.
+/// Kanji, not kana: a proportional Japanese face narrows kana and marks but
+/// leaves its ideographs at the full em, which is the property being measured.
+fn s1167_em_ref(
+    registry: &FontMetricsRegistry,
+    fs: f32,
+    metrics: &FontMetrics,
+    gdi_map: Option<&std::collections::HashMap<u32, u32>>,
+) -> f32 {
+    ['日', '月', '人', '大', '中', '山', '本', '年', '国', '時']
+        .iter()
+        .map(|c| registry.char_width_pt_with_gdi_map(*c, fs, metrics, gdi_map))
+        .fold(f32::INFINITY, f32::min)
+}
+
 fn autospace_cell_segments(
     text: &str,
     fs: f32,
@@ -20244,22 +20267,6 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let keep = current_line.fragments.len() - (n_trail - 1);
                     current_line.fragments.truncate(keep);
                 }
-                // OXI_DUMP_LINEW=1: the breaker's running width against the sum
-                // of the fragment widths it is about to store, and the budget it
-                // was fitting to. The over-wide CJK lines (_hang_census) come out
-                // ~26pt past the budget with every glyph ALREADY compressed, so
-                // the question is which of these three disagrees.
-                if std::env::var("OXI_DUMP_LINEW").is_ok() {
-                    let fw: f32 = current_line.fragments.iter().map(|f| f.width).sum();
-                    let nw: f32 = current_line.fragments.iter().map(|f| f.natural_width).sum();
-                    let nch: usize =
-                        current_line.fragments.iter().map(|f| f.text.chars().count()).sum();
-                    eprintln!(
-                        "[LINEW] nch={} cur_w={:.2} cur_tw={} frag_sum={:.2} nat_sum={:.2} avail_tw={} over={:.2}",
-                        nch, current_width, current_width_tw, fw, nw, available_tw,
-                        fw - available_tw as f32 / 20.0
-                    );
-                }
                 lines.push(std::mem::take(&mut current_line));
                 current_width = 0.0;
                 current_width_tw = 0;
@@ -22927,19 +22934,37 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             eprintln!("[DBG757] ch={:?} cw_tw={} nfrag={} word_len={} capw_tw={} open_eff={:.2}",
                                 ch, current_width_tw, current_line.fragments.len(), word.chars().count(), current_capw_tw, s757_open_eff);
                         }
-                        pt_to_tw(
-                            pre_yakumono_width
-                                - kinsoku::s475_max_compress_pt(
-                                    ch,
-                                    chars_vec.get(char_index + 1).copied(),
-                                    s475_pair,
-                                    comma_pt,
-                                    s757_open_eff,
-                                    period_pt,
-                                    close_solo_pt,
-                                    font_size,
-                                ),
-                        )
+                        let s1167_cap_raw = kinsoku::s475_max_compress_pt(
+                            ch,
+                            chars_vec.get(char_index + 1).copied(),
+                            s475_pair,
+                            comma_pt,
+                            s757_open_eff,
+                            period_pt,
+                            close_solo_pt,
+                            font_size,
+                        );
+                        let s1167_cap = if s1167_cap_raw > 0.0 {
+                            let em = s1167_em_ref(
+                                &self.registry,
+                                font_size,
+                                char_metrics,
+                                gdi_map,
+                            );
+                            if std::env::var("OXI_DBG1167").is_ok()
+                                && pre_yakumono_width < em - 0.01
+                            {
+                                eprintln!(
+                                    "[DBG1167] ch={:?} nat={:.3} em_ref={:.3} fs={:.2} ratio={:.3}",
+                                    ch, pre_yakumono_width, em, font_size,
+                                    pre_yakumono_width / em
+                                );
+                            }
+                            kinsoku::s475_aki_cap(s1167_cap_raw, pre_yakumono_width, em)
+                        } else {
+                            s1167_cap_raw
+                        };
+                        pt_to_tw(pre_yakumono_width - s1167_cap)
                     } else {
                         0
                     };
@@ -23752,8 +23777,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 let fnext = f.text.chars().nth(1);
                                 current_capw_tw += pt_to_tw(
                                     f.natural_width
-                                        - kinsoku::s475_max_compress(
-                                            fc, fnext, s475_pair, s475_solo, s475_open, font_size,
+                                        - kinsoku::s475_aki_cap(
+                                            kinsoku::s475_max_compress(
+                                                fc, fnext, s475_pair, s475_solo, s475_open,
+                                                font_size,
+                                            ),
+                                            f.natural_width,
+                                            // The popped fragments come from the run
+                                            // being broken, so its metrics are the ones
+                                            // in hand.
+                                            s1167_em_ref(
+                                                &self.registry,
+                                                font_size,
+                                                char_metrics,
+                                                gdi_map,
+                                            ),
                                         ),
                                 );
                             } else {
@@ -24246,6 +24284,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         lines = new_lines;
                     }
                 }
+            }
+        }
+
+        // OXI_DUMP_LINEW=1: what the breaker decided, for EVERY line it produced.
+        // The over-wide CJK lines the census finds are pushed at a dozen different
+        // sites, so the dump belongs here, where the paragraph's lines are final,
+        // rather than at any one flush -- an instrument that covers three of the
+        // document's lines invites reading one line's breaker width against
+        // another line's rendered width.
+        if std::env::var("OXI_DUMP_LINEW").is_ok() {
+            for line in &lines {
+                let fw: f32 = line.fragments.iter().map(|f| f.width).sum();
+                let nw: f32 = line.fragments.iter().map(|f| f.natural_width).sum();
+                let nch: usize = line.fragments.iter().map(|f| f.text.chars().count()).sum();
+                if nch == 0 {
+                    continue;
+                }
+                let head: String =
+                    line.fragments.iter().flat_map(|f| f.text.chars()).take(14).collect();
+                eprintln!(
+                    "[LINEW] nch={} frag_sum={:.2} nat_sum={:.2} avail={:.2} over={:.2} head={}",
+                    nch, fw, nw, available_tw as f32 / 20.0,
+                    fw - available_tw as f32 / 20.0, head
+                );
             }
         }
 
