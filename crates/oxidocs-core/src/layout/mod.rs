@@ -28031,7 +28031,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             if let Some(h) = row.height {
                 match row.height_rule.as_deref() {
                     Some("exact") => {
-                        row_height = h;
+                        // S1164 (2026-08-17, default ON, opt-out
+                        // OXI_S1164_DISABLE): Word does NOT take an `exact` trHeight
+                        // literally -- it adds the cell's BOTTOM margin.
+                        // _pb_tblvert_gen.py, trHeight 1200tw = 60pt, compat 11,
+                        // Word's own rules:
+                        //   cellMar t/b   0/0    108/108  200/200  400/400
+                        //   row height    60.00  65.40    69.96    80.04
+                        //   addend         0.00   5.40     9.96    20.04
+                        // and the asymmetric pair settles which margin it is:
+                        //   top 400 / bottom 0  -> 60.00  (no addend)
+                        //   top 0 / bottom 400  -> 80.04  (+20 = the BOTTOM one)
+                        // Oxi returned the literal 60.00 in all six. Every other
+                        // row shape in that probe already matches within 0.05
+                        // (natural rows, uneven cells, atLeast above and below
+                        // the natural need).
+                        // Gate: probe 7/7 exact arms; Phase 1 95/96 with zero
+                        // per-doc change; all 238 SSIM sentinel documents
+                        // byte-identical (no corpus table pairs an exact
+                        // trHeight with a non-zero bottom cell margin).
+                        let s1164 = std::env::var("OXI_S1164_DISABLE").is_err();
+                        row_height = if s1164 {
+                            h + table
+                                .style
+                                .default_cell_margins
+                                .as_ref()
+                                .and_then(|m| m.bottom)
+                                .unwrap_or(0.0)
+                        } else {
+                            h
+                        };
                     }
                     // Default (None) or explicit "atLeast": atLeast semantics.
                     // S445 (2026-05-30, FALSIFIED — tombstone): 7ead52 has

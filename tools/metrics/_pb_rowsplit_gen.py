@@ -1,145 +1,205 @@
-"""Word row-split FILL threshold — direct decision-rule probe.
+# -*- coding: utf-8 -*-
+"""How does Word split a table row across a page boundary?
 
-uklocal p36/37: the row-2 split keeps 2 lines in Word / 3 in Oxi with
-every reconstructible component (footer stack, table gap, row spans,
-line heights, Segoe) confirmed EXACT to <=0.07pt — the decision differs
-within one device quantum, unresolvable by position algebra (fitz ink
-offsets wobble +-0.3). This probe measures the RULE directly:
+_pb_tblvert pinned the row heights on a page (13 of 16 arms already matched; the
+exact-rule addend was the one gap, S1164). What it does not cover is the case
+tokyoshugyo p24-29 actually hits: a row that STARTS near the page bottom and
+continues on the next page. There Word closes the first row at 135.98 with both
+cells on that line while Oxi puts the two cells' bottoms at 127.65 and 146.15,
+and the whole tail of the document inherits -17pt.
 
-  K filler lines (Arial 11, spacing 0) + exact spacer (line=X exact) +
-  a 2-col bordered table (uklocal data-row replica: tcBorders sz6,
-  tcMar top/bottom=105tw, cell paras direct before/after=120,
-  line=0 atLeast, Arial 10) whose left cell has ONE paragraph of 6
-  lines (ROWLINE1..6 via <w:br/>). No footer -> cbot = 769.9
-  (pinned to 0.05 by _pb_fstack c0).
+Arms sweep the distance from the row's top to the content bottom (a spacer
+paragraph moves it), how many lines each of the two cells holds, and cantSplit.
+Read from Word: how many of each cell's lines stay on the first page.
 
-  X swept: readout = the highest ROWLINEn on page 1. Each n->n-1
-  transition X pins Word's per-line fill threshold:
-    line_n kept iff  table_top + lead + n*line + tail(?) <= cbot(+q?)
-  with table_top = 72 + K*12.6489 + X/20 exactly. The transition PHASE
-  gives the threshold formula to 0.1pt (full-line-box vs ink vs
-  device-rounded), the transition SPACING confirms the per-line pitch.
-
-Usage:
-  python _pb_rowsplit_gen.py gen coarse | gen fine:LO:HI:STEP
-  python _pb_rowsplit_gen.py measure [pattern]
+    python _pb_rowsplit_gen.py gen
+    python _pb_rowsplit_gen.py pdf      # Word truth
+    python _pb_rowsplit_gen.py oxi      # Oxi, same arms
 """
-import os, sys, zipfile
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import zipfile
 
-OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-                      "pipeline_data", "_pb_rowsplit")
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+OUT = os.path.join(REPO, "pipeline_data", "_pb_rowsplit")
+GDI = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release",
+                   "oxi-gdi-renderer.exe")
 
-W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+sys.path.insert(0, HERE)
+from _pb_pxgrid_gen import CT, DRELS, NS, RELS  # noqa: E402
 
-CT = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-      '<Default Extension="xml" ContentType="application/xml"/>'
-      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-      '</Types>')
+FACE = "ＭＳ 明朝"
+SZ_HP = 21                 # 10.5pt
+TOP_TW = 1985
+BOT_TW = 1701
+PGH = 16838
+COMPAT = os.environ.get("OXI_PB_COMPAT", "11")
+FILLERS = int(os.environ.get("OXI_PB_FILL", "33"))  # body lines before the table
+LINE_PT = 18.0             # docGrid pitch for the body paragraphs
 
-RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-        '</Relationships>')
-
-R11 = '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/>'
-R10 = '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/>'
-K = 48
-ADV = 12.6489
-
-
-def build(x):
-    paras = []
-    for i in range(K):
-        paras.append(
-            f'<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'
-            f'<w:rPr>{R11}</w:rPr></w:pPr>'
-            f'<w:r><w:rPr>{R11}</w:rPr><w:t>Item {i:02d} alpha beta.</w:t></w:r></w:p>')
-    paras.append(
-        f'<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="{x}" w:lineRule="exact"/>'
-        f'<w:rPr>{R11}</w:rPr></w:pPr></w:p>')
-    lines = '<w:r><w:br/></w:r>'.join(
-        f'<w:r><w:rPr>{R10}</w:rPr><w:t>ROWLINE{n}</w:t></w:r>' for n in range(1, 7))
-    cellp = (f'<w:p><w:pPr><w:spacing w:before="120" w:after="120" w:line="0" w:lineRule="atLeast"/>'
-             f'<w:rPr>{R10}</w:rPr></w:pPr>{lines}</w:p>')
-    cellq = (f'<w:p><w:pPr><w:spacing w:before="120" w:after="120" w:line="0" w:lineRule="atLeast"/>'
-             f'<w:rPr>{R10}</w:rPr></w:pPr>'
-             f'<w:r><w:rPr>{R10}</w:rPr><w:t>SideCell</w:t></w:r></w:p>')
-    def tc(content):
-        return ('<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>'
-                '<w:tcBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="000000"/>'
-                '<w:left w:val="single" w:sz="6" w:space="0" w:color="000000"/>'
-                '<w:bottom w:val="single" w:sz="6" w:space="0" w:color="000000"/>'
-                '<w:right w:val="single" w:sz="6" w:space="0" w:color="000000"/></w:tcBorders>'
-                '<w:tcMar><w:top w:w="105" w:type="dxa"/><w:left w:w="105" w:type="dxa"/>'
-                '<w:bottom w:w="105" w:type="dxa"/><w:right w:w="105" w:type="dxa"/></w:tcMar>'
-                f'</w:tcPr>{content}</w:tc>')
-    tbl = ('<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>'
-           '<w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/>'
-           '<w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar></w:tblPr>'
-           '<w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>'
-           f'<w:tr>{tc(cellp)}{tc(cellq)}</w:tr></w:tbl>')
-    body = ''.join(paras) + tbl + '<w:p/>'
-    body += ('<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
-             '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" '
-             'w:left="1440" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr>')
-    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            f'<w:document {W_NS}><w:body>{body}</w:body></w:document>')
+# (label, spacer_tw, [lines per cell], cantSplit)
+LINES_SETS = [[4, 4], [4, 2], [2, 4], [6, 1]]
+SPACERS = [0, 60, 120, 180, 240, 300, 360, 420, 480]
+ARMS = [("s%d_%s" % (sp, "x".join(map(str, ls))), sp, ls, False)
+        for ls in LINES_SETS for sp in SPACERS]
+ARMS += [("cantsplit_s%d" % sp, sp, [4, 4], True) for sp in (120, 240, 360)]
 
 
-def gen(cases):
-    os.makedirs(OUTDIR, exist_ok=True)
-    for x in cases:
-        with zipfile.ZipFile(os.path.join(OUTDIR, f'prs_{x:04d}.docx'), 'w',
-                             zipfile.ZIP_DEFLATED) as z:
-            z.writestr('[Content_Types].xml', CT)
-            z.writestr('_rels/.rels', RELS)
-            z.writestr('word/document.xml', build(x))
-    print('generated', len(cases), 'docs in', OUTDIR)
+def docx():
+    return os.path.join(OUT, "rowsplit.docx")
 
 
-def measure(pat='prs_*'):
-    import glob
-    import win32com.client, fitz
-    word = win32com.client.Dispatch('Word.Application')
-    word.Visible = False
+def para(text, ppr=""):
+    return ('<w:p><w:pPr>%s<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>'
+            '<w:sz w:val="%d"/></w:rPr></w:pPr><w:r><w:rPr>'
+            '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>'
+            '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>'
+            '<w:t xml:space="preserve">%s</w:t></w:r></w:p>'
+            % (ppr, FACE, FACE, FACE, SZ_HP, FACE, FACE, FACE, SZ_HP, SZ_HP, text))
+
+
+def table(ai, lines, cantsplit):
+    pr = ("<w:tblPr>" + '<w:tblW w:w="0" w:type="auto"/>' +
+          '<w:tblBorders>' + "".join(
+              '<w:%s w:val="single" w:sz="4" w:space="0" w:color="000000"/>' % s
+              for s in ("top", "left", "bottom", "right", "insideH", "insideV")) +
+          "</w:tblBorders>" +
+          '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/>'
+          '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/>'
+          "</w:tblCellMar>" + "</w:tblPr>")
+    trpr = "<w:trPr><w:cantSplit/></w:trPr>" if cantsplit else ""
+    cells = []
+    for ci, n in enumerate(lines):
+        body = "".join(para("R%02dC%dL%d" % (ai, ci, k)) for k in range(n))
+        cells.append('<w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr>'
+                     + body + "</w:tc>")
+    return ("<w:tbl>" + pr +
+            '<w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>'
+            "<w:tr>" + trpr + "".join(cells) + "</w:tr></w:tbl>")
+
+
+def gen():
+    os.makedirs(OUT, exist_ok=True)
+    body = []
+    for ai, (label, sp, lines, cs) in enumerate(ARMS):
+        body.append(para("A%02dZ" % ai,
+                         "<w:pageBreakBefore/>" if ai else ""))
+        for k in range(FILLERS):
+            body.append(para("うめ%02d-%02d" % (ai, k)))
+        if sp:
+            body.append(para("s", '<w:spacing w:before="0" w:after="0"'
+                                  ' w:line="%d" w:lineRule="exact"/>' % sp))
+        body.append(table(ai, lines, cs))
+        body.append(para("E%02dZ" % ai))
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
+           "><w:body>" + "".join(body) +
+           '<w:sectPr><w:pgSz w:w="11906" w:h="%d" w:code="9"/>'
+           '<w:pgMar w:top="%d" w:right="1701" w:bottom="%d" w:left="1701" '
+           'w:header="851" w:footer="992" w:gutter="0"/>'
+           '<w:docGrid w:type="lines" w:linePitch="360"/>'
+           "</w:sectPr></w:body></w:document>" % (PGH, TOP_TW, BOT_TW))
+    styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + NS + ">"
+              "<w:docDefaults><w:rPrDefault><w:rPr>"
+              '<w:rFonts w:ascii="%s" w:eastAsia="%s" w:hAnsi="%s"/>'
+              "</w:rPr></w:rPrDefault></w:docDefaults>"
+              '<w:style w:type="paragraph" w:default="1" w:styleId="a">'
+              '<w:name w:val="Normal"/><w:pPr><w:widowControl w:val="0"/></w:pPr>'
+              '<w:rPr><w:sz w:val="%d"/></w:rPr></w:style>'
+              "</w:styles>" % (FACE, FACE, FACE, SZ_HP))
+    settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ' + NS +
+                '><w:compat><w:compatSetting w:name="compatibilityMode"'
+                ' w:uri="http://schemas.microsoft.com/office/word"'
+                ' w:val="%s"/></w:compat></w:settings>' % COMPAT)
+    ct = CT.replace("</Types>",
+                    '<Override PartName="/word/settings.xml" ContentType="application/'
+                    'vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
+                    "</Types>")
+    drels = DRELS.replace("</Relationships>",
+                          '<Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/'
+                          'officeDocument/2006/relationships/settings" Target="settings.xml"/>'
+                          "</Relationships>")
+    with zipfile.ZipFile(docx(), "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", RELS)
+        z.writestr("word/_rels/document.xml.rels", drels)
+        z.writestr("word/styles.xml", styles)
+        z.writestr("word/settings.xml", settings)
+        z.writestr("word/document.xml", doc)
+    print("wrote", docx(), len(ARMS), "arms; compat", COMPAT)
+
+
+def report(per, who):
+    print("== %s ==" % who)
+    print("%-14s %-7s %-8s %-6s %-11s %-11s %s"
+          % ("arm", "spacer", "lines", "split", "c0 on p1/p2", "c1 on p1/p2", "verdict"))
+    for ai, (label, sp, lines, cs) in enumerate(ARMS):
+        g = per.get(ai)
+        if not g:
+            print("%-14s %-7.1f %-8s MISSING" % (label, sp / 20.0, "x".join(map(str, lines))))
+            continue
+        c0, c1 = g.get(0, {}), g.get(1, {})
+        p0 = sorted(set(c0.values()))
+        n0 = [sum(1 for v in c0.values() if v == p) for p in p0]
+        p1 = sorted(set(c1.values()))
+        n1 = [sum(1 for v in c1.values() if v == p) for p in p1]
+        moved = "whole-move" if (len(p0) == 1 and len(p1) == 1
+                                 and min(p0) == min(p1) and min(p0) > g.get("apage", 0)) else ""
+        v = moved or ("split" if (len(p0) > 1 or len(p1) > 1) else "fits")
+        print("%-14s %-7.1f %-8s %-6s %-11s %-11s %s"
+              % (label, sp / 20.0, "x".join(map(str, lines)),
+                 "cs" if cs else "-",
+                 "/".join(map(str, n0)), "/".join(map(str, n1)), v))
+
+
+def _collect(pagetexts):
+    per = {}
+    for pi, t in enumerate(pagetexts):
+        for m in re.finditer(r"A(\d\d)Z", t):
+            per.setdefault(int(m.group(1)), {})["apage"] = pi + 1
+        for m in re.finditer(r"R(\d\d)C(\d)L(\d)", t):
+            ai, ci, li = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            per.setdefault(ai, {}).setdefault(ci, {})[li] = pi + 1
+    return per
+
+
+def pdf():
+    import fitz
+    import win32com.client as w
+    out = docx().replace(".docx", ".pdf")
+    app = w.DispatchEx("Word.Application")
+    app.Visible = False
+    d = app.Documents.Open(docx(), ReadOnly=True)
     try:
-        for f in sorted(glob.glob(os.path.join(OUTDIR, pat + '.docx'))):
-            pdf = f[:-5] + '.pdf'
-            if not os.path.exists(pdf):
-                doc = word.Documents.Open(os.path.abspath(f), ReadOnly=True)
-                doc.ExportAsFixedFormat(os.path.abspath(pdf), 17)
-                doc.Close(False)
-            d = fitz.open(pdf)
-            kept = []
-            p1lines = {}
-            for blk in d[0].get_text('dict')['blocks']:
-                if blk.get('type') != 0:
-                    continue
-                for ln in blk['lines']:
-                    t = ''.join(s['text'] for s in ln['spans'])
-                    for n in range(1, 7):
-                        if f'ROWLINE{n}' in t:
-                            kept.append(n)
-                            p1lines[n] = round(ln['bbox'][1], 2)
-            x = int(os.path.basename(f)[:-5].rsplit('_', 1)[-1])
-            top = 72 + K * ADV + x / 20.0
-            last = max(kept) if kept else 0
-            lasty = p1lines.get(last)
-            print(f'prs_{x:04d}: kept={last} lastink={lasty} tbl_top_model={top:.2f}')
+        d.ExportAsFixedFormat(out, 17)
     finally:
-        word.Quit()
+        d.Close(False)
+        app.Quit()
+    doc = fitz.open(out)
+    report(_collect([doc[i].get_text() for i in range(doc.page_count)]), "WORD")
 
 
-if __name__ == '__main__':
-    mode = sys.argv[1] if len(sys.argv) > 1 else 'gen'
-    if mode == 'gen':
-        spec = sys.argv[2] if len(sys.argv) > 2 else 'coarse'
-        if spec == 'coarse':
-            gen(list(range(560, 941, 20)))
-        else:
-            _, lo, hi, step = spec.split(':')
-            gen(list(range(int(lo), int(hi) + 1, int(step))))
+def oxi(envs=""):
+    env = dict(os.environ)
+    for kv in [s for s in envs.split(",") if s]:
+        k, _, v = kv.partition("=")
+        env[k] = v or "1"
+    out = os.path.join(tempfile.gettempdir(), "rowsplit_oxi.json")
+    subprocess.run([GDI, docx(), os.path.join(tempfile.gettempdir(), "rs"),
+                    "--dump-layout=" + out], check=True, capture_output=True, env=env)
+    texts = ["".join(e.get("text") or "" for e in pg["elements"] if e["type"] == "text")
+             for pg in json.load(open(out, encoding="utf-8"))["pages"]]
+    report(_collect(texts), "OXI " + (envs or "(default)"))
+
+
+if __name__ == "__main__":
+    if sys.argv[1] == "oxi":
+        oxi(sys.argv[2] if len(sys.argv) > 2 else "")
+    elif sys.argv[1] == "pdf":
+        pdf()
     else:
-        measure(sys.argv[2] if len(sys.argv) > 2 else 'prs_*')
+        gen()
