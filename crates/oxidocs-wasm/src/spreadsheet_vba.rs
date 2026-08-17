@@ -1577,6 +1577,46 @@ mod tests {
     }
 
     #[test]
+    fn vba_uses_nested_with_blocks_for_range_chains() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub TransformWith()\n\
+               With Range(\"B2:C3\")\n\
+                 .Value = 7\n\
+                 With .Offset(1, -1).Resize(1, 2)\n\
+                   .Value = 9\n\
+                 End With\n\
+                 .Resize(1, 2).ClearContents\n\
+               End With\n\
+               With Range(\"D1\")\n\
+                 .Value = 5\n\
+                 .ClearContents\n\
+               End With\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "TransformWith", vec![], &mut host).unwrap();
+        }
+
+        let cell = |row, column| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|item| item.index == row)
+                .and_then(|item| item.cells.iter().find(|cell| cell.col == column))
+                .map(|cell| &cell.value)
+        };
+        assert!(matches!(cell(1, 3), Some(CellValue::Empty)));
+        assert!(matches!(cell(2, 1), Some(CellValue::Empty)));
+        assert!(matches!(cell(2, 2), Some(CellValue::Empty)));
+        assert!(matches!(cell(3, 0), Some(CellValue::Number(9.0))));
+        assert!(matches!(cell(3, 1), Some(CellValue::Number(9.0))));
+        assert!(matches!(cell(3, 2), Some(CellValue::Number(7.0))));
+    }
+
+    #[test]
     fn vba_inspects_ranges_and_uses_relative_cells() {
         let mut workbook = workbook();
         let module = parse_module(

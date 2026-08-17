@@ -129,6 +129,7 @@ pub struct Runtime<'a> {
 struct Frame {
     procedure_name: String,
     values: BTreeMap<String, ValueSlot>,
+    with_objects: Vec<ObjectRef>,
 }
 
 type ValueSlot = Rc<RefCell<Value>>;
@@ -241,6 +242,7 @@ impl<'a> Runtime<'a> {
         let mut frame = Frame {
             procedure_name: key(&procedure.name),
             values: BTreeMap::new(),
+            with_objects: Vec::new(),
         };
         for (param, argument) in procedure.params.iter().zip(args) {
             let value = match argument {
@@ -319,6 +321,7 @@ impl<'a> Runtime<'a> {
             let mut frame = Frame {
                 procedure_name: String::new(),
                 values: BTreeMap::new(),
+                with_objects: Vec::new(),
             };
             return self.eval_expr(default, &mut frame);
         }
@@ -421,6 +424,13 @@ impl<'a> Runtime<'a> {
                 body,
                 span,
             } => self.exec_while(condition, body, frame, span.line),
+            Statement::With { subject, body, .. } => {
+                let receiver = self.eval_object(subject, frame, subject.span().line)?;
+                frame.with_objects.push(receiver);
+                let result = self.exec_body(body, frame);
+                frame.with_objects.pop();
+                result
+            }
             Statement::Call { target, .. } => {
                 self.eval_call(target, frame)?;
                 Ok(Flow::Continue)
@@ -854,6 +864,17 @@ impl<'a> Runtime<'a> {
                     )),
                 }
             }
+            Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
+                let receiver = current_with_object(frame, span.line)?;
+                match self.host_set(&receiver, name, value, span.line)? {
+                    true => Ok(()),
+                    false => Err(error(
+                        RuntimeErrorKind::Unsupported,
+                        format!("host property is not writable: {}.{name}", receiver.kind),
+                        Some(span.line),
+                    )),
+                }
+            }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
                 "assignment target is not executable yet",
@@ -920,6 +941,16 @@ impl<'a> Runtime<'a> {
                     )
                 })
             }
+            Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
+                let receiver = current_with_object(frame, span.line)?;
+                self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::Unsupported,
+                        format!("host property is not available: {}.{name}", receiver.kind),
+                        Some(span.line),
+                    )
+                })
+            }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
                 "VBA expression is not executable yet",
@@ -978,6 +1009,20 @@ impl<'a> Runtime<'a> {
                                 )
                             })
                     }
+                    Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                        let receiver = current_with_object(frame, span.line)?;
+                        self.host_call(Some(&receiver), name, &values, span.line)?
+                            .ok_or_else(|| {
+                                error(
+                                    RuntimeErrorKind::Unsupported,
+                                    format!(
+                                        "host method is not available: {}.{name}",
+                                        receiver.kind
+                                    ),
+                                    Some(span.line),
+                                )
+                            })
+                    }
                     _ => Err(error(
                         RuntimeErrorKind::Unsupported,
                         "call target is not executable yet",
@@ -1000,6 +1045,19 @@ impl<'a> Runtime<'a> {
                             Some(span.line),
                         )
                     })
+            }
+            Expr::WithMember(name, span) | Expr::WithBangMember(name, span) => {
+                let receiver = current_with_object(frame, span.line)?;
+                if let Some(value) = self.host_call(Some(&receiver), name, &[], span.line)? {
+                    return Ok(value);
+                }
+                self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::Unsupported,
+                        format!("host member is not available: {}.{name}", receiver.kind),
+                        Some(span.line),
+                    )
+                })
             }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
@@ -1333,6 +1391,16 @@ fn expr_name(expr: &Expr) -> Option<&str> {
         Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Some(name),
         _ => None,
     }
+}
+
+fn current_with_object(frame: &Frame, line: u32) -> Result<ObjectRef, RuntimeError> {
+    frame.with_objects.last().cloned().ok_or_else(|| {
+        error(
+            RuntimeErrorKind::Unsupported,
+            "With member used outside a With block",
+            Some(line),
+        )
+    })
 }
 
 fn array_offset(array: &ArrayValue, index: i64, line: u32) -> Result<usize, RuntimeError> {
@@ -1758,7 +1826,21 @@ mod tests {
             name: &str,
             args: &[Value],
         ) -> Result<Option<Value>, String> {
-            if receiver.is_some() {
+            if let Some(receiver) = receiver {
+                if name.eq_ignore_ascii_case("offset") {
+                    let Some((row, column)) = Self::coordinates(receiver) else {
+                        return Ok(None);
+                    };
+                    let [row_offset, column_offset] = args else {
+                        return Err("Offset expects row and column offsets".to_string());
+                    };
+                    let row = row as i64 + number(row_offset)?.round_ties_even() as i64;
+                    let column = column as i64 + number(column_offset)?.round_ties_even() as i64;
+                    if row < 1 || column < 1 {
+                        return Err("Offset moved outside the sheet".to_string());
+                    }
+                    return Ok(Some(Self::cell_object(row as u32, column as u32)));
+                }
                 return Ok(None);
             }
             if name.eq_ignore_ascii_case("range") {
@@ -1878,6 +1960,44 @@ mod tests {
         let value = execute_with_host(&module, "WriteThroughObject", vec![], &mut host).unwrap();
         assert_eq!(value, Value::Integer(42));
         assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn with_blocks_read_write_call_and_restore_nested_host_objects() {
+        let module = parse_module(
+            "Public Function WithProbe() As Long\n\
+               With Range(\"A1\")\n\
+                 .Value = 10\n\
+                 With .Offset(1, 0)\n\
+                   .Value = 32\n\
+                 End With\n\
+                 WithProbe = .Value + .Offset(1, 0).Value\n\
+               End With\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "WithProbe", vec![], &mut host).unwrap();
+
+        assert_eq!(value, Value::Integer(42));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(10)));
+        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(32)));
+    }
+
+    #[test]
+    fn a_with_member_outside_a_with_block_fails_at_its_source_line() {
+        let failure = run(
+            "Public Function InvalidWith() As Variant\n\
+               InvalidWith = .Value\n\
+             End Function\n",
+            "InvalidWith",
+            vec![],
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.kind, RuntimeErrorKind::Unsupported);
+        assert_eq!(failure.line, Some(2));
+        assert!(failure.message.contains("outside a With block"));
     }
 
     #[test]
