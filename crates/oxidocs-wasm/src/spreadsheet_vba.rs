@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
 use oxivba_core::{execute_with_host, parse_module, ArrayValue, Host, ObjectRef, Value};
 use serde::{Deserialize, Serialize};
@@ -240,6 +242,22 @@ impl<'a> WorkbookHost<'a> {
         })))
     }
 
+    fn worksheet_axis_object_or_item(
+        &mut self,
+        sheet: usize,
+        axis: RangeAxis,
+        args: &[Value],
+    ) -> Result<Value, String> {
+        let range = CellRange {
+            sheet,
+            start_row: 1,
+            start_column: 0,
+            end_row: MAX_WORKSHEET_ROW,
+            end_column: MAX_WORKSHEET_COLUMN,
+        };
+        self.range_collection_object_or_item(range, axis, args)
+    }
+
     fn cells_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
         let [row, column] = args else {
             return Err("Cells expects row and column".to_string());
@@ -459,6 +477,61 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         Ok(self.object(HostObject::Range(CellRange::single(destination))))
+    }
+
+    fn current_region_object(&mut self, range: CellRange) -> Result<Value, String> {
+        let worksheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let mut occupied_rows = BTreeMap::<u32, BTreeSet<u32>>::new();
+        let mut occupied_columns = BTreeMap::<u32, BTreeSet<u32>>::new();
+        for row in &worksheet.rows {
+            for cell in row.cells.iter().filter(|cell| cell_has_content(cell)) {
+                occupied_rows.entry(row.index).or_default().insert(cell.col);
+                occupied_columns
+                    .entry(cell.col)
+                    .or_default()
+                    .insert(row.index);
+            }
+        }
+        let mut region = range;
+        loop {
+            let outer_start_row = region.start_row.saturating_sub(1).max(1);
+            let outer_start_column = region.start_column.saturating_sub(1);
+            let outer_end_row = region.end_row.saturating_add(1).min(MAX_WORKSHEET_ROW);
+            let outer_end_column = region
+                .end_column
+                .saturating_add(1)
+                .min(MAX_WORKSHEET_COLUMN);
+            let row_has_content = |row, start_column, end_column| {
+                occupied_rows.get(&row).is_some_and(|columns| {
+                    columns.range(start_column..=end_column).next().is_some()
+                })
+            };
+            let column_has_content = |column, start_row, end_row| {
+                occupied_columns
+                    .get(&column)
+                    .is_some_and(|rows| rows.range(start_row..=end_row).next().is_some())
+            };
+            let expand_top = region.start_row > 1
+                && row_has_content(region.start_row - 1, outer_start_column, outer_end_column);
+            let expand_bottom = region.end_row < MAX_WORKSHEET_ROW
+                && row_has_content(region.end_row + 1, outer_start_column, outer_end_column);
+            let expand_left = region.start_column > 0
+                && column_has_content(region.start_column - 1, outer_start_row, outer_end_row);
+            let expand_right = region.end_column < MAX_WORKSHEET_COLUMN
+                && column_has_content(region.end_column + 1, outer_start_row, outer_end_row);
+            if !expand_top && !expand_bottom && !expand_left && !expand_right {
+                break;
+            }
+            region.start_row -= u32::from(expand_top);
+            region.end_row += u32::from(expand_bottom);
+            region.start_column -= u32::from(expand_left);
+            region.end_column += u32::from(expand_right);
+        }
+        Ok(self.object(HostObject::Range(region)))
     }
 
     fn offset_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
@@ -683,12 +756,32 @@ impl Host for WorkbookHost<'_> {
                     }
                     return self.used_range_object(sheet).map(Some);
                 }
+                if name.eq_ignore_ascii_case("rows") {
+                    return self
+                        .worksheet_axis_object_or_item(sheet, RangeAxis::Rows, args)
+                        .map(Some);
+                }
+                if name.eq_ignore_ascii_case("columns") {
+                    return self
+                        .worksheet_axis_object_or_item(sheet, RangeAxis::Columns, args)
+                        .map(Some);
+                }
                 return Ok(None);
             }
             if (self.is_workbook(receiver) || self.is_application(receiver))
                 && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
             {
                 return self.worksheets_object_or_item(args).map(Some);
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("rows") {
+                return self
+                    .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Rows, args)
+                    .map(Some);
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("columns") {
+                return self
+                    .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Columns, args)
+                    .map(Some);
             }
             if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("item") {
                 let [value] = args else {
@@ -720,6 +813,12 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("end") {
                     return self.range_end(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("currentregion") {
+                    if !args.is_empty() {
+                        return Err("Range.CurrentRegion does not accept arguments".to_string());
+                    }
+                    return self.current_region_object(range).map(Some);
                 }
                 if name.eq_ignore_ascii_case("address") {
                     return range_address_from_args(range, args)
@@ -776,6 +875,16 @@ impl Host for WorkbookHost<'_> {
             }
             return self.used_range_object(self.active_sheet).map(Some);
         }
+        if name.eq_ignore_ascii_case("rows") {
+            return self
+                .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Rows, args)
+                .map(Some);
+        }
+        if name.eq_ignore_ascii_case("columns") {
+            return self
+                .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Columns, args)
+                .map(Some);
+        }
         Ok(None)
     }
 
@@ -791,6 +900,16 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
                 return Ok(Some(self.object(HostObject::Worksheets)));
+            }
+            if name.eq_ignore_ascii_case("rows") {
+                return self
+                    .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Rows, &[])
+                    .map(Some);
+            }
+            if name.eq_ignore_ascii_case("columns") {
+                return self
+                    .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Columns, &[])
+                    .map(Some);
             }
             return Ok(None);
         }
@@ -827,6 +946,16 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("usedrange") {
                 return self.used_range_object(sheet).map(Some);
             }
+            if name.eq_ignore_ascii_case("rows") {
+                return self
+                    .worksheet_axis_object_or_item(sheet, RangeAxis::Rows, &[])
+                    .map(Some);
+            }
+            if name.eq_ignore_ascii_case("columns") {
+                return self
+                    .worksheet_axis_object_or_item(sheet, RangeAxis::Columns, &[])
+                    .map(Some);
+            }
             return Ok(None);
         }
         let Some(range) = self.range(receiver) else {
@@ -849,6 +978,9 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("address") {
             return Ok(Some(Value::String(format_range_address(range, true, true))));
+        }
+        if name.eq_ignore_ascii_case("currentregion") {
+            return self.current_region_object(range).map(Some);
         }
         if name.eq_ignore_ascii_case("rows") {
             return Ok(Some(
@@ -1530,6 +1662,35 @@ mod tests {
         };
 
         assert_eq!(result, Value::String("D4:F7|4|3|A1".to_string()));
+    }
+
+    #[test]
+    fn vba_discovers_current_regions_and_worksheet_dimensions() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function InspectRegions() As String\n\
+               Range(\"B2\").Value = 1\n\
+               Range(\"C3\").Formula = \"=1+1\"\n\
+               Range(\"D1\").Value = 1\n\
+               Range(\"H2\").Value = 1\n\
+               Range(\"J2\").Value = 1\n\
+               Range(\"H6\").Value = 1\n\
+               Range(\"J7\").Value = 1\n\
+               InspectRegions = Rows.Count & \"|\" & Columns.Count & \"|\" & ActiveSheet.Rows.Count & \"|\" & Worksheets(1).Columns.Count & \"|\" & Application.Rows.Count & \"|\" & Application.Columns.Count & \"|\" & Range(\"B2\").CurrentRegion.Address(False, False) & \"|\" & Range(\"H2\").CurrentRegion.Address(False, False) & \"|\" & Range(\"I2\").CurrentRegion.Address(False, False) & \"|\" & Range(\"H6\").CurrentRegion.Address(False, False) & \"|\" & Range(\"I6\").CurrentRegion.Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "InspectRegions", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "1048576|16384|1048576|16384|1048576|16384|B1:D3|H2|H2:J2|H6|H6:J7".to_string()
+            )
+        );
     }
 
     #[test]
