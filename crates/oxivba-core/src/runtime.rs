@@ -6,14 +6,15 @@
 //!
 //! This first browser-runtime slice supports scalar values, local variables,
 //! arithmetic, comparisons, branches, loops, and calls between VBA procedures.
-//! Office objects, arrays, `ByRef`, file I/O, and events fail explicitly rather
-//! than being approximated.
+//! Office objects, multidimensional arrays, `ByRef`, file I/O, and events fail
+//! explicitly rather than being approximated.
 
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForStmt, Literal, LoopTest, Module, ModuleItem,
-    ProcKind, Procedure, SelectCaseStmt, Statement, TypeName, UnaryOp, VarDecl,
+    Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind, Expr, ForEachStmt, ForStmt,
+    Literal, LoopTest, Module, ModuleItem, ModuleOption, ProcKind, Procedure, SelectCaseStmt,
+    Statement, TypeName, UnaryOp, VarDecl, VarItem,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +25,23 @@ pub enum Value {
     Integer(i64),
     Double(f64),
     String(String),
+    Array(ArrayValue),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayValue {
+    pub lower_bound: i64,
+    pub values: Vec<Value>,
+    pub element_default: Box<Value>,
+}
+
+impl ArrayValue {
+    pub fn upper_bound(&self) -> i64 {
+        match self.values.len().checked_sub(1) {
+            Some(offset) => self.lower_bound.saturating_add(offset as i64),
+            None => self.lower_bound.saturating_sub(1),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +51,7 @@ pub enum RuntimeErrorKind {
     UndefinedVariable,
     TypeMismatch,
     Overflow,
+    SubscriptOutOfRange,
     DivisionByZero,
     Unsupported,
     StepLimit,
@@ -220,6 +239,16 @@ impl<'a> Runtime<'a> {
                 self.declare_locals(decl, frame)?;
                 Ok(Flow::Continue)
             }
+            Statement::ReDim {
+                preserve,
+                items,
+                span,
+            } => {
+                for item in items {
+                    self.redim(item, *preserve, frame, span.line)?;
+                }
+                Ok(Flow::Continue)
+            }
             Statement::If(branch) => {
                 if truthy(&self.eval_expr(&branch.condition, frame)?).map_err(|message| {
                     error(
@@ -248,6 +277,7 @@ impl<'a> Runtime<'a> {
                 }
             }
             Statement::For(loop_) => self.exec_for(loop_, frame),
+            Statement::ForEach(loop_) => self.exec_for_each(loop_, frame),
             Statement::Do(loop_) => self.exec_do(loop_, frame),
             Statement::SelectCase(select) => self.exec_select_case(select, frame),
             Statement::While {
@@ -381,6 +411,31 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn exec_for_each(
+        &mut self,
+        loop_: &ForEachStmt,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let collection = self.eval_expr(&loop_.collection, frame)?;
+        let Value::Array(array) = collection else {
+            return Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "For Each currently requires a VBA array",
+                Some(loop_.span.line),
+            ));
+        };
+        for value in array.values {
+            self.tick(Some(loop_.span.line))?;
+            self.assign(&loop_.item, value, frame, loop_.span.line)?;
+            match self.exec_body(&loop_.body, frame)? {
+                Flow::Continue => {}
+                Flow::Exit(ExitKind::For) => return Ok(Flow::Continue),
+                flow => return Ok(flow),
+            }
+        }
+        Ok(Flow::Continue)
+    }
+
     fn exec_do(&mut self, loop_: &DoStmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
         loop {
             self.tick(Some(loop_.span.line))?;
@@ -443,41 +498,189 @@ impl<'a> Runtime<'a> {
 
     fn declare_locals(&mut self, decl: &VarDecl, frame: &mut Frame) -> Result<(), RuntimeError> {
         for variable in &decl.items {
-            if variable.array_bounds.is_some() {
-                return Err(error(
-                    RuntimeErrorKind::Unsupported,
-                    "local arrays are not executable yet",
-                    Some(decl.span.line),
-                ));
-            }
-            let value = match &variable.value {
-                Some(expr) => self.eval_expr(expr, frame)?,
-                None => default_value(&variable.type_name),
+            let value = match &variable.array_bounds {
+                Some(bounds) => {
+                    self.make_array(bounds, &variable.type_name, frame, decl.span.line)?
+                }
+                None => match &variable.value {
+                    Some(expr) => self.eval_expr(expr, frame)?,
+                    None => default_value(&variable.type_name),
+                },
             };
             frame.values.insert(key(&variable.name), value);
         }
         Ok(())
     }
 
+    fn redim(
+        &mut self,
+        item: &VarItem,
+        preserve: bool,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<(), RuntimeError> {
+        let bounds = item.array_bounds.as_ref().ok_or_else(|| {
+            error(
+                RuntimeErrorKind::TypeMismatch,
+                "ReDim target must have array bounds",
+                Some(line),
+            )
+        })?;
+        let mut replacement = match self.make_array(bounds, &item.type_name, frame, line)? {
+            Value::Array(array) => array,
+            _ => unreachable!(),
+        };
+        if item.type_name.name.eq_ignore_ascii_case("variant") {
+            if let Some(Value::Array(existing)) = frame.values.get(&key(&item.name)) {
+                replacement.element_default = existing.element_default.clone();
+                replacement.values.fill(*existing.element_default.clone());
+            }
+        }
+        if preserve {
+            let existing = frame.values.get(&key(&item.name)).ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::UndefinedVariable,
+                    format!("undefined VBA array: {}", item.name),
+                    Some(line),
+                )
+            })?;
+            let Value::Array(existing) = existing else {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    format!("ReDim Preserve target is not an array: {}", item.name),
+                    Some(line),
+                ));
+            };
+            if !existing.values.is_empty() && existing.lower_bound != replacement.lower_bound {
+                return Err(error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    "ReDim Preserve cannot change an array's lower bound",
+                    Some(line),
+                ));
+            }
+            let first = existing.lower_bound.max(replacement.lower_bound);
+            let last = existing.upper_bound().min(replacement.upper_bound());
+            for index in first..=last {
+                replacement.values[(index - replacement.lower_bound) as usize] =
+                    existing.values[(index - existing.lower_bound) as usize].clone();
+            }
+        }
+        frame
+            .values
+            .insert(key(&item.name), Value::Array(replacement));
+        Ok(())
+    }
+
+    fn make_array(
+        &mut self,
+        bounds: &[ArrayBound],
+        element_type: &TypeName,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<Value, RuntimeError> {
+        if bounds.is_empty() {
+            return Ok(Value::Array(ArrayValue {
+                lower_bound: self.option_base(),
+                values: Vec::new(),
+                element_default: Box::new(default_value(element_type)),
+            }));
+        }
+        if bounds.len() != 1 {
+            return Err(error(
+                RuntimeErrorKind::Unsupported,
+                "only one-dimensional VBA arrays are executable yet",
+                Some(line),
+            ));
+        }
+        let bound = &bounds[0];
+        let lower = match &bound.lower {
+            Some(lower) => self.array_index(lower, frame, line)?,
+            None => self.option_base(),
+        };
+        let upper = self.array_index(&bound.upper, frame, line)?;
+        if upper < lower {
+            return Err(error(
+                RuntimeErrorKind::SubscriptOutOfRange,
+                format!("invalid VBA array bounds: {lower} To {upper}"),
+                Some(line),
+            ));
+        }
+        let len = upper
+            .checked_sub(lower)
+            .and_then(|value| value.checked_add(1))
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|len| *len <= 1_000_000)
+            .ok_or_else(|| {
+                error(
+                    RuntimeErrorKind::Overflow,
+                    "VBA array is too large for the browser runtime",
+                    Some(line),
+                )
+            })?;
+        let default = default_value(element_type);
+        Ok(Value::Array(ArrayValue {
+            lower_bound: lower,
+            values: vec![default.clone(); len],
+            element_default: Box::new(default),
+        }))
+    }
+
+    fn option_base(&self) -> i64 {
+        self.module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Option(ModuleOption::Base(value), _) => Some(*value as i64),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
     fn assign(
-        &self,
+        &mut self,
         target: &Expr,
         value: Value,
         frame: &mut Frame,
         line: u32,
     ) -> Result<(), RuntimeError> {
-        let name = match target {
-            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => name,
-            _ => {
-                return Err(error(
-                    RuntimeErrorKind::Unsupported,
-                    "only scalar variable assignment is executable yet",
-                    Some(line),
-                ))
+        match target {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                frame.values.insert(key(name), value);
+                Ok(())
             }
-        };
-        frame.values.insert(key(name), value);
-        Ok(())
+            Expr::Index { target, args, .. } => {
+                let name = expr_name(target).ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::Unsupported,
+                        "array assignment target must be a local variable",
+                        Some(line),
+                    )
+                })?;
+                let index = self.single_array_argument(args, frame, line)?;
+                let array = frame.values.get_mut(&key(name)).ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::UndefinedVariable,
+                        format!("undefined VBA array: {name}"),
+                        Some(line),
+                    )
+                })?;
+                let Value::Array(array) = array else {
+                    return Err(error(
+                        RuntimeErrorKind::TypeMismatch,
+                        format!("VBA value is not an array: {name}"),
+                        Some(line),
+                    ));
+                };
+                let offset = array_offset(array, index, line)?;
+                array.values[offset] = value;
+                Ok(())
+            }
+            _ => Err(error(
+                RuntimeErrorKind::Unsupported,
+                "assignment target is not executable yet",
+                Some(line),
+            )),
+        }
     }
 
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
@@ -503,6 +706,19 @@ impl<'a> Runtime<'a> {
                 let rhs = self.eval_expr(rhs, frame)?;
                 binary(*op, lhs, rhs)
                     .map_err(|(kind, message)| error(kind, message, Some(span.line)))
+            }
+            Expr::Index {
+                target, args, span, ..
+            } if expr_name(target).is_some_and(|name| {
+                matches!(frame.values.get(&key(name)), Some(Value::Array(_)))
+            }) =>
+            {
+                let name = expr_name(target).unwrap();
+                let index = self.single_array_argument(args, frame, span.line)?;
+                let Value::Array(array) = frame.values.get(&key(name)).unwrap() else {
+                    unreachable!()
+                };
+                Ok(array.values[array_offset(array, index, span.line)?].clone())
             }
             Expr::Index { .. } => self.eval_call(expr, frame),
             _ => Err(error(
@@ -569,6 +785,50 @@ impl<'a> Runtime<'a> {
         self.call_procedure(name, args, line)
     }
 
+    fn single_array_argument(
+        &mut self,
+        args: &[Argument],
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<i64, RuntimeError> {
+        if args.len() != 1 || args[0].name.is_some() {
+            return Err(error(
+                RuntimeErrorKind::SubscriptOutOfRange,
+                "one-dimensional VBA array requires exactly one index",
+                Some(line),
+            ));
+        }
+        let index = args[0].value.as_ref().ok_or_else(|| {
+            error(
+                RuntimeErrorKind::SubscriptOutOfRange,
+                "VBA array index cannot be omitted",
+                Some(line),
+            )
+        })?;
+        self.array_index(index, frame, line)
+    }
+
+    fn array_index(
+        &mut self,
+        expr: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<i64, RuntimeError> {
+        let value = self.eval_expr(expr, frame)?;
+        let number = number(&value)
+            .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?;
+        let rounded = number.round_ties_even();
+        if !rounded.is_finite() || rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+            Err(error(
+                RuntimeErrorKind::Overflow,
+                "VBA array index is outside the supported integer range",
+                Some(line),
+            ))
+        } else {
+            Ok(rounded as i64)
+        }
+    }
+
     fn tick(&mut self, line: Option<u32>) -> Result<(), RuntimeError> {
         self.steps += 1;
         if self.steps > self.max_steps {
@@ -591,6 +851,28 @@ fn error(kind: RuntimeErrorKind, message: impl Into<String>, line: Option<u32>) 
     }
 }
 
+fn expr_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
+fn array_offset(array: &ArrayValue, index: i64, line: u32) -> Result<usize, RuntimeError> {
+    if array.values.is_empty() || index < array.lower_bound || index > array.upper_bound() {
+        return Err(error(
+            RuntimeErrorKind::SubscriptOutOfRange,
+            format!(
+                "VBA array index {index} is outside {} To {}",
+                array.lower_bound,
+                array.upper_bound()
+            ),
+            Some(line),
+        ));
+    }
+    Ok((index - array.lower_bound) as usize)
+}
+
 fn call_builtin(
     name: &str,
     args: &[Value],
@@ -599,12 +881,58 @@ fn call_builtin(
     let name = name.to_ascii_lowercase();
     let known = matches!(
         name.as_str(),
-        "abs" | "cbool" | "cdbl" | "clng" | "cstr" | "lcase" | "len" | "trim" | "ucase"
+        "abs"
+            | "array"
+            | "cbool"
+            | "cdbl"
+            | "clng"
+            | "cstr"
+            | "lbound"
+            | "lcase"
+            | "len"
+            | "trim"
+            | "ubound"
+            | "ucase"
     );
     if !known {
         return None;
     }
     Some((|| {
+        if name == "array" {
+            return Ok(Value::Array(ArrayValue {
+                lower_bound: 0,
+                values: args.to_vec(),
+                element_default: Box::new(Value::Empty),
+            }));
+        }
+        if matches!(name.as_str(), "lbound" | "ubound") {
+            if !(1..=2).contains(&args.len()) {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("{name} expects 1 or 2 arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            if args.len() == 2 && number(&args[1]).ok().map(f64::round_ties_even) != Some(1.0) {
+                return Err(error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    "only array dimension 1 is supported",
+                    line,
+                ));
+            }
+            let Value::Array(array) = &args[0] else {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    format!("{name} requires an array"),
+                    line,
+                ));
+            };
+            return Ok(Value::Integer(if name == "lbound" {
+                array.lower_bound
+            } else {
+                array.upper_bound()
+            }));
+        }
         if args.len() != 1 {
             return Err(error(
                 RuntimeErrorKind::ArgumentCount,
@@ -642,23 +970,27 @@ fn call_builtin(
             }
             "cstr" => match value {
                 Value::Null => Err(mismatch("invalid use of Null".to_string())),
-                _ => Ok(Value::String(text(value))),
+                _ => Ok(Value::String(text(value).map_err(mismatch)?)),
             },
             "lcase" => match value {
                 Value::Null => Ok(Value::Null),
-                _ => Ok(Value::String(text(value).to_lowercase())),
+                _ => Ok(Value::String(text(value).map_err(mismatch)?.to_lowercase())),
             },
             "len" => match value {
                 Value::Null => Err(mismatch("invalid use of Null".to_string())),
-                _ => Ok(Value::Integer(text(value).encode_utf16().count() as i64)),
+                _ => Ok(Value::Integer(
+                    text(value).map_err(mismatch)?.encode_utf16().count() as i64,
+                )),
             },
             "trim" => match value {
                 Value::Null => Ok(Value::Null),
-                _ => Ok(Value::String(text(value).trim_matches(' ').to_string())),
+                _ => Ok(Value::String(
+                    text(value).map_err(mismatch)?.trim_matches(' ').to_string(),
+                )),
             },
             "ucase" => match value {
                 Value::Null => Ok(Value::Null),
-                _ => Ok(Value::String(text(value).to_uppercase())),
+                _ => Ok(Value::String(text(value).map_err(mismatch)?.to_uppercase())),
             },
             _ => unreachable!(),
         }
@@ -719,6 +1051,7 @@ fn number(value: &Value) -> Result<f64, String> {
             .parse()
             .map_err(|_| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
+        Value::Array(_) => Err("type mismatch converting array to number".to_string()),
     }
 }
 
@@ -735,6 +1068,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
             .parse::<f64>()
             .map(|number| number != 0.0)
             .map_err(|_| "type mismatch converting String to Boolean".to_string()),
+        Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
     }
 }
 
@@ -752,6 +1086,12 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
 
 fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKind, String)> {
     use BinaryOp::*;
+    if matches!(lhs, Value::Array(_)) || matches!(rhs, Value::Array(_)) {
+        return Err((
+            RuntimeErrorKind::TypeMismatch,
+            "VBA arrays cannot be used as scalar operands".to_string(),
+        ));
+    }
     if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
         return Ok(Value::Null);
     }
@@ -763,7 +1103,11 @@ fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKi
         ))
     };
     match op {
-        Concat => Ok(Value::String(format!("{}{}", text(&lhs), text(&rhs)))),
+        Concat => Ok(Value::String(format!(
+            "{}{}",
+            text(&lhs).map_err(mismatch)?,
+            text(&rhs).map_err(mismatch)?
+        ))),
         Add | Sub | Mul | Div | IntDiv | Mod | Pow => {
             let (a, b) = numbers()?;
             if matches!(op, Div | IntDiv | Mod) && b == 0.0 {
@@ -830,8 +1174,8 @@ fn numeric_result(value: f64, lhs: &Value, rhs: &Value) -> Value {
     }
 }
 
-fn text(value: &Value) -> String {
-    match value {
+fn text(value: &Value) -> Result<String, String> {
+    Ok(match value {
         Value::Empty => String::new(),
         Value::Null => "Null".to_string(),
         Value::Boolean(true) => "True".to_string(),
@@ -839,13 +1183,15 @@ fn text(value: &Value) -> String {
         Value::Integer(value) => value.to_string(),
         Value::Double(value) => value.to_string(),
         Value::String(value) => value.clone(),
-    }
+        Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
+    })
 }
 
 fn line_of(statement: &Statement) -> Option<u32> {
     match statement {
         Statement::Assign { span, .. }
         | Statement::SetAssign { span, .. }
+        | Statement::ReDim { span, .. }
         | Statement::Call { span, .. }
         | Statement::Exit { span, .. }
         | Statement::End { span }
@@ -866,7 +1212,6 @@ fn line_of(statement: &Statement) -> Option<u32> {
 
 fn statement_name(statement: &Statement) -> &'static str {
     match statement {
-        Statement::ForEach(_) => "For Each",
         Statement::SetAssign { .. } => "Set",
         Statement::With { .. } => "With",
         Statement::OnError(_) => "On Error",
@@ -1068,6 +1413,78 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
         assert_eq!(failure.line, Some(2));
+    }
+
+    #[test]
+    fn indexes_fixed_arrays_and_iterates_them_with_for_each() {
+        let value = run(
+            "Option Base 1\n\
+             Public Function ArrayTotal() As Long\n\
+               Dim values(3) As Long\n\
+               Dim item As Variant\n\
+               Dim total As Long\n\
+               values(1) = 2\n\
+               values(2) = 4\n\
+               values(3) = 6\n\
+               For Each item In values\n\
+                 total = total + item\n\
+               Next item\n\
+               ArrayTotal = total + LBound(values) * 100 + UBound(values) * 10\n\
+             End Function\n",
+            "ArrayTotal",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(142));
+    }
+
+    #[test]
+    fn creates_array_values_and_preserves_elements_across_redim() {
+        let value = run(
+            "Public Function Resize() As Long\n\
+               Dim values() As Long\n\
+               ReDim values(1 To 2)\n\
+               values(1) = 7\n\
+               values(2) = 8\n\
+               ReDim Preserve values(1 To 3)\n\
+               values(3) = UBound(Array(10, 20, 30))\n\
+               Resize = values(1) + values(2) + values(3)\n\
+             End Function\n",
+            "Resize",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::Integer(17));
+    }
+
+    #[test]
+    fn reports_out_of_range_array_access() {
+        let failure = run(
+            "Public Function Broken() As Long\n\
+               Dim values(1 To 2) As Long\n\
+               Broken = values(3)\n\
+             End Function\n",
+            "Broken",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::SubscriptOutOfRange);
+        assert_eq!(failure.line, Some(3));
+    }
+
+    #[test]
+    fn redim_preserve_rejects_a_changed_lower_bound() {
+        let failure = run(
+            "Public Sub Broken()\n\
+               Dim values(1 To 2) As Long\n\
+               ReDim Preserve values(0 To 3)\n\
+             End Sub\n",
+            "Broken",
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::SubscriptOutOfRange);
+        assert_eq!(failure.line, Some(3));
     }
 
     #[test]
