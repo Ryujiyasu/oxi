@@ -29,6 +29,8 @@ pub enum Value {
     /// An omitted `Optional ... As Variant` argument. Unlike `Empty`, this is
     /// observable through VBA's `IsMissing` function.
     Missing,
+    /// The null object reference used by `Set value = Nothing`.
+    Nothing,
     Null,
     Boolean(bool),
     Integer(i64),
@@ -83,6 +85,7 @@ pub enum RuntimeErrorKind {
     ArgumentCount,
     UndefinedVariable,
     TypeMismatch,
+    ObjectVariableNotSet,
     Overflow,
     SubscriptOutOfRange,
     Host,
@@ -635,10 +638,10 @@ impl<'a> Runtime<'a> {
                 span,
             } => {
                 let value = self.eval_expr(value, frame)?;
-                if !matches!(value, Value::Object(_)) {
+                if !matches!(value, Value::Object(_) | Value::Nothing) {
                     return Err(error(
                         RuntimeErrorKind::TypeMismatch,
-                        "Set requires an object value",
+                        "Set requires an object value or Nothing",
                         Some(span.line),
                     ));
                 }
@@ -1327,6 +1330,22 @@ impl<'a> Runtime<'a> {
                 binary(*op, lhs, rhs)
                     .map_err(|(kind, message)| error(kind, message, Some(span.line)))
             }
+            Expr::TypeOf {
+                operand,
+                type_name,
+                span,
+            } => match self.eval_expr(operand, frame)? {
+                Value::Object(object) => Ok(Value::Boolean(
+                    object.kind.eq_ignore_ascii_case(type_name)
+                        || type_name.eq_ignore_ascii_case("object"),
+                )),
+                Value::Nothing => Ok(Value::Boolean(false)),
+                _ => Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "TypeOf requires an object expression",
+                    Some(span.line),
+                )),
+            },
             Expr::Index {
                 target, args, span, ..
             } if expr_name(target).is_some_and(|name| {
@@ -1681,6 +1700,11 @@ impl<'a> Runtime<'a> {
         })?;
         match value {
             Value::Object(object) => Ok(object),
+            Value::Nothing => Err(error(
+                RuntimeErrorKind::ObjectVariableNotSet,
+                "object variable or With block variable not set",
+                Some(line),
+            )),
             _ => Err(error(
                 RuntimeErrorKind::TypeMismatch,
                 "VBA member access requires an object",
@@ -1850,6 +1874,7 @@ fn runtime_error_number(failure: &RuntimeError) -> i64 {
         RuntimeErrorKind::ProcedureNotFound | RuntimeErrorKind::UndefinedVariable => 35,
         RuntimeErrorKind::ArgumentCount => 450,
         RuntimeErrorKind::TypeMismatch => 13,
+        RuntimeErrorKind::ObjectVariableNotSet => 91,
         RuntimeErrorKind::Overflow => 6,
         RuntimeErrorKind::SubscriptOutOfRange => 9,
         RuntimeErrorKind::Host => 1004,
@@ -2020,13 +2045,20 @@ fn call_builtin(
             | "cdbl"
             | "clng"
             | "cstr"
+            | "isarray"
+            | "isempty"
             | "ismissing"
+            | "isnull"
+            | "isnumeric"
+            | "isobject"
             | "lbound"
             | "lcase"
             | "len"
             | "trim"
+            | "typename"
             | "ubound"
             | "ucase"
+            | "vartype"
     );
     if !known {
         return None;
@@ -2048,6 +2080,33 @@ fn call_builtin(
                 ));
             }
             return Ok(Value::Boolean(matches!(args[0], Value::Missing)));
+        }
+        if matches!(
+            name.as_str(),
+            "isarray" | "isempty" | "isnull" | "isnumeric" | "isobject" | "typename" | "vartype"
+        ) {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("{name} expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            let value = &args[0];
+            return Ok(match name.as_str() {
+                "isarray" => Value::Boolean(matches!(value, Value::Array(_))),
+                "isempty" => Value::Boolean(matches!(value, Value::Empty)),
+                "isnull" => Value::Boolean(matches!(value, Value::Null)),
+                "isnumeric" => Value::Boolean(match value {
+                    Value::Integer(_) | Value::Double(_) => true,
+                    Value::String(value) => value.parse::<f64>().is_ok(),
+                    _ => false,
+                }),
+                "isobject" => Value::Boolean(matches!(value, Value::Object(_) | Value::Nothing)),
+                "typename" => Value::String(value_type_name(value)),
+                "vartype" => Value::Integer(value_var_type(value)),
+                _ => unreachable!(),
+            });
         }
         if matches!(name.as_str(), "lbound" | "ubound") {
             if !(1..=2).contains(&args.len()) {
@@ -2154,7 +2213,8 @@ fn literal_value(literal: &Literal) -> Value {
             .unwrap_or_else(|_| Value::Double(digits.parse().unwrap_or(f64::INFINITY))),
         Literal::Str(value) | Literal::Date(value) => Value::String(value.clone()),
         Literal::Bool(value) => Value::Boolean(*value),
-        Literal::Empty | Literal::Nothing => Value::Empty,
+        Literal::Empty => Value::Empty,
+        Literal::Nothing => Value::Nothing,
         Literal::Null => Value::Null,
     }
 }
@@ -2172,7 +2232,10 @@ fn default_value(type_name: &TypeName) -> Value {
         "boolean" => Value::Boolean(false),
         "byte" | "integer" | "long" | "longlong" | "longptr" | "currency" => Value::Integer(0),
         "single" | "double" | "decimal" => Value::Double(0.0),
+        "date" => Value::Double(0.0),
         "string" => Value::String(String::new()),
+        "object" | "application" | "workbook" | "worksheet" | "range" | "chart" | "shape"
+        | "collection" | "dictionary" => Value::Nothing,
         _ => Value::Empty,
     }
 }
@@ -2183,6 +2246,35 @@ fn default_return_value(procedure: &Procedure) -> Value {
         .as_ref()
         .map(default_value)
         .unwrap_or(Value::Empty)
+}
+
+fn value_type_name(value: &Value) -> String {
+    match value {
+        Value::Empty => "Empty".to_string(),
+        Value::Missing => "Missing".to_string(),
+        Value::Nothing => "Nothing".to_string(),
+        Value::Null => "Null".to_string(),
+        Value::Boolean(_) => "Boolean".to_string(),
+        Value::Integer(_) => "Long".to_string(),
+        Value::Double(_) => "Double".to_string(),
+        Value::String(_) => "String".to_string(),
+        Value::Array(_) => "Variant()".to_string(),
+        Value::Object(object) => object.kind.clone(),
+    }
+}
+
+fn value_var_type(value: &Value) -> i64 {
+    match value {
+        Value::Empty => 0,
+        Value::Null => 1,
+        Value::Integer(_) => 3,
+        Value::Double(_) => 5,
+        Value::String(_) => 8,
+        Value::Object(_) | Value::Nothing => 9,
+        Value::Boolean(_) => 11,
+        Value::Array(_) => 8_192 + 12,
+        Value::Missing => 12,
+    }
 }
 
 fn argument_count_error(procedure: &Procedure, received: usize, line: Option<u32>) -> RuntimeError {
@@ -2209,6 +2301,7 @@ fn number(value: &Value) -> Result<f64, String> {
             .map_err(|_| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
+        Value::Nothing => Err("object variable or With block variable not set".to_string()),
         Value::Array(_) => Err("type mismatch converting array to number".to_string()),
         Value::Object(_) => Err("type mismatch converting object to number".to_string()),
     }
@@ -2230,6 +2323,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
         Value::Object(_) => Err("type mismatch converting object to Boolean".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
+        Value::Nothing => Err("object variable or With block variable not set".to_string()),
     }
 }
 
@@ -2247,9 +2341,26 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
 
 fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKind, String)> {
     use BinaryOp::*;
-    if matches!(lhs, Value::Array(_) | Value::Object(_) | Value::Missing)
-        || matches!(rhs, Value::Array(_) | Value::Object(_) | Value::Missing)
-    {
+    if op == Is {
+        return match (lhs, rhs) {
+            (Value::Nothing, Value::Nothing) => Ok(Value::Boolean(true)),
+            (Value::Object(_), Value::Nothing) | (Value::Nothing, Value::Object(_)) => {
+                Ok(Value::Boolean(false))
+            }
+            (Value::Object(left), Value::Object(right)) => Ok(Value::Boolean(left == right)),
+            _ => Err((
+                RuntimeErrorKind::TypeMismatch,
+                "Is requires two object expressions".to_string(),
+            )),
+        };
+    }
+    if matches!(
+        lhs,
+        Value::Array(_) | Value::Object(_) | Value::Missing | Value::Nothing
+    ) || matches!(
+        rhs,
+        Value::Array(_) | Value::Object(_) | Value::Missing | Value::Nothing
+    ) {
         return Err((
             RuntimeErrorKind::TypeMismatch,
             "VBA arrays and objects cannot be used as scalar operands".to_string(),
@@ -2321,7 +2432,8 @@ fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKi
                 _ => unreachable!(),
             }))
         }
-        Is | Like => Err((
+        Is => unreachable!(),
+        Like => Err((
             RuntimeErrorKind::Unsupported,
             format!("operator {op:?} is not executable yet"),
         )),
@@ -2341,6 +2453,7 @@ fn text(value: &Value) -> Result<String, String> {
     Ok(match value {
         Value::Empty => String::new(),
         Value::Missing => return Err("invalid use of Missing".to_string()),
+        Value::Nothing => return Err("object variable or With block variable not set".to_string()),
         Value::Null => "Null".to_string(),
         Value::Boolean(true) => "True".to_string(),
         Value::Boolean(false) => "False".to_string(),
@@ -2754,6 +2867,68 @@ mod tests {
         let value = execute_with_host(&module, "WriteThroughObject", vec![], &mut host).unwrap();
         assert_eq!(value, Value::Integer(42));
         assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(42)));
+    }
+
+    #[test]
+    fn nothing_object_identity_and_typeof_follow_vba_object_semantics() {
+        let module = parse_module(
+            "Public Function ObjectSemantics() As String\n\
+               Dim first As Object\n\
+               Dim same As Object\n\
+               Dim other As Object\n\
+               ObjectSemantics = (first Is Nothing) & \"|\"\n\
+               Set first = Range(\"A1\")\n\
+               Set same = Range(\"A1\")\n\
+               Set other = Range(\"A2\")\n\
+               ObjectSemantics = ObjectSemantics & (first Is same) & \"|\" & (first Is other) & \"|\" & (TypeOf first Is Cell) & \"|\" & (TypeOf first Is Object) & \"|\" & TypeName(first) & \"|\" & VarType(first) & \"|\"\n\
+               Set same = Nothing\n\
+               ObjectSemantics = ObjectSemantics & (same Is Nothing) & \"|\" & IsObject(same) & \"|\" & TypeName(same)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "ObjectSemantics", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("True|True|False|True|True|Cell|9|True|True|Nothing".to_string())
+        );
+    }
+
+    #[test]
+    fn dereferencing_nothing_raises_vba_error_91() {
+        let module = parse_module(
+            "Public Function MissingObject() As Long\n\
+               Dim cell As Range\n\
+               On Error Resume Next\n\
+               MissingObject = cell.Value\n\
+               MissingObject = Err.Number\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "MissingObject", vec![], &mut host).unwrap();
+
+        assert_eq!(value, Value::Integer(91));
+    }
+
+    #[test]
+    fn intrinsic_type_predicates_distinguish_vba_value_categories() {
+        let value = run(
+            "Public Function TypePredicates() As String\n\
+               Dim values As Variant\n\
+               values = Array(1, 2)\n\
+               TypePredicates = IsEmpty(Empty) & \"|\" & IsNull(Null) & \"|\" & IsNumeric(\"12.5\") & \"|\" & IsNumeric(\"no\") & \"|\" & IsArray(values) & \"|\" & TypeName(values) & \"|\" & VarType(values)\n\
+             End Function\n",
+            "TypePredicates",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("True|True|True|False|True|Variant()|8204".to_string())
+        );
     }
 
     #[test]

@@ -1270,6 +1270,7 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
     match value {
         Value::Empty | Value::Null => Ok(CellValue::Empty),
         Value::Missing => Err("an omitted VBA argument cannot be assigned to a cell".to_string()),
+        Value::Nothing => Err("Nothing cannot be assigned to a spreadsheet cell".to_string()),
         Value::Boolean(value) => Ok(CellValue::Boolean(value)),
         Value::Integer(value) => Ok(CellValue::Number(value as f64)),
         Value::Double(value) => Ok(CellValue::Number(value)),
@@ -1318,6 +1319,7 @@ impl From<InputValue> for Value {
 enum OutputValue {
     Empty,
     Missing,
+    Nothing,
     Null,
     Boolean(bool),
     Integer(i64),
@@ -1338,6 +1340,7 @@ impl From<Value> for OutputValue {
         match value {
             Value::Empty => Self::Empty,
             Value::Missing => Self::Missing,
+            Value::Nothing => Self::Nothing,
             Value::Null => Self::Null,
             Value::Boolean(value) => Self::Boolean(value),
             Value::Integer(value) => Self::Integer(value),
@@ -1672,6 +1675,41 @@ mod tests {
         };
 
         assert_eq!(result, Value::Integer(84));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(42.0)
+        ));
+    }
+
+    #[test]
+    fn vba_tracks_nothing_and_range_object_identity() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function ObjectState() As String\n\
+               Dim target As Range\n\
+               Dim aliasValue As Object\n\
+               ObjectState = (target Is Nothing) & \"|\"\n\
+               Set target = Range(\"A1\")\n\
+               Set aliasValue = target\n\
+               target.Value = 42\n\
+               ObjectState = ObjectState & (target Is aliasValue) & \"|\" & (TypeOf target Is Range) & \"|\" & TypeName(target) & \"|\"\n\
+               Set aliasValue = Nothing\n\
+               ObjectState = ObjectState & (aliasValue Is Nothing) & \"|\" & IsObject(aliasValue) & \"|\"\n\
+               On Error Resume Next\n\
+               ObjectState = aliasValue.Value\n\
+               ObjectState = ObjectState & Err.Number\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ObjectState", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("True|True|True|Range|True|True|91".to_string())
+        );
         assert!(matches!(
             workbook.sheets[0].rows[0].cells[0].value,
             CellValue::Number(42.0)
