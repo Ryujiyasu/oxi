@@ -1,0 +1,389 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
+use oxivba_core::{execute_with_host, parse_module, Host, ObjectRef, Value};
+use serde::{Deserialize, Serialize};
+use wasm_bindgen::prelude::*;
+
+#[derive(Debug, Clone, Copy)]
+struct CellAddress {
+    sheet: usize,
+    row: u32,
+    column: u32,
+}
+
+struct WorkbookHost<'a> {
+    workbook: &'a mut Workbook,
+    active_sheet: usize,
+    objects: Vec<CellAddress>,
+}
+
+impl<'a> WorkbookHost<'a> {
+    fn new(workbook: &'a mut Workbook, active_sheet: usize) -> Result<Self, String> {
+        if active_sheet >= workbook.sheets.len() {
+            return Err(format!(
+                "active sheet index is out of range: {active_sheet}"
+            ));
+        }
+        Ok(Self {
+            workbook,
+            active_sheet,
+            objects: Vec::new(),
+        })
+    }
+
+    fn object(&mut self, address: CellAddress) -> Value {
+        let handle = self.objects.len() as u64;
+        self.objects.push(address);
+        Value::Object(ObjectRef {
+            handle,
+            kind: "Range".to_string(),
+        })
+    }
+
+    fn address(&self, object: &ObjectRef) -> Option<CellAddress> {
+        (object.kind == "Range")
+            .then(|| self.objects.get(object.handle as usize).copied())
+            .flatten()
+    }
+
+    fn value(&self, address: CellAddress) -> Value {
+        self.workbook
+            .sheets
+            .get(address.sheet)
+            .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+            .map(|cell| from_cell_value(&cell.value))
+            .unwrap_or(Value::Empty)
+    }
+
+    fn set_value(&mut self, address: CellAddress, value: Value) -> Result<(), String> {
+        let value = to_cell_value(value)?;
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(address.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        sheet.col_count = sheet.col_count.max(address.column as usize + 1);
+        let row_position = sheet.rows.iter().position(|row| row.index == address.row);
+        let row = match row_position {
+            Some(position) => &mut sheet.rows[position],
+            None => {
+                sheet.rows.push(Row {
+                    index: address.row,
+                    cells: Vec::new(),
+                    height: None,
+                });
+                sheet.rows.sort_by_key(|row| row.index);
+                sheet
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.index == address.row)
+                    .unwrap()
+            }
+        };
+        match row.cells.iter_mut().find(|cell| cell.col == address.column) {
+            Some(cell) => {
+                cell.value = value;
+                cell.formula = None;
+            }
+            None => {
+                row.cells.push(Cell {
+                    col: address.column,
+                    value,
+                    style: CellStyle::default(),
+                    formula: None,
+                });
+                row.cells.sort_by_key(|cell| cell.col);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Host for WorkbookHost<'_> {
+    fn call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        if receiver.is_some() {
+            return Ok(None);
+        }
+        if name.eq_ignore_ascii_case("range") {
+            let [Value::String(reference)] = args else {
+                return Err("Range expects one cell reference".to_string());
+            };
+            let (column, row) = parse_a1_reference(reference)?;
+            return Ok(Some(self.object(CellAddress {
+                sheet: self.active_sheet,
+                row,
+                column,
+            })));
+        }
+        if name.eq_ignore_ascii_case("cells") {
+            let [row, column] = args else {
+                return Err("Cells expects row and column".to_string());
+            };
+            let row = positive_index(row, "row")?;
+            let column = positive_index(column, "column")? - 1;
+            return Ok(Some(self.object(CellAddress {
+                sheet: self.active_sheet,
+                row,
+                column,
+            })));
+        }
+        Ok(None)
+    }
+
+    fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        let Some(address) = self.address(receiver) else {
+            return Ok(None);
+        };
+        if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
+            return Ok(Some(self.value(address)));
+        }
+        Ok(None)
+    }
+
+    fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        let Some(address) = self.address(receiver) else {
+            return Ok(false);
+        };
+        if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
+            self.set_value(address, value)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
+fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
+    let reference = reference.trim();
+    if reference.is_empty() || reference.contains(':') || reference.contains('!') {
+        return Err(format!(
+            "only a single-sheet cell reference is supported: {reference}"
+        ));
+    }
+    let split = reference
+        .find(|ch: char| ch.is_ascii_digit())
+        .ok_or_else(|| format!("invalid cell reference: {reference}"))?;
+    let (letters, digits) = reference.split_at(split);
+    if letters.is_empty()
+        || digits.is_empty()
+        || !letters.chars().all(|ch| ch.is_ascii_alphabetic())
+        || !digits.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Err(format!("invalid cell reference: {reference}"));
+    }
+    let mut column = 0_u32;
+    for letter in letters.bytes() {
+        column = column
+            .checked_mul(26)
+            .and_then(|value| value.checked_add((letter.to_ascii_uppercase() - b'A' + 1) as u32))
+            .ok_or_else(|| format!("cell column is too large: {reference}"))?;
+    }
+    let row = digits
+        .parse::<u32>()
+        .map_err(|_| format!("cell row is too large: {reference}"))?;
+    if row == 0 {
+        return Err(format!("cell rows are one-based: {reference}"));
+    }
+    Ok((column - 1, row))
+}
+
+fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
+    let number = match value {
+        Value::Integer(value) => *value as f64,
+        Value::Double(value) => *value,
+        _ => return Err(format!("Cells {label} must be numeric")),
+    };
+    if !number.is_finite() || number.fract() != 0.0 || !(1.0..=u32::MAX as f64).contains(&number) {
+        return Err(format!("Cells {label} must be a positive integer"));
+    }
+    Ok(number as u32)
+}
+
+fn from_cell_value(value: &CellValue) -> Value {
+    match value {
+        CellValue::Empty => Value::Empty,
+        CellValue::String(value) | CellValue::Error(value) => Value::String(value.clone()),
+        CellValue::Number(value)
+            if value.fract() == 0.0 && *value >= i64::MIN as f64 && *value <= i64::MAX as f64 =>
+        {
+            Value::Integer(*value as i64)
+        }
+        CellValue::Number(value) => Value::Double(*value),
+        CellValue::Boolean(value) => Value::Boolean(*value),
+    }
+}
+
+fn to_cell_value(value: Value) -> Result<CellValue, String> {
+    match value {
+        Value::Empty | Value::Null => Ok(CellValue::Empty),
+        Value::Boolean(value) => Ok(CellValue::Boolean(value)),
+        Value::Integer(value) => Ok(CellValue::Number(value as f64)),
+        Value::Double(value) => Ok(CellValue::Number(value)),
+        Value::String(value) => Ok(CellValue::String(value)),
+        Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
+        Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum InputValue {
+    Null(()),
+    Boolean(bool),
+    Number(f64),
+    String(String),
+}
+
+impl From<InputValue> for Value {
+    fn from(value: InputValue) -> Self {
+        match value {
+            InputValue::Null(()) => Value::Null,
+            InputValue::Boolean(value) => Value::Boolean(value),
+            InputValue::Number(value)
+                if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 =>
+            {
+                Value::Integer(value as i64)
+            }
+            InputValue::Number(value) => Value::Double(value),
+            InputValue::String(value) => Value::String(value),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+enum OutputValue {
+    Empty,
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Double(f64),
+    String(String),
+    Array {
+        lower_bound: i64,
+        values: Vec<OutputValue>,
+    },
+    Object {
+        handle: u64,
+        kind: String,
+    },
+}
+
+impl From<Value> for OutputValue {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Empty => Self::Empty,
+            Value::Null => Self::Null,
+            Value::Boolean(value) => Self::Boolean(value),
+            Value::Integer(value) => Self::Integer(value),
+            Value::Double(value) => Self::Double(value),
+            Value::String(value) => Self::String(value),
+            Value::Array(value) => Self::Array {
+                lower_bound: value.lower_bound,
+                values: value.values.into_iter().map(OutputValue::from).collect(),
+            },
+            Value::Object(value) => Self::Object {
+                handle: value.handle,
+                kind: value.kind,
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RunResult {
+    workbook: Workbook,
+    result: OutputValue,
+}
+
+/// Execute VBA source against an OxiCells workbook IR.
+#[wasm_bindgen]
+pub fn run_spreadsheet_vba(
+    workbook: JsValue,
+    source: &str,
+    procedure: &str,
+    args: JsValue,
+    active_sheet: usize,
+) -> Result<JsValue, JsError> {
+    let mut workbook: Workbook = serde_wasm_bindgen::from_value(workbook)
+        .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
+    let args: Vec<InputValue> = serde_wasm_bindgen::from_value(args)
+        .map_err(|error| JsError::new(&format!("invalid VBA arguments: {error}")))?;
+    let module = parse_module(source).map_err(|error| JsError::new(&error.to_string()))?;
+    let mut host =
+        WorkbookHost::new(&mut workbook, active_sheet).map_err(|error| JsError::new(&error))?;
+    let result = execute_with_host(
+        &module,
+        procedure,
+        args.into_iter().map(Value::from).collect(),
+        &mut host,
+    )
+    .map_err(|error| JsError::new(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&RunResult {
+        workbook,
+        result: result.into(),
+    })
+    .map_err(|error| JsError::new(&error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxicells_core::ir::Sheet;
+
+    fn workbook() -> Workbook {
+        Workbook {
+            sheets: vec![Sheet {
+                name: "Sheet1".to_string(),
+                rows: Vec::new(),
+                col_count: 0,
+                col_widths: Vec::new(),
+                default_col_width: 8.43,
+                default_row_height: 15.0,
+                merge_cells: Vec::new(),
+                unsupported_elements: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn vba_updates_real_workbook_cells_without_losing_value_types() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Fill() As Double\n\
+               Range(\"A1\").Value = 40\n\
+               Cells(2, 1).Value2 = 2.5\n\
+               Fill = Range(\"A1\").Value + Range(\"A2\").Value2\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Fill", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::Double(42.5));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(value) if value == 40.0
+        ));
+        assert!(matches!(
+            workbook.sheets[0].rows[1].cells[0].value,
+            CellValue::Number(value) if value == 2.5
+        ));
+    }
+
+    #[test]
+    fn validates_cell_references_and_one_based_cells_indices() {
+        assert_eq!(parse_a1_reference("AA12").unwrap(), (26, 12));
+        assert!(parse_a1_reference("A0").is_err());
+        assert!(parse_a1_reference("A1:B2").is_err());
+        assert!(positive_index(&Value::Integer(0), "row").is_err());
+        assert!(positive_index(&Value::Double(1.5), "row").is_err());
+    }
+}

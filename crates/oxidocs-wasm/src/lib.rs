@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::cell::RefCell;
 
+#[cfg(feature = "suite")]
+mod spreadsheet_vba;
+#[cfg(feature = "suite")]
+pub use spreadsheet_vba::run_spreadsheet_vba;
+
 // Thread-local cached document for fast re-layout during editing
 thread_local! {
     static CACHED_DOC: RefCell<Option<oxidocs_core::ir::Document>> = RefCell::new(None);

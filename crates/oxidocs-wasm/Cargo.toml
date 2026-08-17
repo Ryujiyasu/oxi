@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 oxidocs-core = { path = "../oxidocs-core" }
 oxicells-core = { path = "../oxicells-core", optional = true }
+oxivba-core = { path = "../oxivba-core", optional = true }
 oxislides-core = { path = "../oxislides-core", optional = true }
 oxipdf-core = { path = "../oxipdf-core" }
 oxihanko = { path = "../oxihanko", optional = true }
@@ -24,4 +25,4 @@ console_error_panic_hook = "0.1"
 default = []
 # Full-suite bindings (spreadsheet/presentation/generic-PDF/hanko) used by the
 # in-repo web editor; the published npm package is the default docs-only build.
-suite = ["dep:oxicells-core", "dep:oxislides-core", "dep:oxihanko"]
+suite = ["dep:oxicells-core", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko"]
