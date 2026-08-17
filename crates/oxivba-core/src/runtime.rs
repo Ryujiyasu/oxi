@@ -26,6 +26,26 @@ pub enum Value {
     Double(f64),
     String(String),
     Array(ArrayValue),
+    Object(ObjectRef),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectRef {
+    pub handle: u64,
+    pub kind: String,
+}
+
+pub trait Host {
+    fn call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String>;
+
+    fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String>;
+
+    fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +72,7 @@ pub enum RuntimeErrorKind {
     TypeMismatch,
     Overflow,
     SubscriptOutOfRange,
+    Host,
     DivisionByZero,
     Unsupported,
     StepLimit,
@@ -80,8 +101,18 @@ pub fn execute(module: &Module, procedure: &str, args: Vec<Value>) -> Result<Val
     Runtime::new(module).call(procedure, args)
 }
 
+pub fn execute_with_host(
+    module: &Module,
+    procedure: &str,
+    args: Vec<Value>,
+    host: &mut dyn Host,
+) -> Result<Value, RuntimeError> {
+    Runtime::new(module).with_host(host).call(procedure, args)
+}
+
 pub struct Runtime<'a> {
     module: &'a Module,
+    host: Option<&'a mut dyn Host>,
     steps: usize,
     max_steps: usize,
     depth: usize,
@@ -103,11 +134,17 @@ impl<'a> Runtime<'a> {
     pub fn new(module: &'a Module) -> Self {
         Self {
             module,
+            host: None,
             steps: 0,
             max_steps: 100_000,
             depth: 0,
             max_depth: 128,
         }
+    }
+
+    pub fn with_host(mut self, host: &'a mut dyn Host) -> Self {
+        self.host = Some(host);
+        self
     }
 
     pub fn with_limits(mut self, max_steps: usize, max_depth: usize) -> Self {
@@ -675,6 +712,19 @@ impl<'a> Runtime<'a> {
                 array.values[offset] = value;
                 Ok(())
             }
+            Expr::Member {
+                object, name, span, ..
+            } => {
+                let receiver = self.eval_object(object, frame, span.line)?;
+                match self.host_set(&receiver, name, value, span.line)? {
+                    true => Ok(()),
+                    false => Err(error(
+                        RuntimeErrorKind::Unsupported,
+                        format!("host property is not writable: {}.{name}", receiver.kind),
+                        Some(span.line),
+                    )),
+                }
+            }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
                 "assignment target is not executable yet",
@@ -687,13 +737,17 @@ impl<'a> Runtime<'a> {
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                frame.values.get(&key(name)).cloned().ok_or_else(|| {
-                    error(
-                        RuntimeErrorKind::UndefinedVariable,
-                        format!("undefined VBA variable: {name}"),
-                        Some(span.line),
-                    )
-                })
+                if let Some(value) = frame.values.get(&key(name)).cloned() {
+                    return Ok(value);
+                }
+                if let Some(value) = self.host_call(None, name, &[], span.line)? {
+                    return Ok(value);
+                }
+                Err(error(
+                    RuntimeErrorKind::UndefinedVariable,
+                    format!("undefined VBA variable: {name}"),
+                    Some(span.line),
+                ))
             }
             Expr::Unary { op, operand, span } => {
                 let value = self.eval_expr(operand, frame)?;
@@ -721,6 +775,18 @@ impl<'a> Runtime<'a> {
                 Ok(array.values[array_offset(array, index, span.line)?].clone())
             }
             Expr::Index { .. } => self.eval_call(expr, frame),
+            Expr::Member {
+                object, name, span, ..
+            } => {
+                let receiver = self.eval_object(object, frame, span.line)?;
+                self.host_get(&receiver, name, span.line)?.ok_or_else(|| {
+                    error(
+                        RuntimeErrorKind::Unsupported,
+                        format!("host property is not available: {}.{name}", receiver.kind),
+                        Some(span.line),
+                    )
+                })
+            }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
                 "VBA expression is not executable yet",
@@ -734,16 +800,6 @@ impl<'a> Runtime<'a> {
             Expr::Index {
                 target, args, span, ..
             } => {
-                let name = match target.as_ref() {
-                    Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => name,
-                    _ => {
-                        return Err(error(
-                            RuntimeErrorKind::Unsupported,
-                            "only calls to VBA procedures are executable yet",
-                            Some(span.line),
-                        ))
-                    }
-                };
                 let mut values = Vec::with_capacity(args.len());
                 for argument in args {
                     let value = argument.value.as_ref().ok_or_else(|| {
@@ -755,7 +811,30 @@ impl<'a> Runtime<'a> {
                     })?;
                     values.push(self.eval_expr(value, frame)?);
                 }
-                self.call_named(name, values, Some(span.line))
+                match target.as_ref() {
+                    Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                        self.call_named(name, values, Some(span.line))
+                    }
+                    Expr::Member { object, name, .. } => {
+                        let receiver = self.eval_object(object, frame, span.line)?;
+                        self.host_call(Some(&receiver), name, &values, span.line)?
+                            .ok_or_else(|| {
+                                error(
+                                    RuntimeErrorKind::Unsupported,
+                                    format!(
+                                        "host method is not available: {}.{name}",
+                                        receiver.kind
+                                    ),
+                                    Some(span.line),
+                                )
+                            })
+                    }
+                    _ => Err(error(
+                        RuntimeErrorKind::Unsupported,
+                        "call target is not executable yet",
+                        Some(span.line),
+                    )),
+                }
             }
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
                 self.call_named(name, Vec::new(), Some(span.line))
@@ -782,7 +861,78 @@ impl<'a> Runtime<'a> {
         if let Some(result) = call_builtin(name, &args, line) {
             return result;
         }
+        if let Some(value) = self.host_call(None, name, &args, line.unwrap_or(0))? {
+            return Ok(value);
+        }
         self.call_procedure(name, args, line)
+    }
+
+    fn eval_object(
+        &mut self,
+        expr: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<ObjectRef, RuntimeError> {
+        let value = self.eval_expr(expr, frame).map_err(|failure| {
+            if failure.kind == RuntimeErrorKind::ProcedureNotFound {
+                error(
+                    RuntimeErrorKind::Unsupported,
+                    "object expression requires a configured VBA host",
+                    Some(line),
+                )
+            } else {
+                failure
+            }
+        })?;
+        match value {
+            Value::Object(object) => Ok(object),
+            _ => Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "VBA member access requires an object",
+                Some(line),
+            )),
+        }
+    }
+
+    fn host_call(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        line: u32,
+    ) -> Result<Option<Value>, RuntimeError> {
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(None);
+        };
+        host.call(receiver, name, args)
+            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+    }
+
+    fn host_get(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        line: u32,
+    ) -> Result<Option<Value>, RuntimeError> {
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(None);
+        };
+        host.get(receiver, name)
+            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+    }
+
+    fn host_set(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        value: Value,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(false);
+        };
+        host.set(receiver, name, value)
+            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
     }
 
     fn single_array_argument(
@@ -1052,6 +1202,7 @@ fn number(value: &Value) -> Result<f64, String> {
             .map_err(|_| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
         Value::Array(_) => Err("type mismatch converting array to number".to_string()),
+        Value::Object(_) => Err("type mismatch converting object to number".to_string()),
     }
 }
 
@@ -1069,6 +1220,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
             .map(|number| number != 0.0)
             .map_err(|_| "type mismatch converting String to Boolean".to_string()),
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
+        Value::Object(_) => Err("type mismatch converting object to Boolean".to_string()),
     }
 }
 
@@ -1086,10 +1238,12 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
 
 fn binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, (RuntimeErrorKind, String)> {
     use BinaryOp::*;
-    if matches!(lhs, Value::Array(_)) || matches!(rhs, Value::Array(_)) {
+    if matches!(lhs, Value::Array(_) | Value::Object(_))
+        || matches!(rhs, Value::Array(_) | Value::Object(_))
+    {
         return Err((
             RuntimeErrorKind::TypeMismatch,
-            "VBA arrays cannot be used as scalar operands".to_string(),
+            "VBA arrays and objects cannot be used as scalar operands".to_string(),
         ));
     }
     if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
@@ -1184,6 +1338,7 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Double(value) => value.to_string(),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
+        Value::Object(_) => return Err("type mismatch converting object to String".to_string()),
     })
 }
 
@@ -1224,6 +1379,88 @@ mod tests {
     use super::*;
     use crate::parse_module;
 
+    #[derive(Default)]
+    struct SheetHost {
+        cells: BTreeMap<(u32, u32), Value>,
+    }
+
+    impl SheetHost {
+        fn cell_object(row: u32, column: u32) -> Value {
+            Value::Object(ObjectRef {
+                handle: ((row as u64) << 32) | column as u64,
+                kind: "Cell".to_string(),
+            })
+        }
+
+        fn coordinates(object: &ObjectRef) -> Option<(u32, u32)> {
+            (object.kind == "Cell").then_some(((object.handle >> 32) as u32, object.handle as u32))
+        }
+    }
+
+    impl Host for SheetHost {
+        fn call(
+            &mut self,
+            receiver: Option<&ObjectRef>,
+            name: &str,
+            args: &[Value],
+        ) -> Result<Option<Value>, String> {
+            if receiver.is_some() {
+                return Ok(None);
+            }
+            if name.eq_ignore_ascii_case("range") {
+                let [Value::String(address)] = args else {
+                    return Err("Range expects one A1 address".to_string());
+                };
+                let address = address.to_ascii_uppercase();
+                let column = address
+                    .bytes()
+                    .next()
+                    .filter(u8::is_ascii_alphabetic)
+                    .map(|value| (value - b'A' + 1) as u32)
+                    .ok_or_else(|| "invalid Range address".to_string())?;
+                let row = address[1..]
+                    .parse::<u32>()
+                    .map_err(|_| "invalid Range address".to_string())?;
+                return Ok(Some(Self::cell_object(row, column)));
+            }
+            if name.eq_ignore_ascii_case("cells") {
+                let [row, column] = args else {
+                    return Err("Cells expects row and column".to_string());
+                };
+                let row = number(row)?.round_ties_even() as u32;
+                let column = number(column)?.round_ties_even() as u32;
+                return Ok(Some(Self::cell_object(row, column)));
+            }
+            Ok(None)
+        }
+
+        fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+            let Some(coordinates) = Self::coordinates(receiver) else {
+                return Ok(None);
+            };
+            if name.eq_ignore_ascii_case("value") {
+                return Ok(Some(
+                    self.cells
+                        .get(&coordinates)
+                        .cloned()
+                        .unwrap_or(Value::Empty),
+                ));
+            }
+            Ok(None)
+        }
+
+        fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+            let Some(coordinates) = Self::coordinates(receiver) else {
+                return Ok(false);
+            };
+            if name.eq_ignore_ascii_case("value") {
+                self.cells.insert(coordinates, value);
+                return Ok(true);
+            }
+            Ok(false)
+        }
+    }
+
     fn run(source: &str, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         let module = parse_module(source).unwrap();
         execute(&module, name, args)
@@ -1247,6 +1484,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::Double(180.0));
+    }
+
+    #[test]
+    fn reads_and_writes_range_and_cells_through_a_host() {
+        let module = parse_module(
+            "Public Sub WriteSheet()\n\
+               Range(\"A1\").Value = 40\n\
+               Cells(2, 1).Value = 2\n\
+             End Sub\n\
+             Public Function SheetTotal() As Long\n\
+               SheetTotal = Range(\"A1\").Value + Cells(2, 1).Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = {
+            let mut runtime = Runtime::new(&module).with_host(&mut host);
+            assert_eq!(runtime.call("WriteSheet", vec![]).unwrap(), Value::Empty);
+            runtime.call("SheetTotal", vec![]).unwrap()
+        };
+        assert_eq!(value, Value::Integer(42));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(40)));
+        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn reports_an_unavailable_host_property_at_its_source_line() {
+        let module = parse_module(
+            "Public Function Missing() As Variant\n\
+               Missing = Range(\"A1\").Formula\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let failure = execute_with_host(&module, "Missing", vec![], &mut host).unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::Unsupported);
+        assert_eq!(failure.line, Some(2));
+    }
+
+    #[test]
+    fn reports_host_failures_at_the_vba_call_site() {
+        let module = parse_module(
+            "Public Function Broken() As Variant\n\
+               Broken = Range(\"bad\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let failure = execute_with_host(&module, "Broken", vec![], &mut host).unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::Host);
+        assert_eq!(failure.line, Some(2));
+        assert!(failure.message.contains("invalid Range address"));
     }
 
     #[test]

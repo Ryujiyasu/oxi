@@ -39,4 +39,7 @@ pub use ast::{Expr, Module, ModuleItem, Procedure, Statement};
 pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity, Strength};
 pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 pub use parser::parse_module;
-pub use runtime::{execute, ArrayValue, Runtime, RuntimeError, RuntimeErrorKind, Value};
+pub use runtime::{
+    execute, execute_with_host, ArrayValue, Host, ObjectRef, Runtime, RuntimeError,
+    RuntimeErrorKind, Value,
+};
