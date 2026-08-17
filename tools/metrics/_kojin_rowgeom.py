@@ -131,10 +131,22 @@ def oxi_rules(page=PAGE):
 
 
 def oxi_lines(page=PAGE):
+    """Oxi text rows, y converted to the GLYPH top.
+
+    ★`element.y` is the LINE BOX top; the renderer draws the glyph at
+    `y + text_y_off`. Word's PDF line bbox is the GLYPH box. Comparing the raw
+    `y` against Word therefore measures the line box against the glyph and
+    invents an offset that grows with the paragraph's line height -- exactly the
+    [[feedback_text_y_vs_info6]] trap. OXI_RAWY=1 restores the old behaviour for
+    the callers that want the line box (cmp_rules pairs borders, not glyphs).
+    """
+    raw = os.environ.get("OXI_RAWY")
     rows = {}
     for e in oxi_page(page)["elements"]:
         if e["type"] != "text":
             continue
+        if not raw:
+            e = dict(e, y=e["y"] + (e.get("text_y_off") or 0.0))
         key = round(e["y"], 1)
         r = rows.setdefault(key, {"x": e["x"], "t": [], "h": e.get("h") or 0.0,
                                   "off": e.get("text_y_off")})
