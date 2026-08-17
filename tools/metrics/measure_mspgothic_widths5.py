@@ -35,7 +35,10 @@ sys.path.insert(0, HERE)
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
-FONT = "ＭＳ Ｐゴシック"      # ＭＳ Ｐゴシック
+# --font/--chars/--out let the same run serve any proportional face; the
+# defaults are the MS PGothic case this was written for.
+FONT = "ＭＳ Ｐゴシック"
+TABLE_NAME = "MS PGothic"
 MISSING = os.path.join(REPO, "pipeline_data", "_pgw_snap", "missing_chars.json")
 OUT = os.path.join(REPO, "pipeline_data", "_pgw_snap", "mspgothic_widths_v5.json")
 # A paragraph per character costs one COM round trip per measurement, so keep
@@ -78,6 +81,17 @@ def measure(word, chars, size, repeat):
 
 
 def main():
+    global FONT, TABLE_NAME, MISSING, OUT
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a.startswith("--font="):
+            FONT = a.split("=", 1)[1]
+        elif a.startswith("--table="):
+            TABLE_NAME = a.split("=", 1)[1]
+        elif a.startswith("--chars="):
+            MISSING = a.split("=", 1)[1]
+        elif a.startswith("--out="):
+            OUT = a.split("=", 1)[1]
     sizes = ["10.5", "11", "12", "14"]
     # 40 fullwidth glyphs at 10.5pt span 420pt, inside the 468pt column; at 14pt
     # they would not fit, so the run shrinks with the size.
@@ -95,8 +109,8 @@ def main():
             keep.append(ch)
         except Exception:
             pass
-    print("measuring %d characters (%d skipped as non-cp932) at %s"
-          % (len(keep), len(chars) - len(keep), ",".join(sizes)))
+    print("measuring %d characters of %s (%d skipped as non-cp932) at %s"
+          % (len(keep), FONT, len(chars) - len(keep), ",".join(sizes)))
 
     import win32com.client
     word = win32com.client.DispatchEx("Word.Application")
@@ -113,7 +127,7 @@ def main():
             word.Quit()
         except Exception:
             pass
-    json.dump({"MS PGothic": result}, open(OUT, "w", encoding="utf-8"),
+    json.dump({TABLE_NAME: result}, open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=1)
     print("wrote %s  (%s)" % (OUT, {s: len(v) for s, v in result.items()}))
 
