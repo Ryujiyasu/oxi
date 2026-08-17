@@ -20244,6 +20244,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let keep = current_line.fragments.len() - (n_trail - 1);
                     current_line.fragments.truncate(keep);
                 }
+                // OXI_DUMP_LINEW=1: the breaker's running width against the sum
+                // of the fragment widths it is about to store, and the budget it
+                // was fitting to. The over-wide CJK lines (_hang_census) come out
+                // ~26pt past the budget with every glyph ALREADY compressed, so
+                // the question is which of these three disagrees.
+                if std::env::var("OXI_DUMP_LINEW").is_ok() {
+                    let fw: f32 = current_line.fragments.iter().map(|f| f.width).sum();
+                    let nw: f32 = current_line.fragments.iter().map(|f| f.natural_width).sum();
+                    let nch: usize =
+                        current_line.fragments.iter().map(|f| f.text.chars().count()).sum();
+                    eprintln!(
+                        "[LINEW] nch={} cur_w={:.2} cur_tw={} frag_sum={:.2} nat_sum={:.2} avail_tw={} over={:.2}",
+                        nch, current_width, current_width_tw, fw, nw, available_tw,
+                        fw - available_tw as f32 / 20.0
+                    );
+                }
                 lines.push(std::mem::take(&mut current_line));
                 current_width = 0.0;
                 current_width_tw = 0;
