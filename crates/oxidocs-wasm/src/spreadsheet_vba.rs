@@ -195,6 +195,66 @@ impl<'a> WorkbookHost<'a> {
         }))
     }
 
+    fn offset_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let (row_offset, column_offset) = match args {
+            [] => (0, 0),
+            [row] => (integer_offset(row, "row")?, 0),
+            [row, column] => (
+                integer_offset(row, "row")?,
+                integer_offset(column, "column")?,
+            ),
+            _ => return Err("Range.Offset expects zero, one, or two offsets".to_string()),
+        };
+        let shift = |value: u32, offset: i64, label: &str| {
+            i64::from(value)
+                .checked_add(offset)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| format!("Range.Offset moves the {label} outside the worksheet"))
+        };
+        let start_row = shift(range.start_row, row_offset, "row")?;
+        let end_row = shift(range.end_row, row_offset, "row")?;
+        let start_column = shift(range.start_column, column_offset, "column")?;
+        let end_column = shift(range.end_column, column_offset, "column")?;
+        if start_row == 0 {
+            return Err("Range.Offset moves the row outside the worksheet".to_string());
+        }
+        Ok(self.object(HostObject::Range(CellRange {
+            sheet: range.sheet,
+            start_row,
+            start_column,
+            end_row,
+            end_column,
+        })))
+    }
+
+    fn resize_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let current_columns = range.end_column - range.start_column + 1;
+        let (rows, columns) = match args {
+            [] => (range.end_row - range.start_row + 1, current_columns),
+            [rows] => (positive_index(rows, "row size")?, current_columns),
+            [rows, columns] => (
+                positive_index(rows, "row size")?,
+                positive_index(columns, "column size")?,
+            ),
+            _ => return Err("Range.Resize expects zero, one, or two sizes".to_string()),
+        };
+        let end_row = range
+            .start_row
+            .checked_add(rows - 1)
+            .ok_or_else(|| "Range.Resize row size is too large".to_string())?;
+        let end_column = range
+            .start_column
+            .checked_add(columns - 1)
+            .ok_or_else(|| "Range.Resize column size is too large".to_string())?;
+        Ok(self.object(HostObject::Range(CellRange {
+            sheet: range.sheet,
+            start_row: range.start_row,
+            start_column: range.start_column,
+            end_row,
+            end_column,
+        })))
+    }
+
     fn set_cell_value(&mut self, address: CellAddress, value: CellValue) -> Result<(), String> {
         let sheet = self
             .workbook
@@ -270,14 +330,29 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         if let Some(receiver) = receiver {
-            let Some(sheet) = self.worksheet(receiver) else {
+            if let Some(sheet) = self.worksheet(receiver) {
+                if name.eq_ignore_ascii_case("range") {
+                    return self.range_object(sheet, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("cells") {
+                    return self.cells_object(sheet, args).map(Some);
+                }
                 return Ok(None);
-            };
-            if name.eq_ignore_ascii_case("range") {
-                return self.range_object(sheet, args).map(Some);
             }
-            if name.eq_ignore_ascii_case("cells") {
-                return self.cells_object(sheet, args).map(Some);
+            if let Some(range) = self.range(receiver) {
+                if name.eq_ignore_ascii_case("offset") {
+                    return self.offset_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("resize") {
+                    return self.resize_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("clearcontents") {
+                    if !args.is_empty() {
+                        return Err("Range.ClearContents does not accept arguments".to_string());
+                    }
+                    self.set_range_value(range, Value::Empty)?;
+                    return Ok(Some(Value::Empty));
+                }
             }
             return Ok(None);
         }
@@ -389,6 +464,23 @@ fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
         return Err(format!("Cells {label} must be a positive integer"));
     }
     Ok(number as u32)
+}
+
+fn integer_offset(value: &Value, label: &str) -> Result<i64, String> {
+    let number = match value {
+        Value::Integer(value) => *value as f64,
+        Value::Double(value) => *value,
+        _ => return Err(format!("Range.Offset {label} offset must be numeric")),
+    };
+    if !number.is_finite()
+        || number.fract() != 0.0
+        || !(i64::MIN as f64..=i64::MAX as f64).contains(&number)
+    {
+        return Err(format!(
+            "Range.Offset {label} offset must be a whole number"
+        ));
+    }
+    Ok(number as i64)
 }
 
 fn from_cell_value(value: &CellValue) -> Value {
@@ -660,6 +752,44 @@ mod tests {
         assert!(matches!(
             workbook.sheets[1].rows[1].cells[0].value,
             CellValue::Number(value) if value == 2.0
+        ));
+    }
+
+    #[test]
+    fn vba_offsets_resizes_and_clears_ranges() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub TransformRange()\n\
+               Range(\"B2:C3\").Value = 7\n\
+               Range(\"B2:C3\").Offset(1, -1).Resize(1, 2).Value = 9\n\
+               Range(\"B2:C2\").ClearContents\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "TransformRange", vec![], &mut host).unwrap();
+        }
+
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Empty
+        ));
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[1].value,
+            CellValue::Empty
+        ));
+        assert!(matches!(
+            workbook.sheets[0].rows[1].cells[0].value,
+            CellValue::Number(9.0)
+        ));
+        assert!(matches!(
+            workbook.sheets[0].rows[1].cells[1].value,
+            CellValue::Number(9.0)
+        ));
+        assert!(matches!(
+            workbook.sheets[0].rows[1].cells[2].value,
+            CellValue::Number(7.0)
         ));
     }
 }

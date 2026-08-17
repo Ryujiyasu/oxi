@@ -855,6 +855,19 @@ impl<'a> Runtime<'a> {
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
                 self.call_named(name, Vec::new(), Some(span.line))
             }
+            Expr::Member {
+                object, name, span, ..
+            } => {
+                let receiver = self.eval_object(object, frame, span.line)?;
+                self.host_call(Some(&receiver), name, &[], span.line)?
+                    .ok_or_else(|| {
+                        error(
+                            RuntimeErrorKind::Unsupported,
+                            format!("host method is not available: {}.{name}", receiver.kind),
+                            Some(span.line),
+                        )
+                    })
+            }
             _ => Err(error(
                 RuntimeErrorKind::Unsupported,
                 "call target is not executable yet",
