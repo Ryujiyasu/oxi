@@ -66,6 +66,14 @@ fn main() {
         supersample
     );
 
+    #[cfg(windows)]
+    {
+        let n = install_embedded_fonts(&pres);
+        if n > 0 {
+            eprintln!("Installed {}/{} embedded fonts", n, pres.embedded_fonts.len());
+        }
+    }
+
     if let Some(path) = dump_layout {
         #[cfg(windows)]
         dump_layout_json_gdi(&pres, &path);
@@ -845,6 +853,113 @@ unsafe fn clip_to_geometry_gdi(
 /// A picture is flipped and rotated with its shape unless this is set.
 fn imgrot_on() -> bool {
     std::env::var("OXI_IMGROT_DISABLE").is_err()
+}
+
+/// Feeds one embedded font part to `TTLoadEmbeddedFont`'s pull-style reader.
+#[cfg(windows)]
+struct FontStream {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+/// `READEMBEDPROC`: copy the next `count` bytes into t2embed's buffer.
+#[cfg(windows)]
+unsafe extern "system" fn read_embedded_font(
+    stream: *mut core::ffi::c_void,
+    dest: *mut core::ffi::c_void,
+    count: u32,
+) -> u32 {
+    if stream.is_null() || dest.is_null() {
+        return 0;
+    }
+    let s = &mut *(stream as *mut FontStream);
+    let n = (count as usize).min(s.data.len().saturating_sub(s.pos));
+    if n > 0 {
+        std::ptr::copy_nonoverlapping(s.data.as_ptr().add(s.pos), dest as *mut u8, n);
+        s.pos += n;
+    }
+    n as u32
+}
+
+/// Install the deck's embedded fonts so GDI can resolve them by name.
+///
+/// The `.fntdata` parts are EOT (all 262 in the dev corpus are EOT 2.2 with
+/// MicroType Express compression), so they cannot be handed to
+/// `AddFontMemResourceEx`; `TTLoadEmbeddedFont` is the API that decompresses
+/// them, and it is the route PowerPoint itself takes.
+///
+/// Measured 2026-08-17 on d28's Calistoga: before the call, `CreateFont`
+/// ("Calistoga") silently yields MS PGothic and "Abraham Lincoln" measures
+/// 417x60 at 60px; after it, `GetTextFace` reports Calistoga and the same
+/// string measures 473x102. A privately loaded font does NOT appear in
+/// `EnumFontFamiliesEx`, which is expected and does not affect `CreateFont`.
+///
+/// ★TRAP: `ulPrivs` is a SINGLE license value, not a bitmask -- passing
+/// `LICENSE_PREVIEWPRINT | LICENSE_EDITABLE` returns E_EXCEPTION (0x105) with
+/// the read callback never invoked, which reads exactly like "this API does
+/// not work here". LICENSE_INSTALLABLE (0) loads every corpus part.
+///
+/// ★Each face is RENAMED to the `p:font/@typeface` the deck's runs ask for,
+/// because a part's own family name often is NOT that name. d04 ships
+/// `RobotoSlab-regular.fntdata` whose internal family is "Roboto Slab Light"
+/// (weight 300) under `typeface="Roboto Slab"`; loading it unrenamed leaves
+/// "Roboto Slab" resolvable only through the BOLD part, so GDI serves weight
+/// 400 from the 700 face and the whole deck renders bold. With the rename,
+/// weight 400 selects tmWeight=300 and weight 700 the real bold face
+/// (219px against the 230px GDI synthesises) -- measured 2026-08-17.
+///
+/// The handles are deliberately leaked: the fonts must stay loaded for the
+/// whole run, and the process exits right after rendering.
+#[cfg(windows)]
+fn install_embedded_fonts(pres: &Presentation) -> usize {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Graphics::Gdi::{
+        TTLoadEmbeddedFont, EMBEDDED_FONT_PRIV_STATUS, FONT_LICENSE_PRIVS,
+        TTLOAD_EMBEDDED_FONT_STATUS,
+    };
+
+    if std::env::var("OXI_EMBEDFONT_DISABLE").is_ok() {
+        return 0;
+    }
+    const TTLOAD_PRIVATE: u32 = 0x0000_0001;
+    const LICENSE_INSTALLABLE: u32 = 0x0000_0000;
+    let mut loaded = 0;
+    for font in &pres.embedded_fonts {
+        let mut stream = Box::new(FontStream {
+            data: font.data.clone(),
+            pos: 0,
+        });
+        let mut handle = HANDLE::default();
+        let mut priv_status = EMBEDDED_FONT_PRIV_STATUS::default();
+        let mut status = TTLOAD_EMBEDDED_FONT_STATUS::default();
+        let mut win_name: Vec<u16> = font.typeface.encode_utf16().collect();
+        win_name.push(0);
+        let rc = unsafe {
+            TTLoadEmbeddedFont(
+                &mut handle,
+                TTLOAD_PRIVATE,
+                &mut priv_status,
+                FONT_LICENSE_PRIVS(LICENSE_INSTALLABLE),
+                &mut status,
+                Some(read_embedded_font),
+                stream.as_mut() as *mut FontStream as *const core::ffi::c_void,
+                windows::core::PCWSTR(win_name.as_ptr()),
+                None,
+                None,
+            )
+        };
+        if rc == 0 {
+            loaded += 1;
+            std::mem::forget(stream); // t2embed keeps no reference, but the
+                                      // font must outlive this scope anyway
+        } else {
+            eprintln!(
+                "  embedded font '{}' (bold={} italic={}) failed to load: 0x{:x}",
+                font.typeface, font.bold, font.italic, rc
+            );
+        }
+    }
+    loaded
 }
 
 /// Resample a picture into the page-aligned pixel box its flipped and rotated

@@ -15,6 +15,11 @@ import hashlib
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    # Deck names carry U+00B7 and the console default is cp932 here, so a
+    # CHANGED line for such a deck killed the run mid-report.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PNG_ROOT = REPO_ROOT / "pipeline_data" / "pptx_benchmark" / "dev" / "oxi_png"
 

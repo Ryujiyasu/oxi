@@ -31,6 +31,39 @@ pub struct Presentation {
     /// `body`, plain textboxes use `other`, title placeholders use `title`.
     #[serde(default)]
     pub master_styles: MasterTxStyles,
+    /// Fonts the deck carries inside itself (`p:embeddedFontLst`), one entry
+    /// per face. A consumer that can install them renders the deck's real
+    /// typography instead of a substitute.
+    #[serde(default)]
+    pub embedded_fonts: Vec<EmbeddedFont>,
+}
+
+/// One face of an embedded font (`p:embeddedFontLst/p:embeddedFont`).
+///
+/// The bytes are the `.fntdata` part verbatim, which is **EOT** (Embedded
+/// OpenType), not a bare TTF: all 262 parts in the dev corpus are EOT 2.2 with
+/// `TTEMBED_TTCOMPRESSED`, i.e. MicroType Express compressed, so renaming the
+/// part to .ttf produces nothing loadable. A Windows consumer hands them to
+/// `TTLoadEmbeddedFont` (t2embed.dll), which is the same route PowerPoint
+/// takes; measured 2026-08-17 on d28's Calistoga, after which GDI resolves the
+/// face by name (473x102 for "Abraham Lincoln" at 60px, against 417x60 for the
+/// MS PGothic fallback it got before).
+///
+/// 37 of the 40 dev decks embed fonts (262 parts), and most of the faces are
+/// Google Fonts present neither on the system nor in Office's cloud cache, so
+/// without this every run of those decks is drawn in a substitute face.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedFont {
+    /// `p:font/@typeface` — the name runs refer to (e.g. "Montserrat SemiBold").
+    pub typeface: String,
+    /// Which child carried this part: `p:bold` / `p:boldItalic` set bold,
+    /// `p:italic` / `p:boldItalic` set italic, `p:regular` sets neither.
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    /// The EOT bytes.
+    pub data: Vec<u8>,
 }
 
 /// Slide master text styles (p:txStyles). Each Vec is indexed by outline level

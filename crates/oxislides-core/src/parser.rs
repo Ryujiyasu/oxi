@@ -17,7 +17,7 @@ use crate::ir::{
     default_chart_hole_size, default_chart_size_represents,
     default_chart_updown_gap,
     default_chart_type, default_l_ins, default_r_ins, default_t_ins, Chart, ChartSeries,
-    CustomGeometry, GeomCmd, GeomPath,
+    CustomGeometry, EmbeddedFont, GeomCmd, GeomPath,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
     SlideParagraph,
@@ -439,6 +439,78 @@ fn take_custom_geometry(paths: &mut Vec<GeomPath>, unsupported: &mut bool) -> Op
         paths,
         unsupported: false,
     })
+}
+
+/// Read `p:embeddedFontLst` and pull in every `.fntdata` part it names.
+///
+/// The list sits in `ppt/presentation.xml`; each `p:embeddedFont` carries one
+/// `p:font/@typeface` plus up to four style children (`p:regular`, `p:bold`,
+/// `p:italic`, `p:boldItalic`), each an `r:id` pointing at the part. A missing
+/// or unreadable part is skipped rather than failing the parse -- a deck whose
+/// fonts we cannot load still renders with substitutes.
+fn parse_embedded_fonts(
+    pres_xml: &str,
+    rid_to_path: &HashMap<String, String>,
+    archive: &mut OoxmlArchive,
+) -> Vec<EmbeddedFont> {
+    let mut out = Vec::new();
+    let mut reader = Reader::from_str(pres_xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut in_list = false;
+    let mut typeface: Option<String> = None;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "embeddedFontLst" => in_list = true,
+                    "embeddedFont" if in_list => typeface = None,
+                    "font" if in_list => typeface = get_attr(&e, "typeface"),
+                    "regular" | "bold" | "italic" | "boldItalic" if in_list => {
+                        let Some(face) = typeface.clone() else { continue };
+                        let Some(r_id) = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| {
+                                let k = std::str::from_utf8(a.key.as_ref()).unwrap_or("");
+                                k == "r:id" || k.ends_with(":id")
+                            })
+                            .map(|a| String::from_utf8_lossy(&a.value).to_string())
+                        else {
+                            continue;
+                        };
+                        let Some(target) = rid_to_path.get(&r_id) else { continue };
+                        let path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
+                        } else {
+                            format!("ppt/{}", target)
+                        };
+                        let Ok(data) = archive.read_binary_part(&path) else { continue };
+                        if data.is_empty() {
+                            continue;
+                        }
+                        out.push(EmbeddedFont {
+                            typeface: face,
+                            bold: matches!(name.as_str(), "bold" | "boldItalic"),
+                            italic: matches!(name.as_str(), "italic" | "boldItalic"),
+                            data,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                if local_name(e.name().as_ref()) == "embeddedFontLst" {
+                    break;
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
 }
 
 /// Parse a single slide XML into shapes.
@@ -3649,6 +3721,14 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         None => Default::default(),
     };
 
+    // 2.9. Fonts the deck carries inside itself. Read before the slides so a
+    // consumer can install them before it measures any text.
+    let embedded_fonts = if std::env::var("OXI_EMBEDFONT_DISABLE").is_err() {
+        parse_embedded_fonts(&pres_xml, &rid_to_path, &mut archive)
+    } else {
+        Vec::new()
+    };
+
     // 3. Parse each slide
     let mut slides = Vec::new();
     for (i, info) in slide_infos.iter().enumerate() {
@@ -3704,6 +3784,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         major_font,
         theme_colors,
         master_styles,
+        embedded_fonts,
     })
 }
 
