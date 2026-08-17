@@ -275,6 +275,18 @@ pub const RULES: &[Rule] = &[
         reason: "changes whether Excel shows user-interface animations while a macro runs",
     },
     Rule {
+        pattern: "Application.EnableSound",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "changes Excel's process-global user-interface sound state",
+    },
+    Rule {
+        pattern: "Application.EnableTipWizard",
+        how: Match::Exact,
+        class: Class::D,
+        reason: "requests Excel's legacy TipWizard user interface; modern Excel reports it disabled and rejects assignments with error 1004",
+    },
+    Rule {
         pattern: "DisplayFormulaBar",
         how: Match::Segment,
         class: Class::D,
@@ -3166,6 +3178,36 @@ mod tests {
             a.findings
                 .iter()
                 .filter(|finding| finding.reason.contains("while a macro runs"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn sound_and_tip_wizard_are_user_interface_dependencies() {
+        let a = analyse_src(
+            "Public Sub ExerciseLegacyUi()\n\
+             Application.EnableSound = False\n\
+             Application.EnableSound = True\n\
+             Application.EnableTipWizard = False\n\
+             Application.EnableTipWizard = True\n\
+             End Sub\n",
+        );
+        assert_eq!(a.metrics.unparsed, 0);
+        assert_eq!(a.class, Some(Class::D));
+        assert_eq!(a.api_names.get("Application.EnableSound"), Some(&2));
+        assert_eq!(a.api_names.get("Application.EnableTipWizard"), Some(&2));
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("user-interface sound state"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            a.findings
+                .iter()
+                .filter(|finding| finding.reason.contains("legacy TipWizard"))
                 .count(),
             2
         );
