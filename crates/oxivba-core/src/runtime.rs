@@ -3276,14 +3276,22 @@ fn call_builtin(
             | "ascw"
             | "atn"
             | "cbool"
+            | "cbyte"
             | "cdate"
+            | "ccur"
+            | "cdec"
             | "cdbl"
             | "choose"
             | "chr"
             | "chrw"
+            | "cint"
             | "clng"
+            | "clnglng"
+            | "clngptr"
             | "cos"
+            | "csng"
             | "cstr"
+            | "cvar"
             | "dateadd"
             | "datediff"
             | "datepart"
@@ -3791,23 +3799,77 @@ fn call_builtin(
                 Value::Null => Err(mismatch("invalid use of Null".to_string())),
                 _ => Ok(Value::Boolean(truthy(value).map_err(mismatch)?)),
             },
-            "cdbl" => Ok(Value::Double(number(value).map_err(mismatch)?)),
-            "clng" => {
-                let value = number(value).map_err(mismatch)?.round_ties_even();
-                if !(-2_147_483_648.0..=2_147_483_647.0).contains(&value) {
+            "cbyte" => Ok(Value::Integer(convert_integer(value, 0, 255, line)?)),
+            "ccur" => {
+                let value = number(value).map_err(mismatch)?;
+                const LIMIT: f64 = 922_337_203_685_477.6;
+                if !value.is_finite() || value.abs() > LIMIT {
                     Err(error(
                         RuntimeErrorKind::Overflow,
-                        "overflow converting value to Long",
+                        "overflow converting value to Currency",
+                        line,
+                    ))
+                } else {
+                    Ok(numeric_literal(
+                        (value * 10_000.0).round_ties_even() / 10_000.0,
+                    ))
+                }
+            }
+            "cdec" => {
+                let value = number(value).map_err(mismatch)?;
+                const LIMIT: f64 = 79_228_162_514_264_337_593_543_950_335.0;
+                if !value.is_finite() || value.abs() > LIMIT {
+                    Err(error(
+                        RuntimeErrorKind::Overflow,
+                        "overflow converting value to Decimal",
+                        line,
+                    ))
+                } else {
+                    Ok(Value::Double(value))
+                }
+            }
+            "cdbl" => Ok(Value::Double(number(value).map_err(mismatch)?)),
+            "cint" => Ok(Value::Integer(convert_integer(
+                value, -32_768, 32_767, line,
+            )?)),
+            "clng" => Ok(Value::Integer(convert_integer(
+                value,
+                -2_147_483_648,
+                2_147_483_647,
+                line,
+            )?)),
+            "clnglng" | "clngptr" => {
+                let value = number(value).map_err(mismatch)?.round_ties_even();
+                if !value.is_finite()
+                    || value < i64::MIN as f64
+                    || value >= 9_223_372_036_854_775_808.0
+                {
+                    Err(error(
+                        RuntimeErrorKind::Overflow,
+                        format!("overflow converting value with {name}"),
                         line,
                     ))
                 } else {
                     Ok(Value::Integer(value as i64))
                 }
             }
+            "csng" => {
+                let value = number(value).map_err(mismatch)?;
+                if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+                    Err(error(
+                        RuntimeErrorKind::Overflow,
+                        "overflow converting value to Single",
+                        line,
+                    ))
+                } else {
+                    Ok(Value::Double(f64::from(value as f32)))
+                }
+            }
             "cstr" => match value {
                 Value::Null => Err(mismatch("invalid use of Null".to_string())),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?)),
             },
+            "cvar" => Ok(value.clone()),
             "fix" | "int" => match value {
                 Value::Null => Ok(Value::Null),
                 _ => {
@@ -5312,6 +5374,24 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbfirstjan1" => Value::Integer(1),
         "vbfirstfourdays" => Value::Integer(2),
         "vbfirstfullweek" => Value::Integer(3),
+        "vbempty" => Value::Integer(0),
+        "vbnull" => Value::Integer(1),
+        "vbinteger" => Value::Integer(2),
+        "vblong" => Value::Integer(3),
+        "vbsingle" => Value::Integer(4),
+        "vbdouble" => Value::Integer(5),
+        "vbcurrency" => Value::Integer(6),
+        "vbdate" => Value::Integer(7),
+        "vbstring" => Value::Integer(8),
+        "vbobject" => Value::Integer(9),
+        "vberror" => Value::Integer(10),
+        "vbboolean" => Value::Integer(11),
+        "vbvariant" => Value::Integer(12),
+        "vbdataobject" => Value::Integer(13),
+        "vbdecimal" => Value::Integer(14),
+        "vbbyte" => Value::Integer(17),
+        "vbuserdefinedtype" => Value::Integer(36),
+        "vbarray" => Value::Integer(8_192),
         "vbgeneraldate" => Value::Integer(0),
         "vblongdate" => Value::Integer(1),
         "vbshortdate" => Value::Integer(2),
@@ -5340,6 +5420,26 @@ fn integer_argument(value: &Value, line: Option<u32>) -> Result<i64, RuntimeErro
         Err(error(
             RuntimeErrorKind::Overflow,
             "numeric argument is outside the supported integer range",
+            line,
+        ))
+    } else {
+        Ok(value as i64)
+    }
+}
+
+fn convert_integer(
+    value: &Value,
+    minimum: i64,
+    maximum: i64,
+    line: Option<u32>,
+) -> Result<i64, RuntimeError> {
+    let value = number(value)
+        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+        .round_ties_even();
+    if !value.is_finite() || value < minimum as f64 || value > maximum as f64 {
+        Err(error(
+            RuntimeErrorKind::Overflow,
+            "numeric conversion overflow",
             line,
         ))
     } else {
@@ -5604,6 +5704,7 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Integer(value) => Ok(*value as f64),
         Value::Double(value) => Ok(*value),
         Value::String(value) => value
+            .trim()
             .parse()
             .map_err(|_| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
@@ -7232,6 +7333,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::String("OXI|3|2|5.5|True".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_numeric_type_conversion_functions() {
+        let value = run(
+            "Public Function ConversionBuiltins() As String\n\
+               ConversionBuiltins = CByte(125.5678) & \"|\" & CInt(2344.5) & \"|\" & CInt(2345.5) & \"|\"\n\
+               ConversionBuiltins = ConversionBuiltins & CCur(543.214588 * 2) & \"|\" & Round(CSng(75.3421115), 5) & \"|\"\n\
+               ConversionBuiltins = ConversionBuiltins & CLngLng(2147483648#) & \"|\" & CLngPtr(42) & \"|\" & CDec(12.5) & \"|\" & CVar(\"variant\")\n\
+             End Function\n",
+            "ConversionBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "126|2344|2346|1086.4292|75.34211|2147483648|42|12.5|variant".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn exposes_vba_variant_type_constants() {
+        let value = run(
+            "Public Function VariantConstants() As String\n\
+               VariantConstants = vbEmpty & \"|\" & vbNull & \"|\" & vbInteger & \"|\" & vbLong & \"|\" & vbSingle & \"|\" & vbDouble & \"|\" & vbCurrency & \"|\" & vbDate & \"|\" & vbString & \"|\" & vbObject & \"|\" & vbError & \"|\" & vbBoolean & \"|\" & vbVariant & \"|\" & vbDecimal & \"|\" & vbByte & \"|\" & vbArray\n\
+             End Function\n",
+            "VariantConstants",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("0|1|2|3|4|5|6|7|8|9|10|11|12|14|17|8192".to_string())
+        );
+    }
+
+    #[test]
+    fn conversion_functions_raise_overflow_errors_for_out_of_range_values() {
+        let value = run(
+            "Public Function ConversionErrors() As String\n\
+               Dim byteError As Long\n\
+               Dim integerError As Long\n\
+               Dim currencyError As Long\n\
+               Dim singleError As Long\n\
+               On Error Resume Next\n\
+               byteError = CByte(-1)\n\
+               byteError = Err.Number\n\
+               Err.Clear\n\
+               integerError = CInt(32768)\n\
+               integerError = Err.Number\n\
+               Err.Clear\n\
+               currencyError = CCur(1E20)\n\
+               currencyError = Err.Number\n\
+               Err.Clear\n\
+               singleError = CSng(1E40)\n\
+               singleError = Err.Number\n\
+               ConversionErrors = byteError & \"|\" & integerError & \"|\" & currencyError & \"|\" & singleError\n\
+             End Function\n",
+            "ConversionErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("6|6|6|6".to_string()));
     }
 
     #[test]
