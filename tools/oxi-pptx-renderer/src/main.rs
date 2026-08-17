@@ -748,7 +748,7 @@ unsafe fn draw_custom_geometry_gdi(
         let _ = StrokeAndFillPath(dc);
         drew = true;
 
-        SetPolyFillMode(dc, old_fill_mode);
+        SetPolyFillMode(dc, CREATE_POLYGON_RGN_MODE(old_fill_mode));
         SelectObject(dc, old_pen);
         SelectObject(dc, old_brush);
     }
