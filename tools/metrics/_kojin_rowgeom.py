@@ -256,8 +256,47 @@ def scan():
         print("%-5d %-7d %-7d %-9.2f %s" % (p, len(w), len(o), med, flag))
 
 
+def dycensus():
+    """dy per line, matched on UNIQUE line text -- no sequence alignment.
+
+    difflib alignment mis-pairs pages that repeat similar lines (1ec1 has 28
+    textboxes and many near-identical 「・ …」 items, and its dy came out
+    non-monotonic inside a single box, which is the alignment lying rather than
+    the layout drifting). Matching only line texts that occur EXACTLY ONCE on
+    both sides removes the guess: fewer rows, every one trustworthy.
+    """
+    import statistics
+    w, o = word_lines(PAGE), oxi_lines(PAGE)
+    wmap, omap = {}, {}
+    for y, _, x0, t in w:
+        wmap.setdefault(_norm(t), []).append((y, x0))
+    for y, _, x0, t in o:
+        omap.setdefault(_norm(t), []).append((y, x0))
+    rows = []
+    for k, v in wmap.items():
+        if len(k) < 4 or len(v) != 1 or len(omap.get(k, [])) != 1:
+            continue
+        (wy, wx), (oy, ox) = v[0], omap[k][0]
+        rows.append((wy, oy, oy - wy, ox - wx, k))
+    rows.sort()
+    print("page %d: %d unique-text matches of %d/%d lines"
+          % (PAGE, len(rows), len(w), len(o)))
+    print("%-9s %-9s %-8s %-8s %s" % ("word_y", "oxi_y", "dy", "dx", "text"))
+    for wy, oy, dy, dx, k in rows:
+        print("%-9.2f %-9.2f %-8.2f %-8.2f %s" % (wy, oy, dy, dx, k[:34]))
+    if rows:
+        dys = [r[2] for r in rows]
+        print("dy: min %.2f  max %.2f  median %.2f  spread %.2f"
+              % (min(dys), max(dys), statistics.median(dys), max(dys) - min(dys)))
+        dxs = [r[3] for r in rows]
+        print("dx: min %.2f  max %.2f  median %.2f" % (min(dxs), max(dxs), statistics.median(dxs)))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "cmp"
+    if cmd == "dycensus":
+        dycensus()
+        sys.exit(0)
     if cmd == "scan":
         scan()
         sys.exit(0)
