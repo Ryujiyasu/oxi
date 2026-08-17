@@ -8427,6 +8427,14 @@ fn parse_table(
             if style.para_style.is_none() {
                 style.para_style = tbl_style.para_style.clone();
             }
+            // S1160: inherit the style's tblInd. Word's built-in table styles
+            // carry <w:tblInd w:w="0"/>, and it is the PRESENCE of tblInd that
+            // makes the table absorb its leading cell margin (compat <= 14) --
+            // so a gen2 table styled TableGrid is an "indent 0" table, not an
+            // "indent absent" one, which is what let S621 read absent as zero.
+            if style.indent.is_none() && std::env::var("OXI_S1160_DISABLE").is_err() {
+                style.indent = tbl_style.indent;
+            }
         }
     }
 

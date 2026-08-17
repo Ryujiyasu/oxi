@@ -1801,6 +1801,14 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                     if child.default_cell_margins.is_none() {
                         child.default_cell_margins = parent.default_cell_margins;
                     }
+                    // S1160: tblInd follows basedOn too. 34140's tables are
+                    // styled a7, which declares no tblInd but is basedOn a1,
+                    // which carries <w:tblInd w:w="0"/>; without this the one
+                    // table there that has no direct tblInd lost its absorption
+                    // and the document dropped 0.0368 SSIM.
+                    if child.indent.is_none() {
+                        child.indent = parent.indent;
+                    }
                     if child.run_font_size.is_none() {
                         child.run_font_size = parent.run_font_size;
                     }
@@ -2013,6 +2021,25 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>) -> Result<(TableStyl
                         for attr in e.attributes().flatten() {
                             if local_name(attr.key.as_ref()) == "val" {
                                 based_on = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                    // S1160 (2026-08-17): a table style's own tblInd. Word's
+                    // built-in table styles all carry <w:tblInd w:w="0"/>, and
+                    // the presence of tblInd -- not its value -- is what makes a
+                    // table absorb its leading cell margin under compat <= 14
+                    // (tools/metrics/_pb_tblanchor_gen.py). Dropping it here left
+                    // gen2's tables at indent=None, which S621 then had to treat
+                    // as "0" to keep them right; that same lenient reading also
+                    // absorbed for tables with genuinely NO tblInd, where Word
+                    // does not.
+                    "tblInd" if in_tbl_pr => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "w" {
+                                style.indent = String::from_utf8_lossy(&attr.value)
+                                    .parse::<f32>()
+                                    .ok()
+                                    .map(|v| v / 20.0);
                             }
                         }
                     }

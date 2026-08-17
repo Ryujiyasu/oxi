@@ -27139,7 +27139,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // Opt-out OXI_S621_DISABLE restores the old !explicit_borders gate.
             let border_offset = {
                 let border_w = table.style.border_width.unwrap_or(0.5);
-                let indent_zero = table.style.indent.map_or(true, |v| v.abs() < 0.01);
+                // S1160 (2026-08-17, opt-out OXI_S1160_DISABLE): the absorption
+                // needs tblInd to be PRESENT, not merely zero-or-absent. Word
+                // (probe _pb_tblanchor, compat 11) leaves a table with NO tblInd
+                // anywhere sitting on the margin, while Oxi pulled it left by the
+                // whole cell margin (20pt on the cellMar=400 arm). S621 read
+                // absent as zero because the style-inherited tblInd was being
+                // dropped at parse time -- gen2's TableGrid does carry
+                // <w:tblInd w:w="0"/>, so with that now inherited the two halves
+                // agree and gen2 keeps its absorption.
+                let indent_zero = if std::env::var("OXI_S1160_DISABLE").is_err() {
+                    table.style.indent.is_some_and(|v| v.abs() < 0.01)
+                } else {
+                    table.style.indent.map_or(true, |v| v.abs() < 0.01)
+                };
                 let absorb = if std::env::var("OXI_S621_DISABLE").is_err() {
                     indent_zero && self.compat_mode <= 14
                 } else {
