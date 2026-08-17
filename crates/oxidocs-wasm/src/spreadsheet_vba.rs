@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
-use oxivba_core::{execute_with_host, parse_module, Host, ObjectRef, Value};
+use oxivba_core::{execute_with_host, parse_module, ArrayValue, Host, ObjectRef, Value};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -13,8 +13,43 @@ struct CellAddress {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct CellRange {
+    sheet: usize,
+    start_row: u32,
+    start_column: u32,
+    end_row: u32,
+    end_column: u32,
+}
+
+impl CellRange {
+    fn single(address: CellAddress) -> Self {
+        Self {
+            sheet: address.sheet,
+            start_row: address.row,
+            start_column: address.column,
+            end_row: address.row,
+            end_column: address.column,
+        }
+    }
+
+    fn is_single(self) -> bool {
+        self.start_row == self.end_row && self.start_column == self.end_column
+    }
+
+    fn addresses(self) -> impl Iterator<Item = CellAddress> {
+        (self.start_row..=self.end_row).flat_map(move |row| {
+            (self.start_column..=self.end_column).map(move |column| CellAddress {
+                sheet: self.sheet,
+                row,
+                column,
+            })
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 enum HostObject {
-    Cell(CellAddress),
+    Range(CellRange),
     Worksheet(usize),
 }
 
@@ -44,16 +79,16 @@ impl<'a> WorkbookHost<'a> {
         Value::Object(ObjectRef {
             handle,
             kind: match object {
-                HostObject::Cell(_) => "Range",
+                HostObject::Range(_) => "Range",
                 HostObject::Worksheet(_) => "Worksheet",
             }
             .to_string(),
         })
     }
 
-    fn address(&self, object: &ObjectRef) -> Option<CellAddress> {
+    fn range(&self, object: &ObjectRef) -> Option<CellRange> {
         match self.objects.get(object.handle as usize) {
-            Some(HostObject::Cell(address)) => Some(*address),
+            Some(HostObject::Range(range)) => Some(*range),
             _ => None,
         }
     }
@@ -90,11 +125,22 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
-        let [Value::String(reference)] = args else {
-            return Err("Range expects one cell reference".to_string());
+        let (start, end) = match args {
+            [Value::String(reference)] => parse_range_reference(reference)?,
+            [Value::String(start), Value::String(end)] => {
+                (parse_a1_reference(start)?, parse_a1_reference(end)?)
+            }
+            _ => return Err("Range expects one range reference or two cell references".to_string()),
         };
-        let (column, row) = parse_a1_reference(reference)?;
-        Ok(self.object(HostObject::Cell(CellAddress { sheet, row, column })))
+        let (start_column, start_row) = start;
+        let (end_column, end_row) = end;
+        Ok(self.object(HostObject::Range(CellRange {
+            sheet,
+            start_row: start_row.min(end_row),
+            start_column: start_column.min(end_column),
+            end_row: start_row.max(end_row),
+            end_column: start_column.max(end_column),
+        })))
     }
 
     fn cells_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
@@ -103,10 +149,16 @@ impl<'a> WorkbookHost<'a> {
         };
         let row = positive_index(row, "row")?;
         let column = positive_index(column, "column")? - 1;
-        Ok(self.object(HostObject::Cell(CellAddress { sheet, row, column })))
+        Ok(
+            self.object(HostObject::Range(CellRange::single(CellAddress {
+                sheet,
+                row,
+                column,
+            }))),
+        )
     }
 
-    fn value(&self, address: CellAddress) -> Value {
+    fn cell_value(&self, address: CellAddress) -> Value {
         self.workbook
             .sheets
             .get(address.sheet)
@@ -116,8 +168,34 @@ impl<'a> WorkbookHost<'a> {
             .unwrap_or(Value::Empty)
     }
 
-    fn set_value(&mut self, address: CellAddress, value: Value) -> Result<(), String> {
-        let value = to_cell_value(value)?;
+    fn range_cell_count(range: CellRange) -> Result<usize, String> {
+        let rows = u64::from(range.end_row - range.start_row) + 1;
+        let columns = u64::from(range.end_column - range.start_column) + 1;
+        let count = rows
+            .checked_mul(columns)
+            .ok_or_else(|| "cell range is too large".to_string())?;
+        if count > 1_000_000 {
+            return Err("cell range exceeds the 1,000,000-cell execution limit".to_string());
+        }
+        Ok(count as usize)
+    }
+
+    fn range_value(&self, range: CellRange) -> Result<Value, String> {
+        Self::range_cell_count(range)?;
+        if range.is_single() {
+            return Ok(self.cell_value(range.addresses().next().unwrap()));
+        }
+        Ok(Value::Array(ArrayValue {
+            lower_bound: 1,
+            values: range
+                .addresses()
+                .map(|address| self.cell_value(address))
+                .collect(),
+            element_default: Box::new(Value::Empty),
+        }))
+    }
+
+    fn set_cell_value(&mut self, address: CellAddress, value: CellValue) -> Result<(), String> {
         let sheet = self
             .workbook
             .sheets
@@ -154,6 +232,30 @@ impl<'a> WorkbookHost<'a> {
                     formula: None,
                 });
                 row.cells.sort_by_key(|cell| cell.col);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_range_value(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        let count = Self::range_cell_count(range)?;
+        match value {
+            Value::Array(array) => {
+                if array.values.len() != count {
+                    return Err(format!(
+                        "range assignment needs {count} values, but the array contains {}",
+                        array.values.len()
+                    ));
+                }
+                for (address, value) in range.addresses().zip(array.values) {
+                    self.set_cell_value(address, to_cell_value(value)?)?;
+                }
+            }
+            value => {
+                let value = to_cell_value(value)?;
+                for address in range.addresses() {
+                    self.set_cell_value(address, value.clone())?;
+                }
             }
         }
         Ok(())
@@ -207,25 +309,40 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
-        let Some(address) = self.address(receiver) else {
+        let Some(range) = self.range(receiver) else {
             return Ok(None);
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
-            return Ok(Some(self.value(address)));
+            return self.range_value(range).map(Some);
         }
         Ok(None)
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
-        let Some(address) = self.address(receiver) else {
+        let Some(range) = self.range(receiver) else {
             return Ok(false);
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
-            self.set_value(address, value)?;
+            self.set_range_value(range, value)?;
             return Ok(true);
         }
         Ok(false)
     }
+}
+
+fn parse_range_reference(reference: &str) -> Result<((u32, u32), (u32, u32)), String> {
+    let mut parts = reference.split(':');
+    let start = parts.next().unwrap_or_default();
+    let end = parts.next();
+    if parts.next().is_some() {
+        return Err(format!("invalid range reference: {reference}"));
+    }
+    let start = parse_a1_reference(start)?;
+    let end = match end {
+        Some(end) => parse_a1_reference(end)?,
+        None => start,
+    };
+    Ok((start, end))
 }
 
 fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
@@ -450,10 +567,53 @@ mod tests {
     #[test]
     fn validates_cell_references_and_one_based_cells_indices() {
         assert_eq!(parse_a1_reference("AA12").unwrap(), (26, 12));
+        assert_eq!(parse_range_reference("B2:A1").unwrap(), ((1, 2), (0, 1)));
         assert!(parse_a1_reference("A0").is_err());
         assert!(parse_a1_reference("A1:B2").is_err());
+        assert!(parse_range_reference("A1:B2:C3").is_err());
         assert!(positive_index(&Value::Integer(0), "row").is_err());
         assert!(positive_index(&Value::Double(1.5), "row").is_err());
+    }
+
+    #[test]
+    fn vba_reads_and_writes_rectangular_ranges_in_row_major_order() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function FillRange() As Long\n\
+               Dim values As Variant\n\
+               Dim item As Variant\n\
+               Dim total As Long\n\
+               Range(\"A1:B2\").Value = 5\n\
+               values = Range(\"A1\", \"B2\").Value\n\
+               For Each item In values\n\
+                 total = total + item\n\
+               Next item\n\
+               FillRange = total\n\
+             End Function\n\
+             Public Sub WriteArray()\n\
+               Dim values(1 To 4) As Long\n\
+               values(1) = 10\n\
+               values(2) = 20\n\
+               values(3) = 30\n\
+               values(4) = 40\n\
+               Range(\"C1:D2\").Value = values\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let mut runtime = oxivba_core::Runtime::new(&module).with_host(&mut host);
+            assert_eq!(
+                runtime.call("FillRange", vec![]).unwrap(),
+                Value::Integer(20)
+            );
+            assert_eq!(runtime.call("WriteArray", vec![]).unwrap(), Value::Empty);
+        }
+        let rows = &workbook.sheets[0].rows;
+        assert!(matches!(rows[0].cells[2].value, CellValue::Number(10.0)));
+        assert!(matches!(rows[0].cells[3].value, CellValue::Number(20.0)));
+        assert!(matches!(rows[1].cells[2].value, CellValue::Number(30.0)));
+        assert!(matches!(rows[1].cells[3].value, CellValue::Number(40.0)));
     }
 
     #[test]
