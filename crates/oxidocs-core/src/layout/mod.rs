@@ -27160,7 +27160,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && !table.style.explicit_borders
                 };
                 if absorb {
-                    pad_l_default + border_w / 2.0
+                    // S1161 (2026-08-17, opt-out OXI_S1161_DISABLE): the shift
+                    // is the cell margin ALONE. Word puts the absorbed table's
+                    // border at anchor + offset - cellMar exactly, on both the
+                    // floating and the tblInd path (_pb_tblanchor compat 11:
+                    // tblpX=567 and tblInd=567 both land at 113.42 - 5.40 =
+                    // 108.02, and Oxi's own ind567 arm already matched at
+                    // 108.00). The extra half-stroke put plain_ind0 at 79.40
+                    // against Word's 79.70 -- the only arm of the ten still
+                    // outside the 0.05 stroke convention.
+                    if std::env::var("OXI_S1161_DISABLE").is_err() {
+                        pad_l_default
+                    } else {
+                        pad_l_default + border_w / 2.0
+                    }
                 } else {
                     0.0
                 }
