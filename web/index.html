@@ -520,6 +520,54 @@ input[type="file"] { display: none; }
 }
 .find-replace-dialog .fr-close:hover { color: #333; }
 .find-replace-dialog .fr-status { font-size: 11px; color: #888; margin-top: 4px; }
+.vba-dialog-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 280;
+    background: rgba(18, 24, 22, 0.48);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.vba-dialog-backdrop.open { display: flex; }
+.vba-dialog {
+    width: min(720px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.28);
+    padding: 20px;
+}
+.vba-dialog h2 { margin: 0 0 4px; font-size: 20px; color: var(--oxi-cells); }
+.vba-dialog .vba-note { margin: 0 0 16px; color: var(--text-secondary); font-size: 12px; }
+.vba-dialog label { display: block; margin: 10px 0 5px; font-size: 12px; font-weight: 600; }
+.vba-dialog input, .vba-dialog textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--text);
+    padding: 8px 10px;
+}
+.vba-dialog textarea {
+    min-height: 280px;
+    resize: vertical;
+    font: 13px/1.5 Consolas, 'Courier New', monospace;
+    tab-size: 4;
+}
+.vba-dialog input:focus, .vba-dialog textarea:focus { outline: 2px solid rgba(33,115,70,0.28); border-color: var(--oxi-cells); }
+.vba-dialog .vba-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.vba-dialog .vba-actions button { padding: 7px 16px; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
+.vba-dialog .vba-actions .primary { background: var(--oxi-cells); color: white; border-color: var(--oxi-cells); }
+.vba-dialog .vba-actions button:disabled { opacity: 0.55; cursor: wait; }
+.vba-result { min-height: 20px; margin: 12px 0 0; padding: 8px 10px; border-radius: 5px; background: var(--bg); font: 12px/1.4 Consolas, monospace; white-space: pre-wrap; }
+.vba-result.error { color: #b42318; background: #fff0ee; }
+.dark .vba-result.error { color: #ffaaa0; background: #3a1e1e; }
 /* Backstage overlay */
 .backstage-overlay {
     display: none;
@@ -1021,6 +1069,24 @@ input[type="file"] { display: none; }
     <div class="fr-status" id="frStatus"></div>
 </div>
 
+<div class="vba-dialog-backdrop" id="vbaDialogBackdrop" role="dialog" aria-modal="true" aria-labelledby="vbaDialogTitle">
+    <div class="vba-dialog">
+        <h2 id="vbaDialogTitle">Run VBA Macro</h2>
+        <p class="vba-note">Runs locally in WebAssembly. File, network, COM, and native system APIs are not available.</p>
+        <label for="vbaProcedure">Procedure</label>
+        <input id="vbaProcedure" type="text" value="Main" autocomplete="off" spellcheck="false">
+        <label for="vbaSource">VBA source</label>
+        <textarea id="vbaSource" spellcheck="false">Public Sub Main()
+    Range("A1").Value = "Hello from Oxi VBA"
+End Sub</textarea>
+        <div class="vba-actions">
+            <button id="vbaClose">Cancel</button>
+            <button id="vbaRun" class="primary">Run</button>
+        </div>
+        <pre class="vba-result" id="vbaResult" aria-live="polite">Ready.</pre>
+    </div>
+</div>
+
 <!-- Backstage view (File menu) -->
 <div class="backstage-overlay" id="backstageOverlay">
     <div class="backstage-sidebar" id="backstageSidebar">
@@ -1414,12 +1480,14 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, run_spreadsheet_vba } from './oxidocs_wasm.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
 let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
+let currentXlsxSheetIndex = 0;
+const xlsxVbaEdits = new Map();
 
 const HIGHLIGHT_COLORS = {
     yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF',
@@ -1866,6 +1934,11 @@ function buildRibbon(format) {
                     { text: '↕', title: 'Sort' }, { text: '▼', title: 'Filter' },
                 ]},
             ]},
+            { name: 'Developer', groups: [
+                { label: 'Macros', items: [
+                    { text: 'VBA', title: 'Run VBA Macro', action: () => openVbaRunner() },
+                ]},
+            ]},
             { name: t('view'), groups: [
                 { label: 'Show', items: [
                     { text: '⊞', title: 'Gridlines' }, { text: 'H', title: 'Headings' },
@@ -2213,8 +2286,12 @@ function collectDocxEdits() {
     return edits;
 }
 
+function xlsxEditKey(sheetIdx, row, col) {
+    return `${sheetIdx}:${row}:${col}`;
+}
+
 function collectXlsxEdits() {
-    const edits = [];
+    const edits = new Map(xlsxVbaEdits);
     const cells = document.querySelectorAll('.edit-cell[data-sheet][data-row][data-col]');
     for (const el of cells) {
         const sheetIdx = parseInt(el.dataset.sheet);
@@ -2223,11 +2300,197 @@ function collectXlsxEdits() {
         const original = el.dataset.original;
         const current = el.textContent;
         if (current !== original) {
-            edits.push({ sheet_index: sheetIdx, row, col, new_value: current });
+            edits.set(xlsxEditKey(sheetIdx, row, col), {
+                sheet_index: sheetIdx,
+                row,
+                col,
+                new_value: current,
+            });
         }
     }
-    return edits;
+    return Array.from(edits.values());
 }
+
+function defaultCellStyle() {
+    return {
+        bold: false,
+        italic: false,
+        font_size: null,
+        font_color: null,
+        bg_color: null,
+        number_format: null,
+        horizontal_align: null,
+        border_top: false,
+        border_bottom: false,
+        border_left: false,
+        border_right: false,
+    };
+}
+
+function setWorkbookCellString(workbook, sheetIdx, rowIndex, colIndex, value) {
+    const sheet = workbook?.sheets?.[sheetIdx];
+    if (!sheet) return;
+
+    let row = sheet.rows.find(candidate => candidate.index === rowIndex);
+    if (!row) {
+        row = { index: rowIndex, cells: [], height: null };
+        sheet.rows.push(row);
+        sheet.rows.sort((left, right) => left.index - right.index);
+    }
+
+    let cell = row.cells.find(candidate => candidate.col === colIndex);
+    if (!cell) {
+        cell = {
+            col: colIndex,
+            value: { String: value },
+            style: defaultCellStyle(),
+            formula: null,
+        };
+        row.cells.push(cell);
+        row.cells.sort((left, right) => left.col - right.col);
+    } else {
+        cell.value = { String: value };
+        cell.formula = null;
+    }
+    sheet.col_count = Math.max(sheet.col_count || 0, colIndex + 1);
+}
+
+function syncPendingXlsxEditsToIr() {
+    const cells = document.querySelectorAll('.edit-cell[data-sheet][data-row][data-col]');
+    for (const el of cells) {
+        const sheetIdx = parseInt(el.dataset.sheet);
+        const row = parseInt(el.dataset.row);
+        const col = parseInt(el.dataset.col);
+        const current = el.textContent;
+        if (current === el.dataset.original) continue;
+
+        const edit = { sheet_index: sheetIdx, row, col, new_value: current };
+        xlsxVbaEdits.set(xlsxEditKey(sheetIdx, row, col), edit);
+        setWorkbookCellString(currentDocIR, sheetIdx, row, col, current);
+    }
+}
+
+function workbookCellMap(workbook) {
+    const cells = new Map();
+    workbook?.sheets?.forEach((sheet, sheetIdx) => {
+        for (const row of sheet.rows) {
+            for (const cell of row.cells) {
+                cells.set(xlsxEditKey(sheetIdx, row.index, cell.col), {
+                    sheet_index: sheetIdx,
+                    row: row.index,
+                    col: cell.col,
+                    cell,
+                });
+            }
+        }
+    });
+    return cells;
+}
+
+function recordVbaWorkbookChanges(before, after) {
+    const previousCells = workbookCellMap(before);
+    const nextCells = workbookCellMap(after);
+    const keys = new Set([...previousCells.keys(), ...nextCells.keys()]);
+    for (const key of keys) {
+        const previous = previousCells.get(key);
+        const next = nextCells.get(key);
+        const previousValue = previous ? JSON.stringify(previous.cell.value) : null;
+        const nextValue = next ? JSON.stringify(next.cell.value) : null;
+        if (previousValue === nextValue) continue;
+
+        const location = next || previous;
+        xlsxVbaEdits.set(key, {
+            sheet_index: location.sheet_index,
+            row: location.row,
+            col: location.col,
+            new_value: next ? formatCellValue(next.cell.value, next.cell.style) : '',
+        });
+    }
+}
+
+function formatVbaResult(result) {
+    if (!result || result.type === 'empty' || result.type === 'null') return 'Completed.';
+    if (result.type === 'array' || result.type === 'object') {
+        return `${result.type}: ${JSON.stringify(result.value)}`;
+    }
+    return `${result.type}: ${String(result.value)}`;
+}
+
+function openVbaRunner() {
+    if (currentFileType !== 'xlsx' || !currentDocIR) {
+        showStatus('Open an .xlsx workbook before running VBA.', 'error');
+        return;
+    }
+    const backdrop = document.getElementById('vbaDialogBackdrop');
+    const resultElement = document.getElementById('vbaResult');
+    resultElement.textContent = 'Ready. Press Ctrl+Enter to run.';
+    resultElement.classList.remove('error');
+    backdrop.classList.add('open');
+    setTimeout(() => document.getElementById('vbaSource').focus(), 0);
+}
+
+function closeVbaRunner() {
+    document.getElementById('vbaDialogBackdrop').classList.remove('open');
+}
+
+async function executeVbaFromDialog() {
+    const source = document.getElementById('vbaSource').value;
+    const procedure = document.getElementById('vbaProcedure').value.trim();
+    const resultElement = document.getElementById('vbaResult');
+    const runButton = document.getElementById('vbaRun');
+    if (!source.trim() || !procedure) {
+        resultElement.textContent = 'VBA source and procedure are required.';
+        resultElement.classList.add('error');
+        return;
+    }
+
+    runButton.disabled = true;
+    resultElement.classList.remove('error');
+    resultElement.textContent = 'Running...';
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    try {
+        syncPendingXlsxEditsToIr();
+        const before = currentDocIR;
+        const execution = run_spreadsheet_vba(
+            currentDocIR,
+            source,
+            procedure,
+            [],
+            currentXlsxSheetIndex,
+        );
+        recordVbaWorkbookChanges(before, execution.workbook);
+        currentDocIR = execution.workbook;
+        renderEditableXlsx(currentDocIR);
+        resultElement.textContent = formatVbaResult(execution.result);
+        showStatus('VBA macro completed.', 'info');
+    } catch (error) {
+        const message = error?.message || String(error);
+        resultElement.textContent = message;
+        resultElement.classList.add('error');
+        showStatus('VBA error: ' + message, 'error');
+        console.error(error);
+    } finally {
+        runButton.disabled = false;
+    }
+}
+
+document.getElementById('vbaClose').addEventListener('click', closeVbaRunner);
+document.getElementById('vbaRun').addEventListener('click', executeVbaFromDialog);
+document.getElementById('vbaDialogBackdrop').addEventListener('click', event => {
+    if (event.target.id === 'vbaDialogBackdrop') closeVbaRunner();
+});
+document.getElementById('vbaSource').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        executeVbaFromDialog();
+    }
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && document.getElementById('vbaDialogBackdrop').classList.contains('open')) {
+        closeVbaRunner();
+        event.stopPropagation();
+    }
+});
 
 function collectPptxEdits() {
     const edits = [];
@@ -3573,6 +3836,7 @@ function renderEditableXlsx(workbook) {
     }
 
     function showSheet(idx) {
+        currentXlsxSheetIndex = idx;
         for (const t of tabs.children) t.classList.remove('active');
         tabs.children[idx].classList.add('active');
 
@@ -3751,14 +4015,19 @@ function renderEditableXlsx(workbook) {
         const tab = document.createElement('div');
         tab.className = 'sheet-tab';
         tab.textContent = sheet.name || `Sheet ${i + 1}`;
-        tab.onclick = () => showSheet(i);
+        tab.onclick = () => {
+            syncPendingXlsxEditsToIr();
+            showSheet(i);
+        };
         tabs.appendChild(tab);
     });
 
     container.appendChild(formulaBar);
     container.appendChild(wrapper);
     container.appendChild(tabs);
-    if (workbook.sheets.length > 0) showSheet(0);
+    if (workbook.sheets.length > 0) {
+        showSheet(Math.min(currentXlsxSheetIndex, workbook.sheets.length - 1));
+    }
 }
 
 // === PPTX EDITABLE RENDERER ===
@@ -3947,6 +4216,8 @@ async function handleFile(file) {
             renderEditableDocx(currentDocIR);
             showStatus(I18N[currentLang].parsedDocx(elapsed), 'info');
         } else if (ext === 'xlsx') {
+            currentXlsxSheetIndex = 0;
+            xlsxVbaEdits.clear();
             currentDocIR = parse_spreadsheet(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;
