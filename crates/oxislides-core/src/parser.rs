@@ -708,6 +708,7 @@ fn parse_slide(
     // PNG crops the SOURCE via srcRect; a photo expands the DESTINATION via a
     // negative fillRect so the stretched image keeps its native aspect.
     let mut shape_src_rect: Option<(f32, f32, f32, f32)> = None;
+    let mut shape_rot_with_shape = true;
     let mut shape_fill_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_fill_color: Option<String> = None;
     let mut shape_fill_alpha: Option<f32> = None;
@@ -850,6 +851,7 @@ fn parse_slide(
                         shape_is_image = name == "pic";
                         shape_image_r_id = None;
                         shape_src_rect = None;
+                        shape_rot_with_shape = true;
                         shape_fill_rect = None;
                         shape_fill_color = None;
                         shape_fill_alpha = None;
@@ -1101,6 +1103,11 @@ fn parse_slide(
                     }
                     "blipFill" if in_shape => {
                         shape_is_image = true;
+                        // @rotWithShape="0" pins the raster upright while the
+                        // shape still turns (PowerPoint render-truth, E5).
+                        if get_attr(&e, "rotWithShape").as_deref() == Some("0") {
+                            shape_rot_with_shape = false;
+                        }
                     }
                     "blip" if in_shape && shape_is_image => {
                         // r:embed attribute for image reference
@@ -1816,6 +1823,7 @@ fn parse_slide(
                             anchor: resolved_anchor,
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
+                            rot_with_shape: shape_rot_with_shape,
                             custom_geometry: take_custom_geometry(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
@@ -1938,6 +1946,7 @@ fn parse_slide(
                             anchor: None,
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
+                            rot_with_shape: shape_rot_with_shape,
                             custom_geometry: take_custom_geometry(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
@@ -2488,6 +2497,7 @@ fn parse_inherited_shapes(
                                         anchor: None,
                                         src_rect,
                                         fill_rect,
+                                        rot_with_shape: true,
                                         // The inheritance gate rejects custGeom
                                         // outright, so an inherited shape never
                                         // carries one.

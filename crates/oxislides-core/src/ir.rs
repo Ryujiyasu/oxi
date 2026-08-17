@@ -94,6 +94,11 @@ pub fn default_theme_font() -> String {
     "Calibri".to_string()
 }
 
+/// A picture turns with its shape unless `a:blipFill/@rotWithShape="0"`.
+pub fn default_rot_with_shape() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Slide {
     pub index: usize,
@@ -227,6 +232,18 @@ pub struct Shape {
     /// placeholders; layout3 title uses "t", layout8/9 "b".
     #[serde(default)]
     pub anchor: Option<String>,
+    /// `a:blipFill/@rotWithShape` — whether the picture inside a shape turns
+    /// with the shape's `@rot`. True (the default) for a `p:pic`, whose raster
+    /// always follows the shape.
+    ///
+    /// PowerPoint render-truth (img_rotation probe, 2026-08-17): with
+    /// rotWithShape="1" a 90-degree shape maps the source's bottom-left corner
+    /// to the box's top-left (E4, identical to a rotated `p:pic` in E2); with
+    /// "0" the raster stays upright while the shape still turns (E5). All 2141
+    /// shape-level blipFills in the dev corpus declare "1", so the schema
+    /// default is not exercised and is taken to be "rotate".
+    #[serde(default = "default_rot_with_shape")]
+    pub rot_with_shape: bool,
     /// Custom geometry (`a:custGeom`) — the shape's outline as explicit paths
     /// instead of a named preset. None for a preset / picture / frame shape.
     ///

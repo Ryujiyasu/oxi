@@ -842,6 +842,119 @@ unsafe fn clip_to_geometry_gdi(
     ok
 }
 
+/// A picture is flipped and rotated with its shape unless this is set.
+fn imgrot_on() -> bool {
+    std::env::var("OXI_IMGROT_DISABLE").is_err()
+}
+
+/// Resample a picture into the page-aligned pixel box its flipped and rotated
+/// destination occupies. Returns the buffer and where to blit it, or None when
+/// there is nothing to transform.
+///
+/// PowerPoint render-truth (`img_rotation` probe, 2026-08-17, exported by
+/// PowerPoint itself; the source is a 2x2 colour grid so each sample names the
+/// source corner that landed there):
+///   - E2 `p:pic` @rot=90: box TL <- source BL, TR <- TL, BL <- BR, BR <- TR,
+///     i.e. the raster turns CLOCKWISE with the shape, about the box centre --
+///     the same convention already derived for outlines.
+///   - E4 a shape blipFill with rotWithShape="1" gives the identical map;
+///     E5 with "0" leaves the raster upright.
+///   - E6 @rot=90 + flipH: box TL <- BR, TR <- TR, BL <- BL, BR <- TL, which
+///     is FLIP FIRST in the shape's local box, THEN rotate -- the composition
+///     `emit_geom_path_gdi` already uses for the outline.
+/// The corpus has 489 rotated shape blipFills, 9 rotated pictures and 257
+/// flipped image shapes; all of it was painted axis-aligned before this.
+fn transform_picture(
+    rgba: &image::RgbaImage,
+    src: (i32, i32, i32, i32),
+    dest: (f64, f64, f64, f64),
+    centre: (f64, f64),
+    angle_deg: f64,
+    flip_h: bool,
+    flip_v: bool,
+) -> Option<(image::RgbaImage, i32, i32)> {
+    let (sx0, sy0, sw, sh) = src;
+    let (dx, dy, dw, dh) = dest;
+    if sw <= 0 || sh <= 0 || dw <= 0.0 || dh <= 0.0 {
+        return None;
+    }
+    let (sn, cs) = angle_deg.to_radians().sin_cos();
+    let rotate = |px: f64, py: f64| {
+        let (rx, ry) = (px - centre.0, py - centre.1);
+        (centre.0 + rx * cs - ry * sn, centre.1 + rx * sn + ry * cs)
+    };
+    let corners = [
+        rotate(dx, dy),
+        rotate(dx + dw, dy),
+        rotate(dx + dw, dy + dh),
+        rotate(dx, dy + dh),
+    ];
+    let min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).floor() as i32;
+    let min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min).floor() as i32;
+    let max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    let max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    let (out_w, out_h) = ((max_x - min_x) as i64, (max_y - min_y) as i64);
+    // A negative fillRect can blow the destination up to many times the page;
+    // refuse rather than allocate unboundedly (the caller keeps its old path).
+    if out_w <= 0 || out_h <= 0 || out_w * out_h > 64_000_000 {
+        return None;
+    }
+    let mut out = image::RgbaImage::new(out_w as u32, out_h as u32);
+    let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let px = min_x as f64 + ox as f64 + 0.5;
+            let py = min_y as f64 + oy as f64 + 0.5;
+            // Inverse rotation back into the destination rect's own frame.
+            let (rx, ry) = (px - centre.0, py - centre.1);
+            let ux = centre.0 + rx * cs + ry * sn;
+            let uy = centre.1 - rx * sn + ry * cs;
+            let mut fx = (ux - dx) / dw;
+            let mut fy = (uy - dy) / dh;
+            if !(0.0..1.0).contains(&fx) || !(0.0..1.0).contains(&fy) {
+                continue; // outside the picture: stays fully transparent
+            }
+            if flip_h {
+                fx = 1.0 - fx;
+            }
+            if flip_v {
+                fy = 1.0 - fy;
+            }
+            // Bilinear sample of the srcRect-cropped source.
+            let sxf = sx0 as f64 + fx * sw as f64 - 0.5;
+            let syf = sy0 as f64 + fy * sh as f64 - 0.5;
+            let (x0, y0) = (sxf.floor() as i32, syf.floor() as i32);
+            let (tx, ty) = (sxf - x0 as f64, syf - y0 as f64);
+            let mut acc = [0.0f64; 4];
+            for (i, (ox2, oy2)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                let sx = (x0 + ox2).clamp(0, iw - 1);
+                let sy = (y0 + oy2).clamp(0, ih - 1);
+                let w = match i {
+                    0 => (1.0 - tx) * (1.0 - ty),
+                    1 => tx * (1.0 - ty),
+                    2 => (1.0 - tx) * ty,
+                    _ => tx * ty,
+                };
+                let p = rgba.get_pixel(sx as u32, sy as u32);
+                for c in 0..4 {
+                    acc[c] += w * p[c] as f64;
+                }
+            }
+            out.put_pixel(
+                ox as u32,
+                oy as u32,
+                image::Rgba([
+                    acc[0].round().clamp(0.0, 255.0) as u8,
+                    acc[1].round().clamp(0.0, 255.0) as u8,
+                    acc[2].round().clamp(0.0, 255.0) as u8,
+                    acc[3].round().clamp(0.0, 255.0) as u8,
+                ]),
+            );
+        }
+    }
+    Some((out, min_x, min_y))
+}
+
 fn srgb_to_linear(c: f64) -> f64 {
     let c = c / 255.0;
     if c <= 0.04045 {
@@ -6893,6 +7006,31 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // and the part a negative fillRect pushes
                                 // outside the box (S-BLIPCLIP render-truth).
                                 let clipped = clip_to_geometry_gdi(mem_dc, sh, scale);
+                                // The picture turns and mirrors with its shape
+                                // (S-IMGROT render-truth). Resample it into a
+                                // page-aligned buffer whose margins are
+                                // transparent, then composite that -- an
+                                // axis-aligned blit cannot express a rotation.
+                                let turns = imgrot_on()
+                                    && (sh.flip_h || sh.flip_v || sh.rotation != 0.0)
+                                    && (sh.rot_with_shape || sh.flip_h || sh.flip_v);
+                                let angle = if sh.rot_with_shape { sh.rotation as f64 } else { 0.0 };
+                                let turned = if turns {
+                                    transform_picture(
+                                        &rgba,
+                                        (sx0, sy0, sw, shh),
+                                        (dx as f64, dy as f64, dw as f64, dh as f64),
+                                        (
+                                            (sh.x + sh.width / 2.0) as f64 * scale,
+                                            (sh.y + sh.height / 2.0) as f64 * scale,
+                                        ),
+                                        angle,
+                                        sh.flip_h,
+                                        sh.flip_v,
+                                    )
+                                } else {
+                                    None
+                                };
                                 // A picture whose media carries transparency
                                 // has to be COMPOSITED over the page -- the
                                 // opaque blit below drops the alpha byte and
@@ -6900,13 +7038,33 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // pixels. A fully opaque picture keeps the
                                 // exact SRCCOPY path (byte-identical), and a
                                 // failed AlphaBlend falls back to it too.
-                                let composited = std::env::var("OXI_ALPHABLEND_DISABLE")
-                                    .is_err()
-                                    && rgba.pixels().any(|p| p[3] != 255)
-                                    && alpha_blit(
-                                        mem_dc, dx, dy, dw, dh, sx0, sy0, sw, shh, iw, ih,
-                                        &rgba,
-                                    );
+                                let composited = match &turned {
+                                    // The resampled buffer always has
+                                    // transparent corners, so it must go
+                                    // through the compositing blit.
+                                    Some((buf, bx, by)) => alpha_blit(
+                                        mem_dc,
+                                        *bx,
+                                        *by,
+                                        buf.width() as i32,
+                                        buf.height() as i32,
+                                        0,
+                                        0,
+                                        buf.width() as i32,
+                                        buf.height() as i32,
+                                        buf.width() as i32,
+                                        buf.height() as i32,
+                                        buf,
+                                    ),
+                                    None => {
+                                        std::env::var("OXI_ALPHABLEND_DISABLE").is_err()
+                                            && rgba.pixels().any(|p| p[3] != 255)
+                                            && alpha_blit(
+                                                mem_dc, dx, dy, dw, dh, sx0, sy0, sw, shh, iw,
+                                                ih, &rgba,
+                                            )
+                                    }
+                                };
                                 if !composited {
                                 // RGBA -> BGRA for the 32-bpp DIB
                                 let mut bgra = Vec::with_capacity((iw * ih * 4) as usize);

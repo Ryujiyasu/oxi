@@ -212,3 +212,19 @@ fn preset_shapes_carry_no_custom_geometry() {
         }
     }
 }
+
+#[test]
+fn pictures_rotate_with_their_shape_by_default() {
+    // `a:blipFill/@rotWithShape` is absent on every fixture shape, and every
+    // one of the dev corpus's 2141 shape-level blipFills declares "1", so the
+    // default the renderer relies on is "rotate". A silent flip of this default
+    // would leave 489 rotated corpus images upright.
+    for pptx in [CUSTGEOM, PPTX] {
+        let p = parse_pptx(pptx).expect("fixture must parse");
+        for slide in &p.slides {
+            for shape in &slide.shapes {
+                assert!(shape.rot_with_shape, "default must be rotate-with-shape");
+            }
+        }
+    }
+}
