@@ -58,6 +58,16 @@ pub trait Host {
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
 
+    fn set_indexed(
+        &mut self,
+        _receiver: &ObjectRef,
+        _name: &str,
+        _args: &[Value],
+        _value: Value,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+
     fn enumerate(&mut self, _receiver: &ObjectRef) -> Result<Option<Vec<Value>>, String> {
         Ok(None)
     }
@@ -201,11 +211,23 @@ struct ErrorState {
 
 enum InternalObject {
     Collection(Vec<CollectionEntry>),
+    Dictionary(DictionaryObject),
 }
 
 struct CollectionEntry {
     value: Value,
     key: Option<String>,
+}
+
+struct DictionaryObject {
+    entries: Vec<DictionaryEntry>,
+    compare_mode: i64,
+    compare_text: bool,
+}
+
+struct DictionaryEntry {
+    key: Value,
+    value: Value,
 }
 
 type ValueSlot = Rc<RefCell<Value>>;
@@ -1541,13 +1563,26 @@ impl<'a> Runtime<'a> {
     }
 
     fn new_object(&mut self, type_name: &str, line: u32) -> Result<Value, RuntimeError> {
-        if !type_name.eq_ignore_ascii_case("collection") {
+        let (kind, object) = if type_name.eq_ignore_ascii_case("collection") {
+            ("Collection", InternalObject::Collection(Vec::new()))
+        } else if type_name.eq_ignore_ascii_case("dictionary")
+            || type_name.eq_ignore_ascii_case("scripting.dictionary")
+        {
+            (
+                "Dictionary",
+                InternalObject::Dictionary(DictionaryObject {
+                    entries: Vec::new(),
+                    compare_mode: 0,
+                    compare_text: false,
+                }),
+            )
+        } else {
             return Err(error(
                 RuntimeErrorKind::Unsupported,
                 format!("New is not available for VBA type: {type_name}"),
                 Some(line),
             ));
-        }
+        };
         let handle = self.next_internal_handle;
         self.next_internal_handle = self.next_internal_handle.checked_add(1).ok_or_else(|| {
             error(
@@ -1556,12 +1591,45 @@ impl<'a> Runtime<'a> {
                 Some(line),
             )
         })?;
-        self.internal_objects
-            .insert(handle, InternalObject::Collection(Vec::new()));
+        self.internal_objects.insert(handle, object);
         Ok(Value::Object(ObjectRef {
             handle,
-            kind: "Collection".to_string(),
+            kind: kind.to_string(),
         }))
+    }
+
+    fn create_object(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+        if args.len() != 1 {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "CreateObject expects one String class name, received {} argument(s)",
+                    args.len()
+                ),
+                line,
+            ));
+        }
+        let Value::String(type_name) = &args[0] else {
+            return Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "CreateObject class name must be a String",
+                line,
+            ));
+        };
+        self.new_object(type_name, line.unwrap_or(0))
+            .map_err(|failure| {
+                if failure.kind == RuntimeErrorKind::Unsupported {
+                    RuntimeError {
+                        kind: RuntimeErrorKind::UserDefined,
+                        message: format!("ActiveX component cannot create object: {type_name}"),
+                        line,
+                        vba_number: Some(429),
+                        vba_source: Some("VBA".to_string()),
+                    }
+                } else {
+                    failure
+                }
+            })
     }
 
     fn is_constant(&self, frame: &Frame, name: &str) -> bool {
@@ -1650,6 +1718,33 @@ impl<'a> Runtime<'a> {
                 Ok(())
             }
             Expr::Index { target, args, .. } => {
+                if let Some((receiver, member)) = self.indexed_object_target(target, frame, line)? {
+                    let mut values = Vec::with_capacity(args.len());
+                    for argument in args {
+                        if argument.name.is_some() {
+                            return Err(error(
+                                RuntimeErrorKind::ArgumentCount,
+                                "indexed property arguments cannot be named",
+                                Some(line),
+                            ));
+                        }
+                        values.push(match &argument.value {
+                            Some(value) => self.eval_expr(value, frame)?,
+                            None => Value::Missing,
+                        });
+                    }
+                    return match self.host_set_indexed(&receiver, &member, &values, value, line)? {
+                        true => Ok(()),
+                        false => Err(error(
+                            RuntimeErrorKind::Unsupported,
+                            format!(
+                                "indexed property is not writable: {}.{member}",
+                                receiver.kind
+                            ),
+                            Some(line),
+                        )),
+                    };
+                }
                 let name = expr_name(target).ok_or_else(|| {
                     error(
                         RuntimeErrorKind::Unsupported,
@@ -1725,6 +1820,34 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn indexed_object_target(
+        &mut self,
+        target: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<Option<(ObjectRef, String)>, RuntimeError> {
+        match target {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                match self.read_variable(frame, name, line)? {
+                    Some(Value::Object(receiver)) => Ok(Some((receiver, "Item".to_string()))),
+                    Some(Value::Nothing) => Err(error(
+                        RuntimeErrorKind::ObjectVariableNotSet,
+                        "object variable or With block variable not set",
+                        Some(line),
+                    )),
+                    _ => Ok(None),
+                }
+            }
+            Expr::Member { object, name, .. } => {
+                Ok(Some((self.eval_object(object, frame, line)?, name.clone())))
+            }
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                Ok(Some((current_with_object(frame, line)?, name.clone())))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
@@ -1771,6 +1894,10 @@ impl<'a> Runtime<'a> {
             } => match self.eval_expr(operand, frame)? {
                 Value::Object(object) => Ok(Value::Boolean(
                     object.kind.eq_ignore_ascii_case(type_name)
+                        || type_name
+                            .rsplit('.')
+                            .next()
+                            .is_some_and(|name| object.kind.eq_ignore_ascii_case(name))
                         || type_name.eq_ignore_ascii_case("object"),
                 )),
                 Value::Nothing => Ok(Value::Boolean(false)),
@@ -2166,6 +2293,9 @@ impl<'a> Runtime<'a> {
         ) {
             return self.call_procedure(name, args, line);
         }
+        if name.eq_ignore_ascii_case("createobject") {
+            return self.create_object(&args, line);
+        }
         if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
         }
@@ -2287,6 +2417,26 @@ impl<'a> Runtime<'a> {
                 (InternalObject::Collection(entries), "count") => {
                     Ok(Some(Value::Integer(entries.len() as i64)))
                 }
+                (InternalObject::Dictionary(dictionary), "count") => {
+                    Ok(Some(Value::Integer(dictionary.entries.len() as i64)))
+                }
+                (InternalObject::Dictionary(dictionary), "comparemode") => {
+                    Ok(Some(Value::Integer(dictionary.compare_mode)))
+                }
+                (InternalObject::Dictionary(dictionary), "keys") => Ok(Some(dictionary_array(
+                    dictionary
+                        .entries
+                        .iter()
+                        .map(|entry| entry.key.clone())
+                        .collect(),
+                ))),
+                (InternalObject::Dictionary(dictionary), "items") => Ok(Some(dictionary_array(
+                    dictionary
+                        .entries
+                        .iter()
+                        .map(|entry| entry.value.clone())
+                        .collect(),
+                ))),
                 _ => Ok(None),
             };
         }
@@ -2304,8 +2454,32 @@ impl<'a> Runtime<'a> {
         value: Value,
         line: u32,
     ) -> Result<bool, RuntimeError> {
-        if self.internal_objects.contains_key(&receiver.handle) {
-            return Ok(false);
+        let option_compare_text = self.option_compare_text();
+        if let Some(object) = self.internal_objects.get_mut(&receiver.handle) {
+            return match object {
+                InternalObject::Dictionary(dictionary)
+                    if name.eq_ignore_ascii_case("comparemode") =>
+                {
+                    if !dictionary.entries.is_empty() {
+                        return Err(invalid_procedure_call(
+                            "CompareMode cannot be changed after adding Dictionary entries"
+                                .to_string(),
+                            Some(line),
+                        ));
+                    }
+                    let mode = integer_argument(&value, Some(line))?;
+                    if !matches!(mode, -1..=1) {
+                        return Err(invalid_procedure_call(
+                            format!("unsupported Dictionary CompareMode: {mode}"),
+                            Some(line),
+                        ));
+                    }
+                    dictionary.compare_mode = mode;
+                    dictionary.compare_text = mode == 1 || (mode == -1 && option_compare_text);
+                    Ok(true)
+                }
+                _ => Ok(false),
+            };
         }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(false);
@@ -2314,17 +2488,40 @@ impl<'a> Runtime<'a> {
             .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
     }
 
+    fn host_set_indexed(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        value: Value,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        if self.internal_objects.contains_key(&receiver.handle) {
+            return self.internal_set_indexed(receiver, name, args, value, line);
+        }
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(false);
+        };
+        host.set_indexed(receiver, name, args, value)
+            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+    }
+
     fn host_enumerate(
         &mut self,
         receiver: &ObjectRef,
         line: u32,
     ) -> Result<Option<Vec<Value>>, RuntimeError> {
-        if let Some(InternalObject::Collection(entries)) =
-            self.internal_objects.get(&receiver.handle)
-        {
-            return Ok(Some(
-                entries.iter().map(|entry| entry.value.clone()).collect(),
-            ));
+        if let Some(object) = self.internal_objects.get(&receiver.handle) {
+            return Ok(Some(match object {
+                InternalObject::Collection(entries) => {
+                    entries.iter().map(|entry| entry.value.clone()).collect()
+                }
+                InternalObject::Dictionary(dictionary) => dictionary
+                    .entries
+                    .iter()
+                    .map(|entry| entry.key.clone())
+                    .collect(),
+            }));
         }
         let Some(host) = self.host.as_deref_mut() else {
             return Ok(None);
@@ -2452,7 +2649,175 @@ impl<'a> Runtime<'a> {
                 format!("Collection method is not available: {name}"),
                 Some(line),
             )),
+            InternalObject::Dictionary(dictionary) if name.eq_ignore_ascii_case("add") => {
+                if args.len() != 2 {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Dictionary.Add expects 2 arguments, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                validate_dictionary_key(&args[0], line)?;
+                if dictionary_position(dictionary, &args[0]).is_some() {
+                    return Err(dictionary_duplicate_key_error(line));
+                }
+                dictionary.entries.push(DictionaryEntry {
+                    key: args[0].clone(),
+                    value: args[1].clone(),
+                });
+                Ok(Value::Empty)
+            }
+            InternalObject::Dictionary(dictionary) if name.eq_ignore_ascii_case("exists") => {
+                if args.len() != 1 {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Dictionary.Exists expects 1 argument, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                validate_dictionary_key(&args[0], line)?;
+                Ok(Value::Boolean(
+                    dictionary_position(dictionary, &args[0]).is_some(),
+                ))
+            }
+            InternalObject::Dictionary(dictionary) if name.eq_ignore_ascii_case("item") => {
+                if args.len() != 1 {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Dictionary.Item expects 1 argument, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                validate_dictionary_key(&args[0], line)?;
+                if let Some(index) = dictionary_position(dictionary, &args[0]) {
+                    Ok(dictionary.entries[index].value.clone())
+                } else {
+                    dictionary.entries.push(DictionaryEntry {
+                        key: args[0].clone(),
+                        value: Value::Empty,
+                    });
+                    Ok(Value::Empty)
+                }
+            }
+            InternalObject::Dictionary(dictionary) if name.eq_ignore_ascii_case("remove") => {
+                if args.len() != 1 {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Dictionary.Remove expects 1 argument, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                validate_dictionary_key(&args[0], line)?;
+                let index = dictionary_position(dictionary, &args[0])
+                    .ok_or_else(|| dictionary_missing_key_error(line))?;
+                dictionary.entries.remove(index);
+                Ok(Value::Empty)
+            }
+            InternalObject::Dictionary(dictionary) if name.eq_ignore_ascii_case("removeall") => {
+                if !args.is_empty() {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!(
+                            "Dictionary.RemoveAll expects no arguments, received {}",
+                            args.len()
+                        ),
+                        Some(line),
+                    ));
+                }
+                dictionary.entries.clear();
+                Ok(Value::Empty)
+            }
+            InternalObject::Dictionary(dictionary)
+                if name.eq_ignore_ascii_case("keys") || name.eq_ignore_ascii_case("items") =>
+            {
+                if !args.is_empty() {
+                    return Err(error(
+                        RuntimeErrorKind::ArgumentCount,
+                        format!("Dictionary.{name} expects no arguments"),
+                        Some(line),
+                    ));
+                }
+                let values = if name.eq_ignore_ascii_case("keys") {
+                    dictionary
+                        .entries
+                        .iter()
+                        .map(|entry| entry.key.clone())
+                        .collect()
+                } else {
+                    dictionary
+                        .entries
+                        .iter()
+                        .map(|entry| entry.value.clone())
+                        .collect()
+                };
+                Ok(dictionary_array(values))
+            }
+            InternalObject::Dictionary(_) => Err(error(
+                RuntimeErrorKind::Unsupported,
+                format!("Dictionary method is not available: {name}"),
+                Some(line),
+            )),
         }
+    }
+
+    fn internal_set_indexed(
+        &mut self,
+        receiver: &ObjectRef,
+        name: &str,
+        args: &[Value],
+        value: Value,
+        line: u32,
+    ) -> Result<bool, RuntimeError> {
+        let Some(InternalObject::Dictionary(dictionary)) =
+            self.internal_objects.get_mut(&receiver.handle)
+        else {
+            return Ok(false);
+        };
+        if !name.eq_ignore_ascii_case("item") && !name.eq_ignore_ascii_case("key") {
+            return Ok(false);
+        }
+        if args.len() != 1 {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "Dictionary.{name} expects 1 argument, received {}",
+                    args.len()
+                ),
+                Some(line),
+            ));
+        }
+        validate_dictionary_key(&args[0], line)?;
+        if name.eq_ignore_ascii_case("key") {
+            validate_dictionary_key(&value, line)?;
+            let index = dictionary_position(dictionary, &args[0])
+                .ok_or_else(|| dictionary_missing_key_error(line))?;
+            if dictionary_position(dictionary, &value).is_some_and(|found| found != index) {
+                return Err(dictionary_duplicate_key_error(line));
+            }
+            dictionary.entries[index].key = value;
+            return Ok(true);
+        }
+        if let Some(index) = dictionary_position(dictionary, &args[0]) {
+            dictionary.entries[index].value = value;
+        } else {
+            dictionary.entries.push(DictionaryEntry {
+                key: args[0].clone(),
+                value,
+            });
+        }
+        Ok(true)
     }
 
     fn array_arguments(
@@ -2710,6 +3075,74 @@ fn current_with_object(frame: &Frame, line: u32) -> Result<ObjectRef, RuntimeErr
             Some(line),
         )
     })
+}
+
+fn dictionary_array(values: Vec<Value>) -> Value {
+    Value::Array(ArrayValue {
+        dimensions: vec![ArrayDimension {
+            lower_bound: 0,
+            length: values.len(),
+        }],
+        values,
+        element_default: Box::new(Value::Empty),
+        resizable: true,
+    })
+}
+
+fn validate_dictionary_key(key: &Value, line: u32) -> Result<(), RuntimeError> {
+    if matches!(
+        key,
+        Value::Array(_) | Value::Null | Value::Missing | Value::Nothing | Value::Object(_)
+    ) {
+        Err(error(
+            RuntimeErrorKind::TypeMismatch,
+            "Dictionary key must be a non-Null scalar value",
+            Some(line),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn dictionary_position(dictionary: &DictionaryObject, key: &Value) -> Option<usize> {
+    dictionary
+        .entries
+        .iter()
+        .position(|entry| dictionary_keys_equal(&entry.key, key, dictionary.compare_text))
+}
+
+fn dictionary_keys_equal(left: &Value, right: &Value, text_compare: bool) -> bool {
+    match (left, right) {
+        (Value::String(left), Value::String(right)) if text_compare => {
+            left.to_lowercase() == right.to_lowercase()
+        }
+        (Value::String(left), Value::String(right)) => left == right,
+        (Value::Integer(left), Value::Integer(right)) => left == right,
+        (Value::Double(left), Value::Double(right)) => left == right,
+        (Value::Integer(left), Value::Double(right)) => *left as f64 == *right,
+        (Value::Double(left), Value::Integer(right)) => *left == *right as f64,
+        (Value::Boolean(left), Value::Boolean(right)) => left == right,
+        (Value::Empty, Value::Empty) => true,
+        _ => false,
+    }
+}
+
+fn dictionary_duplicate_key_error(line: u32) -> RuntimeError {
+    raised_error(
+        457,
+        "Scripting.Dictionary".to_string(),
+        "this key is already associated with an element of this collection".to_string(),
+        line,
+    )
+}
+
+fn dictionary_missing_key_error(line: u32) -> RuntimeError {
+    raised_error(
+        32_811,
+        "Scripting.Dictionary".to_string(),
+        "element not found".to_string(),
+        line,
+    )
 }
 
 fn collection_index(
@@ -3600,8 +4033,16 @@ fn default_value(type_name: &TypeName) -> Value {
         "single" | "double" | "decimal" => Value::Double(0.0),
         "date" => Value::Double(0.0),
         "string" => Value::String(String::new()),
-        "object" | "application" | "workbook" | "worksheet" | "range" | "chart" | "shape"
-        | "collection" | "dictionary" => Value::Nothing,
+        "object"
+        | "application"
+        | "workbook"
+        | "worksheet"
+        | "range"
+        | "chart"
+        | "shape"
+        | "collection"
+        | "dictionary"
+        | "scripting.dictionary" => Value::Nothing,
         _ => Value::Empty,
     }
 }
@@ -4584,6 +5025,114 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("457|5".to_string()));
+    }
+
+    #[test]
+    fn dictionary_supports_createobject_default_item_arrays_and_enumeration() {
+        let value = run(
+            "Public Function DictionaryProbe() As String\n\
+               Dim values As Object\n\
+               Dim entryKey As Variant\n\
+               Dim keys As Variant\n\
+               Dim items As Variant\n\
+               Dim walked As String\n\
+               Set values = CreateObject(\"Scripting.Dictionary\")\n\
+               values.CompareMode = vbTextCompare\n\
+               values.Add \"Alpha\", 10\n\
+               values(\"beta\") = 20\n\
+               values.Item(\"ALPHA\") = 11\n\
+               For Each entryKey In values\n\
+                 walked = walked & entryKey & \",\"\n\
+               Next\n\
+               keys = values.Keys\n\
+               items = values.Items\n\
+               DictionaryProbe = values.Count & \"|\" & values.Exists(\"BETA\") & \"|\" & values(\"alpha\") & \"|\" & keys(0) & \"|\" & keys(1) & \"|\" & items(0) & \"|\" & items(1) & \"|\" & walked & \"|\" & TypeName(values) & \"|\" & (TypeOf values Is Scripting.Dictionary)\n\
+               values.Remove \"BETA\"\n\
+               DictionaryProbe = DictionaryProbe & \"|\" & values.Count\n\
+             End Function\n",
+            "DictionaryProbe",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("2|True|11|Alpha|beta|11|20|Alpha,beta,|Dictionary|True|1".to_string())
+        );
+    }
+
+    #[test]
+    fn dictionary_reports_vba_errors_and_removeall_resets_comparemode() {
+        let value = run(
+            "Public Function DictionaryErrors() As String\n\
+               Dim values As New Scripting.Dictionary\n\
+               Dim duplicate As Long\n\
+               Dim modeChange As Long\n\
+               Dim missing As Long\n\
+               values.CompareMode = vbTextCompare\n\
+               values.Add \"key\", 1\n\
+               On Error Resume Next\n\
+               values.Add \"KEY\", 2\n\
+               duplicate = Err.Number\n\
+               Err.Clear\n\
+               values.CompareMode = vbBinaryCompare\n\
+               modeChange = Err.Number\n\
+               Err.Clear\n\
+               values.Remove \"absent\"\n\
+               missing = Err.Number\n\
+               Err.Clear\n\
+               values.RemoveAll\n\
+               values.CompareMode = vbBinaryCompare\n\
+               values(\"x\") = 3\n\
+               DictionaryErrors = duplicate & \"|\" & modeChange & \"|\" & missing & \"|\" & values.Count & \"|\" & values(\"x\")\n\
+             End Function\n",
+            "DictionaryErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("457|5|32811|1|3".to_string()));
+    }
+
+    #[test]
+    fn dictionary_key_rename_and_use_compare_option_follow_module_settings() {
+        let value = run(
+            "Option Compare Text\n\
+             Public Function DictionaryRename() As String\n\
+               Dim values As New Scripting.Dictionary\n\
+               values.CompareMode = vbUseCompareOption\n\
+               values.Add \"Alpha\", 42\n\
+               values.Key(\"ALPHA\") = \"Renamed\"\n\
+               DictionaryRename = values.CompareMode & \"|\" & values.Exists(\"RENAMED\") & \"|\" & values.Exists(\"alpha\") & \"|\" & values(\"renamed\")\n\
+             End Function\n",
+            "DictionaryRename",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("-1|True|False|42".to_string()));
+    }
+
+    #[test]
+    fn dictionary_as_new_reactivates_and_unknown_createobject_reports_429() {
+        let value = run(
+            "Public Function DictionaryLifetime() As String\n\
+               Dim values As New Scripting.Dictionary\n\
+               Dim createFailure As Long\n\
+               values(\"first\") = 1\n\
+               Set values = Nothing\n\
+               values(\"second\") = 2\n\
+               On Error Resume Next\n\
+               Set values = CreateObject(\"Oxi.Unknown\")\n\
+               createFailure = Err.Number\n\
+               DictionaryLifetime = values.Count & \"|\" & values(\"second\") & \"|\" & createFailure\n\
+             End Function\n",
+            "DictionaryLifetime",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("1|2|429".to_string()));
     }
 
     #[test]
