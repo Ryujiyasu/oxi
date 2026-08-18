@@ -20594,6 +20594,57 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             eprintln!("[S1026-REPLAY] para={} pass={} start={} end={} cand={:?} cw_tw={} curw_tw={} avail_tw={} credit_tw={} tabslack_tw={} line={} branch=latin_wordwrap badness={} cap={} dec={}",
                                 s1026_replay_para.unwrap(), s1026_replay_pass, s1026_nonws_consumed.saturating_sub(cn), s1026_nonws_consumed, word, word_width_tw, current_width_tw, available_tw, cr, ts, lines.len(), s1022_badness_wrap, cap, if wr {"WRAP"} else {"KEEP"});
                         }
+                        // S1172 (2026-08-18, opt-IN OXI_OPENWRAP=1, default OFF =
+                        // byte-identical): the kinsoku gate above declines to wrap a
+                        // token that follows an opening bracket, so the greedy segment
+                        // placement below keeps the bracket AND the head of the token on
+                        // this line. Word does the opposite: it moves the bracket down
+                        // WITH the token. c7b923e5 p3 measured 2026-08-18 --
+                        //   Word  L12 ends «…表示4.0 国際ライセンス» (40 ch) and L13 opens
+                        //         «（https://creativecommons.org/…», the short L12 then
+                        //         justified out by 13.6%
+                        //   Oxi   L12 ends «…国際ライセンス（https» (49 ch)
+                        // So the comment above describes Word correctly and the code
+                        // reaches the opposite arrangement. Wrapping WITH the bracket
+                        // means popping the fragments already placed for it.
+                        // The census finds five documents where an opening bracket
+                        // precedes a 20+ character Latin token, and two of them
+                        // (uklocalspending 16 sites, usnyserda 2) are large Latin
+                        // documents on the most calibrated path in the breaker -- both
+                        // come through untouched, because their brackets never land on
+                        // a wrap boundary. GATE: c7b923e5 lines 87/94 -> 92/94 and SSIM
+                        // +0.0222 (the only one of 238 bases whose bytes move),
+                        // tokyoshugyo 2087 -> 2090, uklocalspending / usnyserda / d77a
+                        // unchanged, Phase 1 95/96 with every per-document score
+                        // identical. Opt-out OXI_OPENWRAP_DISABLE.
+                        if std::env::var("OXI_OPENWRAP_DISABLE").is_err()
+                            && preceded_by_open && !s745_char_wrap
+                            && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
+                            && current_line.fragments.len() > 1 && !para_all_whitespace {
+                            let mut carried: Vec<LineFragment> = Vec::new();
+                            while current_line.fragments.len() > 1 {
+                                let prohibited = current_line
+                                    .fragments
+                                    .last()
+                                    .and_then(|f| f.text.chars().last())
+                                    .map_or(false, kinsoku::is_line_end_prohibited);
+                                if !prohibited {
+                                    break;
+                                }
+                                let f = current_line.fragments.pop().unwrap();
+                                current_width -= f.width;
+                                current_width_tw -= pt_to_tw(f.width);
+                                current_capw_tw -= pt_to_tw(f.width);
+                                carried.push(f);
+                            }
+                            wrap_and_seed!(ws);
+                            for f in carried.into_iter().rev() {
+                                current_width += f.width;
+                                current_width_tw += pt_to_tw(f.width);
+                                current_capw_tw += pt_to_tw(f.width);
+                                current_line.fragments.push(f);
+                            }
+                        }
                         if !preceded_by_open && !s745_char_wrap
                             && (current_width_tw + word_width_tw > available_tw + (if c14_active && c14_space_tw > 0 { latin_space_credit_tw } else { latin_space_credit_tw + wpj_credit_at(lines.len()) }) + right_tab_slack_tw + s958_center_slack(center_tab_stop_tw, current_width_tw) + (if c14_active && c14_space_tw > 0 { if !s1026_final_token && std::env::var("OXI_S1028_HG_DISABLE").is_err() { (pt_to_tw(word_trail_hang_w) - 1).max(0) } else { 0 } } else { pt_to_tw(word_trail_hang_w) }) || s1022_badness_wrap)
                             && !current_line.fragments.is_empty() && !para_all_whitespace {
