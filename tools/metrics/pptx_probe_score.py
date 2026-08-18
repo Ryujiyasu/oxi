@@ -43,13 +43,25 @@ def find_pdf(deck: Path) -> Path | None:
     return hits[0] if hits else None
 
 
-def ssim(a: np.ndarray, b: np.ndarray) -> float:
-    """Global SSIM on the luma plane -- enough to rank two arms."""
+def ssim(a: np.ndarray, b: np.ndarray, block: int = 44) -> float:
+    """Windowed SSIM on the luma plane, averaged over blocks.
+
+    A single global window is not usable here: on a sparse probe page it is
+    dominated by the white field, and it rated a one-line break difference on
+    `bulletph` at -0.0362 where the windowed measure says -0.0074. Windowed is
+    also what the corpus harness uses, so the two numbers are comparable.
+    """
     a, b = a.astype(float), b.astype(float)
     c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
-    ma, mb, va, vb = a.mean(), b.mean(), a.var(), b.var()
-    cov = ((a - ma) * (b - mb)).mean()
-    return ((2 * ma * mb + c1) * (2 * cov + c2)) / ((ma * ma + mb * mb + c1) * (va + vb + c2))
+    vals = []
+    for y in range(0, a.shape[0] - block, block):
+        for x in range(0, a.shape[1] - block, block):
+            p, q = a[y:y + block, x:x + block], b[y:y + block, x:x + block]
+            mp, mq, vp, vq = p.mean(), q.mean(), p.var(), q.var()
+            cov = ((p - mp) * (q - mq)).mean()
+            vals.append(((2 * mp * mq + c1) * (2 * cov + c2))
+                        / ((mp * mp + mq * mq + c1) * (vp + vq + c2)))
+    return float(np.mean(vals)) if vals else float("nan")
 
 
 def render(deck: Path, out: Path, env: dict[str, str]) -> list[Path]:

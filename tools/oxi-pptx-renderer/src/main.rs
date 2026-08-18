@@ -8764,15 +8764,37 @@ fn runtime_dx_px(
     if !font_has_all_glyphs(family, bold, italic, text) {
         return None;
     }
+    // Round the CUMULATIVE position, not each advance. `ExtTextOutW` needs
+    // integer steps, but rounding every advance on its own makes the drawn line
+    // the sum of 55 roundings -- several pixels adrift of the design width, which
+    // is what PowerPoint both breaks and centres against. Taking differences of
+    // rounded running positions keeps every glyph within half a pixel of its
+    // exact place AND makes the total equal the rounded exact width, so the same
+    // number can be used for wrapping, for alignment, and for drawing.
     let mut dx = Vec::with_capacity(text.len());
+    let mut acc = 0.0f64;
+    let mut prev = 0i32;
     for ch in text.chars() {
         let em = runtime_advance_em(family, bold, italic, ch)?;
-        dx.push((em * fs * scale as f32).round() as i32);
+        acc += em as f64 * fs as f64 * scale;
+        let pos = if advwidth_on() {
+            acc.round() as i32
+        } else {
+            prev + (em * fs * scale as f32).round() as i32
+        };
+        dx.push(pos - prev);
+        prev = pos;
     }
     Some(dx)
 }
 
 /// Design width of `text` in device pixels, or None (see `runtime_dx_px`).
+///
+/// Summed in EM units and rounded ONCE. `runtime_dx_px` has to round every
+/// character on its own because `ExtTextOutW` takes an integer dx array, but a
+/// line's width is not the sum of those roundings -- PowerPoint measures the
+/// exact design width, and d28 slide 8's centred body lines came out 0.4% to
+/// 2.0% wide, enough to shift a 250pt line by up to 5pt.
 #[cfg(windows)]
 fn runtime_width_px(
     dc: windows::Win32::Graphics::Gdi::HDC,
@@ -8784,6 +8806,12 @@ fn runtime_width_px(
     scale: f64,
 ) -> Option<i32> {
     runtime_dx_px(dc, text, fs, family, bold, italic, scale).map(|dx| dx.iter().sum())
+}
+
+/// Glyph positions are rounded cumulatively unless this is set, which restores
+/// rounding each advance on its own.
+fn advwidth_on() -> bool {
+    std::env::var("OXI_ADVWIDTH_DISABLE").is_err()
 }
 
 /// Text is measured and drawn at the font's design advances unless this is
