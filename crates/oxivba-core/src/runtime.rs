@@ -3329,6 +3329,7 @@ fn call_builtin(
             | "mid"
             | "minute"
             | "month"
+            | "monthname"
             | "oct"
             | "replace"
             | "rgb"
@@ -3342,6 +3343,8 @@ fn call_builtin(
             | "split"
             | "sqr"
             | "strcomp"
+            | "strconv"
+            | "str"
             | "string"
             | "strreverse"
             | "switch"
@@ -3355,6 +3358,7 @@ fn call_builtin(
             | "val"
             | "vartype"
             | "weekday"
+            | "weekdayname"
             | "year"
     );
     if !known {
@@ -3366,6 +3370,12 @@ fn call_builtin(
             "format" | "formatcurrency" | "formatdatetime" | "formatnumber" | "formatpercent"
         ) {
             return call_format_builtin(&name, args, line);
+        }
+        if matches!(
+            name.as_str(),
+            "monthname" | "str" | "strconv" | "weekdayname"
+        ) {
+            return call_text_conversion_builtin(&name, args, line);
         }
         if matches!(
             name.as_str(),
@@ -4056,6 +4066,272 @@ fn call_format_builtin(
     }
 }
 
+fn call_text_conversion_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+) -> Result<Value, RuntimeError> {
+    let count_error = || {
+        error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("invalid argument count for {name}: {}", args.len()),
+            line,
+        )
+    };
+    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    match name {
+        "str" => {
+            if args.len() != 1 {
+                return Err(count_error());
+            }
+            let value = number(&args[0]).map_err(mismatch)?;
+            if !value.is_finite() {
+                return Err(error(
+                    RuntimeErrorKind::Overflow,
+                    "overflow converting number with Str",
+                    line,
+                ));
+            }
+            let rendered = text(&numeric_literal(value)).map_err(mismatch)?;
+            Ok(Value::String(if value.is_sign_negative() {
+                rendered
+            } else {
+                format!(" {rendered}")
+            }))
+        }
+        "monthname" => {
+            if !(1..=2).contains(&args.len()) {
+                return Err(count_error());
+            }
+            let month = integer_argument(&args[0], line)?;
+            if !(1..=12).contains(&month) {
+                return Err(invalid_procedure_call(
+                    format!("invalid month number: {month}"),
+                    line,
+                ));
+            }
+            let abbreviate = optional_boolean(args.get(1), false, line)?;
+            let name = month_name(month as u32);
+            Ok(Value::String(if abbreviate {
+                name[..3].to_string()
+            } else {
+                name.to_string()
+            }))
+        }
+        "weekdayname" => {
+            if !(1..=3).contains(&args.len()) {
+                return Err(count_error());
+            }
+            let weekday = integer_argument(&args[0], line)?;
+            if !(1..=7).contains(&weekday) {
+                return Err(invalid_procedure_call(
+                    format!("invalid weekday number: {weekday}"),
+                    line,
+                ));
+            }
+            let abbreviate = optional_boolean(args.get(1), false, line)?;
+            let first_day = first_day_of_week(args.get(2), line)?;
+            let absolute = (first_day + weekday - 2).rem_euclid(7) + 1;
+            let name = weekday_name_by_number(absolute);
+            Ok(Value::String(if abbreviate {
+                name[..3].to_string()
+            } else {
+                name.to_string()
+            }))
+        }
+        "strconv" => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(count_error());
+            }
+            if matches!(args[0], Value::Null) {
+                return Err(mismatch("invalid use of Null".to_string()));
+            }
+            let mut value = text(&args[0]).map_err(mismatch)?;
+            let conversion = integer_argument(&args[1], line)?;
+            if let Some(locale) = args.get(2) {
+                integer_argument(locale, line)?;
+            }
+            if !(0..=255).contains(&conversion)
+                || conversion & 4 != 0 && conversion & 8 != 0
+                || conversion & 16 != 0 && conversion & 32 != 0
+            {
+                return Err(invalid_procedure_call(
+                    format!("invalid StrConv conversion: {conversion}"),
+                    line,
+                ));
+            }
+            if conversion & 4 != 0 {
+                value = convert_width_unicode(&value, true);
+            }
+            if conversion & 16 != 0 {
+                value = convert_kana_script(&value, true);
+            } else if conversion & 32 != 0 {
+                value = convert_kana_script(&value, false);
+            }
+            if conversion & 8 != 0 {
+                value = convert_width_unicode(&value, false);
+            }
+            value = match conversion & 3 {
+                0 => value,
+                1 => value.to_uppercase(),
+                2 => value.to_lowercase(),
+                3 => proper_case(&value),
+                _ => unreachable!(),
+            };
+            Ok(Value::String(value))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn optional_boolean(
+    value: Option<&Value>,
+    default: bool,
+    line: Option<u32>,
+) -> Result<bool, RuntimeError> {
+    match value {
+        None | Some(Value::Missing) => Ok(default),
+        Some(Value::Null) => Err(error(
+            RuntimeErrorKind::TypeMismatch,
+            "invalid use of Null",
+            line,
+        )),
+        Some(value) => {
+            truthy(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))
+        }
+    }
+}
+
+fn proper_case(value: &str) -> String {
+    let mut at_word_start = true;
+    let mut result = String::new();
+    for character in value.chars() {
+        if character.is_alphanumeric() {
+            if at_word_start {
+                result.extend(character.to_uppercase());
+            } else {
+                result.extend(character.to_lowercase());
+            }
+            at_word_start = false;
+        } else {
+            result.push(character);
+            at_word_start = true;
+        }
+    }
+    result
+}
+
+fn convert_kana_script(value: &str, katakana: bool) -> String {
+    value
+        .chars()
+        .map(|character| {
+            let code = character as u32;
+            let converted = if katakana && (0x3041..=0x3096).contains(&code) {
+                code + 0x60
+            } else if !katakana && (0x30a1..=0x30f6).contains(&code) {
+                code - 0x60
+            } else if katakana && (0x309d..=0x309e).contains(&code) {
+                code + 0x60
+            } else if !katakana && (0x30fd..=0x30fe).contains(&code) {
+                code - 0x60
+            } else {
+                code
+            };
+            char::from_u32(converted).unwrap_or(character)
+        })
+        .collect()
+}
+
+fn convert_width_unicode(value: &str, wide: bool) -> String {
+    let mut output = String::new();
+    if wide {
+        let mut input = value.chars().peekable();
+        while let Some(character) = input.next() {
+            let code = character as u32;
+            if character == ' ' {
+                output.push(char::from_u32(0x3000).unwrap());
+            } else if (0x21..=0x7e).contains(&code) {
+                output.push(char::from_u32(code + 0xfee0).unwrap());
+            } else if let Some(mut converted) = halfwidth_kana_code(code) {
+                if let Some(mark @ (0xff9e | 0xff9f)) = input.peek().map(|value| *value as u32) {
+                    if let Some(composed) = compose_kana_code(converted, mark) {
+                        converted = composed;
+                        input.next();
+                    }
+                }
+                output.push(char::from_u32(converted).unwrap());
+            } else {
+                output.push(character);
+            }
+        }
+    } else {
+        for character in value.chars() {
+            let code = character as u32;
+            if code == 0x3000 {
+                output.push(' ');
+            } else if (0xff01..=0xff5e).contains(&code) {
+                output.push(char::from_u32(code - 0xfee0).unwrap());
+            } else if let Some((base, mark)) = narrow_voiced_kana_codes(code) {
+                output.push(char::from_u32(base).unwrap());
+                output.push(char::from_u32(mark).unwrap());
+            } else if let Some(halfwidth) = fullwidth_kana_code(code) {
+                output.push(char::from_u32(halfwidth).unwrap());
+            } else {
+                output.push(character);
+            }
+        }
+    }
+    output
+}
+
+fn halfwidth_kana_code(code: u32) -> Option<u32> {
+    const FULLWIDTH: [u32; 63] = [
+        0x3002, 0x300c, 0x300d, 0x3001, 0x30fb, 0x30f2, 0x30a1, 0x30a3, 0x30a5, 0x30a7, 0x30a9,
+        0x30e3, 0x30e5, 0x30e7, 0x30c3, 0x30fc, 0x30a2, 0x30a4, 0x30a6, 0x30a8, 0x30aa, 0x30ab,
+        0x30ad, 0x30af, 0x30b1, 0x30b3, 0x30b5, 0x30b7, 0x30b9, 0x30bb, 0x30bd, 0x30bf, 0x30c1,
+        0x30c4, 0x30c6, 0x30c8, 0x30ca, 0x30cb, 0x30cc, 0x30cd, 0x30ce, 0x30cf, 0x30d2, 0x30d5,
+        0x30d8, 0x30db, 0x30de, 0x30df, 0x30e0, 0x30e1, 0x30e2, 0x30e4, 0x30e6, 0x30e8, 0x30e9,
+        0x30ea, 0x30eb, 0x30ec, 0x30ed, 0x30ef, 0x30f3, 0x3099, 0x309a,
+    ];
+    let index = usize::try_from(code.checked_sub(0xff61)?).ok()?;
+    FULLWIDTH.get(index).copied()
+}
+
+fn fullwidth_kana_code(code: u32) -> Option<u32> {
+    (0xff61..=0xff9f).find(|halfwidth| halfwidth_kana_code(*halfwidth) == Some(code))
+}
+
+fn compose_kana_code(base: u32, mark: u32) -> Option<u32> {
+    Some(match (base, mark) {
+        (0x30a6, 0xff9e) => 0x30f4,
+        (0x30ab | 0x30ad | 0x30af | 0x30b1 | 0x30b3, 0xff9e)
+        | (0x30b5 | 0x30b7 | 0x30b9 | 0x30bb | 0x30bd, 0xff9e)
+        | (0x30bf | 0x30c1 | 0x30c6 | 0x30c8, 0xff9e)
+        | (0x30cf | 0x30d2 | 0x30d5 | 0x30d8 | 0x30db, 0xff9e) => base + 1,
+        (0x30c4, 0xff9e) => 0x30c5,
+        (0x30cf | 0x30d2 | 0x30d5 | 0x30d8 | 0x30db, 0xff9f) => base + 2,
+        (0x30ef, 0xff9e) => 0x30f7,
+        (0x30f2, 0xff9e) => 0x30fa,
+        _ => return None,
+    })
+}
+
+fn narrow_voiced_kana_codes(code: u32) -> Option<(u32, u32)> {
+    let (base, mark) = match code {
+        0x30f4 => (0x30a6, 0xff9e),
+        0x30ac | 0x30ae | 0x30b0 | 0x30b2 | 0x30b4 | 0x30b6 | 0x30b8 | 0x30ba | 0x30bc | 0x30be
+        | 0x30c0 | 0x30c2 | 0x30c7 | 0x30c9 | 0x30d0 | 0x30d3 | 0x30d6 | 0x30d9 | 0x30dc => {
+            (code - 1, 0xff9e)
+        }
+        0x30c5 => (0x30c4, 0xff9e),
+        0x30d1 | 0x30d4 | 0x30d7 | 0x30da | 0x30dd => (code - 2, 0xff9f),
+        0x30f7 => (0x30ef, 0xff9e),
+        0x30fa => (0x30f2, 0xff9e),
+        _ => return None,
+    };
+    Some((fullwidth_kana_code(base)?, mark))
+}
+
 fn tristate(value: Option<&Value>, default: bool, line: Option<u32>) -> Result<bool, RuntimeError> {
     match value {
         None | Some(Value::Missing) => Ok(default),
@@ -4292,6 +4568,10 @@ fn month_name(month: u32) -> &'static str {
 }
 
 fn weekday_name(serial: f64) -> &'static str {
+    weekday_name_by_number(weekday_number(serial.floor() as i64, 1))
+}
+
+fn weekday_name_by_number(weekday: i64) -> &'static str {
     const NAMES: [&str; 7] = [
         "Sunday",
         "Monday",
@@ -4301,7 +4581,7 @@ fn weekday_name(serial: f64) -> &'static str {
         "Friday",
         "Saturday",
     ];
-    NAMES[weekday_number(serial.floor() as i64, 1) as usize - 1]
+    NAMES[weekday as usize - 1]
 }
 
 fn hour_value(hour: u32, meridiem: bool) -> u32 {
@@ -5392,6 +5672,15 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbbyte" => Value::Integer(17),
         "vbuserdefinedtype" => Value::Integer(36),
         "vbarray" => Value::Integer(8_192),
+        "vbuppercase" => Value::Integer(1),
+        "vblowercase" => Value::Integer(2),
+        "vbpropercase" => Value::Integer(3),
+        "vbwide" => Value::Integer(4),
+        "vbnarrow" => Value::Integer(8),
+        "vbkatakana" => Value::Integer(16),
+        "vbhiragana" => Value::Integer(32),
+        "vbunicode" => Value::Integer(64),
+        "vbfromunicode" => Value::Integer(128),
         "vbgeneraldate" => Value::Integer(0),
         "vblongdate" => Value::Integer(1),
         "vbshortdate" => Value::Integer(2),
@@ -7401,6 +7690,77 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("6|6|6|6".to_string()));
+    }
+
+    #[test]
+    fn executes_str_and_unicode_strconv_modes() {
+        let value = run(
+            "Public Function TextConversions() As String\n\
+               TextConversions = \"[\" & Str(459) & \"]|[\" & Str(-459.65) & \"]|\"\n\
+               TextConversions = TextConversions & StrConv(\"Oxi VBA\", vbUpperCase) & \"|\" & StrConv(\"Oxi VBA\", vbLowerCase) & \"|\" & StrConv(\"oXI-vBA runtime\", vbProperCase) & \"|\"\n\
+               TextConversions = TextConversions & StrConv(\"ABC 123 ｶﾞ\", vbWide) & \"|\" & StrConv(\"ＡＢＣ　１２３　ガ\", vbNarrow) & \"|\"\n\
+               TextConversions = TextConversions & StrConv(\"おーぷん\", vbKatakana) & \"|\" & StrConv(\"オープン\", vbHiragana)\n\
+             End Function\n",
+            "TextConversions",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "[ 459]|[-459.65]|OXI VBA|oxi vba|Oxi-Vba Runtime|ＡＢＣ　１２３　ガ|ABC 123 ｶﾞ|オープン|おーぷん"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn executes_monthname_and_weekdayname() {
+        let value = run(
+            "Public Function CalendarNames() As String\n\
+               CalendarNames = MonthName(2) & \"|\" & MonthName(2, True) & \"|\"\n\
+               CalendarNames = CalendarNames & WeekdayName(1) & \"|\" & WeekdayName(1, True, vbMonday) & \"|\" & WeekdayName(7, False, vbMonday)\n\
+             End Function\n",
+            "CalendarNames",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("February|Feb|Sunday|Mon|Sunday".to_string())
+        );
+    }
+
+    #[test]
+    fn text_conversion_functions_report_invalid_arguments_as_vba_errors() {
+        let value = run(
+            "Public Function TextConversionErrors() As String\n\
+               Dim monthError As Long\n\
+               Dim weekdayError As Long\n\
+               Dim modeError As Long\n\
+               Dim nullError As Long\n\
+               On Error Resume Next\n\
+               monthError = MonthName(0)\n\
+               monthError = Err.Number\n\
+               Err.Clear\n\
+               weekdayError = WeekdayName(8)\n\
+               weekdayError = Err.Number\n\
+               Err.Clear\n\
+               modeError = StrConv(\"x\", vbWide + vbNarrow)\n\
+               modeError = Err.Number\n\
+               Err.Clear\n\
+               nullError = StrConv(Null, vbUpperCase)\n\
+               nullError = Err.Number\n\
+               TextConversionErrors = monthError & \"|\" & weekdayError & \"|\" & modeError & \"|\" & nullError\n\
+             End Function\n",
+            "TextConversionErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5|5|13".to_string()));
     }
 
     #[test]
