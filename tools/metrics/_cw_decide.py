@@ -67,12 +67,43 @@ def rules_of(pg):
     return out
 
 
+def fullwidth(c):
+    o = ord(c)
+    return (0x3000 <= o <= 0x303F or 0x3040 <= o <= 0x30FF or 0x4E00 <= o <= 0x9FFF
+            or 0x3400 <= o <= 0x4DBF or 0xFF01 <= o <= 0xFF60)
+
+
 def natural_table(obs):
-    """The advance a (face, size, char) takes when nothing squeezes it: its mode."""
+    """The advance a fullwidth character takes when nothing squeezes it.
+
+    Keying the mode per CHARACTER needs a sample per character, and rare ones came
+    back with whatever their one compressed occurrence was -- that is what produced
+    "squeezed" lines with a pool of zero (公表事項, a URL, ***,***,***). Every
+    fullwidth glyph in these faces is one em, so the mode over ALL of them at a
+    given (face, size) is the natural advance for all of them, spacing included,
+    and it has the whole document behind it."""
+    per_face = defaultdict(Counter)
+    for adv, (face, size, ch) in obs:
+        if fullwidth(ch):
+            per_face[(face, size)][round(adv, 2)] += 1
+    face_nat = {k: c.most_common(1)[0][0] for k, c in per_face.items()
+                if sum(c.values()) >= 8}
+    # halfwidth and Latin still need their own mode; they are not one em
     seen = defaultdict(Counter)
     for adv, key in obs:
-        seen[key][round(adv, 2)] += 1
-    return {k: c.most_common(1)[0][0] for k, c in seen.items() if sum(c.values()) >= 3}
+        if not fullwidth(key[2]):
+            seen[key][round(adv, 2)] += 1
+    out = {k: c.most_common(1)[0][0] for k, c in seen.items() if sum(c.values()) >= 3}
+    for (face, size), v in face_nat.items():
+        out[("*FULL*", face, size)] = v
+    return out
+
+
+def nat_of(nat, key):
+    face, size, ch = key
+    if fullwidth(ch):
+        return nat.get(("*FULL*", face, size))
+    return nat.get(key)
 
 
 def read(pdf, marl, marr):
@@ -122,10 +153,11 @@ def main():
                 if len(body) < 3:
                     continue
                 keys = [(c[3], c[2], c[0]) for c in body]
-                if not all(k in nat for k in keys):
+                vals = [nat_of(nat, k) for k in keys]
+                if any(v is None for v in vals):
                     continue
-                drawn = body[-1][1] - body[0][1] + nat[keys[-1]]
-                natural = sum(nat[k] for k in keys)
+                drawn = body[-1][1] - body[0][1] + vals[-1]
+                natural = sum(vals)
                 inner = cr - cl
                 slack = inner - drawn
                 em = body[0][2]
@@ -140,9 +172,10 @@ def main():
                     continue
                 nc = nxt[0]
                 nk = (nc[3], nc[2], nc[0])
-                if nk not in nat:
+                nv = nat_of(nat, nk)
+                if nv is None:
                     continue
-                need = nat[nk] - slack
+                need = nv - slack
                 if 0 < need <= pool:
                     declined.append((need, pool, text))
                 elif need > pool:
