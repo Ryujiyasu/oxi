@@ -2996,6 +2996,11 @@ fn parse_inherited_shapes(
     // S-SHAPEGRAD), so inherited shapes carrying them are no longer refused.
     let s_inherit_geom = std::env::var("OXI_LMGEOM_DISABLE").is_err();
     let s_gradshape = std::env::var("OXI_GRADALPHA_DISABLE").is_err();
+    // An inherited shape keeps its own turn and mirror unless this is set,
+    // which restores refusing it outright.
+    let s_inherit_rot = std::env::var("OXI_LMROT_DISABLE").is_err();
+    let mut ig_rot: f32 = 0.0;
+    let mut ig_flip = (false, false);
     // A shape whose only unsupported feature is an effect is still emitted --
     // without the effect. Setting this restores the old outright rejection.
     let s_effectshape = std::env::var("OXI_EFFECTSHAPE_DISABLE").is_err();
@@ -3091,9 +3096,9 @@ fn parse_inherited_shapes(
                                         y,
                                         width: w,
                                         height: h,
-                                        rotation: 0.0,
-                                        flip_h: false,
-                                        flip_v: false,
+                                        rotation: ig_rot,
+                                        flip_h: ig_flip.0,
+                                        flip_v: ig_flip.1,
                                         shape_type: prst.clone(),
                                         ph_type: None,
                                         // Inherited shapes reject prstGeom, so
@@ -3269,6 +3274,8 @@ fn parse_inherited_shapes(
                     ig_cur = None;
                     ig_pending = None;
                     ig_in = false;
+                    ig_rot = 0.0;
+                    ig_flip = (false, false);
                     gr_stops.clear();
                     gr_in = false;
                     gr_in_gs = false;
@@ -3313,12 +3320,24 @@ fn parse_inherited_shapes(
                 }
             }
             "xfrm" => {
-                // Any rotation or mirror is dropped by the axis-aligned paint,
-                // so such a shape must not be emitted at all.
-                if get_attr(e, "rot").is_some_and(|r| r != "0")
-                    || get_attr(e, "flipH").as_deref() == Some("1")
-                    || get_attr(e, "flipV").as_deref() == Some("1")
-                {
+                // A turned or mirrored shape used to be refused outright,
+                // because the paint was axis-aligned and would have drawn it
+                // straight. It is not any more: `emit_geom_path_gdi`,
+                // `draw_preset_shape_gdi` and `transform_picture` all honour
+                // `rotation` / `flip_h` / `flip_v`, so the shape can be carried
+                // through instead. 64 otherwise-drawable layout shapes across
+                // six decks were being dropped for this (d39 16, d40 16,
+                // d10 13, d06 7, d24 7, d19 5).
+                let r = get_attr(e, "rot")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(|v| v / 60000.0)
+                    .unwrap_or(0.0);
+                let fh = get_attr(e, "flipH").as_deref() == Some("1");
+                let fv = get_attr(e, "flipV").as_deref() == Some("1");
+                if s_inherit_rot {
+                    ig_rot = r;
+                    ig_flip = (fh, fv);
+                } else if r != 0.0 || fh || fv {
                     ok = false;
                 }
             }
