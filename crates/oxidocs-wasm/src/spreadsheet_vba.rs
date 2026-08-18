@@ -3,9 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
+use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
-use oxivba_core::{parse_module, ArrayDimension, ArrayValue, Host, ObjectRef, Runtime, Value};
+use oxivba_core::{
+    parse_module, ArrayDimension, ArrayValue, Host, ModuleItem, ObjectRef, Runtime, Value,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -1573,6 +1576,62 @@ struct RunResult {
     debug_output: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Serialize)]
+struct ProcedureSummary {
+    name: String,
+    kind: &'static str,
+    visibility: &'static str,
+    parameter_count: usize,
+    required_parameter_count: usize,
+    line: u32,
+}
+
+fn spreadsheet_vba_procedures(source: &str) -> Result<Vec<ProcedureSummary>, String> {
+    let module = parse_module(source).map_err(|error| error.to_string())?;
+    Ok(module
+        .items
+        .iter()
+        .filter_map(|item| {
+            let ModuleItem::Procedure(procedure) = item else {
+                return None;
+            };
+            let kind = match procedure.kind {
+                ProcKind::Sub => "sub",
+                ProcKind::Function => "function",
+                ProcKind::PropertyGet | ProcKind::PropertyLet | ProcKind::PropertySet => {
+                    return None
+                }
+            };
+            let visibility = match procedure.visibility {
+                Visibility::Default | Visibility::Public | Visibility::Global => "public",
+                Visibility::Private => "private",
+                Visibility::Friend => "friend",
+            };
+            Some(ProcedureSummary {
+                name: procedure.name.clone(),
+                kind,
+                visibility,
+                parameter_count: procedure.params.len(),
+                required_parameter_count: procedure
+                    .params
+                    .iter()
+                    .filter(|parameter| {
+                        !parameter.optional && parameter.mode != ParamMode::ParamArray
+                    })
+                    .count(),
+                line: procedure.span.line,
+            })
+        })
+        .collect())
+}
+
+/// List executable Sub and Function entry points in VBA source.
+#[wasm_bindgen]
+pub fn list_spreadsheet_vba_procedures(source: &str) -> Result<JsValue, JsError> {
+    let procedures = spreadsheet_vba_procedures(source).map_err(|error| JsError::new(&error))?;
+    serde_wasm_bindgen::to_value(&procedures).map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Execute VBA source against an OxiCells workbook IR.
 #[wasm_bindgen]
 pub fn run_spreadsheet_vba(
@@ -1678,6 +1737,41 @@ mod tests {
             workbook.sheets[0].rows[0].cells[0].value,
             CellValue::Number(7.0)
         ));
+    }
+
+    #[test]
+    fn lists_vba_entry_points_and_required_arguments() {
+        let procedures = spreadsheet_vba_procedures(
+            "Private Sub Prepare(Optional label As String = \"x\")\n\
+             End Sub\n\
+             Public Function Add(left As Long, ByVal right As Long) As Long\n\
+             End Function\n\
+             Public Property Get Caption() As String\n\
+             End Property\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            procedures,
+            vec![
+                ProcedureSummary {
+                    name: "Prepare".to_string(),
+                    kind: "sub",
+                    visibility: "private",
+                    parameter_count: 1,
+                    required_parameter_count: 0,
+                    line: 1,
+                },
+                ProcedureSummary {
+                    name: "Add".to_string(),
+                    kind: "function",
+                    visibility: "public",
+                    parameter_count: 2,
+                    required_parameter_count: 2,
+                    line: 3,
+                },
+            ]
+        );
     }
 
     #[test]

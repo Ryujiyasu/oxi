@@ -1074,7 +1074,8 @@ input[type="file"] { display: none; }
         <h2 id="vbaDialogTitle">Run VBA Macro</h2>
         <p class="vba-note">Runs locally in WebAssembly. Debug.Print output appears below. File, network, COM, and native system APIs are not available.</p>
         <label for="vbaProcedure">Procedure</label>
-        <input id="vbaProcedure" type="text" value="Main" autocomplete="off" spellcheck="false">
+        <input id="vbaProcedure" type="text" value="Main" list="vbaProcedureList" autocomplete="off" spellcheck="false">
+        <datalist id="vbaProcedureList"></datalist>
         <label for="vbaArguments">Arguments (JSON array)</label>
         <input id="vbaArguments" type="text" value="[]" placeholder='[42, "text", true, null]' autocomplete="off" spellcheck="false">
         <label for="vbaSource">VBA source</label>
@@ -1483,7 +1484,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures } from './oxidocs_wasm.js';
 import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
 
 let wasmReady = false;
@@ -2471,6 +2472,33 @@ function formatVbaExecution(execution) {
     return `Debug.Print:\n${execution.debug_output.join('\n')}\n\n${result}`;
 }
 
+let vbaProcedureRefreshTimer = null;
+
+function refreshVbaProcedures(selectFallback = false) {
+    if (!wasmReady) return;
+    const source = document.getElementById('vbaSource').value;
+    const input = document.getElementById('vbaProcedure');
+    const list = document.getElementById('vbaProcedureList');
+    try {
+        const procedures = list_spreadsheet_vba_procedures(source);
+        list.replaceChildren(...procedures.map(procedure => {
+            const option = document.createElement('option');
+            option.value = procedure.name;
+            const required = procedure.required_parameter_count;
+            const total = procedure.parameter_count;
+            option.label = `${procedure.kind} · ${required}/${total} required · line ${procedure.line}`;
+            return option;
+        }));
+        if (selectFallback
+            && procedures.length
+            && !procedures.some(procedure => procedure.name.toLowerCase() === input.value.toLowerCase())) {
+            input.value = procedures[0].name;
+        }
+    } catch {
+        list.replaceChildren();
+    }
+}
+
 function openVbaRunner() {
     if (currentFileType !== 'xlsx' || !currentDocIR) {
         showStatus('Open an .xlsx workbook before running VBA.', 'error');
@@ -2481,6 +2509,7 @@ function openVbaRunner() {
     resultElement.textContent = 'Ready. Press Ctrl+Enter to run.';
     resultElement.classList.remove('error');
     backdrop.classList.add('open');
+    refreshVbaProcedures(true);
     setTimeout(() => document.getElementById('vbaSource').focus(), 0);
 }
 
@@ -2547,6 +2576,10 @@ document.getElementById('vbaSource').addEventListener('keydown', event => {
         event.preventDefault();
         executeVbaFromDialog();
     }
+});
+document.getElementById('vbaSource').addEventListener('input', () => {
+    clearTimeout(vbaProcedureRefreshTimer);
+    vbaProcedureRefreshTimer = setTimeout(() => refreshVbaProcedures(), 150);
 });
 document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && document.getElementById('vbaDialogBackdrop').classList.contains('open')) {
