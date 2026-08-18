@@ -3414,6 +3414,7 @@ fn call_builtin(
             | "dateserial"
             | "datevalue"
             | "day"
+            | "ddb"
             | "exp"
             | "filter"
             | "fix"
@@ -3430,6 +3431,7 @@ fn call_builtin(
             | "instrrev"
             | "int"
             | "ipmt"
+            | "irr"
             | "isarray"
             | "isdate"
             | "isempty"
@@ -3446,6 +3448,7 @@ fn call_builtin(
             | "ltrim"
             | "mid"
             | "minute"
+            | "mirr"
             | "month"
             | "monthname"
             | "nper"
@@ -3462,6 +3465,7 @@ fn call_builtin(
             | "second"
             | "sgn"
             | "sin"
+            | "sln"
             | "space"
             | "split"
             | "sqr"
@@ -3471,6 +3475,7 @@ fn call_builtin(
             | "string"
             | "strreverse"
             | "switch"
+            | "syd"
             | "tan"
             | "timeserial"
             | "timevalue"
@@ -3502,7 +3507,18 @@ fn call_builtin(
         }
         if matches!(
             name.as_str(),
-            "fv" | "ipmt" | "nper" | "pmt" | "ppmt" | "pv" | "rate"
+            "ddb"
+                | "fv"
+                | "ipmt"
+                | "irr"
+                | "mirr"
+                | "nper"
+                | "pmt"
+                | "ppmt"
+                | "pv"
+                | "rate"
+                | "sln"
+                | "syd"
         ) {
             return call_financial_builtin(&name, args, line);
         }
@@ -4201,6 +4217,10 @@ fn call_financial_builtin(
     line: Option<u32>,
 ) -> Result<Value, RuntimeError> {
     let expected = match name {
+        "irr" => 1..=2,
+        "sln" | "mirr" => 3..=3,
+        "ddb" => 4..=5,
+        "syd" => 4..=4,
         "rate" => 3..=6,
         "ipmt" | "ppmt" => 4..=6,
         _ => 3..=5,
@@ -4231,6 +4251,13 @@ fn call_financial_builtin(
         }
     };
     let result = match name {
+        "ddb" => financial_ddb(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
+            numeric(4, 2.0)?,
+        ),
         "fv" => financial_fv(
             numeric(0, 0.0)?,
             numeric(1, 0.0)?,
@@ -4290,6 +4317,15 @@ fn call_financial_builtin(
                 })()
             }
         }
+        "irr" => financial_irr(
+            &cash_flow_values(&args[0]).map_err(mismatch)?,
+            numeric(1, 0.1)?,
+        ),
+        "mirr" => financial_mirr(
+            &cash_flow_values(&args[0]).map_err(mismatch)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+        ),
         "rate" => financial_rate(
             numeric(0, 0.0)?,
             numeric(1, 0.0)?,
@@ -4297,6 +4333,13 @@ fn call_financial_builtin(
             numeric(3, 0.0)?,
             payment_type(4)?,
             numeric(5, 0.1)?,
+        ),
+        "sln" => financial_sln(numeric(0, 0.0)?, numeric(1, 0.0)?, numeric(2, 0.0)?),
+        "syd" => financial_syd(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
         ),
         _ => unreachable!(),
     }
@@ -4310,6 +4353,117 @@ fn call_financial_builtin(
             line,
         ))
     }
+}
+
+fn cash_flow_values(value: &Value) -> Result<Vec<f64>, String> {
+    let Value::Array(array) = value else {
+        return Err("cash flows must be a one-dimensional numeric array".to_string());
+    };
+    if array.dimensions.len() != 1 {
+        return Err("cash flows must be a one-dimensional numeric array".to_string());
+    }
+    array.values.iter().map(number).collect()
+}
+
+fn financial_ddb(
+    cost: f64,
+    salvage: f64,
+    life: f64,
+    period: f64,
+    factor: f64,
+) -> Result<f64, String> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || factor <= 0.0 {
+        return Err("invalid depreciation arguments".to_string());
+    }
+    if period > life {
+        return Err("depreciation period exceeds asset life".to_string());
+    }
+    if cost <= salvage {
+        return Ok(0.0);
+    }
+    let rate = (factor / life).min(1.0);
+    let book_value = cost * (1.0 - rate).powf(period - 1.0);
+    Ok((book_value * rate).min((book_value - salvage).max(0.0)))
+}
+
+fn financial_sln(cost: f64, salvage: f64, life: f64) -> Result<f64, String> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 {
+        return Err("invalid depreciation arguments".to_string());
+    }
+    Ok((cost - salvage) / life)
+}
+
+fn financial_syd(cost: f64, salvage: f64, life: f64, period: f64) -> Result<f64, String> {
+    if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || period > life {
+        return Err("invalid depreciation arguments".to_string());
+    }
+    Ok((cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)))
+}
+
+fn financial_irr(values: &[f64], guess: f64) -> Result<f64, String> {
+    if values.len() < 2
+        || !values.iter().any(|value| *value < 0.0)
+        || !values.iter().any(|value| *value > 0.0)
+        || !guess.is_finite()
+        || guess <= -1.0
+    {
+        return Err("invalid IRR cash flows or guess".to_string());
+    }
+    let mut rate = guess;
+    for _ in 0..20 {
+        let base = 1.0 + rate;
+        let mut value = 0.0;
+        let mut derivative = 0.0;
+        for (period, cash_flow) in values.iter().enumerate() {
+            let period = period as f64;
+            value += cash_flow / base.powf(period);
+            if period != 0.0 {
+                derivative -= period * cash_flow / base.powf(period + 1.0);
+            }
+        }
+        if !value.is_finite() || !derivative.is_finite() || derivative == 0.0 {
+            break;
+        }
+        let mut next = rate - value / derivative;
+        if next <= -1.0 {
+            next = (rate - 1.0) / 2.0;
+        }
+        if !next.is_finite() {
+            break;
+        }
+        if (next - rate).abs() <= 1e-7 {
+            return Ok(next);
+        }
+        rate = next;
+    }
+    Err("IRR failed to converge after 20 iterations".to_string())
+}
+
+fn financial_mirr(values: &[f64], finance_rate: f64, reinvest_rate: f64) -> Result<f64, String> {
+    if values.len() < 2
+        || !values.iter().any(|value| *value < 0.0)
+        || !values.iter().any(|value| *value > 0.0)
+        || finance_rate <= -1.0
+        || reinvest_rate <= -1.0
+    {
+        return Err("invalid MIRR cash flows or rates".to_string());
+    }
+    let last_period = values.len() - 1;
+    let mut positive_future_value = 0.0;
+    let mut negative_present_value = 0.0;
+    for (period, cash_flow) in values.iter().enumerate() {
+        if *cash_flow > 0.0 {
+            positive_future_value +=
+                cash_flow * (1.0 + reinvest_rate).powf((last_period - period) as f64);
+        } else if *cash_flow < 0.0 {
+            negative_present_value += cash_flow / (1.0 + finance_rate).powf(period as f64);
+        }
+    }
+    let ratio = -positive_future_value / negative_present_value;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Err("MIRR has no real solution".to_string());
+    }
+    Ok(ratio.powf(1.0 / last_period as f64) - 1.0)
 }
 
 fn annuity_factor(rate: f64, periods: f64) -> Result<f64, String> {
@@ -8303,6 +8457,70 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5|5|5".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_depreciation_functions() {
+        let value = run(
+            "Public Function DepreciationBuiltins() As String\n\
+               DepreciationBuiltins = DDB(1000, 100, 5, 1) & \"|\" & DDB(1000, 100, 5, 2) & \"|\" & Round(DDB(1000, 100, 5, 5), 2) & \"|\"\n\
+               DepreciationBuiltins = DepreciationBuiltins & SLN(1000, 100, 5) & \"|\" & SYD(1000, 100, 5, 2)\n\
+             End Function\n",
+            "DepreciationBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("400|240|29.6|180|240".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_cash_flow_financial_functions() {
+        let value = run(
+            "Public Function CashFlowBuiltins() As String\n\
+               Dim values(4) As Double\n\
+               values(0) = -70000\n\
+               values(1) = 22000\n\
+               values(2) = 25000\n\
+               values(3) = 28000\n\
+               values(4) = 31000\n\
+               CashFlowBuiltins = Round(IRR(values), 8) & \"|\" & Round(MIRR(values, 0.1, 0.12), 8)\n\
+             End Function\n",
+            "CashFlowBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("0.17743588|0.15512706".to_string()));
+    }
+
+    #[test]
+    fn remaining_financial_functions_report_invalid_inputs() {
+        let value = run(
+            "Public Function FinancialInputErrors() As String\n\
+               Dim flows(1) As Double\n\
+               Dim badPeriod As Long\n\
+               Dim badFlows As Long\n\
+               Dim wrongType As Long\n\
+               flows(0) = 100\n\
+               flows(1) = 200\n\
+               On Error Resume Next\n\
+               badPeriod = SYD(1000, 100, 5, 6)\n\
+               badPeriod = Err.Number\n\
+               Err.Clear\n\
+               badFlows = IRR(flows)\n\
+               badFlows = Err.Number\n\
+               Err.Clear\n\
+               wrongType = MIRR(42, 0.1, 0.12)\n\
+               wrongType = Err.Number\n\
+               FinancialInputErrors = badPeriod & \"|\" & badFlows & \"|\" & wrongType\n\
+             End Function\n",
+            "FinancialInputErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5|13".to_string()));
     }
 
     #[test]
