@@ -12,7 +12,7 @@ use oxivba_core::{
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CellAddress {
     sheet: usize,
     row: u32,
@@ -685,6 +685,112 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         Ok(self.object(HostObject::Range(CellRange::single(destination))))
+    }
+
+    fn find_in_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if args.is_empty() || args.len() > 9 {
+            return Err("Range.Find expects between one and nine arguments".to_string());
+        }
+        Self::range_cell_count(range)?;
+        let what = args
+            .first()
+            .filter(|value| !matches!(value, Value::Missing))
+            .ok_or_else(|| "Range.Find What argument is required".to_string())?;
+        let look_in = find_integer_argument(args.get(2), -4163, "LookIn")?;
+        if !matches!(look_in, -4163 | -4123) {
+            return Err(format!("unsupported Range.Find LookIn constant: {look_in}"));
+        }
+        let look_at = find_integer_argument(args.get(3), 2, "LookAt")?;
+        if !matches!(look_at, 1 | 2) {
+            return Err(format!("unsupported Range.Find LookAt constant: {look_at}"));
+        }
+        let search_order = find_integer_argument(args.get(4), 1, "SearchOrder")?;
+        if !matches!(search_order, 1 | 2) {
+            return Err(format!(
+                "unsupported Range.Find SearchOrder constant: {search_order}"
+            ));
+        }
+        let search_direction = find_integer_argument(args.get(5), 1, "SearchDirection")?;
+        if !matches!(search_direction, 1 | 2) {
+            return Err(format!(
+                "unsupported Range.Find SearchDirection constant: {search_direction}"
+            ));
+        }
+        let match_case = find_boolean_argument(args.get(6), false, "MatchCase")?;
+        if find_boolean_argument(args.get(7), false, "MatchByte")? {
+            return Err("Range.Find MatchByte:=True is not supported in the browser".to_string());
+        }
+        if find_boolean_argument(args.get(8), false, "SearchFormat")? {
+            return Err(
+                "Range.Find SearchFormat:=True is not supported in the browser".to_string(),
+            );
+        }
+
+        let mut addresses = if search_order == 1 {
+            range.addresses().collect::<Vec<_>>()
+        } else {
+            let mut addresses = Vec::with_capacity(Self::range_cell_count(range)?);
+            for column in range.start_column..=range.end_column {
+                for row in range.start_row..=range.end_row {
+                    addresses.push(CellAddress {
+                        sheet: range.sheet,
+                        row,
+                        column,
+                    });
+                }
+            }
+            addresses
+        };
+        let after = match args.get(1) {
+            None | Some(Value::Missing) => addresses[0],
+            Some(Value::Object(object)) => {
+                let after = self
+                    .range(object)
+                    .filter(|range| range.is_single())
+                    .ok_or_else(|| "Range.Find After must be a single cell".to_string())?;
+                let address = after.addresses().next().unwrap();
+                if !addresses.contains(&address) {
+                    return Err("Range.Find After cell must be inside the search range".to_string());
+                }
+                address
+            }
+            _ => return Err("Range.Find After must be a single cell".to_string()),
+        };
+        let after_index = addresses
+            .iter()
+            .position(|address| *address == after)
+            .unwrap();
+        if search_direction == 1 {
+            let address_count = addresses.len();
+            addresses.rotate_left((after_index + 1) % address_count);
+        } else {
+            addresses.rotate_left(after_index);
+            addresses.reverse();
+        }
+        let needle = find_value_text(what);
+        let found = addresses.into_iter().find(|address| {
+            let candidate = self.find_cell_text(*address, look_in);
+            find_text_matches(&candidate, &needle, look_at == 1, match_case)
+        });
+        Ok(found
+            .map(|address| self.object(HostObject::Range(CellRange::single(address))))
+            .unwrap_or(Value::Nothing))
+    }
+
+    fn find_cell_text(&self, address: CellAddress, look_in: i64) -> String {
+        if look_in == -4123 {
+            if let Some(formula) = self
+                .workbook
+                .sheets
+                .get(address.sheet)
+                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                .and_then(|cell| cell.formula.as_deref())
+            {
+                return format!("={formula}");
+            }
+        }
+        find_value_text(&self.cell_value(address))
     }
 
     fn current_region_object(&mut self, range: CellRange) -> Result<Value, String> {
@@ -1505,6 +1611,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("end") {
                     return self.range_end(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("find") {
+                    return self.find_in_range(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("currentregion") {
                     if !args.is_empty() {
                         return Err("Range.CurrentRegion does not accept arguments".to_string());
@@ -2066,6 +2175,62 @@ fn application_calculation(value: &Value) -> Result<i64, String> {
     }
 }
 
+fn find_integer_argument(value: Option<&Value>, default: i64, label: &str) -> Result<i64, String> {
+    match value {
+        None | Some(Value::Missing) => Ok(default),
+        Some(Value::Integer(value)) => Ok(*value),
+        Some(Value::Double(value)) if value.is_finite() && value.fract() == 0.0 => {
+            Ok(*value as i64)
+        }
+        _ => Err(format!("Range.Find {label} must be an Excel constant")),
+    }
+}
+
+fn find_boolean_argument(
+    value: Option<&Value>,
+    default: bool,
+    label: &str,
+) -> Result<bool, String> {
+    match value {
+        None | Some(Value::Missing) => Ok(default),
+        Some(value) => style_boolean(value, &format!("Range.Find {label}")),
+    }
+}
+
+fn find_value_text(value: &Value) -> String {
+    match value {
+        Value::Empty => String::new(),
+        Value::Boolean(value) => if *value { "TRUE" } else { "FALSE" }.to_string(),
+        Value::Integer(value) => value.to_string(),
+        Value::Double(value) => value.to_string(),
+        Value::Error(value) => format!("Error {value}"),
+        Value::String(value) => value.clone(),
+        Value::Null => "Null".to_string(),
+        Value::Missing => String::new(),
+        Value::Nothing => "Nothing".to_string(),
+        Value::Array(_) => "<Array>".to_string(),
+        Value::Object(value) => format!("<{}>", value.kind),
+    }
+}
+
+fn find_text_matches(candidate: &str, needle: &str, whole: bool, match_case: bool) -> bool {
+    if match_case {
+        if whole {
+            candidate == needle
+        } else {
+            candidate.contains(needle)
+        }
+    } else {
+        let candidate = candidate.to_lowercase();
+        let needle = needle.to_lowercase();
+        if whole {
+            candidate == needle
+        } else {
+            candidate.contains(&needle)
+        }
+    }
+}
+
 fn optional_dimension(value: Value, property: &str, maximum: f64) -> Result<Option<f32>, String> {
     let number = match value {
         Value::Empty => return Ok(None),
@@ -2444,6 +2609,14 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlcalculationautomatic" => -4105,
         "xlcalculationmanual" => -4135,
         "xlcalculationsemiautomatic" => 2,
+        "xlformulas" => -4123,
+        "xlvalues" => -4163,
+        "xlwhole" => 1,
+        "xlpart" => 2,
+        "xlbyrows" => 1,
+        "xlbycolumns" => 2,
+        "xlnext" => 1,
+        "xlprevious" => 2,
         "vbokonly" | "vbapplicationmodal" | "vbdefaultbutton1" => 0,
         "vbokcancel" | "vbok" => 1,
         "vbabortretryignore" | "vbcancel" => 2,
@@ -3532,6 +3705,35 @@ mod tests {
                 "True\tTrue\tTrue\t-4105".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn vba_finds_values_and_formulas_in_ranges() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub FindCells()\n\
+               Range(\"A1\").Value = \"Alpha\"\n\
+               Range(\"B1\").Value = 42\n\
+               Range(\"A2\").Value = \"needle in text\"\n\
+               Range(\"B2\").Formula = \"=A1\"\n\
+               Range(\"A3\").Value = \"Alpha\"\n\
+               Set partial = Range(\"A1:B2\").Find(\"NEEDLE\")\n\
+               Set exact = Range(\"A1:B2\").Find(42, , xlValues, xlWhole, xlByColumns, xlNext, False)\n\
+               Set formula = Range(\"A1:B2\").Find(\"=A1\", , xlFormulas, xlWhole)\n\
+               Set previous = Range(\"A1:B3\").Find(\"Alpha\", Range(\"A1\"), xlValues, xlWhole, xlByRows, xlPrevious, False)\n\
+               Set missing = Range(\"A1:B2\").Find(\"absent\")\n\
+               Set caseMiss = Range(\"A1:B2\").Find(\"alpha\", , xlValues, xlWhole, xlByRows, xlNext, True)\n\
+               Debug.Print partial.Address(False, False), exact.Address(False, False), formula.Address(False, False), previous.Address(False, False), missing Is Nothing, caseMiss Is Nothing\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "FindCells", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(debug_output, vec!["A2\tB1\tB2\tA3\tTrue\tTrue".to_string()]);
     }
 
     #[test]
