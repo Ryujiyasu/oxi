@@ -852,6 +852,79 @@ impl<'a> WorkbookHost<'a> {
         }
         Ok(())
     }
+
+    fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
+        let [Value::Object(destination)] = args else {
+            return Err(
+                "Range.Copy expects one destination Range; the browser clipboard is unavailable"
+                    .to_string(),
+            );
+        };
+        let destination = self
+            .range(destination)
+            .ok_or_else(|| "Range.Copy destination must be a Range".to_string())?;
+        Self::range_cell_count(source)?;
+        let row_count = source.end_row - source.start_row + 1;
+        let column_count = source.end_column - source.start_column + 1;
+        let end_row = destination
+            .start_row
+            .checked_add(row_count - 1)
+            .filter(|row| *row <= MAX_WORKSHEET_ROW)
+            .ok_or_else(|| {
+                "Range.Copy destination extends beyond the worksheet rows".to_string()
+            })?;
+        let end_column = destination
+            .start_column
+            .checked_add(column_count - 1)
+            .filter(|column| *column <= MAX_WORKSHEET_COLUMN)
+            .ok_or_else(|| {
+                "Range.Copy destination extends beyond the worksheet columns".to_string()
+            })?;
+        let destination = CellRange {
+            sheet: destination.sheet,
+            start_row: destination.start_row,
+            start_column: destination.start_column,
+            end_row,
+            end_column,
+        };
+        let worksheet = self
+            .workbook
+            .sheets
+            .get(source.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let copied = source
+            .addresses()
+            .map(|address| {
+                worksheet
+                    .rows
+                    .iter()
+                    .find(|row| row.index == address.row)
+                    .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                    .map(|cell| {
+                        if cell.formula.is_some() {
+                            return Err(
+                                "Range.Copy cannot copy formulas until relative references can be adjusted"
+                                    .to_string(),
+                            );
+                        }
+                        Ok((cell.value.clone(), cell.style.clone()))
+                    })
+                    .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default())))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (address, (value, style)) in destination.addresses().zip(copied) {
+            self.set_cell_value(address, value)?;
+            let sheet = &mut self.workbook.sheets[address.sheet];
+            let cell = sheet
+                .rows
+                .iter_mut()
+                .find(|row| row.index == address.row)
+                .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column))
+                .expect("set_cell_value creates the destination cell");
+            cell.style = style;
+        }
+        Ok(Value::Empty)
+    }
 }
 
 fn validate_range_array_shape(
@@ -993,6 +1066,9 @@ impl Host for WorkbookHost<'_> {
                 return Ok(None);
             }
             if let Some(range) = self.range(receiver) {
+                if name.eq_ignore_ascii_case("copy") {
+                    return self.copy_range(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("select") {
                     if !args.is_empty() {
                         return Err("Range.Select does not accept arguments".to_string());
@@ -2136,6 +2212,72 @@ mod tests {
             workbook.sheets[0].rows[1].cells[2].value,
             CellValue::Number(7.0)
         ));
+    }
+
+    #[test]
+    fn vba_copies_range_values_and_styles_to_a_destination() {
+        let mut workbook = workbook();
+        workbook.sheets[0].rows.push(Row {
+            index: 1,
+            height: None,
+            cells: vec![
+                Cell {
+                    col: 0,
+                    value: CellValue::Number(10.0),
+                    style: CellStyle {
+                        bold: true,
+                        ..CellStyle::default()
+                    },
+                    formula: None,
+                },
+                Cell {
+                    col: 1,
+                    value: CellValue::String("copied".to_string()),
+                    style: CellStyle {
+                        bg_color: Some("#ff0000".to_string()),
+                        ..CellStyle::default()
+                    },
+                    formula: None,
+                },
+            ],
+        });
+        let module = parse_module(
+            "Public Sub CopyValues()\n\
+               Range(\"A1:B1\").Copy Destination:=Range(\"C2\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "CopyValues", vec![], &mut host).unwrap();
+        }
+
+        let destination = &workbook.sheets[0].rows[1].cells;
+        assert!(matches!(destination[0].value, CellValue::Number(10.0)));
+        assert!(destination[0].style.bold);
+        assert!(matches!(
+            &destination[1].value,
+            CellValue::String(value) if value == "copied"
+        ));
+        assert_eq!(destination[1].style.bg_color.as_deref(), Some("#ff0000"));
+    }
+
+    #[test]
+    fn vba_rejects_formula_copy_until_references_can_be_adjusted() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub CopyFormula()\n\
+               Range(\"A1\").Formula = \"=B1+1\"\n\
+               Range(\"A1\").Copy Destination:=Range(\"A2\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let failure = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "CopyFormula", vec![], &mut host).unwrap_err()
+        };
+
+        assert!(failure.message.contains("relative references"));
     }
 
     #[test]
