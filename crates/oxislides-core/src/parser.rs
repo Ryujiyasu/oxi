@@ -914,6 +914,17 @@ fn parse_slide(
     let mut shape_src_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_rot_with_shape = true;
     let mut shape_image_alpha: Option<f32> = None;
+    // a:gradFill on the shape itself (same ramp model as the background).
+    let s_shapegrad = std::env::var("OXI_SHAPEGRAD_DISABLE").is_err();
+    let mut sg_in = false;
+    let mut sg_in_gs = false;
+    let mut sg_in_path = false;
+    let mut sg_pos: f32 = 0.0;
+    let mut sg_color: Option<String> = None;
+    let mut sg_stops: Vec<SlideGradientStop> = Vec::new();
+    let mut sg_angle: Option<f32> = None;
+    let mut sg_scaled = false;
+    let mut sg_focus: Option<(f32, f32)> = None;
     let mut shape_fill_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_fill_color: Option<String> = None;
     let mut shape_fill_alpha: Option<f32> = None;
@@ -1072,6 +1083,13 @@ fn parse_slide(
                         shape_src_rect = None;
                         shape_rot_with_shape = true;
                         shape_image_alpha = None;
+                        sg_in = false;
+                        sg_in_gs = false;
+                        sg_in_path = false;
+                        sg_stops.clear();
+                        sg_angle = None;
+                        sg_scaled = false;
+                        sg_focus = None;
                         shape_fill_rect = None;
                         shape_fill_color = None;
                         shape_fill_alpha = None;
@@ -1268,6 +1286,53 @@ fn parse_slide(
                                 shape_adjustments.insert(name, value);
                             }
                         }
+                    }
+                    // a:gradFill on the SHAPE (not the background, not inside
+                    // a:ln). Same ramp model as the slide background, which is
+                    // already derived; only the paint area differs.
+                    "gradFill" if in_sp_pr && !in_ln && s_shapegrad => {
+                        sg_in = true;
+                        sg_stops.clear();
+                        sg_angle = None;
+                        sg_scaled = false;
+                        sg_focus = None;
+                    }
+                    "gs" if sg_in => {
+                        sg_in_gs = true;
+                        sg_pos = get_attr(&e, "pos").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        sg_color = None;
+                    }
+                    "srgbClr" if sg_in_gs && sg_color.is_none() => {
+                        sg_color = get_attr(&e, "val");
+                    }
+                    "schemeClr" if sg_in_gs && sg_color.is_none() => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            sg_color = Some(
+                                theme_colors
+                                    .get(&v)
+                                    .cloned()
+                                    .unwrap_or_else(|| scheme_color_to_hex(&v)),
+                            );
+                        }
+                    }
+                    "lin" if sg_in => {
+                        sg_angle = get_attr(&e, "ang")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 60_000.0);
+                        sg_scaled = get_attr(&e, "scaled").as_deref() == Some("1");
+                    }
+                    "path" if sg_in => {
+                        if get_attr(&e, "path").as_deref() == Some("circle") {
+                            sg_in_path = true;
+                            sg_focus = Some((0.5, 0.5));
+                        }
+                    }
+                    "fillToRect" if sg_in_path => {
+                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        sg_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
                     }
                     "custGeom" if in_shape && s_custgeom => {
                         in_cust_geom = true;
@@ -1995,6 +2060,14 @@ fn parse_slide(
                     "ln" if in_ln => {
                         in_ln = false;
                     }
+                    "gs" if sg_in_gs => {
+                        sg_in_gs = false;
+                        if let Some(c) = sg_color.take() {
+                            sg_stops.push(SlideGradientStop { pos: sg_pos, color: c });
+                        }
+                    }
+                    "path" if sg_in_path => sg_in_path = false,
+                    "gradFill" if sg_in => sg_in = false,
                     "prstGeom" if in_prst_geom => {
                         in_prst_geom = false;
                     }
@@ -2186,6 +2259,17 @@ fn parse_slide(
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
                             image_alpha: shape_image_alpha,
+                            gradient: if sg_stops.len() >= 2 {
+                                Some(SlideGradient {
+                                    stops: std::mem::take(&mut sg_stops),
+                                    angle_deg: sg_angle,
+                                    scaled: sg_scaled,
+                                    focus: sg_focus,
+                                })
+                            } else {
+                                sg_stops.clear();
+                                None
+                            },
                             custom_geometry: take_custom_geometry(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
@@ -2318,6 +2402,7 @@ fn parse_slide(
                             shape_type: shape_prst.take(),
                             adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: None,
+                            gradient: None,
                             ph_levels: Vec::new(),
                             content,
                             fill_color: shape_fill_color.take(),
@@ -2885,6 +2970,7 @@ fn parse_inherited_shapes(
                                         fill_rect,
                                         rot_with_shape: true,
                                         image_alpha: None,
+                                        gradient: None,
                                         ph_levels: Vec::new(),
                                         // The inheritance gate rejects custGeom
                                         // outright, so an inherited shape never

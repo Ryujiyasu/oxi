@@ -1754,9 +1754,16 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         || (matches!(&sh.content, ShapeContent::AutoShape { .. })
                             && draw_preset_shape_gdi(mem_dc, sh, scale)));
 
+                // A gradient fill paints the shape's own area (clipped to
+                // its outline) and stands in for the solid fill below.
+                let drew_gradient = match sh.gradient.as_ref() {
+                    Some(g) if !drew_preset => paint_shape_gradient(mem_dc, sh, g, scale),
+                    _ => false,
+                };
+
                 // Fill. A preset path fills itself, so this rectangular
                 // fallback only runs for the shapes it declined.
-                if !drew_preset {
+                if !drew_preset && !drew_gradient {
                     if let Some(fill) = &sh.fill_color {
                         if let Some((r, g, b)) = parse_hex_rgb(fill) {
                             // <a:alpha> makes the fill translucent; PowerPoint
@@ -8135,6 +8142,62 @@ fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
     } * mag;
     let div = (axis_max / step).round().max(1.0) as usize;
     (axis_max, div)
+}
+
+/// Paint a shape's `a:gradFill`, clipped to its outline.
+///
+/// The ramp model is the one already derived for slide backgrounds (linear
+/// angle / scaled, or a circular focus running to the farthest corner); only
+/// the area differs. The corpus has 302 slide-level gradient shapes on 35
+/// slides in 4 decks plus 60 on layout shapes, and d24's title slide is built
+/// entirely from them -- without this it renders as one flat slab.
+#[cfg(windows)]
+unsafe fn paint_shape_gradient(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    sh: &Shape,
+    g: &SlideGradient,
+    scale: f64,
+) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if !shapegrad_on() {
+        return false;
+    }
+    let w = (sh.width as f64 * scale).round() as i32;
+    let h = (sh.height as f64 * scale).round() as i32;
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    // Clip first (the region is captured in device space), then shift the
+    // origin so the background painter's 0..w,0..h maps onto the shape box.
+    let clipped = clip_to_geometry_gdi(dc, sh, scale);
+    let mut clip_rgn = None;
+    if !clipped {
+        let x = (sh.x as f64 * scale).round() as i32;
+        let y = (sh.y as f64 * scale).round() as i32;
+        let rgn = CreateRectRgn(x, y, x + w, y + h);
+        let _ = SelectClipRgn(dc, rgn);
+        clip_rgn = Some(rgn);
+    }
+    let mut old_org = windows::Win32::Foundation::POINT::default();
+    let _ = SetViewportOrgEx(
+        dc,
+        (sh.x as f64 * scale).round() as i32,
+        (sh.y as f64 * scale).round() as i32,
+        Some(&mut old_org),
+    );
+    paint_bg_gradient(dc, w, h, g);
+    let _ = SetViewportOrgEx(dc, old_org.x, old_org.y, None);
+    let _ = SelectClipRgn(dc, None);
+    if let Some(rgn) = clip_rgn {
+        let _ = DeleteObject(rgn);
+    }
+    true
+}
+
+/// Shape gradients are painted unless this is set.
+fn shapegrad_on() -> bool {
+    std::env::var("OXI_SHAPEGRAD_DISABLE").is_err()
 }
 
 /// Fonts PowerPoint could not resolve are drawn in Calibri unless this is set.

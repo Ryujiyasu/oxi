@@ -311,6 +311,12 @@ pub struct Shape {
     /// PowerPoint ignores -- a different element with a similar name.
     #[serde(default)]
     pub ph_levels: Vec<MasterStyleLevel>,
+    /// `a:gradFill` on the shape itself. The dev corpus has 302 of these on
+    /// 35 slides in 4 decks, plus 60 more on layout shapes -- d24's title
+    /// slide is built entirely out of them, which is why it renders as a flat
+    /// slab. The ramp model is the one already derived for slide backgrounds.
+    #[serde(default)]
+    pub gradient: Option<SlideGradient>,
     /// Custom geometry (`a:custGeom`) — the shape's outline as explicit paths
     /// instead of a named preset. None for a preset / picture / frame shape.
     ///
