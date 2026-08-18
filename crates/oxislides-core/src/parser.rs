@@ -441,6 +441,122 @@ fn take_custom_geometry(paths: &mut Vec<GeomPath>, unsupported: &mut bool) -> Op
     })
 }
 
+/// The per-level text styles each LAYOUT placeholder declares in its own
+/// `a:lstStyle`, keyed like the geometry map.
+///
+/// PowerPoint render-truth (d24 slide 1, 2026-08-18): the deck's master
+/// `p:titleStyle` lvl1 carries no `defRPr` size or colour at all, while the
+/// layout's ctrTitle placeholder carries
+/// `<a:defRPr sz="6000"><a:solidFill><a:schemeClr val="lt1"/>`, and
+/// PowerPoint draws the title at 60pt in white (#FFFFFF, measured from its own
+/// PDF). Without this the title fell back to the engine's 18pt black.
+///
+/// This is the placeholder's `a:lstStyle`, NOT the layout's `p:txStyles` --
+/// the phfs probe showed PowerPoint ignores the latter.
+fn parse_layout_ph_lststyles(
+    xml: &str,
+    theme_colors: &HashMap<String, String>,
+) -> HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>> {
+    let mut out: HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>> = HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut in_sp = false;
+    let mut in_lst = false;
+    let mut ph_type: Option<String> = None;
+    let mut ph_idx: Option<String> = None;
+    let mut levels: Vec<MasterStyleLevel> = Vec::new();
+    let mut cur_lvl: Option<usize> = None;
+    let mut in_def_rpr = false;
+    let mut in_ln_spc_lvl = false;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "sp" => {
+                        in_sp = true;
+                        ph_type = None;
+                        ph_idx = None;
+                        levels.clear();
+                    }
+                    "ph" if in_sp => {
+                        ph_type = match get_attr(&e, "type") {
+                            Some(t) if !t.is_empty() => Some(t),
+                            _ => Some("obj".to_string()),
+                        };
+                        ph_idx = get_attr(&e, "idx");
+                    }
+                    "lstStyle" if in_sp => in_lst = true,
+                    _ if in_lst && is_master_lvl(&name) => {
+                        let idx = name
+                            .trim_start_matches("lvl")
+                            .trim_end_matches("pPr")
+                            .parse::<usize>()
+                            .unwrap_or(1)
+                            .saturating_sub(1);
+                        while levels.len() <= idx {
+                            levels.push(MasterStyleLevel::default());
+                        }
+                        cur_lvl = Some(idx);
+                        if let Some(a) = get_attr(&e, "algn") {
+                            levels[idx].algn = Some(parse_alignment_attr(&a));
+                        }
+                    }
+                    "spcPct" if in_lst && in_ln_spc_lvl && cur_lvl.is_some() => {
+                        if let (Some(idx), Some(v)) = (cur_lvl, get_attr(&e, "val")) {
+                            if let Ok(x) = v.parse::<f32>() {
+                                levels[idx].line_spacing = Some(x / 100000.0);
+                            }
+                        }
+                    }
+                    "lnSpc" if in_lst => in_ln_spc_lvl = true,
+                    "defRPr" if in_lst && cur_lvl.is_some() => {
+                        in_def_rpr = true;
+                        if let (Some(idx), Some(sz)) = (cur_lvl, get_attr(&e, "sz")) {
+                            if let Ok(v) = sz.parse::<f32>() {
+                                levels[idx].font_size = Some(v / 100.0);
+                            }
+                        }
+                    }
+                    "srgbClr" | "schemeClr" if in_def_rpr => {
+                        if let (Some(idx), Some(val)) = (cur_lvl, get_attr(&e, "val")) {
+                            if levels[idx].color.is_none() {
+                                levels[idx].color = Some(if name == "srgbClr" {
+                                    val
+                                } else {
+                                    theme_colors
+                                        .get(&val)
+                                        .cloned()
+                                        .unwrap_or_else(|| scheme_color_to_hex(&val))
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
+                "defRPr" => in_def_rpr = false,
+                "lnSpc" => in_ln_spc_lvl = false,
+                "lstStyle" => in_lst = false,
+                "sp" => {
+                    if in_sp && !levels.is_empty() {
+                        out.insert((ph_type.clone(), ph_idx.clone()), std::mem::take(&mut levels));
+                    }
+                    in_sp = false;
+                    cur_lvl = None;
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
 /// Read `p:embeddedFontLst` and pull in every `.fntdata` part it names.
 ///
 /// The list sits in `ppt/presentation.xml`; each `p:embeddedFont` carries one
@@ -562,12 +678,25 @@ fn parse_slide(
     // follow-up: when the layout placeholder also lacks an explicit xfrm, fall
     // back to the slideMaster's placeholder geometry (the master ph carries the
     // authoritative xfrm for layout-less placeholder slots).
-    let (layout_ph_geoms, layout_ph_anchors): (
+    // The MASTER's placeholder lstStyles, merged UNDER the layout's.
+    let master_ph_styles: HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>> =
+        if std::env::var("OXI_PHLEVEL_DISABLE").is_err() {
+            match archive.try_read_part("ppt/slideMasters/slideMaster1.xml") {
+                Ok(Some(xml)) => parse_layout_ph_lststyles(&xml, theme_colors),
+                _ => HashMap::new(),
+            }
+        } else {
+            HashMap::new()
+        };
+
+    let (layout_ph_geoms, layout_ph_anchors, layout_ph_styles): (
         HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
         HashMap<(Option<String>, Option<String>), String>,
+        HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>>,
     ) = {
         let mut geoms = HashMap::new();
         let mut anchors = HashMap::new();
+        let mut styles = HashMap::new();
         for rel in rels.values() {
             if rel.rel_type.ends_with("/slideLayout") {
                 let layout_path =
@@ -576,11 +705,14 @@ fn parse_slide(
                     let (g, a) = parse_layout_ph_info(&layout_xml).unwrap_or_default();
                     geoms = g;
                     anchors = a;
+                    if std::env::var("OXI_PHLEVEL_DISABLE").is_err() {
+                        styles = parse_layout_ph_lststyles(&layout_xml, theme_colors);
+                    }
                 }
                 break;
             }
         }
-        (geoms, anchors)
+        (geoms, anchors, styles)
     };
 
     // A slide with no <p:bg> of its own inherits the layout's background, and
@@ -2027,7 +2159,19 @@ fn parse_slide(
                             flip_v: shape_flip_v,
                             shape_type: shape_prst.take(),
                             adjustments: std::mem::take(&mut shape_adjustments),
-                            ph_type: shape_ph_type.take(),
+                            ph_type: shape_ph_type.clone(),
+                            ph_levels: merge_ph_levels(
+                                lookup_ph_levels(
+                                    &layout_ph_styles,
+                                    shape_ph_type.as_ref(),
+                                    shape_ph_idx.as_ref(),
+                                ),
+                                lookup_ph_levels(
+                                    &master_ph_styles,
+                                    shape_ph_type.take().as_ref(),
+                                    shape_ph_idx.as_ref(),
+                                ),
+                            ),
                             content,
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
@@ -2174,6 +2318,7 @@ fn parse_slide(
                             shape_type: shape_prst.take(),
                             adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: None,
+                            ph_levels: Vec::new(),
                             content,
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
@@ -2740,6 +2885,7 @@ fn parse_inherited_shapes(
                                         fill_rect,
                                         rot_with_shape: true,
                                         image_alpha: None,
+                                        ph_levels: Vec::new(),
                                         // The inheritance gate rejects custGeom
                                         // outright, so an inherited shape never
                                         // carries one.
@@ -3248,6 +3394,69 @@ fn lookup_ph_geom(
 /// the ctrTitle -> title alias, then obj/body-equivalence, then idx-only.
 /// The layout map wins over the master map. Returns None when no placeholder
 /// in the chain declares an anchor (= the bodyPr default, "t").
+/// The layout placeholder text styles that apply to a slide shape, using the
+/// same key normalisation as `lookup_ph_anchor` (a slide's "ctrTitle" and a
+/// layout's "title" are the same slot).
+/// Layout placeholder styles laid over master placeholder styles, field by
+/// field and level by level. The layout is the nearer ancestor, so anything it
+/// states wins; anything it leaves out falls through to the master's
+/// placeholder, which in turn beats the master's `p:txStyles`.
+fn merge_ph_levels(
+    layout: Vec<MasterStyleLevel>,
+    master: Vec<MasterStyleLevel>,
+) -> Vec<MasterStyleLevel> {
+    if layout.is_empty() {
+        return master;
+    }
+    if master.is_empty() {
+        return layout;
+    }
+    let n = layout.len().max(master.len());
+    (0..n)
+        .map(|i| {
+            let l = layout.get(i.min(layout.len() - 1)).cloned().unwrap_or_default();
+            let m = master.get(i.min(master.len() - 1)).cloned().unwrap_or_default();
+            MasterStyleLevel {
+                font_size: l.font_size.or(m.font_size),
+                color: l.color.clone().or(m.color.clone()),
+                algn: l.algn.or(m.algn),
+                line_spacing: l.line_spacing.or(m.line_spacing),
+                ..l
+            }
+        })
+        .collect()
+}
+
+fn lookup_ph_levels(
+    layout: &HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>>,
+    ph_type: Option<&String>,
+    ph_idx: Option<&String>,
+) -> Vec<MasterStyleLevel> {
+    let mut keys: Vec<(Option<String>, Option<String>)> = Vec::new();
+    keys.push((ph_type.cloned(), ph_idx.cloned()));
+    if let Some(ty) = ph_type {
+        if ty == "ctrTitle" {
+            keys.push((Some("title".to_string()), ph_idx.cloned()));
+        }
+        if ty == "title" {
+            keys.push((Some("ctrTitle".to_string()), ph_idx.cloned()));
+        }
+        keys.push((Some(ty.clone()), None));
+    }
+    if let Some(idx) = ph_idx {
+        let idx = idx.clone();
+        keys.push((Some("body".to_string()), Some(idx.clone())));
+        keys.push((Some("obj".to_string()), Some(idx.clone())));
+        keys.push((None, Some(idx)));
+    }
+    for k in &keys {
+        if let Some(v) = layout.get(k) {
+            return v.clone();
+        }
+    }
+    Vec::new()
+}
+
 fn lookup_ph_anchor(
     layout: &HashMap<(Option<String>, Option<String>), String>,
     master: &HashMap<(Option<String>, Option<String>), String>,

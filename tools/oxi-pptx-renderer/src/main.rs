@@ -181,6 +181,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 sh.l_ins,
                                                 sh.r_ins,
                                                 &master_ctx[..],
+                                                &sh.ph_levels[..],
                                                 anchor_off,
                                                 &mut counters,
                                             );
@@ -308,6 +309,7 @@ fn compute_shape_anchor_off(
             sh.l_ins,
             sh.r_ins,
             &master_ctx[..],
+            &sh.ph_levels[..],
             0.0,
             &mut counters,
         );
@@ -319,9 +321,18 @@ fn compute_shape_anchor_off(
         .iter()
         .filter_map(|r| r.font_size)
         .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))))
-        .unwrap_or(master_ctx.first().and_then(|m| m.font_size).unwrap_or(18.0));
+        .unwrap_or(
+            sh.ph_levels
+                .first()
+                .and_then(|l| l.font_size)
+                .or_else(|| master_ctx.first().and_then(|m| m.font_size))
+                .unwrap_or(18.0),
+        );
     let first_off = {
-        let n = para.line_spacing.unwrap_or(1.0);
+        let n = para
+            .line_spacing
+            .or_else(|| sh.ph_levels.first().and_then(|l| l.line_spacing))
+            .unwrap_or(1.0);
         let family = para
             .runs
             .iter()
@@ -334,11 +345,23 @@ fn compute_shape_anchor_off(
         }
     };
     let block_h = (cursor_pt - first_off).max(0.0);
-    let extra = (inner_h - block_h).max(0.0);
     if anchor == Some("ctr") {
-        extra / 2.0
+        // ★A block TALLER than its box still centres on it: d24 slide 1's
+        // 60pt title needs 178pt in a 91pt box and PowerPoint puts the block's
+        // centre (195.6) on the box's (202.4), overflowing equally above and
+        // below. Clamping the offset at zero pinned it to the box top, 63pt
+        // low. Measured 2026-08-18 from PowerPoint's own render.
+        //
+        // Gated with the placeholder-style inheritance because it belongs to
+        // the same change: leaving it outside made the opt-out arm differ on 9
+        // decks, so the A/B was not a before-vs-after.
+        if phlevel_on() {
+            (inner_h - block_h) / 2.0
+        } else {
+            (inner_h - block_h).max(0.0) / 2.0
+        }
     } else {
-        extra
+        (inner_h - block_h).max(0.0)
     }
 }
 
@@ -1824,7 +1847,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             } else {
                                 Some(&master_ctx[(p.lvl as usize).min(master_ctx.len() - 1)])
                             };
-                            let m_fs = m.and_then(|mm| mm.font_size);
+                            // The LAYOUT placeholder's own a:lstStyle sits
+                            // between the run and the master txStyles: d24's
+                            // master titleStyle has no size or colour while its
+                            // layout ctrTitle declares sz=6000 + lt1, and
+                            // PowerPoint draws 60pt white.
+                            let phl = if sh.ph_levels.is_empty() {
+                                None
+                            } else {
+                                Some(&sh.ph_levels[(p.lvl as usize).min(sh.ph_levels.len() - 1)])
+                            };
+                            let m_fs = phl
+                                .and_then(|l| l.font_size)
+                                .or_else(|| m.and_then(|mm| mm.font_size));
                             let fs = p
                                 .runs
                                 .iter()
@@ -1838,7 +1873,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .iter()
                                 .find_map(|r| r.font_family.clone())
                                 .unwrap_or_else(|| resolve_font(pres, sh));
-                            let color = p.runs.iter().find_map(|r| r.color.clone());
+                            let color = p
+                                .runs
+                                .iter()
+                                .find_map(|r| r.color.clone())
+                                .or_else(|| phl.and_then(|l| l.color.clone()));
                             let (lines, marker) = layout_paragraph_baselines(
                                 mem_dc,
                                 p,
@@ -1850,6 +1889,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 sh.l_ins,
                                 sh.r_ins,
                                 &master_ctx[..],
+                                &sh.ph_levels[..],
                                 anchor_off,
                                 &mut counters,
                             );
@@ -8151,6 +8191,12 @@ unsafe fn draw_line_runs(
     }
 }
 
+/// The layout / master placeholder `a:lstStyle` chain is applied unless this
+/// is set.
+fn phlevel_on() -> bool {
+    std::env::var("OXI_PHLEVEL_DISABLE").is_err()
+}
+
 /// Run-level styling within a paragraph is applied unless this is set.
 fn runstyle_on() -> bool {
     std::env::var("OXI_RUNSTYLE_DISABLE").is_err()
@@ -8559,17 +8605,37 @@ fn layout_paragraph_baselines(
     l_ins: f32,
     r_ins: f32,
     master: &[MasterStyleLevel],
+    ph_levels: &[MasterStyleLevel],
     anchor_off: f32,
     counters: &mut std::collections::HashMap<(u32, String), (Option<u32>, u32)>,
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
-    let m = if master.is_empty() {
+    let mut m = if master.is_empty() {
         MasterStyleLevel::default()
     } else {
         let idx = (para.lvl as usize).min(master.len() - 1);
         master[idx].clone()
     };
+    // The LAYOUT placeholder's own a:lstStyle overrides the master level, field
+    // by field. Resolving it only in the draw loop and not here wrapped d24's
+    // title at the master's 18pt and then drew it at the layout's 60pt, so the
+    // line ran off the box instead of breaking into PowerPoint's three.
+    if !ph_levels.is_empty() {
+        let l = &ph_levels[(para.lvl as usize).min(ph_levels.len() - 1)];
+        if l.font_size.is_some() {
+            m.font_size = l.font_size;
+        }
+        if l.color.is_some() {
+            m.color = l.color.clone();
+        }
+        if l.algn.is_some() {
+            m.algn = l.algn;
+        }
+        if l.line_spacing.is_some() {
+            m.line_spacing = l.line_spacing;
+        }
+    }
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
     // run 14pt overrides master 32pt); else the engine default.
@@ -8579,7 +8645,10 @@ fn layout_paragraph_baselines(
         .filter_map(|r| r.font_size)
         .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))))
         .unwrap_or(m.font_size.unwrap_or(18.0));
-    let n = para.line_spacing.unwrap_or(1.0);
+    // The paragraph's own lnSpc wins; otherwise the placeholder chain's
+    // (d24's master title placeholder says 90%, which is what makes its
+    // 60pt title step 64.8pt instead of 72pt).
+    let n = para.line_spacing.or(m.line_spacing).unwrap_or(1.0);
     let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
     let family = para
         .runs

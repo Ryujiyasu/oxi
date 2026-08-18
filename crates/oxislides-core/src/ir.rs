@@ -102,6 +102,20 @@ pub struct MasterStyleLevel {
     /// always wins.
     #[serde(default)]
     pub font_size: Option<f32>,
+    /// `a:lnSpc/a:spcPct` as a multiple (90000 -> 0.9). PowerPoint render-truth
+    /// (d24 slide 1, 2026-08-18): the MASTER's title PLACEHOLDER carries
+    /// `lnSpc 90%` while the master's `p:txStyles/p:titleStyle` says 100%, and
+    /// the rendered pitch is 64.82pt on 60pt text = 1.2 x 0.9. The placeholder
+    /// style wins over txStyles.
+    #[serde(default)]
+    pub line_spacing: Option<f32>,
+    /// `a:defRPr/a:solidFill` — the level's text colour, theme colours already
+    /// resolved. PowerPoint render-truth (d24 slide 1, 2026-08-18): the deck's
+    /// master titleStyle carries no size or colour at all, while the LAYOUT's
+    /// ctrTitle placeholder `a:lstStyle` carries `sz="6000"` and `lt1`, and
+    /// PowerPoint draws the title 60pt white.
+    #[serde(default)]
+    pub color: Option<String>,
     /// a:lvlNpPr/@algn — the horizontal paragraph alignment inherited from the
     /// master txStyles level (Spec #6). None = not specified (paragraph-level
     /// Left applies). The master titleStyle lvl1pPr carries algn="ctr", which
@@ -287,6 +301,16 @@ pub struct Shape {
     /// ignored.
     #[serde(default)]
     pub image_alpha: Option<f32>,
+    /// The text styles of the LAYOUT placeholder this shape inherits from
+    /// (`a:lstStyle` on the layout's matching `p:sp`), indexed by outline
+    /// level. This sits BETWEEN the run's own properties and the master
+    /// txStyles: a run with no explicit `sz` takes the layout placeholder's,
+    /// and only then the master's.
+    ///
+    /// It is NOT the layout's `p:txStyles`, which the phfs probe showed
+    /// PowerPoint ignores -- a different element with a similar name.
+    #[serde(default)]
+    pub ph_levels: Vec<MasterStyleLevel>,
     /// Custom geometry (`a:custGeom`) — the shape's outline as explicit paths
     /// instead of a named preset. None for a preset / picture / frame shape.
     ///
