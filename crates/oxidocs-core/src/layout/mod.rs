@@ -30864,6 +30864,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
                                             && self.compat_mode <= 14
                                             && self.compress_punctuation;
+                                    // S1176 (opt-in): the CJK space-shrink. Justified only --
+                                    // jc=left gave nothing at all across the sweep.
+                                    let s1176_space =
+                                        std::env::var("OXI_CJKSPACE").ok().as_deref() == Some("1")
+                                            && matches!(
+                                                para.alignment,
+                                                Alignment::Justify | Alignment::Distribute
+                                            );
                                     // S497b FALSIFIED (2026-06-05): extending the compute_compression wrap
                                     // lookahead to left-aligned compressPunctuation cells (to model Word's
                                     // end-of-line yakumono oikomi at wrap for non-justified paras) was a NO-OP
@@ -31736,7 +31744,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 false
                                             } else if s586_overflow_fixed {
                                                 false
-                                            } else if s1174_yakucomp && would_overflow_natural {
+                                            } else if (s1174_yakucomp || s1176_space)
+                                                && would_overflow_natural
+                                            {
                                                 // S1174: the pool is HALF AN EM FOR THE LINE, not
                                                 // half an em per 約物. Sweeping the count
                                                 // (`_cw_yaku_n.py`, 12-character lines carrying 0
@@ -31787,13 +31797,35 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 } else {
                                                     0.0
                                                 };
-                                                let pool = if mid { 0.5 * font_size } else { 0.0 }
-                                                    + if kinsoku::cell_yaku_capacity(ch) > 0.0 {
-                                                        0.5 * cw
-                                                    } else {
-                                                        0.0
-                                                    }
-                                                    + joints;
+                                                // S1176: an ideographic space on a JUSTIFIED line
+                                                // squeezes to a quarter of itself -- 0.75em of give.
+                                                // It happens at compatibilityMode 15, where 約物 do
+                                                // not compress at all, so this is the space-shrink
+                                                // (S825/S1082's mechanism) and not the 約物 one.
+                                                // Measured both ways: jc=both holds out to 0.748em
+                                                // of shortfall, jc=left wraps the moment it is short.
+                                                let spaces = if s1176_space {
+                                                    0.75
+                                                        * current_line_chars
+                                                            .iter()
+                                                            .chain(buf_chars.iter())
+                                                            .filter(|c| c.ch == '\u{3000}')
+                                                            .map(|c| c.natural_advance)
+                                                            .sum::<f32>()
+                                                } else {
+                                                    0.0
+                                                };
+                                                let yaku = if s1174_yakucomp {
+                                                    (if mid { 0.5 * font_size } else { 0.0 })
+                                                        + if kinsoku::cell_yaku_capacity(ch) > 0.0 {
+                                                            0.5 * cw
+                                                        } else {
+                                                            0.0
+                                                        }
+                                                } else {
+                                                    0.0
+                                                };
+                                                let pool = yaku + joints + spaces;
                                                 ((line_x + buf_w + cw) - effective_wrap) > pool
                                             } else if legacy_cell_break
                                                 && !s1174_yakucomp
@@ -36765,6 +36797,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let s1174_yakucomp = std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
             && self.compat_mode <= 14
             && self.compress_punctuation;
+        let s1176_space = std::env::var("OXI_CJKSPACE").ok().as_deref() == Some("1")
+            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
         let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
         // S1082: paragraph-wide char stream + running offset, so the estimate can
         // answer the same "is this the paragraph's last word?" question the render
@@ -37037,7 +37071,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
                 // S1174 supersedes this the same way it supersedes the render-side
                 // legacy_cell_break branch -- stacking the two counts the pool twice.
-                let would_overflow = if s1174_yakucomp && would_overflow_natural {
+                let would_overflow = if (s1174_yakucomp || s1176_space)
+                    && would_overflow_natural
+                {
                     // S1174 estimate mirror -- half an em for the line, plus half an
                     // em more when the character being placed is itself a 約物.
                     let mid = current_line_chars
@@ -37071,9 +37107,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         0.0
                     };
-                    let pool = if mid { 0.5 * font_size } else { 0.0 }
-                        + if kinsoku::cell_yaku_capacity(ch) > 0.0 { 0.5 * cw } else { 0.0 }
-                        + joints;
+                    // S1176 estimate mirror.
+                    let spaces = if s1176_space {
+                        0.75
+                            * current_line_chars
+                                .iter()
+                                .chain(buf_chars.iter())
+                                .filter(|c| c.ch == '\u{3000}')
+                                .map(|c| c.natural_advance)
+                                .sum::<f32>()
+                    } else {
+                        0.0
+                    };
+                    let yaku = if s1174_yakucomp {
+                        (if mid { 0.5 * font_size } else { 0.0 })
+                            + if kinsoku::cell_yaku_capacity(ch) > 0.0 { 0.5 * cw } else { 0.0 }
+                    } else {
+                        0.0
+                    };
+                    let pool = yaku + joints + spaces;
                     ((line_x + buf_w + cw) - effective_wrap) > pool
                 } else if cellpair_est && !s1174_yakucomp && would_overflow_natural {
                     let n_yak = current_line_chars
