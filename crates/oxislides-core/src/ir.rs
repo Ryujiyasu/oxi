@@ -734,6 +734,14 @@ pub struct SlideParagraph {
     /// Outline level (a:pPr/@lvl, 0-based). Default 0.
     #[serde(default)]
     pub lvl: u32,
+    /// `a:endParaRPr/@sz` in points -- the size of the paragraph mark. It is
+    /// what gives an EMPTY paragraph its line height: PowerPoint advances such
+    /// a line by sz * 1.2 * lnSpc exactly (probe emptypara arms A-D: 7/10/24/40
+    /// pt all land on the nose), and it wins over an rPr on a textless run
+    /// (arm F: run 10pt + endParaRPr 40pt renders 40pt). Ignored when the
+    /// paragraph has text -- then the runs govern.
+    #[serde(default)]
+    pub end_para_size: Option<f32>,
     /// Left indent (a:pPr/@marL) in points. None = not specified (the master
     /// txStyles level provides it).
     #[serde(default)]

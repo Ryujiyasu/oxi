@@ -167,6 +167,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                         (u32, String),
                                         (Option<u32>, u32),
                                     >::new();
+                                    let mut prev_fs: Option<f32> = None;
                                     for (i, para_json) in arr.iter_mut().enumerate() {
                                         if let Some(para) = sh_para(&sh.content, i) {
                                             let def_family = resolve_font(pres, sh);
@@ -184,6 +185,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 &sh.ph_levels[..],
                                                 anchor_off,
                                                 &mut counters,
+                                                &mut prev_fs,
                                             );
                                             // Spec #11: surface the marker text so autonum
                                             // number strings can be verified in the dump.
@@ -297,6 +299,7 @@ fn compute_shape_anchor_off(
     // Spec #11: AutoNum counters are per text box; this measurement pass only
     // needs the block height, so a throwaway counter set is fine.
     let mut counters = std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
+    let mut prev_fs: Option<f32> = None;
     for (i, para) in paragraphs.iter().enumerate() {
         let _ = layout_paragraph_baselines(
             dc,
@@ -312,22 +315,19 @@ fn compute_shape_anchor_off(
             &sh.ph_levels[..],
             0.0,
             &mut counters,
+            &mut prev_fs,
         );
     }
     // block_h = the block's advance minus the first paragraph's first_off.
     let para = &paragraphs[0];
-    let fs = para
-        .runs
-        .iter()
-        .filter_map(|r| r.font_size)
-        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))))
-        .unwrap_or(
-            sh.ph_levels
-                .first()
-                .and_then(|l| l.font_size)
-                .or_else(|| master_ctx.first().and_then(|m| m.font_size))
-                .unwrap_or(18.0),
-        );
+    let fs = paragraph_font_size(
+        para,
+        sh.ph_levels
+            .first()
+            .and_then(|l| l.font_size)
+            .or_else(|| master_ctx.first().and_then(|m| m.font_size)),
+        None,
+    );
     let first_off = {
         let n = para
             .line_spacing
@@ -1119,8 +1119,18 @@ unsafe fn draw_table_legacy(
             let pw = (table.col_widths.get(c).copied().unwrap_or(0.0) as f64 * scale).round() as i32;
             let _ = Rectangle(mem_dc, cx, cy, cx + pw, cy + ph);
             let mut cursor_y = cy + (0.06 * scale).round() as i32;
+            let mut prev_fs: Option<f32> = None;
             for p in &cell.paragraphs {
-                let fs = p.runs.iter().filter_map(|r| r.font_size).fold(18.0, f32::max);
+                // The legacy cell size is max(runs, 18pt) -- an 18pt floor the
+                // rest of the engine does not have. Keep it for paragraphs that
+                // carry text; only the EMPTY ones take the paragraph-mark rule.
+                let legacy = p.runs.iter().filter_map(|r| r.font_size).fold(18.0, f32::max);
+                let fs = if emptypara_on() && p.runs.iter().all(|r| r.text.is_empty()) {
+                    p.end_para_size.or(prev_fs).unwrap_or(legacy)
+                } else {
+                    legacy
+                };
+                prev_fs = Some(fs);
                 let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
                 if text.trim().is_empty() {
                     cursor_y += (fs as f64 * scale * 1.2).round() as i32;
@@ -1436,6 +1446,47 @@ fn blipclip_on() -> bool {
 /// runs' real font size unless this is set, which restores the legacy grid.
 fn tblcell_on() -> bool {
     std::env::var("OXI_TBLCELL_DISABLE").is_err()
+}
+
+/// An empty paragraph is sized by its paragraph mark unless this is set,
+/// which restores the pre-S-EMPTYPARA fallback to the inherited level default.
+fn emptypara_on() -> bool {
+    std::env::var("OXI_EMPTYPARA_DISABLE").is_err()
+}
+
+/// The font size that governs a paragraph's line advance.
+///
+/// A paragraph with text is sized by its runs. A paragraph with NONE is sized
+/// by its paragraph mark, and PowerPoint's own export says so exactly (probe
+/// `emptypara`, 10 arms, and `emptypara2`, 6 paired questions, 2026-08-18):
+///
+/// * `a:endParaRPr/@sz` wins -- 7 / 10 / 24 / 40pt arms advance by sz * 1.2 * n
+///   on the nose, and it beats an `a:rPr` on a textless run (run 10pt +
+///   endParaRPr 40pt renders 40pt).
+/// * With no `endParaRPr`, the PRECEDING paragraph's size is used: prev=24
+///   gives 28.80pt, prev=32 gives 38.43pt, and prev=10/next=24 gives 12.00pt,
+///   so it is the paragraph before and not the one after.
+/// * Only then does the inherited level default apply.
+///
+/// d28 slide 13 is the corpus case: a 10pt `endParaRPr` between two 10pt
+/// paragraphs, under a 14pt inherited default, which Oxi drew 15px too tall at
+/// 150dpi and pushed the whole lower half of the text block down with it.
+fn paragraph_font_size(
+    para: &oxislides_core::ir::SlideParagraph,
+    inherited: Option<f32>,
+    prev_fs: Option<f32>,
+) -> f32 {
+    let explicit = para
+        .runs
+        .iter()
+        .filter_map(|r| r.font_size)
+        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))));
+    if emptypara_on() && para.runs.iter().all(|r| r.text.is_empty()) {
+        if let Some(fs) = para.end_para_size.or(prev_fs) {
+            return fs;
+        }
+    }
+    explicit.or(inherited).unwrap_or(18.0)
 }
 
 /// `a:alphaModFix/@amt` scales a picture's opacity unless this is set.
@@ -1944,6 +1995,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // layout_paragraph_baselines).
                         let mut counters =
                             std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
+                        let mut prev_fs: Option<f32> = None;
                         for (pi, p) in paragraphs.iter().enumerate() {
                             // Effective font size: a run's explicit sz wins (the
                             // max over runs); else the master txStyles level
@@ -1968,14 +2020,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let m_fs = phl
                                 .and_then(|l| l.font_size)
                                 .or_else(|| m.and_then(|mm| mm.font_size));
-                            let fs = p
-                                .runs
-                                .iter()
-                                .filter_map(|r| r.font_size)
-                                .fold(None, |acc: Option<f32>, x| {
-                                    Some(acc.map_or(x, |a| a.max(x)))
-                                })
-                                .unwrap_or(m_fs.unwrap_or(18.0));
+                            let fs = paragraph_font_size(p, m_fs, prev_fs);
                             let family = effective_family(
                                 mem_dc,
                                 &p.runs
@@ -2002,6 +2047,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 &sh.ph_levels[..],
                                 anchor_off,
                                 &mut counters,
+                                &mut prev_fs,
                             );
                             if let Some(m) = &marker {
                                 let marker_x =
@@ -8860,6 +8906,7 @@ fn layout_paragraph_baselines(
     ph_levels: &[MasterStyleLevel],
     anchor_off: f32,
     counters: &mut std::collections::HashMap<(u32, String), (Option<u32>, u32)>,
+    prev_fs: &mut Option<f32>,
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
@@ -8890,13 +8937,11 @@ fn layout_paragraph_baselines(
     }
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
-    // run 14pt overrides master 32pt); else the engine default.
-    let fs = para
-        .runs
-        .iter()
-        .filter_map(|r| r.font_size)
-        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))))
-        .unwrap_or(m.font_size.unwrap_or(18.0));
+    // run 14pt overrides master 32pt); else the engine default. An EMPTY
+    // paragraph is sized by its paragraph mark instead -- see
+    // `paragraph_font_size`.
+    let fs = paragraph_font_size(para, m.font_size, *prev_fs);
+    *prev_fs = Some(fs);
     // The paragraph's own lnSpc wins; otherwise the placeholder chain's
     // (d24's master title placeholder says 90%, which is what makes its
     // 60pt title step 64.8pt instead of 72pt).

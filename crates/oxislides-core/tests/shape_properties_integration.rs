@@ -228,3 +228,53 @@ fn pictures_rotate_with_their_shape_by_default() {
         }
     }
 }
+
+// --- a:endParaRPr ---------------------------------------------------------
+// An empty paragraph takes its line height from its paragraph mark, so the
+// mark's size has to survive parsing. `emptypara_test.pptx` carries both XML
+// shapes of the element: `<a:endParaRPr sz="2400"/>` self-closing, and one
+// with an `a:solidFill` child. quick-xml routes those to different events, and
+// a handler present in only one arm silently drops half the corpus.
+
+const EMPTYPARA_PPTX: &[u8] = include_bytes!("../../../tests/fixtures/emptypara_test.pptx");
+
+fn emptypara_paragraphs() -> Vec<oxislides_core::ir::SlideParagraph> {
+    let p = parse_pptx(EMPTYPARA_PPTX).expect("emptypara_test.pptx must parse");
+    p.slides[0]
+        .shapes
+        .iter()
+        .find_map(|s| match &s.content {
+            ShapeContent::AutoShape { paragraphs } if paragraphs.len() >= 4 => {
+                Some(paragraphs.clone())
+            }
+            _ => None,
+        })
+        .expect("the text box with four paragraphs")
+}
+
+#[test]
+fn end_para_size_read_from_self_closing_element() {
+    let paras = emptypara_paragraphs();
+    assert_eq!(
+        paras[1].end_para_size,
+        Some(24.0),
+        "<a:endParaRPr sz=\"2400\"/> arrives as Event::Empty"
+    );
+}
+
+#[test]
+fn end_para_size_read_when_the_element_has_children() {
+    let paras = emptypara_paragraphs();
+    assert_eq!(
+        paras[2].end_para_size,
+        Some(10.0),
+        "an endParaRPr wrapping a:solidFill arrives as Event::Start"
+    );
+}
+
+#[test]
+fn end_para_size_does_not_leak_between_paragraphs() {
+    let paras = emptypara_paragraphs();
+    assert_eq!(paras[0].end_para_size, None, "AAA declares no paragraph mark size");
+    assert_eq!(paras[3].end_para_size, None, "and the mark size is reset per paragraph");
+}

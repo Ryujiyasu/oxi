@@ -986,6 +986,7 @@ fn parse_slide(
     let mut para_indent: Option<f32> = None;
     let mut para_bullet = SlideBullet::Inherit;
     let mut para_bullet_font: Option<String> = None;
+    let mut para_end_size: Option<f32> = None;
 
     // Run state
     let mut in_run = false;
@@ -1492,6 +1493,7 @@ fn parse_slide(
                         para_indent = None;
                         para_bullet = SlideBullet::Inherit;
                         para_bullet_font = None;
+                        para_end_size = None;
                     }
                     "bodyPr" if in_shape => {
                         in_body_pr = true;
@@ -1590,6 +1592,11 @@ fn parse_slide(
                         run_color = None;
                         run_font_family = None;
                     }
+                    "endParaRPr" if in_paragraph => {
+                        para_end_size = get_attr(&e, "sz")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 100.0);
+                    }
                     "rPr" if in_run => {
                         if let Some(b) = get_attr(&e, "b") {
                             run_bold = b == "1" || b == "true";
@@ -1658,6 +1665,14 @@ fn parse_slide(
                                 shape_fill_alpha = Some((p / 100000.0).clamp(0.0, 1.0));
                             }
                         }
+                    }
+                    // `<a:endParaRPr sz="1400"/>` normally has no children, so it
+                    // arrives here and never in the Start arm. The Start arm has
+                    // its own copy for the form that wraps an a:solidFill.
+                    "endParaRPr" if in_paragraph => {
+                        para_end_size = get_attr(&e, "sz")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 100.0);
                     }
                     "gridCol" if in_table => {
                         // a:gridCol is typically self-closing.
@@ -2302,6 +2317,7 @@ fn parse_slide(
                             mar_l: para_mar_l,
                             indent: para_indent,
                             bullet: std::mem::take(&mut para_bullet),
+                            end_para_size: para_end_size.take(),
                         };
                         if in_tbl_cell {
                             tbl_cur_cell_paragraphs.push(para);
