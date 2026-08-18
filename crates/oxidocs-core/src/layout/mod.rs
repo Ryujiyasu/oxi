@@ -31686,27 +31686,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             } else if s586_overflow_fixed {
                                                 false
                                             } else if s1174_yakucomp && would_overflow_natural {
-                                                // S1174: the derived cell rule, run through the
-                                                // compression model the engine already has rather
-                                                // than beside it -- 約物 give up to half an em each
-                                                // and the line takes only its shortfall.
-                                                let mut trial: Vec<
-                                                    crate::layout::jc_both_compress::CharContext,
-                                                > = Vec::with_capacity(
-                                                    current_line_chars.len() + buf_chars.len() + 1,
-                                                );
-                                                trial.extend(current_line_chars.iter().cloned());
-                                                trial.extend(buf_chars.iter().cloned());
-                                                trial.push(
-                                                    crate::layout::jc_both_compress::CharContext {
-                                                        ch,
-                                                        natural_advance: cw,
-                                                        font_size,
-                                                    },
-                                                );
-                                                !crate::layout::jc_both_compress::compute_compression_floor(
-                                                    &trial, effective_wrap, true, Some(0.5),
-                                                ).fits
+                                                // S1174: the pool is HALF AN EM FOR THE LINE, not
+                                                // half an em per 約物. Sweeping the count
+                                                // (`_cw_yaku_n.py`, 12-character lines carrying 0
+                                                // to 8 closing brackets) the line breaks at the
+                                                // same 0.495-0.500em of shortfall whether it holds
+                                                // one 約物 or eight. A line-final 約物 adds its own
+                                                // half em on top, by hanging -- which is why the
+                                                // five-character arms that ended in one held out to
+                                                // a full em and read as "additive".
+                                                let mid = current_line_chars
+                                                    .iter()
+                                                    .chain(buf_chars.iter())
+                                                    .any(|c| kinsoku::cell_yaku_capacity(c.ch) > 0.0);
+                                                let pool = if mid { 0.5 * font_size } else { 0.0 }
+                                                    + if kinsoku::cell_yaku_capacity(ch) > 0.0 {
+                                                        0.5 * cw
+                                                    } else {
+                                                        0.0
+                                                    };
+                                                ((line_x + buf_w + cw) - effective_wrap) > pool
                                             } else if legacy_cell_break
                                                 && !s1174_yakucomp
                                                 && would_overflow_natural
@@ -36941,23 +36940,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // S1174 supersedes this the same way it supersedes the render-side
                 // legacy_cell_break branch -- stacking the two counts the pool twice.
                 let would_overflow = if s1174_yakucomp && would_overflow_natural {
-                    // S1174 estimate mirror.
-                    let mut trial: Vec<crate::layout::jc_both_compress::CharContext> =
-                        Vec::with_capacity(current_line_chars.len() + buf_chars.len() + 1);
-                    trial.extend(current_line_chars.iter().cloned());
-                    trial.extend(buf_chars.iter().cloned());
-                    trial.push(crate::layout::jc_both_compress::CharContext {
-                        ch,
-                        natural_advance: cw,
-                        font_size,
-                    });
-                    !crate::layout::jc_both_compress::compute_compression_floor(
-                        &trial,
-                        effective_wrap,
-                        true,
-                        Some(0.5),
-                    )
-                    .fits
+                    // S1174 estimate mirror -- half an em for the line, plus half an
+                    // em more when the character being placed is itself a 約物.
+                    let mid = current_line_chars
+                        .iter()
+                        .chain(buf_chars.iter())
+                        .any(|c| kinsoku::cell_yaku_capacity(c.ch) > 0.0);
+                    let pool = if mid { 0.5 * font_size } else { 0.0 }
+                        + if kinsoku::cell_yaku_capacity(ch) > 0.0 { 0.5 * cw } else { 0.0 };
+                    ((line_x + buf_w + cw) - effective_wrap) > pool
                 } else if cellpair_est && !s1174_yakucomp && would_overflow_natural {
                     let n_yak = current_line_chars
                         .iter()

@@ -164,10 +164,18 @@ pub fn is_s473_compressible(ch: char) -> bool {
 ///   ）0.520em   、0.510em   。0.510em   （0.497em   　0.497em
 /// ```
 ///
-/// Half an em each, and the line gives up EXACTLY what it is short by out of that
-/// pool -- never more (supplied - demand, median +0.07pt over 421 widths, which is
-/// the device grid). A line whose shortfall exceeds the pool cannot be saved and
-/// wraps; a line with no 約物 at all wraps the moment it is short.
+/// The line gives up EXACTLY what it is short by, never more (supplied - demand,
+/// median +0.07pt over 421 widths, which is the device grid), and wraps when its
+/// shortfall exceeds what it has; a line with no 約物 at all wraps the moment it is
+/// short at all.
+///
+/// ★The pool is half an em FOR THE LINE, not half an em per 約物. Sweeping the count
+/// (`_cw_yaku_n.py`: 12-character lines carrying 0, 1, 2, 3, 4, 6 and 8 closing
+/// brackets) the line breaks at the same 0.495-0.500em of shortfall throughout. The
+/// five-character arms that read as additive -- one em with two 約物 -- each ended
+/// in one, and a line-FINAL 約物 adds its own half em by hanging. So this function
+/// answers "does this character carry aki", and the caller spends at most half an em
+/// of it for the line plus half an em for a line-final one.
 ///
 /// Two settings gate the whole mechanism, and both are invisible unless declared:
 /// `compatibilityMode <= 14` and `characterSpacingControl = compressPunctuation`.
