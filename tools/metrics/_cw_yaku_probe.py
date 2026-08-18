@@ -43,6 +43,7 @@ ARMS = {
     "Y6": ("甲）亜亜）", "two closing brackets competing"),
     "Y7": ("甲（亜亜亜", "an OPENING bracket -- does it give too?"),
     "Y8": ("甲亜亜亜　", "a trailing ideographic space"),
+    "Y9": ("甲亜　亜亜", "an ideographic space MID-line -- does it shrink on a justified line?"),
 }
 # 5 characters at 10.5pt = 52.5pt of text. Sweep the content area from 42 to 63pt,
 # i.e. demand from +10.5 (one em over) to -10.5 (one em of slack).
