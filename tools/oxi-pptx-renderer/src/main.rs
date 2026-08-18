@@ -1463,6 +1463,13 @@ fn geomalpha_on() -> bool {
     std::env::var("OXI_GEOMALPHA_DISABLE").is_err()
 }
 
+/// Each line wraps against the width left between its own start and the shared
+/// right edge unless this is set, which wraps every line at the full inner
+/// width.
+fn wrapwidth_on() -> bool {
+    std::env::var("OXI_WRAPWIDTH_DISABLE").is_err()
+}
+
 /// A shape's `a:blipFill` is clipped to its outline unless this is set.
 fn blipclip_on() -> bool {
     std::env::var("OXI_BLIPCLIP_DISABLE").is_err()
@@ -8882,14 +8889,17 @@ fn gdi_measure_text_px(dc: windows::Win32::Graphics::Gdi::HDC, text: &str) -> i3
 fn gdi_wrap_lines(
     dc: windows::Win32::Graphics::Gdi::HDC,
     text: &str,
-    effective_width_pt: f32,
+    first_width_pt: f32,
+    rest_width_pt: f32,
     scale: f64,
     fs: f32,
     family: &str,
     bold: bool,
     italic: bool,
 ) -> Vec<String> {
-    let width_px = (effective_width_pt as f64 * scale).round().max(1.0) as i32;
+    let first_px = (first_width_pt as f64 * scale).round().max(1.0) as i32;
+    let rest_px = (rest_width_pt as f64 * scale).round().max(1.0) as i32;
+    let mut width_px = first_px;
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut current_w = 0i32;
@@ -8930,6 +8940,9 @@ fn gdi_wrap_lines(
         if !current.is_empty() && !fits {
             lines.push(std::mem::take(&mut current));
             current_w = 0;
+            // Every line after the first is judged against the continuation
+            // width, which a hanging indent or a bullet makes narrower.
+            width_px = rest_px;
         }
         current.push_str(word);
         current_w += gdi_measure_text_px(dc, word);
@@ -9216,9 +9229,7 @@ fn layout_paragraph_baselines(
     let old_font = unsafe { SelectObject(dc, font) };
     let bold = para.runs.iter().any(|r| r.bold);
     let italic = para.runs.iter().any(|r| r.italic);
-    let lines = gdi_wrap_lines(dc, &text, effective_width, scale, fs, &family, bold, italic);
     let area_w = effective_width;
-    let n_lines = lines.len();
     let adv = fs * 1.2 * n;
     let first_off = if (n - 1.0).abs() > 1e-4 {
         0.75 * adv
@@ -9312,6 +9323,28 @@ fn layout_paragraph_baselines(
         }
         _ => {}
     }
+
+    // PowerPoint wraps each line against the same RIGHT EDGE, so the width a
+    // line may use is the inner width MINUS that line's own left offset -- and
+    // with a hanging indent or a bullet, line 0's offset differs from the rest.
+    // Probe `wrapwidth` (2026-08-19, 7 arms): with marL18/ind-18 and no bullet,
+    // line 0 starts at the inner left and runs a 232.07pt span while the
+    // continuations start 18pt in and run at most 221.26 -- both stopping at
+    // the same 316.8. Wrapping everything at the full 237.6 and shifting
+    // afterwards let a continuation run 18pt past the inset, which is what put
+    // an extra word on `bulletph`'s line 0.
+    let lines = gdi_wrap_lines(
+        dc,
+        &text,
+        (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0),
+        (effective_width - if wrapwidth_on() { para_left_rel } else { 0.0 }).max(1.0),
+        scale,
+        fs,
+        &family,
+        bold,
+        italic,
+    );
+    let n_lines = lines.len();
 
     let mut out = Vec::with_capacity(n_lines);
     for (i, line) in lines.iter().enumerate() {
