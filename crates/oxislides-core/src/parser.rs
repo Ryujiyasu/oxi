@@ -942,8 +942,13 @@ fn parse_slide(
     // coordinates to slide points.  Empty = top level (identity).
     let s_grp = std::env::var("OXI_GRPXFRM_DISABLE").is_err();
     let s_grprot = std::env::var("OXI_GRPROT_DISABLE").is_err();
-    // (origin x, origin y, scale x, scale y, rotation deg, rotation centre)
-    let mut grp_stack: Vec<(f32, f32, f32, f32, f32, f32, f32)> = Vec::new();
+    // The mirror ships after the turn, so it needs its own opt-out: disabling
+    // both together would compare against the pre-rotation build, not the
+    // shipped one.
+    let s_grpflip = std::env::var("OXI_GRPFLIP_DISABLE").is_err();
+    // (origin x, origin y, scale x, scale y, rotation deg, centre x, centre y,
+    //  flipH, flipV) -- the group's own turn and mirror, about that centre
+    let mut grp_stack: Vec<(f32, f32, f32, f32, f32, f32, f32, bool, bool)> = Vec::new();
     let mut in_grp_sp_pr = false;
     let mut in_grp_xfrm = false;
     let mut g_off = (0.0f32, 0.0f32);
@@ -951,6 +956,7 @@ fn parse_slide(
     let mut g_ch_off = (0.0f32, 0.0f32);
     let mut g_ch_ext = (0.0f32, 0.0f32);
     let mut g_rot: f32 = 0.0;
+    let mut g_flip = (false, false);
     // Spec #6: vertical text-anchor from the shape's own a:bodyPr/@anchor
     // (resolved through the placeholder chain at shape end).
     let mut shape_anchor: Option<String> = None;
@@ -1052,7 +1058,10 @@ fn parse_slide(
                         // Inherit the parent transform until this group's
                         // own a:xfrm is read (a group may omit it).
                         let base =
-                            grp_stack.last().copied().unwrap_or((0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0));
+                            grp_stack
+                                .last()
+                                .copied()
+                                .unwrap_or((0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, false));
                         grp_stack.push(base);
                     }
                     "grpSpPr" if !grp_stack.is_empty() => {
@@ -1073,6 +1082,10 @@ fn parse_slide(
                             .and_then(|v| v.parse::<f32>().ok())
                             .map(|v| v / 60000.0)
                             .unwrap_or(0.0);
+                        g_flip = (
+                            get_attr(&e, "flipH").as_deref() == Some("1"),
+                            get_attr(&e, "flipV").as_deref() == Some("1"),
+                        );
                     }
                     "sp" | "pic" | "cxnSp" if in_sp_tree => {
                         in_shape = true;
@@ -2166,7 +2179,7 @@ fn parse_slide(
                         let base = if grp_stack.len() >= 2 {
                             grp_stack[grp_stack.len() - 2]
                         } else {
-                            (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0)
+                            (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, false)
                         };
                         let box_x = base.0 + g_off.0 * base.2;
                         let box_y = base.1 + g_off.1 * base.3;
@@ -2183,6 +2196,8 @@ fn parse_slide(
                                 base.4 + g_rot,
                                 box_x + box_w / 2.0,
                                 box_y + box_h / 2.0,
+                                base.7 ^ (g_flip.0 && s_grpflip),
+                                base.8 ^ (g_flip.1 && s_grpflip),
                             );
                         }
                     }
@@ -2252,26 +2267,44 @@ fn parse_slide(
                         // back to layout/master geometry is already in slide
                         // space, so it is left alone.
                         let mut extra_rot = 0.0f32;
+                        let mut grp_flip = (false, false);
                         let (use_x, use_y, use_w, use_h) = match grp_stack.last() {
-                            Some(&(ox, oy, sx, sy, rot, cx, cy)) if s_grp && shape_has_xfrm => {
+                            Some(&(ox, oy, sx, sy, rot, cx, cy, fh, fv))
+                                if s_grp && shape_has_xfrm =>
+                            {
                                 let (x, y, w, h) =
                                     (ox + use_x * sx, oy + use_y * sy, use_w * sx, use_h * sy);
-                                if rot.abs() > 1e-4 && s_grprot {
-                                    // The group turns as a whole: the child's
-                                    // CENTRE swings about the group's centre and
-                                    // the child keeps its own size, turned by the
-                                    // same angle on top of whatever it declared.
-                                    let (t, u) = (x + w / 2.0 - cx, y + h / 2.0 - cy);
+                                if (rot.abs() > 1e-4 || fh || fv) && s_grprot {
+                                    // The group turns and mirrors as a whole
+                                    // about its own centre: the child's CENTRE
+                                    // moves with it, the child keeps its size,
+                                    // and its own turn and mirror compose with
+                                    // the group's. OOXML mirrors first, then
+                                    // rotates.
+                                    let (mut t, mut u) = (x + w / 2.0 - cx, y + h / 2.0 - cy);
+                                    if fh {
+                                        t = -t;
+                                    }
+                                    if fv {
+                                        u = -u;
+                                    }
                                     let (s, c) =
                                         (rot.to_radians().sin(), rot.to_radians().cos());
                                     let (nx, ny) = (cx + t * c - u * s, cy + t * s + u * c);
                                     extra_rot = rot;
+                                    grp_flip = (fh, fv);
                                     (nx - w / 2.0, ny - h / 2.0, w, h)
                                 } else {
                                     (x, y, w, h)
                                 }
                             }
                             _ => (use_x, use_y, use_w, use_h),
+                        };
+                        // A single-axis mirror reverses the child's own turn.
+                        let own_rot = if grp_flip.0 ^ grp_flip.1 {
+                            -shape_rotation
+                        } else {
+                            shape_rotation
                         };
 
                         // Spec #6: a:bodyPr/@anchor resolved through the placeholder
@@ -2300,9 +2333,9 @@ fn parse_slide(
                             y: use_y,
                             width: use_w,
                             height: use_h,
-                            rotation: shape_rotation + extra_rot,
-                            flip_h: shape_flip_h,
-                            flip_v: shape_flip_v,
+                            rotation: own_rot + extra_rot,
+                            flip_h: shape_flip_h ^ grp_flip.0,
+                            flip_v: shape_flip_v ^ grp_flip.1,
                             shape_type: shape_prst.take(),
                             adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: shape_ph_type.clone(),
