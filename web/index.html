@@ -1072,12 +1072,13 @@ input[type="file"] { display: none; }
 <div class="vba-dialog-backdrop" id="vbaDialogBackdrop" role="dialog" aria-modal="true" aria-labelledby="vbaDialogTitle">
     <div class="vba-dialog">
         <h2 id="vbaDialogTitle">Run VBA Macro</h2>
-        <p class="vba-note">Runs locally in WebAssembly. File, network, COM, and native system APIs are not available.</p>
+        <p class="vba-note">Runs locally in WebAssembly. Debug.Print output appears below. File, network, COM, and native system APIs are not available.</p>
         <label for="vbaProcedure">Procedure</label>
         <input id="vbaProcedure" type="text" value="Main" autocomplete="off" spellcheck="false">
         <label for="vbaSource">VBA source</label>
         <textarea id="vbaSource" spellcheck="false">Public Sub Main()
     Range("A1").Value = "Hello from Oxi VBA"
+    Debug.Print "A1 =", Range("A1").Value
 End Sub</textarea>
         <div class="vba-actions">
             <button id="vbaClose">Cancel</button>
@@ -2462,6 +2463,12 @@ function formatVbaResult(result) {
     return `${result.type}: ${String(result.value)}`;
 }
 
+function formatVbaExecution(execution) {
+    const result = formatVbaResult(execution.result);
+    if (!execution.debug_output?.length) return result;
+    return `Debug.Print:\n${execution.debug_output.join('\n')}\n\n${result}`;
+}
+
 function openVbaRunner() {
     if (currentFileType !== 'xlsx' || !currentDocIR) {
         showStatus('Open an .xlsx workbook before running VBA.', 'error');
@@ -2509,7 +2516,7 @@ async function executeVbaFromDialog() {
         recordVbaWorkbookChanges(before, execution.workbook);
         currentDocIR = execution.workbook;
         renderEditableXlsx(currentDocIR);
-        resultElement.textContent = formatVbaResult(execution.result);
+        resultElement.textContent = formatVbaExecution(execution);
         showStatus('VBA macro completed.', 'info');
     } catch (error) {
         if (error?.name === 'AbortError') {

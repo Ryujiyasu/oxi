@@ -76,12 +76,14 @@ enum HostObject {
     Worksheets,
     Workbook,
     Application,
+    DebugConsole,
 }
 
 struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
     objects: Vec<HostObject>,
+    debug_output: Vec<String>,
 }
 
 impl<'a> WorkbookHost<'a> {
@@ -95,6 +97,7 @@ impl<'a> WorkbookHost<'a> {
             workbook,
             active_sheet,
             objects: Vec::new(),
+            debug_output: Vec::new(),
         })
     }
 
@@ -111,6 +114,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Worksheets => "Worksheets",
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
+                HostObject::DebugConsole => "Debug",
             }
             .to_string(),
         })
@@ -156,6 +160,17 @@ impl<'a> WorkbookHost<'a> {
             self.objects.get(object.handle as usize),
             Some(HostObject::Application)
         )
+    }
+
+    fn is_debug_console(&self, object: &ObjectRef) -> bool {
+        matches!(
+            self.objects.get(object.handle as usize),
+            Some(HostObject::DebugConsole)
+        )
+    }
+
+    fn take_debug_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.debug_output)
     }
 
     fn worksheet_object(&mut self, value: &Value) -> Result<Value, String> {
@@ -827,6 +842,15 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         if let Some(receiver) = receiver {
+            if self.is_debug_console(receiver) && name.eq_ignore_ascii_case("print") {
+                self.debug_output.push(
+                    args.iter()
+                        .map(format_debug_value)
+                        .collect::<Vec<_>>()
+                        .join("\t"),
+                );
+                return Ok(Some(Value::Empty));
+            }
             if let Some(sheet) = self.worksheet(receiver) {
                 if name.eq_ignore_ascii_case("evaluate") {
                     return self.evaluate_object(sheet, args).map(Some);
@@ -968,6 +992,12 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("application") {
             return Ok(Some(self.object(HostObject::Application)));
+        }
+        if name.eq_ignore_ascii_case("debug") {
+            if !args.is_empty() {
+                return Err("Debug does not accept arguments".to_string());
+            }
+            return Ok(Some(self.object(HostObject::DebugConsole)));
         }
         if name.eq_ignore_ascii_case("usedrange") {
             if !args.is_empty() {
@@ -1143,6 +1173,22 @@ impl Host for WorkbookHost<'_> {
             cells.push(self.object(HostObject::Range(CellRange::single(address))));
         }
         Ok(Some(cells))
+    }
+}
+
+fn format_debug_value(value: &Value) -> String {
+    match value {
+        Value::Empty => String::new(),
+        Value::Missing => "Missing".to_string(),
+        Value::Nothing => "Nothing".to_string(),
+        Value::Null => "Null".to_string(),
+        Value::Boolean(value) => if *value { "True" } else { "False" }.to_string(),
+        Value::Integer(value) => value.to_string(),
+        Value::Double(value) => value.to_string(),
+        Value::Error(value) => format!("Error {value}"),
+        Value::String(value) => value.clone(),
+        Value::Array(_) => "<Array>".to_string(),
+        Value::Object(value) => format!("<{}>", value.kind),
     }
 }
 
@@ -1524,6 +1570,7 @@ struct OutputArrayDimension {
 struct RunResult {
     workbook: Workbook,
     result: OutputValue,
+    debug_output: Vec<String>,
 }
 
 /// Execute VBA source against an OxiCells workbook IR.
@@ -1553,9 +1600,12 @@ pub fn run_spreadsheet_vba(
         .with_current_time(current_time)
         .call(procedure, args.into_iter().map(Value::from).collect())
         .map_err(|error| JsError::new(&error.to_string()))?;
+    let debug_output = host.take_debug_output();
+    drop(host);
     serde_wasm_bindgen::to_value(&RunResult {
         workbook,
         result: result.into(),
+        debug_output,
     })
     .map_err(|error| JsError::new(&error.to_string()))
 }
@@ -1603,6 +1653,30 @@ mod tests {
         assert!(matches!(
             workbook.sheets[0].rows[1].cells[0].value,
             CellValue::Number(value) if value == 2.5
+        ));
+    }
+
+    #[test]
+    fn vba_collects_debug_print_output() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub TraceValues()\n\
+               Debug.Print \"before\", 42, True\n\
+               Debug.Print\n\
+               Range(\"A1\").Value = 7\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "TraceValues", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(output, vec!["before\t42\tTrue", ""]);
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(7.0)
         ));
     }
 
