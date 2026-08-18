@@ -176,6 +176,7 @@ pub struct Runtime<'a> {
     next_internal_handle: u64,
     random_state: u32,
     random_entropy: u64,
+    current_time: f64,
 }
 
 struct Frame {
@@ -269,6 +270,7 @@ impl<'a> Runtime<'a> {
             next_internal_handle: 1_u64 << 63,
             random_state: 327_680,
             random_entropy: 327_680,
+            current_time: default_current_time(),
         }
     }
 
@@ -286,6 +288,14 @@ impl<'a> Runtime<'a> {
     /// Supplies entropy for `Randomize` calls that omit their numeric seed.
     pub fn with_random_seed(mut self, seed: u64) -> Self {
         self.random_entropy = seed;
+        self
+    }
+
+    /// Supplies the current local date and time as an OLE Automation serial.
+    pub fn with_current_time(mut self, serial: f64) -> Self {
+        if serial.is_finite() {
+            self.current_time = serial;
+        }
         self
     }
 
@@ -1875,7 +1885,10 @@ impl<'a> Runtime<'a> {
                         kind: "Err".to_string(),
                     }));
                 }
-                if name.eq_ignore_ascii_case("rnd") {
+                if ["date", "now", "rnd", "time", "timer"]
+                    .iter()
+                    .any(|builtin| name.eq_ignore_ascii_case(builtin))
+                {
                     return self.call_named(name, Vec::new(), Some(span.line));
                 }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
@@ -2315,6 +2328,12 @@ impl<'a> Runtime<'a> {
         if name.eq_ignore_ascii_case("randomize") {
             return self.call_randomize(&args, line);
         }
+        if ["date", "now", "time", "timer"]
+            .iter()
+            .any(|builtin| name.eq_ignore_ascii_case(builtin))
+        {
+            return self.call_current_time(name, &args, line);
+        }
         if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
         }
@@ -2377,6 +2396,29 @@ impl<'a> Runtime<'a> {
         self.random_state = ((folded & 0xffff) ^ (folded >> 16)) << 8 | (self.random_state & 0xff);
         self.random_state &= 0x00ff_ffff;
         Ok(Value::Empty)
+    }
+
+    fn call_current_time(
+        &self,
+        name: &str,
+        args: &[Value],
+        line: Option<u32>,
+    ) -> Result<Value, RuntimeError> {
+        if !args.is_empty() {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!("{name} expects no arguments, received {}", args.len()),
+                line,
+            ));
+        }
+        let value = match name.to_ascii_lowercase().as_str() {
+            "now" => self.current_time,
+            "date" => self.current_time.floor(),
+            "time" => self.current_time.rem_euclid(1.0),
+            "timer" => self.current_time.rem_euclid(1.0) * 86_400.0,
+            _ => unreachable!(),
+        };
+        Ok(Value::Double(value))
     }
 
     fn eval_object(
@@ -5962,6 +6004,21 @@ fn utf16_split(source: &str, delimiter: &str, limit: usize, text_compare: bool) 
     values
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn default_current_time() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64() / 86_400.0 + 25_569.0)
+        .unwrap_or(0.0)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn default_current_time() -> f64 {
+    0.0
+}
+
 fn key(name: &str) -> String {
     name.to_ascii_lowercase()
 }
@@ -7997,6 +8054,52 @@ mod tests {
                RandomErrors = rndCount & \"|\" & randomizeCount\n\
              End Function\n",
             "RandomErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("450|450".to_string()));
+    }
+
+    #[test]
+    fn executes_current_date_time_and_timer_functions() {
+        let module = parse_module(
+            "Public Function ClockSnapshot() As String\n\
+               ClockSnapshot = Format(Now, \"yyyy-mm-dd hh:nn:ss\") & \"|\" & Format(Date, \"yyyy-mm-dd\") & \"|\" & Format(Time, \"hh:nn:ss\") & \"|\" & Round(Timer, 3) & \"|\"\n\
+               ClockSnapshot = ClockSnapshot & (Now = Now()) & \"|\" & (Date = Date()) & \"|\" & (Time = Time()) & \"|\" & (Timer = Timer())\n\
+             End Function\n",
+        )
+        .unwrap();
+        let clock =
+            date_serial(2024, 2, 29).unwrap() + (16.0 * 3_600.0 + 35.0 * 60.0 + 17.25) / 86_400.0;
+        let value = Runtime::new(&module)
+            .with_current_time(clock)
+            .call("ClockSnapshot", vec![])
+            .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "2024-02-29 16:35:17|2024-02-29|16:35:17|59717.25|True|True|True|True".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn current_time_functions_reject_arguments() {
+        let value = run(
+            "Public Function ClockErrors() As String\n\
+               Dim nowError As Long\n\
+               Dim timerError As Long\n\
+               On Error Resume Next\n\
+               nowError = Now(1)\n\
+               nowError = Err.Number\n\
+               Err.Clear\n\
+               timerError = Timer(1)\n\
+               timerError = Err.Number\n\
+               ClockErrors = nowError & \"|\" & timerError\n\
+             End Function\n",
+            "ClockErrors",
             vec![],
         )
         .unwrap();

@@ -1500,9 +1500,13 @@ pub fn run_spreadsheet_vba(
         WorkbookHost::new(&mut workbook, active_sheet).map_err(|error| JsError::new(&error))?;
     let random_seed =
         js_sys::Date::now().to_bits() ^ js_sys::Math::random().to_bits().rotate_left(17);
+    let browser_now = js_sys::Date::new_0();
+    let local_millis = browser_now.get_time() - browser_now.get_timezone_offset() * 60_000.0;
+    let current_time = local_millis / 86_400_000.0 + 25_569.0;
     let result = Runtime::new(&module)
         .with_host(&mut host)
         .with_random_seed(random_seed)
+        .with_current_time(current_time)
         .call(procedure, args.into_iter().map(Value::from).collect())
         .map_err(|error| JsError::new(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&RunResult {
