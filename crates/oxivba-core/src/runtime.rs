@@ -3417,6 +3417,7 @@ fn call_builtin(
             | "exp"
             | "filter"
             | "fix"
+            | "fv"
             | "format"
             | "formatcurrency"
             | "formatdatetime"
@@ -3428,6 +3429,7 @@ fn call_builtin(
             | "instr"
             | "instrrev"
             | "int"
+            | "ipmt"
             | "isarray"
             | "isdate"
             | "isempty"
@@ -3446,7 +3448,12 @@ fn call_builtin(
             | "minute"
             | "month"
             | "monthname"
+            | "nper"
             | "oct"
+            | "pmt"
+            | "ppmt"
+            | "pv"
+            | "rate"
             | "replace"
             | "rgb"
             | "right"
@@ -3492,6 +3499,12 @@ fn call_builtin(
             "monthname" | "str" | "strconv" | "weekdayname"
         ) {
             return call_text_conversion_builtin(&name, args, line);
+        }
+        if matches!(
+            name.as_str(),
+            "fv" | "ipmt" | "nper" | "pmt" | "ppmt" | "pv" | "rate"
+        ) {
+            return call_financial_builtin(&name, args, line);
         }
         if matches!(
             name.as_str(),
@@ -4180,6 +4193,262 @@ fn call_format_builtin(
         }
         _ => unreachable!(),
     }
+}
+
+fn call_financial_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+) -> Result<Value, RuntimeError> {
+    let expected = match name {
+        "rate" => 3..=6,
+        "ipmt" | "ppmt" => 4..=6,
+        _ => 3..=5,
+    };
+    if !expected.contains(&args.len()) {
+        return Err(error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("invalid argument count for {name}: {}", args.len()),
+            line,
+        ));
+    }
+    let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    let numeric = |index: usize, default: f64| -> Result<f64, RuntimeError> {
+        match args.get(index) {
+            None | Some(Value::Missing) => Ok(default),
+            Some(value) => number(value).map_err(mismatch),
+        }
+    };
+    let payment_type = |index: usize| -> Result<f64, RuntimeError> {
+        let value = numeric(index, 0.0)?;
+        if value == 0.0 || value == 1.0 {
+            Ok(value)
+        } else {
+            Err(invalid_procedure_call(
+                format!("invalid payment type: {value}"),
+                line,
+            ))
+        }
+    };
+    let result = match name {
+        "fv" => financial_fv(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
+            payment_type(4)?,
+        ),
+        "pv" => financial_pv(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
+            payment_type(4)?,
+        ),
+        "pmt" => financial_pmt(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
+            payment_type(4)?,
+        ),
+        "nper" => financial_nper(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
+            payment_type(4)?,
+        ),
+        "ipmt" | "ppmt" => {
+            let rate = numeric(0, 0.0)?;
+            let period = numeric(1, 0.0)?;
+            let periods = numeric(2, 0.0)?;
+            if period < 1.0 || period > periods {
+                Err("payment period is outside the annuity".to_string())
+            } else {
+                let present = numeric(3, 0.0)?;
+                let future = numeric(4, 0.0)?;
+                let kind = payment_type(5)?;
+                (|| {
+                    let payment = financial_pmt(rate, periods, present, future, kind)?;
+                    let interest = if kind == 1.0 && period == 1.0 {
+                        0.0
+                    } else {
+                        let balance = financial_fv(rate, period - 1.0, payment, present, kind)?;
+                        let interest = balance * rate;
+                        if kind == 1.0 {
+                            interest / (1.0 + rate)
+                        } else {
+                            interest
+                        }
+                    };
+                    if name == "ipmt" {
+                        Ok(interest)
+                    } else {
+                        Ok(payment - interest)
+                    }
+                })()
+            }
+        }
+        "rate" => financial_rate(
+            numeric(0, 0.0)?,
+            numeric(1, 0.0)?,
+            numeric(2, 0.0)?,
+            numeric(3, 0.0)?,
+            payment_type(4)?,
+            numeric(5, 0.1)?,
+        ),
+        _ => unreachable!(),
+    }
+    .map_err(|message| invalid_procedure_call(message, line))?;
+    if result.is_finite() {
+        Ok(Value::Double(if result == 0.0 { 0.0 } else { result }))
+    } else {
+        Err(error(
+            RuntimeErrorKind::Overflow,
+            format!("{name} result overflow"),
+            line,
+        ))
+    }
+}
+
+fn annuity_factor(rate: f64, periods: f64) -> Result<f64, String> {
+    if rate <= -1.0 {
+        return Err("interest rate must be greater than -1".to_string());
+    }
+    let factor = (1.0 + rate).powf(periods);
+    if factor.is_finite() {
+        Ok(factor)
+    } else {
+        Err("annuity factor overflow".to_string())
+    }
+}
+
+fn financial_fv(
+    rate: f64,
+    periods: f64,
+    payment: f64,
+    present: f64,
+    kind: f64,
+) -> Result<f64, String> {
+    if rate == 0.0 {
+        return Ok(-(present + payment * periods));
+    }
+    let factor = annuity_factor(rate, periods)?;
+    Ok(-(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate))
+}
+
+fn financial_pv(
+    rate: f64,
+    periods: f64,
+    payment: f64,
+    future: f64,
+    kind: f64,
+) -> Result<f64, String> {
+    if rate == 0.0 {
+        return Ok(-(future + payment * periods));
+    }
+    let factor = annuity_factor(rate, periods)?;
+    Ok(-(future + payment * (1.0 + rate * kind) * (factor - 1.0) / rate) / factor)
+}
+
+fn financial_pmt(
+    rate: f64,
+    periods: f64,
+    present: f64,
+    future: f64,
+    kind: f64,
+) -> Result<f64, String> {
+    if periods == 0.0 {
+        return Err("payment periods cannot be zero".to_string());
+    }
+    if rate == 0.0 {
+        return Ok(-(future + present) / periods);
+    }
+    let factor = annuity_factor(rate, periods)?;
+    let denominator = (1.0 + rate * kind) * (factor - 1.0);
+    if denominator == 0.0 {
+        return Err("payment denominator is zero".to_string());
+    }
+    Ok(-(future + present * factor) * rate / denominator)
+}
+
+fn financial_nper(
+    rate: f64,
+    payment: f64,
+    present: f64,
+    future: f64,
+    kind: f64,
+) -> Result<f64, String> {
+    if rate == 0.0 {
+        if payment == 0.0 {
+            return Err("payment cannot be zero".to_string());
+        }
+        return Ok(-(present + future) / payment);
+    }
+    if rate <= -1.0 {
+        return Err("interest rate must be greater than -1".to_string());
+    }
+    let adjusted = payment * (1.0 + rate * kind);
+    let denominator = present * rate + adjusted;
+    let ratio = (adjusted - future * rate) / denominator;
+    if denominator == 0.0 || ratio <= 0.0 {
+        return Err("annuity has no real payment-period solution".to_string());
+    }
+    Ok(ratio.ln() / (1.0 + rate).ln())
+}
+
+fn financial_equation(
+    rate: f64,
+    periods: f64,
+    payment: f64,
+    present: f64,
+    future: f64,
+    kind: f64,
+) -> Result<f64, String> {
+    if rate.abs() < 1e-12 {
+        return Ok(present + payment * periods + future);
+    }
+    let factor = annuity_factor(rate, periods)?;
+    Ok(present * factor + payment * (1.0 + rate * kind) * (factor - 1.0) / rate + future)
+}
+
+fn financial_rate(
+    periods: f64,
+    payment: f64,
+    present: f64,
+    future: f64,
+    kind: f64,
+    guess: f64,
+) -> Result<f64, String> {
+    if periods <= 0.0 || !guess.is_finite() || guess <= -1.0 {
+        return Err("invalid Rate arguments".to_string());
+    }
+    let mut rate = guess;
+    for _ in 0..20 {
+        let value = financial_equation(rate, periods, payment, present, future, kind)?;
+        let step = (rate.abs() * 1e-6).max(1e-7);
+        let lower = (rate - step).max(-0.999_999_999);
+        let upper = rate + step;
+        let derivative = (financial_equation(upper, periods, payment, present, future, kind)?
+            - financial_equation(lower, periods, payment, present, future, kind)?)
+            / (upper - lower);
+        if derivative == 0.0 || !derivative.is_finite() {
+            break;
+        }
+        let mut next = rate - value / derivative;
+        if next <= -1.0 {
+            next = (rate - 1.0) / 2.0;
+        }
+        if !next.is_finite() {
+            break;
+        }
+        if (next - rate).abs() <= 1e-7 {
+            return Ok(next);
+        }
+        rate = next;
+    }
+    Err("Rate failed to converge after 20 iterations".to_string())
 }
 
 fn call_text_conversion_builtin(
@@ -5797,6 +6066,8 @@ fn builtin_constant(name: &str) -> Option<Value> {
         "vbhiragana" => Value::Integer(32),
         "vbunicode" => Value::Integer(64),
         "vbfromunicode" => Value::Integer(128),
+        "vbendofperiod" => Value::Integer(0),
+        "vbbeginningofperiod" => Value::Integer(1),
         "vbgeneraldate" => Value::Integer(0),
         "vblongdate" => Value::Integer(1),
         "vbshortdate" => Value::Integer(2),
@@ -7963,6 +8234,75 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5|13".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_annuity_financial_functions() {
+        let value = run(
+            "Public Function FinancialBuiltins() As String\n\
+               Dim payment As Double\n\
+               payment = Pmt(0.1 / 12, 48, 10000, 0, vbEndOfPeriod)\n\
+               FinancialBuiltins = Round(payment, 2) & \"|\" & Round(PV(0.1 / 12, 48, payment), 2) & \"|\" & Round(FV(0.1 / 12, 48, payment, 10000), 2) & \"|\"\n\
+               FinancialBuiltins = FinancialBuiltins & Round(NPer(0.1 / 12, payment, 10000), 6) & \"|\" & Round(Rate(48, payment, 10000) * 12, 8) & \"|\"\n\
+               FinancialBuiltins = FinancialBuiltins & Round(IPmt(0.1 / 12, 1, 48, 10000), 2) & \"|\" & Round(PPmt(0.1 / 12, 1, 48, 10000), 2)\n\
+             End Function\n",
+            "FinancialBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("-253.63|10000|0|48|0.1|-83.33|-170.29".to_string())
+        );
+    }
+
+    #[test]
+    fn financial_functions_handle_zero_rate_and_beginning_payments() {
+        let value = run(
+            "Public Function FinancialEdges() As String\n\
+               FinancialEdges = Pmt(0, 10, 1000) & \"|\" & PV(0, 10, -100) & \"|\" & FV(0, 10, -100, 1000) & \"|\" & NPer(0, -100, 1000) & \"|\"\n\
+               FinancialEdges = FinancialEdges & IPmt(0.01, 1, 12, 1000, 0, vbBeginningOfPeriod) & \"|\" & Round(Pmt(0.01, 12, 1000, 0, vbBeginningOfPeriod), 6)\n\
+             End Function\n",
+            "FinancialEdges",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("-100|1000|0|10|0|-87.969098".to_string())
+        );
+    }
+
+    #[test]
+    fn financial_functions_report_invalid_domains() {
+        let value = run(
+            "Public Function FinancialErrors() As String\n\
+               Dim paymentType As Long\n\
+               Dim zeroPeriods As Long\n\
+               Dim badPeriod As Long\n\
+               Dim noRate As Long\n\
+               On Error Resume Next\n\
+               paymentType = PV(0.1, 10, -100, 0, 2)\n\
+               paymentType = Err.Number\n\
+               Err.Clear\n\
+               zeroPeriods = Pmt(0.1, 0, 1000)\n\
+               zeroPeriods = Err.Number\n\
+               Err.Clear\n\
+               badPeriod = IPmt(0.1, 0, 10, 1000)\n\
+               badPeriod = Err.Number\n\
+               Err.Clear\n\
+               noRate = Rate(10, 0, 1000, 1000)\n\
+               noRate = Err.Number\n\
+               FinancialErrors = paymentType & \"|\" & zeroPeriods & \"|\" & badPeriod & \"|\" & noRate\n\
+             End Function\n",
+            "FinancialErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5|5|5".to_string()));
     }
 
     #[test]
