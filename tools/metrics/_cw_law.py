@@ -47,9 +47,9 @@ WINDOWS = [(1000.0, 1250.0, 1.0), (2250.0, 2500.0, 1.0)]   # twips: 50..62.5pt, 
 
 # name -> (marL, marR, border sz eighths-of-a-point, tblLayout, jc, docGrid)
 def arm(marl=108, marr=108, bd=4, layout="fixed", jc="left", grid="lines",
-        compat="15"):
+        compat="15", cpunct=""):
     return dict(marl=marl, marr=marr, bd=bd, layout=layout, jc=jc, grid=grid,
-                compat=compat)
+                compat=compat, cpunct=cpunct)
 
 
 ARMS = {
@@ -96,7 +96,7 @@ def widths():
     return ws
 
 
-def build(out, marl, marr, bd, layout, jc, grid, compat):
+def build(out, marl, marr, bd, layout, jc, grid, compat, cpunct=""):
     font = "ＭＳ 明朝"      # ＭＳ 明朝
     rpr = (f'<w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
            f'<w:sz w:val="{SZ}"/>')
@@ -142,8 +142,13 @@ def build(out, marl, marr, bd, layout, jc, grid, compat):
               f'<w:sz w:val="{SZ}"/></w:rPr></w:rPrDefault></w:docDefaults>'
               '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>'
               '<w:pPr><w:widowControl w:val="0"/></w:pPr></w:style></w:styles>')
+    # absent = doNotCompress, the ECMA default -- and the reason the first
+    # 約物 sweep saw no compression at all while the corpus documents, which all
+    # carry compressPunctuation, plainly do.
+    csc = (f'<w:characterSpacingControl w:val="{cpunct}"/>' if cpunct else "")
     settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                + csc +
                 '<w:compat><w:compatSetting w:name="compatibilityMode" '
                 f'w:uri="http://schemas.microsoft.com/office/word" w:val="{compat}"/>'
                 '</w:compat></w:settings>')
