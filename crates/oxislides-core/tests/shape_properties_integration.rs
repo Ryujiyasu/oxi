@@ -278,3 +278,34 @@ fn end_para_size_does_not_leak_between_paragraphs() {
     assert_eq!(paras[0].end_para_size, None, "AAA declares no paragraph mark size");
     assert_eq!(paras[3].end_para_size, None, "and the mark size is reset per paragraph");
 }
+
+// --- a:gradFill stop alpha ------------------------------------------------
+// `<a:alpha val="20000"/>` has nothing but its attribute, so it ALWAYS arrives
+// as Event::Empty. A stop-alpha handler written only into the Start arm reads
+// nothing and every translucent ramp paints opaque: d15's illustrations are
+// white at 20% fading to 0 over a purple slide, and painting them solid put a
+// white slab across the artwork.
+
+const GRADALPHA_PPTX: &[u8] = include_bytes!("../../../tests/fixtures/gradalpha_test.pptx");
+
+#[test]
+fn gradient_stop_alpha_is_read_from_the_self_closing_element() {
+    let p = parse_pptx(GRADALPHA_PPTX).expect("gradalpha_test.pptx must parse");
+    let g = p.slides[0]
+        .shapes
+        .iter()
+        .find_map(|s| s.gradient.as_ref())
+        .expect("the shape carries an a:gradFill");
+    assert_eq!(g.stops.len(), 3, "three stops");
+    assert!(
+        (g.stops[0].alpha - 0.2).abs() < 1e-6,
+        "first stop is 20% opaque, got {}",
+        g.stops[0].alpha
+    );
+    assert!(
+        g.stops[1].alpha.abs() < 1e-6 && g.stops[2].alpha.abs() < 1e-6,
+        "the ramp fades to fully transparent, got {} / {}",
+        g.stops[1].alpha,
+        g.stops[2].alpha
+    );
+}

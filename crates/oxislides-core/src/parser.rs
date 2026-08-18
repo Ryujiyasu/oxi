@@ -1657,8 +1657,17 @@ fn parse_slide(
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     // <a:alpha> only ever arrives self-closing (the schema gives
-                    // it nothing but @val). Its parent colour has already been
-                    // routed to shape_fill_color under the same guard.
+                    // it nothing but @val), which is why a gradient STOP's alpha
+                    // has to be read here too. d15's illustrations are white at
+                    // 20%/30% fading to 0 over a purple slide; read as opaque
+                    // they paint a white slab.
+                    "alpha" if sg_in_gs => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(a) = v.parse::<f32>() {
+                                sg_alpha = (a / 100000.0).clamp(0.0, 1.0);
+                            }
+                        }
+                    }
                     "alpha" if in_solid_fill && in_sp_pr && !in_ln => {
                         if let Some(v) = get_attr(&e, "val") {
                             if let Ok(p) = v.parse::<f32>() {
@@ -2918,6 +2927,9 @@ fn parse_inherited_shapes(
     // S-SHAPEGRAD), so inherited shapes carrying them are no longer refused.
     let s_inherit_geom = std::env::var("OXI_LMGEOM_DISABLE").is_err();
     let s_gradshape = std::env::var("OXI_GRADALPHA_DISABLE").is_err();
+    // A shape whose only unsupported feature is an effect is still emitted --
+    // without the effect. Setting this restores the old outright rejection.
+    let s_effectshape = std::env::var("OXI_EFFECTSHAPE_DISABLE").is_err();
     let mut ig_paths: Vec<GeomPath> = Vec::new();
     let mut ig_bad = false;
     let mut ig_cur: Option<GeomPath> = None;
@@ -3448,8 +3460,16 @@ fn parse_inherited_shapes(
                 ));
             }
             // A shadow/glow changes what the shape looks like well beyond its
-            // box, so a shape carrying one is not emitted either.
-            "outerShdw" | "innerShdw" | "softEdge" | "reflection" | "glow" => ok = false,
+            // box, so the shape used not to be emitted at all. That trades a
+            // missing soft edge for a missing shape, which is the larger error
+            // when the shape is big: d24's layout draws three full-height
+            // gradient bands, each carrying an `a:outerShdw`, and Oxi drew bare
+            // background where PowerPoint draws half the slide.
+            "outerShdw" | "innerShdw" | "softEdge" | "reflection" | "glow"
+                if !s_effectshape =>
+            {
+                ok = false
+            }
             _ => {}
         }
         buf.clear();

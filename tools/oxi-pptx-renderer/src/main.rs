@@ -671,6 +671,20 @@ unsafe fn draw_custom_geometry_gdi(
         Some(g) => g,
         None => return false,
     };
+    // A custGeom shape whose fill is a GRADIENT has no solid brush to paint
+    // with: this would trace the path with no brush, paint nothing, and then
+    // report success -- which stops `paint_shape_gradient`, the one painter
+    // that clips a ramp to this very geometry, from ever running. d24's three
+    // full-height layout bands are exactly that shape, and the deck rendered
+    // bare background where PowerPoint draws half the slide. Handing over
+    // costs the outline, so keep the path when there is one to draw.
+    if geomgrad_on()
+        && sh.fill_color.is_none()
+        && sh.gradient.is_some()
+        && sh.border_width.unwrap_or(0.0) <= 0.0
+    {
+        return false;
+    }
     if sh.fill_color.is_some()
         && sh
             .fill_alpha
@@ -1446,6 +1460,12 @@ fn blipclip_on() -> bool {
 /// runs' real font size unless this is set, which restores the legacy grid.
 fn tblcell_on() -> bool {
     std::env::var("OXI_TBLCELL_DISABLE").is_err()
+}
+
+/// A custGeom shape filled with a gradient is left to the gradient painter
+/// unless this is set, which restores the geometry path claiming it.
+fn geomgrad_on() -> bool {
+    std::env::var("OXI_GEOMGRAD_DISABLE").is_err()
 }
 
 /// An empty paragraph is sized by its paragraph mark unless this is set,
