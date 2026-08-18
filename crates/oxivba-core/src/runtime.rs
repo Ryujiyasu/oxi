@@ -857,6 +857,7 @@ impl<'a> Runtime<'a> {
                     OnError::Disable { .. } => ErrorMode::Disabled,
                     OnError::ResumeNext { .. } => ErrorMode::ResumeNext,
                 };
+                frame.error_state = ErrorState::default();
                 if matches!(mode, OnError::Disable { .. }) {
                     frame.error_handler_active = false;
                     frame.error_statement = None;
@@ -878,6 +879,13 @@ impl<'a> Runtime<'a> {
             Statement::GoTo { label, .. } => Ok(Flow::Jump(label.clone())),
             Statement::GoSub { label, .. } => Ok(Flow::GoSub(label.clone())),
             Statement::Return { .. } => Ok(Flow::Return),
+            Statement::Call { target, span, .. }
+                if matches!(target, Expr::Index { target, .. }
+                    if expr_name(target).is_some_and(|name| name.eq_ignore_ascii_case("error"))) =>
+            {
+                self.exec_error_statement(target, frame, span.line)?;
+                Ok(Flow::Continue)
+            }
             Statement::Call { target, .. } => {
                 self.eval_call(target, frame)?;
                 Ok(Flow::Continue)
@@ -1882,10 +1890,10 @@ impl<'a> Runtime<'a> {
                     return Ok(value);
                 }
                 if name.eq_ignore_ascii_case("err") {
-                    return Ok(Value::Object(ObjectRef {
-                        handle: u64::MAX,
-                        kind: "Err".to_string(),
-                    }));
+                    return Ok(Value::Integer(frame.error_state.number));
+                }
+                if name.eq_ignore_ascii_case("erl") {
+                    return Ok(Value::Integer(frame.error_state.line.unwrap_or(0) as i64));
                 }
                 if ["date", "now", "rnd", "time", "timer"]
                     .iter()
@@ -2340,6 +2348,20 @@ impl<'a> Runtime<'a> {
         if name.eq_ignore_ascii_case("error") {
             return call_error_builtin(&args, frame, line);
         }
+        if name.eq_ignore_ascii_case("err") || name.eq_ignore_ascii_case("erl") {
+            if !args.is_empty() {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("{name} expects no arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            return Ok(Value::Integer(if name.eq_ignore_ascii_case("err") {
+                frame.error_state.number
+            } else {
+                frame.error_state.line.unwrap_or(0) as i64
+            }));
+        }
         if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
         }
@@ -2347,6 +2369,50 @@ impl<'a> Runtime<'a> {
             return Ok(value);
         }
         self.call_procedure(name, args, line)
+    }
+
+    fn exec_error_statement(
+        &mut self,
+        target: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<(), RuntimeError> {
+        let Expr::Index { args, .. } = target else {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                "Error statement expects 1 argument",
+                Some(line),
+            ));
+        };
+        if args.len() != 1 || args[0].value.is_none() {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "Error statement expects 1 argument, received {}",
+                    args.len()
+                ),
+                Some(line),
+            ));
+        }
+        let value = self.eval_expr(args[0].value.as_ref().unwrap(), frame)?;
+        let number = integer_argument(&value, Some(line))?;
+        if !(1..=65_535).contains(&number) {
+            return Err(invalid_procedure_call(
+                format!("invalid Error statement number: {number}"),
+                Some(line),
+            ));
+        }
+        let description = vba_error_description(number);
+        Err(raised_error(
+            number,
+            frame.source_name.clone(),
+            if description == "Application-defined or object-defined error" {
+                String::new()
+            } else {
+                description.to_string()
+            },
+            line,
+        ))
     }
 
     fn call_rnd(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -2433,6 +2499,12 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<ObjectRef, RuntimeError> {
+        if expr_name(expr).is_some_and(|name| name.eq_ignore_ascii_case("err")) {
+            return Ok(ObjectRef {
+                handle: u64::MAX,
+                kind: "Err".to_string(),
+            });
+        }
         let value = match expr {
             Expr::EvaluateShortcut { text, .. } => self.evaluate_shortcut(text, line, true),
             _ => self.eval_expr(expr, frame),
@@ -3250,7 +3322,7 @@ fn err_call(
             .filter(|value| !matches!(value, Value::Missing | Value::Empty))
             .map(|value| text(value).map_err(mismatch))
             .transpose()?
-            .unwrap_or_else(|| format!("VBA error {number}"));
+            .unwrap_or_else(|| vba_error_description(number).to_string());
         return Err(raised_error(number, source, description, line));
     }
     Err(error(
@@ -8868,6 +8940,61 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5".to_string()));
+    }
+
+    #[test]
+    fn executes_legacy_error_statement_and_err_default_property() {
+        let value = run(
+            "Public Function LegacyError() As String\n\
+               On Error Resume Next\n\
+               Error 11\n\
+               LegacyError = Err & \"|\" & Err.Number & \"|\" & Error() & \"|\" & (Erl = Err.Erl)\n\
+             End Function\n",
+            "LegacyError",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("11|11|Division by zero|True".to_string())
+        );
+    }
+
+    #[test]
+    fn on_error_statements_clear_the_err_object() {
+        let value = run(
+            "Public Function ErrorReset() As String\n\
+               Dim ignored As Double\n\
+               Dim before As Long\n\
+               On Error Resume Next\n\
+               ignored = 1 / 0\n\
+               before = Err\n\
+               On Error Resume Next\n\
+               ErrorReset = before & \"|\" & Err & \"|[\" & Err.Description & \"]\"\n\
+             End Function\n",
+            "ErrorReset",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("11|0|[]".to_string()));
+    }
+
+    #[test]
+    fn err_raise_uses_the_standard_description_when_omitted() {
+        let value = run(
+            "Public Function DefaultRaiseDescription() As String\n\
+               On Error Resume Next\n\
+               Err.Raise 6\n\
+               DefaultRaiseDescription = Err.Number & \"|\" & Err.Description\n\
+             End Function\n",
+            "DefaultRaiseDescription",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("6|Overflow".to_string()));
     }
 
     #[test]
