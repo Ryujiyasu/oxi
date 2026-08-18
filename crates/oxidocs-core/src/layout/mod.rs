@@ -57,6 +57,39 @@ fn s958_center_slack(center_tab_stop_tw: Option<i32>, current_width_tw: i32) -> 
     }
 }
 
+/// S-LATCJK (2026-08-19, ★default ON, opt-out `OXI_LATCJK_DISABLE`): does
+/// LATINEM's true-em break reach this document?
+///
+/// LATINEM gives a NO-KERN Latin character the un-rounded em advance, and was
+/// written with `!doc_body_has_real_cjk` beside it. That was a SCOPE -- the
+/// safety restriction that kept the Japanese corpus byte-identical while the
+/// rule was proven on English documents -- not part of the rule. Word does not
+/// consult the rest of the document to decide how wide a Latin glyph is.
+///
+/// MEASURED (2026-08-19): Word draws a Latin glyph at its exact design em in
+/// Japanese documents too -- c7b923e5, d77a58, tokyoshugyo, 34140b, 04b88e and
+/// e3c545, six faces, design-vs-Word within 0.005em -- while the com_tw table a
+/// no-kern run falls back to is off by up to 0.38pt per glyph, with the sign
+/// changing character by character so it accumulates rather than cancels. A
+/// faithful-slice repro isolates it to this one property: holding everything
+/// else and flipping only `w:kern`, a kern-active run matches Word inside the
+/// renderer's 0.12pt device quantisation, and the same run with kerning off is
+/// as much as 3.36pt short over 61pt. Word's own width is unchanged by the flip.
+///
+/// Kern-active runs already take the true em through KERNBREAK (S1017), so the
+/// hole is exactly a no-kern Latin run inside a CJK document, which neither
+/// rule reaches.
+///
+/// GATES: the repro's 35 runs go from 12 wider than the renderer's 0.12pt
+/// device step to 0. Phase 1 pagination 95/96 mean 0.9995 with ZERO per-doc
+/// changes. Corpus SSIM A/B (`ssim_ab.py OXI_LATCJK_DISABLE`) net +0.0109,
+/// 7 improved / 0 regressed -- the no-kern Japanese families (gen2_*, gen_jp_*)
+/// are the population, which is what the census predicted. `cargo test
+/// -p oxidocs-core` clean.
+fn latinem_in_scope(doc_body_has_real_cjk: bool) -> bool {
+    !doc_body_has_real_cjk || std::env::var("OXI_LATCJK_DISABLE").is_err()
+}
+
 fn is_break_after(ch: char) -> bool {
     matches!(
         ch,
@@ -21987,7 +22020,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // fixes nyserda pagination (57→56=Word, Exhibit boundaries aligned).
                 if !kern_active
                     && std::env::var("OXI_LATINEM_DISABLE").is_err()
-                    && !self.doc_body_has_real_cjk
+                    && latinem_in_scope(self.doc_body_has_real_cjk)
                     && !kinsoku::is_cjk(ch)
                     && char_metrics.char_widths.contains_key(&ch)
                 {
@@ -31259,7 +31292,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             });
                                                 if !kern_active
                                                     && std::env::var("OXI_LATINEM_DISABLE").is_err()
-                                                    && !self.doc_body_has_real_cjk
+                                                    && latinem_in_scope(self.doc_body_has_real_cjk)
                                                     && !kinsoku::is_cjk(ch)
                                                     && cm.char_widths.contains_key(&ch)
                                                 {
@@ -36946,7 +36979,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .map_or(false, |k| k > 0.0 && font_size >= k);
                     if !kern_active
                         && std::env::var("OXI_LATINEM_DISABLE").is_err()
-                        && !self.doc_body_has_real_cjk
+                        && latinem_in_scope(self.doc_body_has_real_cjk)
                         && !kinsoku::is_cjk(ch)
                         && cm.char_widths.contains_key(&ch)
                     {
