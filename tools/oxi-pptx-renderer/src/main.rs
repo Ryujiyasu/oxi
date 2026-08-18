@@ -1457,6 +1457,12 @@ fn custgeom_on() -> bool {
     std::env::var("OXI_CUSTGEOM_DISABLE").is_err()
 }
 
+/// A translucent solid fill is clipped to the shape's outline unless this is
+/// set, which restores the bounding-box fill.
+fn geomalpha_on() -> bool {
+    std::env::var("OXI_GEOMALPHA_DISABLE").is_err()
+}
+
 /// A shape's `a:blipFill` is clipped to its outline unless this is set.
 fn blipclip_on() -> bool {
     std::env::var("OXI_BLIPCLIP_DISABLE").is_err()
@@ -1977,7 +1983,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             match sh.fill_alpha.filter(|_| fill_alpha_on()) {
                                 Some(a) if a < 1.0 => {
                                     if a > 0.0 {
+                                        // A translucent fill cannot be painted
+                                        // with a GDI brush, so
+                                        // `draw_custom_geometry_gdi` declines
+                                        // the shape and this box is what gets
+                                        // painted. Clip it to the outline, or
+                                        // d04 slide 13's world map -- one
+                                        // custGeom of 154 subpaths at 50%
+                                        // alpha -- arrives as a single pink
+                                        // slab over the continents.
+                                        let clipped = geomalpha_on()
+                                            && clip_to_geometry_gdi(mem_dc, sh, scale);
                                         alpha_fill(mem_dc, &r2, (r, g, b), a);
+                                        if clipped {
+                                            let _ = SelectClipRgn(mem_dc, None);
+                                        }
                                     }
                                 }
                                 _ => {
@@ -2005,8 +2025,31 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         COLORREF(colorref(col.0, col.1, col.2)),
                     );
                     let old_pen = SelectObject(mem_dc, pen);
-                    let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
-                    let _ = Rectangle(mem_dc, x, y, x + ew, y + eh);
+                    let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
+                    // A shape that HAS an outline should be stroked along it,
+                    // not around its box. This only arises when the geometry
+                    // path declined the shape (a translucent fill), and d04
+                    // slide 13 is the case: PowerPoint traces every coastline
+                    // in 0.75pt white, Oxi drew one rectangle around the map.
+                    let stroked = if geomalpha_on() {
+                        match drawable_geometry(sh) {
+                            Some(geom) => {
+                                let _ = BeginPath(mem_dc);
+                                for path in &geom.paths {
+                                    emit_geom_path_gdi(mem_dc, sh, path, scale);
+                                }
+                                let _ = EndPath(mem_dc);
+                                StrokePath(mem_dc).as_bool()
+                            }
+                            None => false,
+                        }
+                    } else {
+                        false
+                    };
+                    if !stroked {
+                        let _ = Rectangle(mem_dc, x, y, x + ew, y + eh);
+                    }
+                    SelectObject(mem_dc, old_brush);
                     SelectObject(mem_dc, old_pen);
                     let _ = DeleteObject(pen);
                 }
