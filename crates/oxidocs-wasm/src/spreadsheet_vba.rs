@@ -1356,7 +1356,8 @@ fn format_range_address(range: CellRange, row_absolute: bool, column_absolute: b
 fn from_cell_value(value: &CellValue) -> Value {
     match value {
         CellValue::Empty => Value::Empty,
-        CellValue::String(value) | CellValue::Error(value) => Value::String(value.clone()),
+        CellValue::String(value) => Value::String(value.clone()),
+        CellValue::Error(value) => Value::Error(spreadsheet_error_number(value)),
         CellValue::Number(value)
             if value.fract() == 0.0 && *value >= i64::MIN as f64 && *value <= i64::MAX as f64 =>
         {
@@ -1375,6 +1376,7 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         Value::Boolean(value) => Ok(CellValue::Boolean(value)),
         Value::Integer(value) => Ok(CellValue::Number(value as f64)),
         Value::Double(value) => Ok(CellValue::Number(value)),
+        Value::Error(value) => Ok(CellValue::Error(spreadsheet_error_text(value).to_string())),
         Value::String(value) => Ok(CellValue::String(value)),
         Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
@@ -1425,6 +1427,7 @@ enum OutputValue {
     Boolean(bool),
     Integer(i64),
     Double(f64),
+    Error(i64),
     String(String),
     Array {
         lower_bound: i64,
@@ -1448,6 +1451,7 @@ impl From<Value> for OutputValue {
             Value::Boolean(value) => Self::Boolean(value),
             Value::Integer(value) => Self::Integer(value),
             Value::Double(value) => Self::Double(value),
+            Value::Error(value) => Self::Error(value),
             Value::String(value) => Self::String(value),
             Value::Array(value) => Self::Array {
                 lower_bound: value.lower_bound(1).unwrap_or(0),
@@ -1467,6 +1471,46 @@ impl From<Value> for OutputValue {
                 kind: value.kind,
             },
         }
+    }
+}
+
+fn spreadsheet_error_number(value: &str) -> i64 {
+    match value.to_ascii_uppercase().as_str() {
+        "#NULL!" => 2000,
+        "#DIV/0!" => 2007,
+        "#VALUE!" => 2015,
+        "#REF!" => 2023,
+        "#NAME?" => 2029,
+        "#NUM!" => 2036,
+        "#N/A" => 2042,
+        "#GETTING_DATA" => 2043,
+        "#SPILL!" => 2045,
+        "#CONNECT!" => 2046,
+        "#BLOCKED!" => 2047,
+        "#UNKNOWN!" => 2048,
+        "#FIELD!" => 2049,
+        "#CALC!" => 2050,
+        _ => 2015,
+    }
+}
+
+fn spreadsheet_error_text(value: i64) -> &'static str {
+    match value {
+        2000 => "#NULL!",
+        2007 => "#DIV/0!",
+        2015 => "#VALUE!",
+        2023 => "#REF!",
+        2029 => "#NAME?",
+        2036 => "#NUM!",
+        2042 => "#N/A",
+        2043 => "#GETTING_DATA",
+        2045 => "#SPILL!",
+        2046 => "#CONNECT!",
+        2047 => "#BLOCKED!",
+        2048 => "#UNKNOWN!",
+        2049 => "#FIELD!",
+        2050 => "#CALC!",
+        _ => "#VALUE!",
     }
 }
 
@@ -1573,6 +1617,18 @@ mod tests {
         assert!(parse_range_reference("A1:B2:C3").is_err());
         assert!(positive_index(&Value::Integer(0), "row").is_err());
         assert!(positive_index(&Value::Double(1.5), "row").is_err());
+    }
+
+    #[test]
+    fn preserves_spreadsheet_error_values_as_vba_error_variants() {
+        assert_eq!(
+            from_cell_value(&CellValue::Error("#N/A".to_string())),
+            Value::Error(2042)
+        );
+        assert!(matches!(
+            to_cell_value(Value::Error(2007)).unwrap(),
+            CellValue::Error(value) if value == "#DIV/0!"
+        ));
     }
 
     #[test]

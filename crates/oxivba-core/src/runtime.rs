@@ -35,6 +35,8 @@ pub enum Value {
     Boolean(bool),
     Integer(i64),
     Double(f64),
+    /// A Variant of subtype Error, normally created by `CVErr`.
+    Error(i64),
     String(String),
     Array(ArrayValue),
     Object(ObjectRef),
@@ -1889,7 +1891,7 @@ impl<'a> Runtime<'a> {
                     .iter()
                     .any(|builtin| name.eq_ignore_ascii_case(builtin))
                 {
-                    return self.call_named(name, Vec::new(), Some(span.line));
+                    return self.call_named(name, Vec::new(), Some(span.line), frame);
                 }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
                     return Ok(value);
@@ -2047,7 +2049,7 @@ impl<'a> Runtime<'a> {
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
-                        self.call_named(name, values, Some(span.line))
+                        self.call_named(name, values, Some(span.line), frame)
                     }
                     Expr::Member { object, name, .. } => {
                         let receiver = self.eval_object(object, frame, span.line)?;
@@ -2088,7 +2090,7 @@ impl<'a> Runtime<'a> {
                 }
             }
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                self.call_named(name, Vec::new(), Some(span.line))
+                self.call_named(name, Vec::new(), Some(span.line), frame)
             }
             Expr::Member {
                 object, name, span, ..
@@ -2313,6 +2315,7 @@ impl<'a> Runtime<'a> {
         name: &str,
         args: Vec<Value>,
         line: Option<u32>,
+        frame: &Frame,
     ) -> Result<Value, RuntimeError> {
         if self.module.items.iter().any(
             |item| matches!(item, ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name)),
@@ -2333,6 +2336,9 @@ impl<'a> Runtime<'a> {
             .any(|builtin| name.eq_ignore_ascii_case(builtin))
         {
             return self.call_current_time(name, &args, line);
+        }
+        if name.eq_ignore_ascii_case("error") {
+            return call_error_builtin(&args, frame, line);
         }
         if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
@@ -3046,6 +3052,84 @@ fn raised_error(number: i64, source: String, description: String, line: u32) -> 
     }
 }
 
+fn call_error_builtin(
+    args: &[Value],
+    frame: &Frame,
+    line: Option<u32>,
+) -> Result<Value, RuntimeError> {
+    if args.len() > 1 {
+        return Err(error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("Error expects 0 or 1 arguments, received {}", args.len()),
+            line,
+        ));
+    }
+    let Some(value) = args.first() else {
+        return Ok(Value::String(frame.error_state.description.clone()));
+    };
+    let number = integer_argument(value, line)?;
+    if !(0..=65_535).contains(&number) {
+        return Err(invalid_procedure_call(
+            format!("invalid Error number: {number}"),
+            line,
+        ));
+    }
+    Ok(Value::String(vba_error_description(number).to_string()))
+}
+
+fn vba_error_description(number: i64) -> &'static str {
+    match number {
+        0 => "",
+        5 => "Invalid procedure call or argument",
+        6 => "Overflow",
+        7 => "Out of memory",
+        9 => "Subscript out of range",
+        10 => "This array is fixed or temporarily locked",
+        11 => "Division by zero",
+        13 => "Type mismatch",
+        14 => "Out of string space",
+        28 => "Out of stack space",
+        35 => "Sub or Function not defined",
+        48 => "Error in loading DLL",
+        52 => "Bad file name or number",
+        53 => "File not found",
+        54 => "Bad file mode",
+        55 => "File already open",
+        58 => "File already exists",
+        61 => "Disk full",
+        62 => "Input past end of file",
+        67 => "Too many files",
+        68 => "Device unavailable",
+        70 => "Permission denied",
+        71 => "Disk not ready",
+        75 => "Path/File access error",
+        76 => "Path not found",
+        91 => "Object variable or With block variable not set",
+        92 => "For loop not initialized",
+        93 => "Invalid pattern string",
+        94 => "Invalid use of Null",
+        424 => "Object required",
+        429 => "ActiveX component can't create object",
+        430 => "Class does not support Automation or does not support expected interface",
+        432 => "File name or class name not found during Automation operation",
+        438 => "Object doesn't support this property or method",
+        440 => "Automation error",
+        445 => "Object doesn't support this action",
+        446 => "Object doesn't support named arguments",
+        447 => "Object doesn't support current locale setting",
+        448 => "Named argument not found",
+        449 => "Argument not optional",
+        450 => "Wrong number of arguments or invalid property assignment",
+        451 => {
+            "Property let procedure not defined and property get procedure did not return an object"
+        }
+        453 => "Specified DLL function not found",
+        457 => "This key is already associated with an element of this collection",
+        458 => "Variable uses an Automation type not supported in Visual Basic",
+        _ => "Application-defined or object-defined error",
+    }
+}
+
 fn runtime_error_number(failure: &RuntimeError) -> i64 {
     failure.vba_number.unwrap_or(match failure.kind {
         RuntimeErrorKind::ProcedureNotFound | RuntimeErrorKind::UndefinedVariable => 35,
@@ -3408,6 +3492,7 @@ fn call_builtin(
             | "csng"
             | "cstr"
             | "cvar"
+            | "cverr"
             | "dateadd"
             | "datediff"
             | "datepart"
@@ -3435,6 +3520,7 @@ fn call_builtin(
             | "isarray"
             | "isdate"
             | "isempty"
+            | "iserror"
             | "ismissing"
             | "isnull"
             | "isnumeric"
@@ -3873,9 +3959,33 @@ fn call_builtin(
             }
             return Ok(Value::Boolean(matches!(args[0], Value::Missing)));
         }
+        if name == "cverr" {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("cverr expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            let number = integer_argument(&args[0], line)?;
+            if !(0..=65_535).contains(&number) {
+                return Err(invalid_procedure_call(
+                    format!("invalid CVErr number: {number}"),
+                    line,
+                ));
+            }
+            return Ok(Value::Error(number));
+        }
         if matches!(
             name.as_str(),
-            "isarray" | "isempty" | "isnull" | "isnumeric" | "isobject" | "typename" | "vartype"
+            "isarray"
+                | "isempty"
+                | "iserror"
+                | "isnull"
+                | "isnumeric"
+                | "isobject"
+                | "typename"
+                | "vartype"
         ) {
             if args.len() != 1 {
                 return Err(error(
@@ -3888,6 +3998,7 @@ fn call_builtin(
             return Ok(match name.as_str() {
                 "isarray" => Value::Boolean(matches!(value, Value::Array(_))),
                 "isempty" => Value::Boolean(matches!(value, Value::Empty)),
+                "iserror" => Value::Boolean(matches!(value, Value::Error(_))),
                 "isnull" => Value::Boolean(matches!(value, Value::Null)),
                 "isnumeric" => Value::Boolean(match value {
                     Value::Integer(_) | Value::Double(_) => true,
@@ -6596,6 +6707,7 @@ fn value_type_name(value: &Value) -> String {
         Value::Boolean(_) => "Boolean".to_string(),
         Value::Integer(_) => "Long".to_string(),
         Value::Double(_) => "Double".to_string(),
+        Value::Error(_) => "Error".to_string(),
         Value::String(_) => "String".to_string(),
         Value::Array(_) => "Variant()".to_string(),
         Value::Object(object) => object.kind.clone(),
@@ -6608,6 +6720,7 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Null => 1,
         Value::Integer(_) => 3,
         Value::Double(_) => 5,
+        Value::Error(_) => 10,
         Value::String(_) => 8,
         Value::Object(_) | Value::Nothing => 9,
         Value::Boolean(_) => 11,
@@ -6635,6 +6748,7 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Boolean(true) => Ok(-1.0),
         Value::Integer(value) => Ok(*value as f64),
         Value::Double(value) => Ok(*value),
+        Value::Error(value) => Ok(*value as f64),
         Value::String(value) => value
             .trim()
             .parse()
@@ -6661,6 +6775,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
             .map(|number| number != 0.0)
             .map_err(|_| "type mismatch converting String to Boolean".to_string()),
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
+        Value::Error(_) => Err("type mismatch converting Error to Boolean".to_string()),
         Value::Object(_) => Err("type mismatch converting object to Boolean".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Nothing => Err("object variable or With block variable not set".to_string()),
@@ -6668,6 +6783,9 @@ fn truthy(value: &Value) -> Result<bool, String> {
 }
 
 fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
+    if matches!(value, Value::Error(_)) {
+        return Err("type mismatch using Error value as an operand".to_string());
+    }
     match op {
         UnaryOp::Plus => Ok(numeric_literal(number(&value)?)),
         UnaryOp::Neg => Ok(numeric_literal(-number(&value)?)),
@@ -6701,10 +6819,10 @@ fn binary(
     }
     if matches!(
         lhs,
-        Value::Array(_) | Value::Object(_) | Value::Missing | Value::Nothing
+        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Missing | Value::Nothing
     ) || matches!(
         rhs,
-        Value::Array(_) | Value::Object(_) | Value::Missing | Value::Nothing
+        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Missing | Value::Nothing
     ) {
         return Err((
             RuntimeErrorKind::TypeMismatch,
@@ -6950,6 +7068,7 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Boolean(false) => "False".to_string(),
         Value::Integer(value) => value.to_string(),
         Value::Double(value) => value.to_string(),
+        Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
         Value::Object(_) => return Err("type mismatch converting object to String".to_string()),
@@ -8679,6 +8798,76 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5|5".to_string()));
+    }
+
+    #[test]
+    fn creates_and_inspects_vba_error_values() {
+        let value = run(
+            "Public Function ErrorValues() As String\n\
+               Dim failure As Variant\n\
+               Dim implicitUse As Long\n\
+               failure = CVErr(2001)\n\
+               On Error Resume Next\n\
+               implicitUse = failure & \"x\"\n\
+               implicitUse = Err.Number\n\
+               ErrorValues = IsError(failure) & \"|\" & IsError(2001) & \"|\" & VarType(failure) & \"|\" & TypeName(failure) & \"|\" & CInt(failure) & \"|\" & implicitUse\n\
+             End Function\n",
+            "ErrorValues",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("True|False|10|Error|2001|13".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_vba_error_descriptions() {
+        let value = run(
+            "Public Function ErrorDescriptions() As String\n\
+               Dim ignored As Double\n\
+               Dim latest As String\n\
+               On Error Resume Next\n\
+               ignored = 1 / 0\n\
+               latest = Error()\n\
+               ErrorDescriptions = Error(11) & \"|\" & Error(600) & \"|[\" & Error(0) & \"]|\" & latest\n\
+             End Function\n",
+            "ErrorDescriptions",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "Division by zero|Application-defined or object-defined error|[]|division by zero"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn cverr_and_error_reject_numbers_outside_vba_range() {
+        let value = run(
+            "Public Function ErrorValueErrors() As String\n\
+               Dim badValue As Long\n\
+               Dim badMessage As Long\n\
+               On Error Resume Next\n\
+               badValue = CVErr(65536)\n\
+               badValue = Err.Number\n\
+               Err.Clear\n\
+               badMessage = Error(-1)\n\
+               badMessage = Err.Number\n\
+               ErrorValueErrors = badValue & \"|\" & badMessage\n\
+             End Function\n",
+            "ErrorValueErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5".to_string()));
     }
 
     #[test]
