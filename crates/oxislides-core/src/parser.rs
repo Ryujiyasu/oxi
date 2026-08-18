@@ -941,13 +941,16 @@ fn parse_slide(
     // cumulative (offset_x, offset_y, scale_x, scale_y) mapping a child's
     // coordinates to slide points.  Empty = top level (identity).
     let s_grp = std::env::var("OXI_GRPXFRM_DISABLE").is_err();
-    let mut grp_stack: Vec<(f32, f32, f32, f32)> = Vec::new();
+    let s_grprot = std::env::var("OXI_GRPROT_DISABLE").is_err();
+    // (origin x, origin y, scale x, scale y, rotation deg, rotation centre)
+    let mut grp_stack: Vec<(f32, f32, f32, f32, f32, f32, f32)> = Vec::new();
     let mut in_grp_sp_pr = false;
     let mut in_grp_xfrm = false;
     let mut g_off = (0.0f32, 0.0f32);
     let mut g_ext = (0.0f32, 0.0f32);
     let mut g_ch_off = (0.0f32, 0.0f32);
     let mut g_ch_ext = (0.0f32, 0.0f32);
+    let mut g_rot: f32 = 0.0;
     // Spec #6: vertical text-anchor from the shape's own a:bodyPr/@anchor
     // (resolved through the placeholder chain at shape end).
     let mut shape_anchor: Option<String> = None;
@@ -1049,7 +1052,7 @@ fn parse_slide(
                         // Inherit the parent transform until this group's
                         // own a:xfrm is read (a group may omit it).
                         let base =
-                            grp_stack.last().copied().unwrap_or((0.0, 0.0, 1.0, 1.0));
+                            grp_stack.last().copied().unwrap_or((0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0));
                         grp_stack.push(base);
                     }
                     "grpSpPr" if !grp_stack.is_empty() => {
@@ -1061,6 +1064,15 @@ fn parse_slide(
                         g_ext = (0.0, 0.0);
                         g_ch_off = (0.0, 0.0);
                         g_ch_ext = (0.0, 0.0);
+                        // `p:grpSpPr/a:xfrm/@rot` turns the whole group about
+                        // its own box centre. d19 slide 36 is ten pencils, each
+                        // a 25x381pt picture inside its own group at rot 90 --
+                        // ignoring it drew ten vertical pencils stacked at one
+                        // x instead of ten horizontal ones down the slide.
+                        g_rot = get_attr(&e, "rot")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 60000.0)
+                            .unwrap_or(0.0);
                     }
                     "sp" | "pic" | "cxnSp" if in_sp_tree => {
                         in_shape = true;
@@ -2154,7 +2166,7 @@ fn parse_slide(
                         let base = if grp_stack.len() >= 2 {
                             grp_stack[grp_stack.len() - 2]
                         } else {
-                            (0.0, 0.0, 1.0, 1.0)
+                            (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0)
                         };
                         let box_x = base.0 + g_off.0 * base.2;
                         let box_y = base.1 + g_off.1 * base.3;
@@ -2163,7 +2175,15 @@ fn parse_slide(
                         let sx = if g_ch_ext.0 != 0.0 { box_w / g_ch_ext.0 } else { base.2 };
                         let sy = if g_ch_ext.1 != 0.0 { box_h / g_ch_ext.1 } else { base.3 };
                         if let Some(top) = grp_stack.last_mut() {
-                            *top = (box_x - g_ch_off.0 * sx, box_y - g_ch_off.1 * sy, sx, sy);
+                            *top = (
+                                box_x - g_ch_off.0 * sx,
+                                box_y - g_ch_off.1 * sy,
+                                sx,
+                                sy,
+                                base.4 + g_rot,
+                                box_x + box_w / 2.0,
+                                box_y + box_h / 2.0,
+                            );
                         }
                     }
                     "grpSpPr" if in_grp_sp_pr => {
@@ -2231,9 +2251,25 @@ fn parse_slide(
                         // the group's child space.  A placeholder that fell
                         // back to layout/master geometry is already in slide
                         // space, so it is left alone.
+                        let mut extra_rot = 0.0f32;
                         let (use_x, use_y, use_w, use_h) = match grp_stack.last() {
-                            Some(&(ox, oy, sx, sy)) if s_grp && shape_has_xfrm => {
-                                (ox + use_x * sx, oy + use_y * sy, use_w * sx, use_h * sy)
+                            Some(&(ox, oy, sx, sy, rot, cx, cy)) if s_grp && shape_has_xfrm => {
+                                let (x, y, w, h) =
+                                    (ox + use_x * sx, oy + use_y * sy, use_w * sx, use_h * sy);
+                                if rot.abs() > 1e-4 && s_grprot {
+                                    // The group turns as a whole: the child's
+                                    // CENTRE swings about the group's centre and
+                                    // the child keeps its own size, turned by the
+                                    // same angle on top of whatever it declared.
+                                    let (t, u) = (x + w / 2.0 - cx, y + h / 2.0 - cy);
+                                    let (s, c) =
+                                        (rot.to_radians().sin(), rot.to_radians().cos());
+                                    let (nx, ny) = (cx + t * c - u * s, cy + t * s + u * c);
+                                    extra_rot = rot;
+                                    (nx - w / 2.0, ny - h / 2.0, w, h)
+                                } else {
+                                    (x, y, w, h)
+                                }
                             }
                             _ => (use_x, use_y, use_w, use_h),
                         };
@@ -2264,7 +2300,7 @@ fn parse_slide(
                             y: use_y,
                             width: use_w,
                             height: use_h,
-                            rotation: shape_rotation,
+                            rotation: shape_rotation + extra_rot,
                             flip_h: shape_flip_h,
                             flip_v: shape_flip_v,
                             shape_type: shape_prst.take(),
