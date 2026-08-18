@@ -96,6 +96,13 @@ enum HostObject {
     DebugConsole,
 }
 
+#[derive(Clone)]
+struct FindState {
+    range: CellRange,
+    args: Vec<Value>,
+    last_found: Option<CellAddress>,
+}
+
 struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
@@ -104,6 +111,7 @@ struct WorkbookHost<'a> {
     enable_events: bool,
     display_alerts: bool,
     calculation: i64,
+    last_find: Option<FindState>,
     objects: Vec<HostObject>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
@@ -128,6 +136,7 @@ impl<'a> WorkbookHost<'a> {
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
+            last_find: None,
             objects: Vec::new(),
             debug_output: Vec::new(),
             messages: Vec::new(),
@@ -772,9 +781,42 @@ impl<'a> WorkbookHost<'a> {
             let candidate = self.find_cell_text(*address, look_in);
             find_text_matches(&candidate, &needle, look_at == 1, match_case)
         });
-        Ok(found
+        let result = found
             .map(|address| self.object(HostObject::Range(CellRange::single(address))))
-            .unwrap_or(Value::Nothing))
+            .unwrap_or(Value::Nothing);
+        self.last_find = Some(FindState {
+            range,
+            args: args.to_vec(),
+            last_found: found,
+        });
+        Ok(result)
+    }
+
+    fn find_again(&mut self, args: &[Value], search_direction: i64) -> Result<Value, String> {
+        if args.len() > 1 {
+            return Err("Range.FindNext and FindPrevious expect zero or one argument".to_string());
+        }
+        let state = self
+            .last_find
+            .clone()
+            .ok_or_else(|| "Range.FindNext requires a preceding Range.Find call".to_string())?;
+        let after = match args.first() {
+            Some(Value::Object(object)) => Value::Object(object.clone()),
+            Some(_) => {
+                return Err(
+                    "Range.FindNext and FindPrevious After must be a single cell".to_string(),
+                )
+            }
+            None => match state.last_found {
+                Some(address) => self.object(HostObject::Range(CellRange::single(address))),
+                None => return Ok(Value::Nothing),
+            },
+        };
+        let mut find_args = state.args;
+        find_args.resize(6, Value::Missing);
+        find_args[1] = after;
+        find_args[5] = Value::Integer(search_direction);
+        self.find_in_range(state.range, &find_args)
     }
 
     fn find_cell_text(&self, address: CellAddress, look_in: i64) -> String {
@@ -1613,6 +1655,12 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("find") {
                     return self.find_in_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("findnext") {
+                    return self.find_again(args, 1).map(Some);
+                }
+                if name.eq_ignore_ascii_case("findprevious") {
+                    return self.find_again(args, 2).map(Some);
                 }
                 if name.eq_ignore_ascii_case("currentregion") {
                     if !args.is_empty() {
@@ -3734,6 +3782,36 @@ mod tests {
         };
 
         assert_eq!(debug_output, vec!["A2\tB1\tB2\tA3\tTrue\tTrue".to_string()]);
+    }
+
+    #[test]
+    fn vba_continues_the_previous_range_search() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ContinueSearch()\n\
+               Range(\"A1\").Value = \"hit\"\n\
+               Range(\"A3\").Value = \"hit\"\n\
+               Set first = Range(\"A1:A3\").Find(\"hit\", , xlValues, xlWhole)\n\
+               Set following = Range(\"A1:A3\").FindNext(first)\n\
+               Set preceding = Range(\"A1:A3\").FindPrevious(following)\n\
+               Set wrapped = Range(\"A1:A3\").FindNext()\n\
+               Debug.Print first.Address(False, False), following.Address(False, False), preceding.Address(False, False), wrapped.Address(False, False)\n\
+               Set missing = Range(\"A1:A3\").Find(\"absent\")\n\
+               Set stillMissing = Range(\"A1:A3\").FindNext()\n\
+               Debug.Print missing Is Nothing, stillMissing Is Nothing\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ContinueSearch", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec!["A3\tA1\tA3\tA1".to_string(), "True\tTrue".to_string(),]
+        );
     }
 
     #[test]
