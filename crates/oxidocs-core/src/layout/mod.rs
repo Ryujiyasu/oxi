@@ -2107,6 +2107,44 @@ fn heading_default_font_size(level: u8) -> f32 {
 /// MS Mincho + Century digits/letters/kana boundaries) is explained to the
 /// decimal by gap = fs/4 in true space, both sides; per-cluster total = fs/2.
 /// Opt-out: OXI_S546_DISABLE (shared with the fs/2 halfwidth fix).
+/// S1175 (opt-in `OXI_AUTOSPACE2=1`): the gap Word leaves between a CJK character
+/// and a Latin one, as a quarter of the SPACED advance rather than of the font size.
+///
+/// `s546_autospace_extra` reads only the font size, so a run carrying `w:spacing`
+/// gets the same gap as one without. Word does not: sweeping eight spacings at two
+/// sizes with `balanceSingleByteDoubleByteWidth` and Century as the ascii face
+/// (`tools/metrics/_cw_spacing.py`), the gap tracks the advance the spacing leaves
+/// behind, at a ratio that stays put:
+///
+/// ```text
+///   sz    cs      CJK advance   gap     gap / advance
+///   8.0    0.0        8.040     2.037       0.253
+///   8.0   -1.0        6.000     1.556       0.259
+///  10.5    0.0       10.444     2.744       0.263
+///  10.5   -1.0        8.520     2.156       0.253
+///  10.5   -2.0        6.480     1.676       0.259
+/// ```
+///
+/// The spacing reaches a fullwidth character twice under balanceSBDB and a halfwidth
+/// one once, so the advance the quarter is taken of is `fs + cs (+ cs)`. At cs = 0
+/// this lands within a device step of what s546 already returned, which is why the
+/// old formula survived: only a run that declares `w:spacing` can tell them apart.
+///
+/// 04b88e's 「うちH4年度以降許可債分」 is such a run -- `w:sz 16` with
+/// `w:spacing -20` -- and its two gaps are the whole of that line's 1.84pt excess.
+/// A CJK/Latin boundary, in either direction -- where Word inserts autoSpaceDE or
+/// autoSpaceDN.
+fn is_cjk_latin_joint(a: char, b: char) -> bool {
+    let lat = |c: char| c.is_ascii_alphabetic() || c.is_ascii_digit();
+    (kinsoku::is_cjk_ideograph_or_kana(a) && lat(b))
+        || (lat(a) && kinsoku::is_cjk_ideograph_or_kana(b))
+}
+
+fn s1175_autospace(font_size: f32, cs: f32, balance: bool) -> f32 {
+    let spaced = font_size + cs + if balance { cs } else { 0.0 };
+    0.25 * spaced.max(0.0)
+}
+
 fn s546_autospace_extra(font_size: f32) -> f32 {
     if crate::font::s546_exact_halfwidth() {
         font_size / 4.0
@@ -31401,7 +31439,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 if (de_boundary && para.style.auto_space_de)
                                                     || (dn_boundary && para.style.auto_space_dn)
                                                 {
-                                                    s546_autospace_extra(font_size)
+                                                    if std::env::var("OXI_AUTOSPACE2")
+                                                        .ok()
+                                                        .as_deref()
+                                                        == Some("1")
+                                                    {
+                                                        s1175_autospace(
+                                                            font_size,
+                                                            cs,
+                                                            self.balance_single_byte_double_byte_width
+                                                                && run.style.fit_text.is_none(),
+                                                        )
+                                                    } else {
+                                                        s546_autospace_extra(font_size)
+                                                    }
                                                 } else {
                                                     0.0
                                                 }
@@ -31699,12 +31750,50 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     .iter()
                                                     .chain(buf_chars.iter())
                                                     .any(|c| kinsoku::cell_yaku_capacity(c.ch) > 0.0);
+                                                // S1175: each CJK/Latin joint on the line is aki
+                                                // too, and gives up about half of itself before
+                                                // the line breaks -- 501 widths took the gap from
+                                                // 1.560 down to 0.840 in device steps and only
+                                                // then wrapped. Unlike the 約物 pool these ARE
+                                                // additive: the probe's two joints both gave way
+                                                // together.
+                                                let joints = if std::env::var("OXI_AUTOSPACE2")
+                                                    .ok()
+                                                    .as_deref()
+                                                    == Some("1")
+                                                {
+                                                    let mut n = 0.0f32;
+                                                    let mut prev: Option<char> = None;
+                                                    for c in current_line_chars
+                                                        .iter()
+                                                        .chain(buf_chars.iter())
+                                                        .map(|c| c.ch)
+                                                        .chain(std::iter::once(ch))
+                                                    {
+                                                        if let Some(p) = prev {
+                                                            if is_cjk_latin_joint(p, c) {
+                                                                n += 1.0;
+                                                            }
+                                                        }
+                                                        prev = Some(c);
+                                                    }
+                                                    n * 0.5
+                                                        * s1175_autospace(
+                                                            font_size,
+                                                            cs,
+                                                            self.balance_single_byte_double_byte_width
+                                                                && run.style.fit_text.is_none(),
+                                                        )
+                                                } else {
+                                                    0.0
+                                                };
                                                 let pool = if mid { 0.5 * font_size } else { 0.0 }
                                                     + if kinsoku::cell_yaku_capacity(ch) > 0.0 {
                                                         0.5 * cw
                                                     } else {
                                                         0.0
-                                                    };
+                                                    }
+                                                    + joints;
                                                 ((line_x + buf_w + cw) - effective_wrap) > pool
                                             } else if legacy_cell_break
                                                 && !s1174_yakucomp
@@ -36886,7 +36975,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if (de_boundary && para.style.auto_space_de)
                         || (dn_boundary && para.style.auto_space_dn)
                     {
-                        s546_autospace_extra(font_size)
+                        if std::env::var("OXI_AUTOSPACE2").ok().as_deref() == Some("1") {
+                            s1175_autospace(
+                                font_size,
+                                cs,
+                                self.balance_single_byte_double_byte_width
+                                    && run.style.fit_text.is_none(),
+                            )
+                        } else {
+                            s546_autospace_extra(font_size)
+                        }
                     } else {
                         0.0
                     }
@@ -36946,8 +37044,36 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .iter()
                         .chain(buf_chars.iter())
                         .any(|c| kinsoku::cell_yaku_capacity(c.ch) > 0.0);
+                    // S1175 estimate mirror -- the CJK/Latin joints are aki too.
+                    let joints = if std::env::var("OXI_AUTOSPACE2").ok().as_deref() == Some("1") {
+                        let mut n = 0.0f32;
+                        let mut prev: Option<char> = None;
+                        for c in current_line_chars
+                            .iter()
+                            .chain(buf_chars.iter())
+                            .map(|c| c.ch)
+                            .chain(std::iter::once(ch))
+                        {
+                            if let Some(p) = prev {
+                                if is_cjk_latin_joint(p, c) {
+                                    n += 1.0;
+                                }
+                            }
+                            prev = Some(c);
+                        }
+                        n * 0.5
+                            * s1175_autospace(
+                                font_size,
+                                cs,
+                                self.balance_single_byte_double_byte_width
+                                    && run.style.fit_text.is_none(),
+                            )
+                    } else {
+                        0.0
+                    };
                     let pool = if mid { 0.5 * font_size } else { 0.0 }
-                        + if kinsoku::cell_yaku_capacity(ch) > 0.0 { 0.5 * cw } else { 0.0 };
+                        + if kinsoku::cell_yaku_capacity(ch) > 0.0 { 0.5 * cw } else { 0.0 }
+                        + joints;
                     ((line_x + buf_w + cw) - effective_wrap) > pool
                 } else if cellpair_est && !s1174_yakucomp && would_overflow_natural {
                     let n_yak = current_line_chars
