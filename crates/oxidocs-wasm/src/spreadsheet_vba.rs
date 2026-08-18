@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
+use oxicells_core::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Workbook};
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
@@ -1132,6 +1132,87 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    fn merge_range(&mut self, range: CellRange) -> Result<(), String> {
+        if range.is_single() {
+            return Ok(());
+        }
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        for existing in &sheet.merge_cells {
+            let existing = merge_range(range.sheet, existing);
+            if ranges_overlap(range, existing) {
+                if ranges_equal(range, existing) {
+                    return Ok(());
+                }
+                return Err("Range.Merge overlaps an existing merged range".to_string());
+            }
+        }
+        for row in &mut sheet.rows {
+            if !(range.start_row..=range.end_row).contains(&row.index) {
+                continue;
+            }
+            for cell in &mut row.cells {
+                if (range.start_column..=range.end_column).contains(&cell.col)
+                    && !(row.index == range.start_row && cell.col == range.start_column)
+                {
+                    cell.value = CellValue::Empty;
+                    cell.formula = None;
+                }
+            }
+        }
+        sheet.merge_cells.push(MergeCell {
+            start_row: range.start_row,
+            start_col: range.start_column,
+            end_row: range.end_row,
+            end_col: range.end_column,
+        });
+        sheet.merge_cells.sort_by_key(|merge| {
+            (
+                merge.start_row,
+                merge.start_col,
+                merge.end_row,
+                merge.end_col,
+            )
+        });
+        Ok(())
+    }
+
+    fn unmerge_range(&mut self, range: CellRange) -> Result<(), String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        sheet
+            .merge_cells
+            .retain(|merge| !ranges_overlap(range, merge_range(range.sheet, merge)));
+        Ok(())
+    }
+
+    fn range_merge_state(&self, range: CellRange) -> Result<Value, String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let mut overlaps = sheet
+            .merge_cells
+            .iter()
+            .map(|merge| merge_range(range.sheet, merge))
+            .filter(|merge| ranges_overlap(range, *merge));
+        let Some(merge) = overlaps.next() else {
+            return Ok(Value::Boolean(false));
+        };
+        if overlaps.next().is_none() && range_contains(merge, range) {
+            Ok(Value::Boolean(true))
+        } else {
+            Ok(Value::Null)
+        }
+    }
+
     fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
         let [Value::Object(destination)] = args else {
             return Err(
@@ -1429,6 +1510,29 @@ impl Host for WorkbookHost<'_> {
                     self.clear_range(range, true, true)?;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("merge") {
+                    match args {
+                        [] => {}
+                        [across] => {
+                            if style_boolean(across, "Range.Merge Across")? {
+                                return Err(
+                                    "Range.Merge Across:=True is not supported in the browser"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        _ => return Err("Range.Merge expects zero or one argument".to_string()),
+                    }
+                    self.merge_range(range)?;
+                    return Ok(Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("unmerge") {
+                    if !args.is_empty() {
+                        return Err("Range.UnMerge does not accept arguments".to_string());
+                    }
+                    self.unmerge_range(range)?;
+                    return Ok(Some(Value::Empty));
+                }
             }
             return Ok(None);
         }
@@ -1678,6 +1782,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("rowheight") {
             return self.range_row_height(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("mergecells") {
+            return self.range_merge_state(range).map(Some);
+        }
         if name.eq_ignore_ascii_case("row") {
             return Ok(Some(Value::Integer(i64::from(range.start_row))));
         }
@@ -1780,6 +1887,14 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("rowheight") {
             self.set_range_row_height(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("mergecells") {
+            if style_boolean(&value, "Range.MergeCells")? {
+                self.merge_range(range)?;
+            } else {
+                self.unmerge_range(range)?;
+            }
             return Ok(true);
         }
         Ok(false)
@@ -2104,6 +2219,40 @@ fn rgb_value(args: &[Value]) -> Result<Value, String> {
 
 fn cell_has_content(cell: &Cell) -> bool {
     cell.formula.is_some() || !matches!(&cell.value, CellValue::Empty)
+}
+
+fn merge_range(sheet: usize, merge: &MergeCell) -> CellRange {
+    CellRange {
+        sheet,
+        start_row: merge.start_row,
+        start_column: merge.start_col,
+        end_row: merge.end_row,
+        end_column: merge.end_col,
+    }
+}
+
+fn ranges_overlap(left: CellRange, right: CellRange) -> bool {
+    left.sheet == right.sheet
+        && left.start_row <= right.end_row
+        && right.start_row <= left.end_row
+        && left.start_column <= right.end_column
+        && right.start_column <= left.end_column
+}
+
+fn ranges_equal(left: CellRange, right: CellRange) -> bool {
+    left.sheet == right.sheet
+        && left.start_row == right.start_row
+        && left.start_column == right.start_column
+        && left.end_row == right.end_row
+        && left.end_column == right.end_column
+}
+
+fn range_contains(outer: CellRange, inner: CellRange) -> bool {
+    outer.sheet == inner.sheet
+        && outer.start_row <= inner.start_row
+        && outer.start_column <= inner.start_column
+        && outer.end_row >= inner.end_row
+        && outer.end_column >= inner.end_column
 }
 
 fn ctrl_arrow_destination(
@@ -3202,6 +3351,68 @@ mod tests {
         assert_eq!(sheet.rows[2].height, Some(18.0));
         assert!(sheet.rows[2].cells.is_empty());
         assert_eq!(debug_output, vec!["12.5\tNull\t24\t18".to_string()]);
+    }
+
+    #[test]
+    fn vba_merges_and_unmerges_ranges_without_keeping_hidden_contents() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub MergeRanges()\n\
+               Range(\"A1\").Value = \"heading\"\n\
+               Range(\"B1\").Value = \"discarded\"\n\
+               Range(\"A2\").Value = 3\n\
+               Range(\"B2\").Formula = \"=A2*2\"\n\
+               Range(\"A1:B2\").Merge\n\
+               Debug.Print Range(\"A1\").MergeCells, Range(\"A1:B2\").MergeCells, Range(\"A1:C2\").MergeCells, Range(\"C1\").MergeCells\n\
+               Range(\"A1:B2\").UnMerge\n\
+               Range(\"C1:D1\").MergeCells = True\n\
+               Range(\"E1:F1\").MergeCells = True\n\
+               Range(\"E1\").MergeCells = False\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "MergeRanges", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        let sheet = &workbook.sheets[0];
+        assert!(matches!(
+            &sheet.rows[0].cells[0].value,
+            CellValue::String(value) if value == "heading"
+        ));
+        assert!(matches!(sheet.rows[0].cells[1].value, CellValue::Empty));
+        assert!(matches!(sheet.rows[1].cells[0].value, CellValue::Empty));
+        assert!(matches!(sheet.rows[1].cells[1].value, CellValue::Empty));
+        assert_eq!(sheet.rows[1].cells[1].formula, None);
+        assert_eq!(sheet.merge_cells.len(), 1);
+        let merge = &sheet.merge_cells[0];
+        assert_eq!(
+            (
+                merge.start_row,
+                merge.start_col,
+                merge.end_row,
+                merge.end_col
+            ),
+            (1, 2, 1, 3)
+        );
+        assert_eq!(debug_output, vec!["True\tTrue\tNull\tFalse".to_string()]);
+
+        let overlap = parse_module(
+            "Public Sub OverlapMerge()\n\
+               Range(\"D1:E1\").Merge\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let failure = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&overlap, "OverlapMerge", vec![], &mut host).unwrap_err()
+        };
+        assert!(failure
+            .message
+            .contains("overlaps an existing merged range"));
+        assert_eq!(workbook.sheets[0].merge_cells.len(), 1);
     }
 
     #[test]
