@@ -74,6 +74,8 @@ impl CellRange {
 #[derive(Debug, Clone, Copy)]
 enum HostObject {
     Range(CellRange),
+    RangeFont(CellRange),
+    RangeInterior(CellRange),
     RangeCollection(CellRange, RangeAxis),
     Worksheet(usize),
     Worksheets,
@@ -119,6 +121,8 @@ impl<'a> WorkbookHost<'a> {
             handle,
             kind: match object {
                 HostObject::Range(_) => "Range",
+                HostObject::RangeFont(_) => "Font",
+                HostObject::RangeInterior(_) => "Interior",
                 HostObject::RangeCollection(_, RangeAxis::Rows) => "Rows",
                 HostObject::RangeCollection(_, RangeAxis::Columns) => "Columns",
                 HostObject::Worksheet(_) => "Worksheet",
@@ -134,6 +138,20 @@ impl<'a> WorkbookHost<'a> {
     fn range(&self, object: &ObjectRef) -> Option<CellRange> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::Range(range)) => Some(*range),
+            _ => None,
+        }
+    }
+
+    fn range_font(&self, object: &ObjectRef) -> Option<CellRange> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::RangeFont(range)) => Some(*range),
+            _ => None,
+        }
+    }
+
+    fn range_interior(&self, object: &ObjectRef) -> Option<CellRange> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::RangeInterior(range)) => Some(*range),
             _ => None,
         }
     }
@@ -853,6 +871,77 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    fn set_range_style(
+        &mut self,
+        range: CellRange,
+        mut update: impl FnMut(&mut CellStyle),
+    ) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        for address in range.addresses() {
+            let sheet = self
+                .workbook
+                .sheets
+                .get_mut(address.sheet)
+                .ok_or_else(|| "worksheet no longer exists".to_string())?;
+            sheet.col_count = sheet.col_count.max(address.column as usize + 1);
+            if !sheet.rows.iter().any(|row| row.index == address.row) {
+                sheet.rows.push(Row {
+                    index: address.row,
+                    cells: Vec::new(),
+                    height: None,
+                });
+                sheet.rows.sort_by_key(|row| row.index);
+            }
+            let row = sheet
+                .rows
+                .iter_mut()
+                .find(|row| row.index == address.row)
+                .expect("the destination row was created");
+            if !row.cells.iter().any(|cell| cell.col == address.column) {
+                row.cells.push(Cell {
+                    col: address.column,
+                    value: CellValue::Empty,
+                    style: CellStyle::default(),
+                    formula: None,
+                });
+                row.cells.sort_by_key(|cell| cell.col);
+            }
+            let cell = row
+                .cells
+                .iter_mut()
+                .find(|cell| cell.col == address.column)
+                .expect("the destination cell was created");
+            update(&mut cell.style);
+        }
+        Ok(())
+    }
+
+    fn uniform_style<T: Clone + PartialEq>(
+        &self,
+        range: CellRange,
+        read: impl Fn(&CellStyle) -> T,
+    ) -> Result<Option<T>, String> {
+        Self::range_cell_count(range)?;
+        let default_style = CellStyle::default();
+        let mut first = None;
+        for address in range.addresses() {
+            let style = self
+                .workbook
+                .sheets
+                .get(address.sheet)
+                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                .map(|cell| &cell.style)
+                .unwrap_or(&default_style);
+            let value = read(style);
+            if first.as_ref().is_some_and(|first| first != &value) {
+                return Ok(None);
+            }
+            first = Some(value);
+        }
+        Ok(first)
+    }
+
     fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
         let [Value::Object(destination)] = args else {
             return Err(
@@ -1144,6 +1233,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("msgbox") {
             return self.show_message_box(args).map(Some);
         }
+        if name.eq_ignore_ascii_case("rgb") {
+            return rgb_value(args).map(Some);
+        }
         if name.eq_ignore_ascii_case("range") {
             return self.range_object(self.active_sheet, args).map(Some);
         }
@@ -1207,6 +1299,43 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if let Some(range) = self.range_font(receiver) {
+            if name.eq_ignore_ascii_case("bold") {
+                return self
+                    .uniform_style(range, |style| style.bold)
+                    .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+            }
+            if name.eq_ignore_ascii_case("italic") {
+                return self
+                    .uniform_style(range, |style| style.italic)
+                    .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+            }
+            if name.eq_ignore_ascii_case("size") {
+                return self
+                    .uniform_style(range, |style| style.font_size)
+                    .map(|value| {
+                        Some(match value {
+                            Some(Some(value)) => Value::Double(f64::from(value)),
+                            Some(None) => Value::Empty,
+                            None => Value::Null,
+                        })
+                    });
+            }
+            if name.eq_ignore_ascii_case("color") {
+                return self
+                    .uniform_style(range, |style| style.font_color.clone())
+                    .map(|value| Some(style_color_value(value)));
+            }
+            return Ok(None);
+        }
+        if let Some(range) = self.range_interior(receiver) {
+            if name.eq_ignore_ascii_case("color") {
+                return self
+                    .uniform_style(range, |style| style.bg_color.clone())
+                    .map(|value| Some(style_color_value(value)));
+            }
+            return Ok(None);
+        }
         if self.is_application(receiver) {
             if name.eq_ignore_ascii_case("activesheet") {
                 return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
@@ -1297,6 +1426,23 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
             return self.range_formula(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("font") {
+            return Ok(Some(self.object(HostObject::RangeFont(range))));
+        }
+        if name.eq_ignore_ascii_case("interior") {
+            return Ok(Some(self.object(HostObject::RangeInterior(range))));
+        }
+        if name.eq_ignore_ascii_case("numberformat") {
+            return self
+                .uniform_style(range, |style| style.number_format.clone())
+                .map(|value| {
+                    Some(match value {
+                        Some(Some(value)) => Value::String(value),
+                        Some(None) => Value::String("General".to_string()),
+                        None => Value::Null,
+                    })
+                });
+        }
         if name.eq_ignore_ascii_case("row") {
             return Ok(Some(Value::Integer(i64::from(range.start_row))));
         }
@@ -1326,6 +1472,37 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(range) = self.range_font(receiver) {
+            if name.eq_ignore_ascii_case("bold") {
+                let value = style_boolean(&value, "Font.Bold")?;
+                self.set_range_style(range, |style| style.bold = value)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("italic") {
+                let value = style_boolean(&value, "Font.Italic")?;
+                self.set_range_style(range, |style| style.italic = value)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("size") {
+                let value = font_size(&value)?;
+                self.set_range_style(range, |style| style.font_size = value)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("color") {
+                let value = style_color(&value, "Font.Color")?;
+                self.set_range_style(range, |style| style.font_color = value.clone())?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        if let Some(range) = self.range_interior(receiver) {
+            if name.eq_ignore_ascii_case("color") {
+                let value = style_color(&value, "Interior.Color")?;
+                self.set_range_style(range, |style| style.bg_color = value.clone())?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         let Some(range) = self.range(receiver) else {
             return Ok(false);
         };
@@ -1335,6 +1512,16 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
             self.set_range_formula(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("numberformat") {
+            let value = match value {
+                Value::Empty => None,
+                Value::String(value) if value.eq_ignore_ascii_case("general") => None,
+                Value::String(value) => Some(value),
+                _ => return Err("Range.NumberFormat must be a string".to_string()),
+            };
+            self.set_range_style(range, |style| style.number_format = value.clone())?;
             return Ok(true);
         }
         Ok(false)
@@ -1390,6 +1577,92 @@ fn format_debug_value(value: &Value) -> String {
         Value::Array(_) => "<Array>".to_string(),
         Value::Object(value) => format!("<{}>", value.kind),
     }
+}
+
+fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
+    match value {
+        Value::Boolean(value) => Ok(*value),
+        Value::Integer(value) => Ok(*value != 0),
+        Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
+        _ => Err(format!("{property} must be Boolean")),
+    }
+}
+
+fn font_size(value: &Value) -> Result<Option<f32>, String> {
+    let number = match value {
+        Value::Empty => return Ok(None),
+        Value::Integer(value) => *value as f64,
+        Value::Double(value) => *value,
+        _ => return Err("Font.Size must be numeric".to_string()),
+    };
+    if !number.is_finite() || number <= 0.0 || number > f32::MAX as f64 {
+        return Err("Font.Size must be a positive finite number".to_string());
+    }
+    Ok(Some(number as f32))
+}
+
+fn color_number(value: &Value, property: &str) -> Result<Option<u32>, String> {
+    let number = match value {
+        Value::Empty => return Ok(None),
+        Value::Integer(value) => *value as f64,
+        Value::Double(value) => *value,
+        _ => return Err(format!("{property} must be an RGB color number")),
+    };
+    if !number.is_finite() || number.fract() != 0.0 || !(0.0..=16_777_215.0).contains(&number) {
+        return Err(format!(
+            "{property} must be an RGB color number from 0 to 16777215"
+        ));
+    }
+    Ok(Some(number as u32))
+}
+
+fn style_color(value: &Value, property: &str) -> Result<Option<String>, String> {
+    Ok(color_number(value, property)?.map(|color| {
+        let red = color & 0xff;
+        let green = (color >> 8) & 0xff;
+        let blue = (color >> 16) & 0xff;
+        format!("#{red:02x}{green:02x}{blue:02x}")
+    }))
+}
+
+fn style_color_value(value: Option<Option<String>>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let Some(value) = value else {
+        return Value::Empty;
+    };
+    let Some(hex) = value.strip_prefix('#').filter(|hex| hex.len() == 6) else {
+        return Value::Empty;
+    };
+    let Ok(rgb) = u32::from_str_radix(hex, 16) else {
+        return Value::Empty;
+    };
+    let red = (rgb >> 16) & 0xff;
+    let green = (rgb >> 8) & 0xff;
+    let blue = rgb & 0xff;
+    Value::Integer(i64::from(red | (green << 8) | (blue << 16)))
+}
+
+fn rgb_value(args: &[Value]) -> Result<Value, String> {
+    let [red, green, blue] = args else {
+        return Err("RGB expects red, green, and blue arguments".to_string());
+    };
+    let component = |value: &Value, name: &str| -> Result<u32, String> {
+        let value = match value {
+            Value::Integer(value) => *value as f64,
+            Value::Double(value) => *value,
+            _ => return Err(format!("RGB {name} must be numeric")),
+        };
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=255.0).contains(&value) {
+            return Err(format!("RGB {name} must be an integer from 0 to 255"));
+        }
+        Ok(value as u32)
+    };
+    let red = component(red, "red")?;
+    let green = component(green, "green")?;
+    let blue = component(blue, "blue")?;
+    Ok(Value::Integer(i64::from(red | (green << 8) | (blue << 16))))
 }
 
 fn cell_has_content(cell: &Cell) -> bool {
@@ -1481,6 +1754,14 @@ fn host_constant(name: &str) -> Option<Value> {
         "vbmsgboxsetforeground" => 65_536,
         "vbmsgboxright" => 524_288,
         "vbmsgboxrtlreading" => 1_048_576,
+        "vbblack" => 0,
+        "vbred" => 255,
+        "vbgreen" => 65_280,
+        "vbyellow" => 65_535,
+        "vbblue" => 16_711_680,
+        "vbmagenta" => 16_711_935,
+        "vbcyan" => 16_776_960,
+        "vbwhite" => 16_777_215,
         _ => return None,
     };
     Some(Value::Integer(value))
@@ -2297,6 +2578,55 @@ mod tests {
         assert_eq!(row.cells[1].formula.as_deref(), Some("SUM(C2:D2)"));
         assert!(matches!(row.cells[0].value, CellValue::Empty));
         assert!(matches!(row.cells[1].value, CellValue::Empty));
+    }
+
+    #[test]
+    fn vba_formats_ranges_without_destroying_cell_contents() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub FormatCells()\n\
+               Range(\"A1\").Value = 12\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"A1:B2\").Font.Bold = True\n\
+               Range(\"A1:B2\").Font.Italic = True\n\
+               Range(\"A1:B2\").Font.Size = 14\n\
+               Range(\"A1:B2\").Font.Color = RGB(10, 20, 30)\n\
+               Range(\"A1:B2\").Interior.Color = vbYellow\n\
+               Range(\"A1:B2\").NumberFormat = \"0.00\"\n\
+               Debug.Print Range(\"A1:B2\").Font.Bold, Range(\"A1:B2\").Font.Size, Range(\"A1:B2\").Font.Color, Range(\"A1:B2\").Interior.Color, Range(\"A1:B2\").NumberFormat\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "FormatCells", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(12.0)
+        ));
+        assert_eq!(
+            workbook.sheets[0].rows[0].cells[1].formula.as_deref(),
+            Some("A1*2")
+        );
+        assert_eq!(workbook.sheets[0].rows.len(), 2);
+        for row in &workbook.sheets[0].rows {
+            assert_eq!(row.cells.len(), 2);
+            for cell in &row.cells {
+                assert!(cell.style.bold);
+                assert!(cell.style.italic);
+                assert_eq!(cell.style.font_size, Some(14.0));
+                assert_eq!(cell.style.font_color.as_deref(), Some("#0a141e"));
+                assert_eq!(cell.style.bg_color.as_deref(), Some("#ffff00"));
+                assert_eq!(cell.style.number_format.as_deref(), Some("0.00"));
+            }
+        }
+        assert_eq!(
+            debug_output,
+            vec!["True\t14\t1971210\t65535\t0.00".to_string()]
+        );
     }
 
     #[test]
