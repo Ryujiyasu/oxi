@@ -85,6 +85,7 @@ enum HostObject {
 struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
+    selection: CellRange,
     objects: Vec<HostObject>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
@@ -100,6 +101,11 @@ impl<'a> WorkbookHost<'a> {
         Ok(Self {
             workbook,
             active_sheet,
+            selection: CellRange::single(CellAddress {
+                sheet: active_sheet,
+                row: 1,
+                column: 0,
+            }),
             objects: Vec::new(),
             debug_output: Vec::new(),
             messages: Vec::new(),
@@ -907,6 +913,11 @@ impl Host for WorkbookHost<'_> {
                         return Err("Worksheet.Activate does not accept arguments".to_string());
                     }
                     self.active_sheet = sheet;
+                    self.selection = CellRange::single(CellAddress {
+                        sheet,
+                        row: 1,
+                        column: 0,
+                    });
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("usedrange") {
@@ -934,6 +945,24 @@ impl Host for WorkbookHost<'_> {
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("evaluate") {
                 return self.evaluate_object(self.active_sheet, args).map(Some);
+            }
+            if self.is_application(receiver)
+                && (name.eq_ignore_ascii_case("selection")
+                    || name.eq_ignore_ascii_case("activecell"))
+            {
+                if !args.is_empty() {
+                    return Err(format!("Application.{name} does not accept arguments"));
+                }
+                let range = if name.eq_ignore_ascii_case("activecell") {
+                    CellRange::single(CellAddress {
+                        sheet: self.selection.sheet,
+                        row: self.selection.start_row,
+                        column: self.selection.start_column,
+                    })
+                } else {
+                    self.selection
+                };
+                return Ok(Some(self.object(HostObject::Range(range))));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("rows") {
                 return self
@@ -964,6 +993,16 @@ impl Host for WorkbookHost<'_> {
                 return Ok(None);
             }
             if let Some(range) = self.range(receiver) {
+                if name.eq_ignore_ascii_case("select") {
+                    if !args.is_empty() {
+                        return Err("Range.Select does not accept arguments".to_string());
+                    }
+                    if range.sheet != self.active_sheet {
+                        return Err("Range.Select requires its worksheet to be active".to_string());
+                    }
+                    self.selection = range;
+                    return Ok(Some(Value::Empty));
+                }
                 if name.eq_ignore_ascii_case("cells") {
                     return self.range_cells_object(range, args).map(Some);
                 }
@@ -1037,6 +1076,21 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("application") {
             return Ok(Some(self.object(HostObject::Application)));
         }
+        if name.eq_ignore_ascii_case("selection") || name.eq_ignore_ascii_case("activecell") {
+            if !args.is_empty() {
+                return Err(format!("{name} does not accept arguments"));
+            }
+            let range = if name.eq_ignore_ascii_case("activecell") {
+                CellRange::single(CellAddress {
+                    sheet: self.selection.sheet,
+                    row: self.selection.start_row,
+                    column: self.selection.start_column,
+                })
+            } else {
+                self.selection
+            };
+            return Ok(Some(self.object(HostObject::Range(range))));
+        }
         if name.eq_ignore_ascii_case("debug") {
             if !args.is_empty() {
                 return Err("Debug does not accept arguments".to_string());
@@ -1074,6 +1128,18 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
                 return Ok(Some(self.object(HostObject::Worksheets)));
+            }
+            if name.eq_ignore_ascii_case("selection") || name.eq_ignore_ascii_case("activecell") {
+                let range = if name.eq_ignore_ascii_case("activecell") {
+                    CellRange::single(CellAddress {
+                        sheet: self.selection.sheet,
+                        row: self.selection.start_row,
+                        column: self.selection.start_column,
+                    })
+                } else {
+                    self.selection
+                };
+                return Ok(Some(self.object(HostObject::Range(range))));
             }
             if name.eq_ignore_ascii_case("rows") {
                 return self
@@ -2069,6 +2135,74 @@ mod tests {
         assert!(matches!(
             workbook.sheets[0].rows[1].cells[2].value,
             CellValue::Number(7.0)
+        ));
+    }
+
+    #[test]
+    fn vba_selects_ranges_and_exposes_the_active_cell() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function FillSelection() As String\n\
+               Range(\"B2:C3\").Select\n\
+               Selection.Value = 5\n\
+               ActiveCell.Value = 7\n\
+               FillSelection = Selection.Address & \"|\" & Application.Selection.Count & \"|\" & Application.ActiveCell.Address\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "FillSelection", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("$B$2:$C$3|4|$B$2".to_string()));
+        let rows = &workbook.sheets[0].rows;
+        assert!(matches!(rows[0].cells[0].value, CellValue::Number(7.0)));
+        assert!(matches!(rows[0].cells[1].value, CellValue::Number(5.0)));
+        assert!(matches!(rows[1].cells[0].value, CellValue::Number(5.0)));
+        assert!(matches!(rows[1].cells[1].value, CellValue::Number(5.0)));
+    }
+
+    #[test]
+    fn vba_requires_a_worksheet_to_be_active_before_selecting_its_range() {
+        let mut workbook = workbook();
+        workbook.sheets.push(Sheet {
+            name: "Data".to_string(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: 8.43,
+            default_row_height: 15.0,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        });
+        let invalid = parse_module(
+            "Public Sub InvalidSelection()\n\
+               Worksheets(\"Data\").Range(\"A1\").Select\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let failure = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&invalid, "InvalidSelection", vec![], &mut host).unwrap_err()
+        };
+        assert!(failure.message.contains("worksheet to be active"));
+
+        let valid = parse_module(
+            "Public Sub ValidSelection()\n\
+               Worksheets(\"Data\").Activate\n\
+               Range(\"A1\").Select\n\
+               Selection.Value = 42\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&valid, "ValidSelection", vec![], &mut host).unwrap();
+        }
+        assert!(matches!(
+            workbook.sheets[1].rows[0].cells[0].value,
+            CellValue::Number(42.0)
         ));
     }
 
