@@ -1480,7 +1480,8 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, run_spreadsheet_vba } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko } from './oxidocs_wasm.js';
+import { cancelActiveVbaExecution, runVbaInWorker } from './vba-runner.js';
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
@@ -2475,6 +2476,7 @@ function openVbaRunner() {
 }
 
 function closeVbaRunner() {
+    cancelActiveVbaExecution();
     document.getElementById('vbaDialogBackdrop').classList.remove('open');
 }
 
@@ -2483,6 +2485,7 @@ async function executeVbaFromDialog() {
     const procedure = document.getElementById('vbaProcedure').value.trim();
     const resultElement = document.getElementById('vbaResult');
     const runButton = document.getElementById('vbaRun');
+    if (runButton.disabled) return;
     if (!source.trim() || !procedure) {
         resultElement.textContent = 'VBA source and procedure are required.';
         resultElement.classList.add('error');
@@ -2496,7 +2499,7 @@ async function executeVbaFromDialog() {
     try {
         syncPendingXlsxEditsToIr();
         const before = currentDocIR;
-        const execution = run_spreadsheet_vba(
+        const execution = await runVbaInWorker(
             currentDocIR,
             source,
             procedure,
@@ -2509,6 +2512,11 @@ async function executeVbaFromDialog() {
         resultElement.textContent = formatVbaResult(execution.result);
         showStatus('VBA macro completed.', 'info');
     } catch (error) {
+        if (error?.name === 'AbortError') {
+            resultElement.textContent = error.message;
+            showStatus(error.message, 'info');
+            return;
+        }
         const message = error?.message || String(error);
         resultElement.textContent = message;
         resultElement.classList.add('error');

@@ -1895,7 +1895,7 @@ impl<'a> Runtime<'a> {
                 if name.eq_ignore_ascii_case("erl") {
                     return Ok(Value::Integer(frame.error_state.line.unwrap_or(0) as i64));
                 }
-                if ["date", "now", "rnd", "time", "timer"]
+                if ["date", "doevents", "now", "rnd", "time", "timer"]
                     .iter()
                     .any(|builtin| name.eq_ignore_ascii_case(builtin))
                 {
@@ -3572,6 +3572,7 @@ fn call_builtin(
             | "datevalue"
             | "day"
             | "ddb"
+            | "doevents"
             | "exp"
             | "filter"
             | "fix"
@@ -3686,6 +3687,16 @@ fn call_builtin(
         }
         if name == "partition" {
             return call_partition_builtin(args, line);
+        }
+        if name == "doevents" {
+            if !args.is_empty() {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("doevents expects no arguments, received {}", args.len()),
+                    line,
+                ));
+            }
+            return Ok(Value::Integer(0));
         }
         if name == "qbcolor" {
             if args.len() != 1 {
@@ -8995,6 +9006,34 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("6|Overflow".to_string()));
+    }
+
+    #[test]
+    fn doevents_returns_zero_for_the_browser_host() {
+        let value = run(
+            "Public Function PumpEvents() As String\n\
+               PumpEvents = DoEvents & \"|\" & DoEvents()\n\
+             End Function\n",
+            "PumpEvents",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("0|0".to_string()));
+    }
+
+    #[test]
+    fn doevents_rejects_arguments() {
+        let failure = run(
+            "Public Function BadPump() As Long\n\
+               BadPump = DoEvents(1)\n\
+             End Function\n",
+            "BadPump",
+            vec![],
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
     }
 
     #[test]
