@@ -3452,10 +3452,13 @@ fn call_builtin(
             | "month"
             | "monthname"
             | "nper"
+            | "npv"
             | "oct"
+            | "partition"
             | "pmt"
             | "ppmt"
             | "pv"
+            | "qbcolor"
             | "rate"
             | "replace"
             | "rgb"
@@ -3513,6 +3516,7 @@ fn call_builtin(
                 | "irr"
                 | "mirr"
                 | "nper"
+                | "npv"
                 | "pmt"
                 | "ppmt"
                 | "pv"
@@ -3521,6 +3525,27 @@ fn call_builtin(
                 | "syd"
         ) {
             return call_financial_builtin(&name, args, line);
+        }
+        if name == "partition" {
+            return call_partition_builtin(args, line);
+        }
+        if name == "qbcolor" {
+            if args.len() != 1 {
+                return Err(error(
+                    RuntimeErrorKind::ArgumentCount,
+                    format!("qbcolor expects 1 argument, received {}", args.len()),
+                    line,
+                ));
+            }
+            let color = integer_argument(&args[0], line)?;
+            const COLORS: [i64; 16] = [
+                0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xc0c0c0,
+                0x808080, 0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff, 0xffffff,
+            ];
+            let result = COLORS.get(color as usize).ok_or_else(|| {
+                invalid_procedure_call(format!("invalid QBColor index: {color}"), line)
+            })?;
+            return Ok(Value::Integer(*result));
         }
         if matches!(
             name.as_str(),
@@ -4218,6 +4243,7 @@ fn call_financial_builtin(
 ) -> Result<Value, RuntimeError> {
     let expected = match name {
         "irr" => 1..=2,
+        "npv" => 2..=2,
         "sln" | "mirr" => 3..=3,
         "ddb" => 4..=5,
         "syd" => 4..=4,
@@ -4326,6 +4352,10 @@ fn call_financial_builtin(
             numeric(1, 0.0)?,
             numeric(2, 0.0)?,
         ),
+        "npv" => financial_npv(
+            numeric(0, 0.0)?,
+            &cash_flow_values(&args[1]).map_err(mismatch)?,
+        ),
         "rate" => financial_rate(
             numeric(0, 0.0)?,
             numeric(1, 0.0)?,
@@ -4353,6 +4383,47 @@ fn call_financial_builtin(
             line,
         ))
     }
+}
+
+fn call_partition_builtin(args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+    if args.len() != 4 {
+        return Err(error(
+            RuntimeErrorKind::ArgumentCount,
+            format!("partition expects 4 arguments, received {}", args.len()),
+            line,
+        ));
+    }
+    if args.iter().any(|value| matches!(value, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let number = integer_argument(&args[0], line)?;
+    let start = integer_argument(&args[1], line)?;
+    let stop = integer_argument(&args[2], line)?;
+    let interval = integer_argument(&args[3], line)?;
+    if start < 0 || stop <= start || interval < 1 {
+        return Err(invalid_procedure_call(
+            "invalid Partition range".to_string(),
+            line,
+        ));
+    }
+    let before = start
+        .checked_sub(1)
+        .ok_or_else(|| error(RuntimeErrorKind::Overflow, "Partition range overflow", line))?;
+    let after = stop
+        .checked_add(1)
+        .ok_or_else(|| error(RuntimeErrorKind::Overflow, "Partition range overflow", line))?;
+    let width = after.to_string().len().max(before.to_string().len());
+    let (lower, upper) = if number < start {
+        (String::new(), before.to_string())
+    } else if number > stop {
+        (after.to_string(), String::new())
+    } else {
+        let offset = number - start;
+        let lower = start + offset / interval * interval;
+        let upper = lower.saturating_add(interval - 1).min(stop);
+        (lower.to_string(), upper.to_string())
+    };
+    Ok(Value::String(format!("{lower:>width$}:{upper:>width$}")))
 }
 
 fn cash_flow_values(value: &Value) -> Result<Vec<f64>, String> {
@@ -4464,6 +4535,22 @@ fn financial_mirr(values: &[f64], finance_rate: f64, reinvest_rate: f64) -> Resu
         return Err("MIRR has no real solution".to_string());
     }
     Ok(ratio.powf(1.0 / last_period as f64) - 1.0)
+}
+
+fn financial_npv(rate: f64, values: &[f64]) -> Result<f64, String> {
+    if values.is_empty()
+        || !values.iter().any(|value| *value < 0.0)
+        || !values.iter().any(|value| *value > 0.0)
+        || rate == -1.0
+    {
+        return Err("invalid NPV cash flows or rate".to_string());
+    }
+    let base = 1.0 + rate;
+    Ok(values
+        .iter()
+        .enumerate()
+        .map(|(period, cash_flow)| cash_flow / base.powf((period + 1) as f64))
+        .sum())
 }
 
 fn annuity_factor(rate: f64, periods: f64) -> Result<f64, String> {
@@ -8521,6 +8608,77 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, Value::String("5|5|13".to_string()));
+    }
+
+    #[test]
+    fn executes_vba_npv_partition_and_qbcolor() {
+        let value = run(
+            "Public Function RemainingPureBuiltins() As String\n\
+               Dim values(4) As Double\n\
+               values(0) = -70000\n\
+               values(1) = 22000\n\
+               values(2) = 25000\n\
+               values(3) = 28000\n\
+               values(4) = 31000\n\
+               RemainingPureBuiltins = Round(NPV(0.0625, values), 8) & \"|[\" & Partition(42, 0, 99, 5) & \"]|[\"\n\
+               RemainingPureBuiltins = RemainingPureBuiltins & Partition(-2, 0, 99, 5) & \"]|[\" & Partition(101, 0, 99, 5) & \"]|\"\n\
+               RemainingPureBuiltins = RemainingPureBuiltins & QBColor(1) & \"|\" & QBColor(7) & \"|\" & QBColor(15)\n\
+             End Function\n",
+            "RemainingPureBuiltins",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "19312.57020954|[ 40: 44]|[   : -1]|[100:   ]|8388608|12632256|16777215"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn partition_rounds_arguments_and_propagates_null() {
+        let value = run(
+            "Public Function PartitionEdges() As String\n\
+               PartitionEdges = \"[\" & Partition(2.5, 0, 99, 5) & \"]|[\" & Partition(3.5, 0, 99, 5) & \"]|\" & IsNull(Partition(1, Null, 9, 1))\n\
+             End Function\n",
+            "PartitionEdges",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("[  0:  4]|[  0:  4]|True".to_string()));
+    }
+
+    #[test]
+    fn npv_partition_and_qbcolor_report_invalid_inputs() {
+        let value = run(
+            "Public Function PureBuiltinErrors() As String\n\
+               Dim values(1) As Double\n\
+               Dim badFlows As Long\n\
+               Dim badRange As Long\n\
+               Dim badColor As Long\n\
+               values(0) = 10\n\
+               values(1) = 20\n\
+               On Error Resume Next\n\
+               badFlows = NPV(0.1, values)\n\
+               badFlows = Err.Number\n\
+               Err.Clear\n\
+               badRange = Partition(5, 10, 5, 1)\n\
+               badRange = Err.Number\n\
+               Err.Clear\n\
+               badColor = QBColor(16)\n\
+               badColor = Err.Number\n\
+               PureBuiltinErrors = badFlows & \"|\" & badRange & \"|\" & badColor\n\
+             End Function\n",
+            "PureBuiltinErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("5|5|5".to_string()));
     }
 
     #[test]
