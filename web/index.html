@@ -1072,7 +1072,7 @@ input[type="file"] { display: none; }
 <div class="vba-dialog-backdrop" id="vbaDialogBackdrop" role="dialog" aria-modal="true" aria-labelledby="vbaDialogTitle">
     <div class="vba-dialog">
         <h2 id="vbaDialogTitle">Run VBA Macro</h2>
-        <p class="vba-note">Runs locally in WebAssembly. Debug.Print output appears below. File, network, COM, and native system APIs are not available.</p>
+        <p class="vba-note">Runs locally in WebAssembly. Debug.Print and vbOKOnly MsgBox output appears below. File, network, COM, and native system APIs are not available.</p>
         <label for="vbaProcedure">Procedure</label>
         <input id="vbaProcedure" type="text" value="Main" list="vbaProcedureList" autocomplete="off" spellcheck="false">
         <datalist id="vbaProcedureList"></datalist>
@@ -2468,8 +2468,17 @@ function formatVbaResult(result) {
 
 function formatVbaExecution(execution) {
     const result = formatVbaResult(execution.result);
-    if (!execution.debug_output?.length) return result;
-    return `Debug.Print:\n${execution.debug_output.join('\n')}\n\n${result}`;
+    const sections = [];
+    if (execution.messages?.length) {
+        sections.push(`MsgBox:\n${execution.messages
+            .map(message => `[${message.title}] ${message.prompt}`)
+            .join('\n')}`);
+    }
+    if (execution.debug_output?.length) {
+        sections.push(`Debug.Print:\n${execution.debug_output.join('\n')}`);
+    }
+    sections.push(result);
+    return sections.join('\n\n');
 }
 
 let vbaProcedureRefreshTimer = null;

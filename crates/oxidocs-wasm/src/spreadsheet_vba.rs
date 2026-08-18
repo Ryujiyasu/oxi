@@ -87,6 +87,7 @@ struct WorkbookHost<'a> {
     active_sheet: usize,
     objects: Vec<HostObject>,
     debug_output: Vec<String>,
+    messages: Vec<BrowserMessage>,
 }
 
 impl<'a> WorkbookHost<'a> {
@@ -101,6 +102,7 @@ impl<'a> WorkbookHost<'a> {
             active_sheet,
             objects: Vec::new(),
             debug_output: Vec::new(),
+            messages: Vec::new(),
         })
     }
 
@@ -174,6 +176,42 @@ impl<'a> WorkbookHost<'a> {
 
     fn take_debug_output(&mut self) -> Vec<String> {
         std::mem::take(&mut self.debug_output)
+    }
+
+    fn take_messages(&mut self) -> Vec<BrowserMessage> {
+        std::mem::take(&mut self.messages)
+    }
+
+    fn show_message_box(&mut self, args: &[Value]) -> Result<Value, String> {
+        if !(1..=5).contains(&args.len()) {
+            return Err(format!(
+                "MsgBox expects 1 to 5 arguments, received {}",
+                args.len()
+            ));
+        }
+        let buttons = match args.get(1) {
+            None | Some(Value::Missing) | Some(Value::Empty) => 0,
+            Some(Value::Integer(value)) => *value,
+            Some(Value::Double(value)) if value.is_finite() && value.fract() == 0.0 => {
+                *value as i64
+            }
+            Some(_) => return Err("MsgBox buttons must be an integer style".to_string()),
+        };
+        if buttons & 0x0f != 0 {
+            return Err(
+                "browser MsgBox supports vbOKOnly; interactive button styles are unavailable"
+                    .to_string(),
+            );
+        }
+        let title = match args.get(2) {
+            None | Some(Value::Missing) | Some(Value::Empty) => "Oxi VBA".to_string(),
+            Some(value) => format_debug_value(value),
+        };
+        self.messages.push(BrowserMessage {
+            prompt: format_debug_value(&args[0]),
+            title,
+        });
+        Ok(Value::Integer(1))
     }
 
     fn worksheet_object(&mut self, value: &Value) -> Result<Value, String> {
@@ -970,9 +1008,12 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if args.is_empty() {
-            if let Some(value) = excel_constant(name) {
+            if let Some(value) = host_constant(name) {
                 return Ok(Some(value));
             }
+        }
+        if name.eq_ignore_ascii_case("msgbox") {
+            return self.show_message_box(args).map(Some);
         }
         if name.eq_ignore_ascii_case("range") {
             return self.range_object(self.active_sheet, args).map(Some);
@@ -1258,17 +1299,33 @@ fn end_direction(value: &Value) -> Result<EndDirection, String> {
     }
 }
 
-fn excel_constant(name: &str) -> Option<Value> {
-    let value = if name.eq_ignore_ascii_case("xlup") {
-        -4162
-    } else if name.eq_ignore_ascii_case("xldown") {
-        -4121
-    } else if name.eq_ignore_ascii_case("xltoleft") {
-        -4159
-    } else if name.eq_ignore_ascii_case("xltoright") {
-        -4161
-    } else {
-        return None;
+fn host_constant(name: &str) -> Option<Value> {
+    let value = match name.to_ascii_lowercase().as_str() {
+        "xlup" => -4162,
+        "xldown" => -4121,
+        "xltoleft" => -4159,
+        "xltoright" => -4161,
+        "vbokonly" | "vbapplicationmodal" | "vbdefaultbutton1" => 0,
+        "vbokcancel" | "vbok" => 1,
+        "vbabortretryignore" | "vbcancel" => 2,
+        "vbyesnocancel" | "vbabort" => 3,
+        "vbyesno" | "vbretry" => 4,
+        "vbretrycancel" | "vbignore" => 5,
+        "vbyes" => 6,
+        "vbno" => 7,
+        "vbcritical" => 16,
+        "vbquestion" => 32,
+        "vbexclamation" => 48,
+        "vbinformation" => 64,
+        "vbdefaultbutton2" => 256,
+        "vbdefaultbutton3" => 512,
+        "vbdefaultbutton4" => 768,
+        "vbsystemmodal" => 4096,
+        "vbmsgboxhelpbutton" => 16_384,
+        "vbmsgboxsetforeground" => 65_536,
+        "vbmsgboxright" => 524_288,
+        "vbmsgboxrtlreading" => 1_048_576,
+        _ => return None,
     };
     Some(Value::Integer(value))
 }
@@ -1574,6 +1631,13 @@ struct RunResult {
     workbook: Workbook,
     result: OutputValue,
     debug_output: Vec<String>,
+    messages: Vec<BrowserMessage>,
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+struct BrowserMessage {
+    prompt: String,
+    title: String,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -1660,11 +1724,13 @@ pub fn run_spreadsheet_vba(
         .call(procedure, args.into_iter().map(Value::from).collect())
         .map_err(|error| JsError::new(&error.to_string()))?;
     let debug_output = host.take_debug_output();
+    let messages = host.take_messages();
     drop(host);
     serde_wasm_bindgen::to_value(&RunResult {
         workbook,
         result: result.into(),
         debug_output,
+        messages,
     })
     .map_err(|error| JsError::new(&error.to_string()))
 }
@@ -1737,6 +1803,48 @@ mod tests {
             workbook.sheets[0].rows[0].cells[0].value,
             CellValue::Number(7.0)
         ));
+    }
+
+    #[test]
+    fn vba_collects_ok_only_message_boxes() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Notify() As Long\n\
+               Notify = MsgBox(\"Finished\", vbOKOnly + vbInformation, \"Report\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let (result, messages) = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let result = execute_with_host(&module, "Notify", vec![], &mut host).unwrap();
+            (result, host.take_messages())
+        };
+
+        assert_eq!(result, Value::Integer(1));
+        assert_eq!(
+            messages,
+            vec![BrowserMessage {
+                prompt: "Finished".to_string(),
+                title: "Report".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn vba_rejects_interactive_message_boxes() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub AskUser()\n\
+               MsgBox \"Continue?\", vbYesNo\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let failure = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "AskUser", vec![], &mut host).unwrap_err()
+        };
+
+        assert!(failure.message.contains("interactive button styles"));
     }
 
     #[test]
