@@ -835,6 +835,88 @@ impl<'a> WorkbookHost<'a> {
         find_value_text(&self.cell_value(address))
     }
 
+    fn replace_in_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if !(2..=8).contains(&args.len()) {
+            return Err("Range.Replace expects between two and eight arguments".to_string());
+        }
+        Self::range_cell_count(range)?;
+        let what = args
+            .first()
+            .filter(|value| !matches!(value, Value::Missing))
+            .ok_or_else(|| "Range.Replace What argument is required".to_string())?;
+        let replacement = args
+            .get(1)
+            .filter(|value| !matches!(value, Value::Missing))
+            .ok_or_else(|| "Range.Replace Replacement argument is required".to_string())?;
+        let look_at = find_integer_argument(args.get(2), 2, "LookAt")?;
+        if !matches!(look_at, 1 | 2) {
+            return Err(format!(
+                "unsupported Range.Replace LookAt constant: {look_at}"
+            ));
+        }
+        let search_order = find_integer_argument(args.get(3), 1, "SearchOrder")?;
+        if !matches!(search_order, 1 | 2) {
+            return Err(format!(
+                "unsupported Range.Replace SearchOrder constant: {search_order}"
+            ));
+        }
+        let match_case = find_boolean_argument(args.get(4), false, "MatchCase")?;
+        if find_boolean_argument(args.get(5), false, "MatchByte")? {
+            return Err(
+                "Range.Replace MatchByte:=True is not supported in the browser".to_string(),
+            );
+        }
+        if find_boolean_argument(args.get(6), false, "SearchFormat")? {
+            return Err(
+                "Range.Replace SearchFormat:=True is not supported in the browser".to_string(),
+            );
+        }
+        if find_boolean_argument(args.get(7), false, "ReplaceFormat")? {
+            return Err(
+                "Range.Replace ReplaceFormat:=True is not supported in the browser".to_string(),
+            );
+        }
+
+        let needle = find_value_text(what);
+        let replacement_text = find_value_text(replacement);
+        let mut changed = false;
+        for address in range.addresses() {
+            let formula = self
+                .workbook
+                .sheets
+                .get(address.sheet)
+                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                .and_then(|cell| cell.formula.as_deref())
+                .map(|formula| format!("={formula}"));
+            let candidate = formula
+                .clone()
+                .unwrap_or_else(|| find_value_text(&self.cell_value(address)));
+            let Some(replaced) = replace_matching_text(
+                &candidate,
+                &needle,
+                &replacement_text,
+                look_at == 1,
+                match_case,
+            ) else {
+                continue;
+            };
+            if formula.is_some() {
+                if replaced.starts_with('=') {
+                    self.set_cell_formula(address, replaced)?;
+                } else {
+                    self.set_cell_value(address, CellValue::String(replaced))?;
+                }
+            } else if look_at == 1 {
+                self.set_cell_value(address, to_cell_value(replacement.clone())?)?;
+            } else {
+                self.set_cell_value(address, CellValue::String(replaced))?;
+            }
+            changed = true;
+        }
+        Ok(Value::Boolean(changed))
+    }
+
     fn current_region_object(&mut self, range: CellRange) -> Result<Value, String> {
         let worksheet = self
             .workbook
@@ -1662,6 +1744,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("findprevious") {
                     return self.find_again(args, 2).map(Some);
                 }
+                if name.eq_ignore_ascii_case("replace") {
+                    return self.replace_in_range(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("currentregion") {
                     if !args.is_empty() {
                         return Err("Range.CurrentRegion does not accept arguments".to_string());
@@ -1827,6 +1912,19 @@ impl Host for WorkbookHost<'_> {
         } else if name.eq_ignore_ascii_case("findnext") || name.eq_ignore_ascii_case("findprevious")
         {
             Some(&["After"][..])
+        } else if name.eq_ignore_ascii_case("replace") {
+            Some(
+                &[
+                    "What",
+                    "Replacement",
+                    "LookAt",
+                    "SearchOrder",
+                    "MatchCase",
+                    "MatchByte",
+                    "SearchFormat",
+                    "ReplaceFormat",
+                ][..],
+            )
         } else {
             None
         };
@@ -2358,6 +2456,48 @@ fn find_text_matches(candidate: &str, needle: &str, whole: bool, match_case: boo
             candidate.contains(&needle)
         }
     }
+}
+
+fn replace_matching_text(
+    candidate: &str,
+    needle: &str,
+    replacement: &str,
+    whole: bool,
+    match_case: bool,
+) -> Option<String> {
+    if !find_text_matches(candidate, needle, whole, match_case) {
+        return None;
+    }
+    if whole {
+        return Some(replacement.to_string());
+    }
+    if needle.is_empty() {
+        return None;
+    }
+    if match_case {
+        return Some(candidate.replace(needle, replacement));
+    }
+
+    let mut result = String::with_capacity(candidate.len());
+    let mut offset = 0;
+    let mut replaced_any = false;
+    while offset < candidate.len() {
+        let Some(relative) = candidate[offset..].char_indices().find_map(|(index, _)| {
+            let start = offset + index;
+            let end = start.checked_add(needle.len())?;
+            (candidate.is_char_boundary(end) && candidate[start..end].eq_ignore_ascii_case(needle))
+                .then_some(index)
+        }) else {
+            result.push_str(&candidate[offset..]);
+            break;
+        };
+        let start = offset + relative;
+        result.push_str(&candidate[offset..start]);
+        result.push_str(replacement);
+        offset = start + needle.len();
+        replaced_any = true;
+    }
+    replaced_any.then_some(result)
 }
 
 fn optional_dimension(value: Value, property: &str, maximum: f64) -> Result<Option<f32>, String> {
@@ -3892,6 +4032,34 @@ mod tests {
         assert_eq!(
             debug_output,
             vec!["A3\tA1\tA3\tA1".to_string(), "True\tTrue".to_string(),]
+        );
+    }
+
+    #[test]
+    fn vba_replaces_values_and_formula_text_in_ranges() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ReplaceCells()\n\
+               Range(\"A1\").Value = \"foo bar\"\n\
+               Range(\"A2\").Value = \"FOO\"\n\
+               Range(\"B1\").Value = 42\n\
+               Range(\"B2\").Formula = \"=A1&\"\"foo\"\"\"\n\
+               changed = Range(\"A1:B2\").Replace(What:=\"foo\", Replacement:=\"baz\", LookAt:=xlPart, SearchOrder:=xlByRows, MatchCase:=False)\n\
+               exact = Range(\"B1\").Replace(What:=42, Replacement:=7, LookAt:=xlWhole)\n\
+               missing = Range(\"A1:B2\").Replace(What:=\"absent\", Replacement:=\"unused\")\n\
+               Debug.Print changed, exact, missing, Range(\"A1\").Value, Range(\"A2\").Value, Range(\"B1\").Value, Range(\"B2\").Formula\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ReplaceCells", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec!["True\tTrue\tFalse\tbaz bar\tbaz\t7\t=A1&\"baz\"".to_string()]
         );
     }
 
