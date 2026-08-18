@@ -42,6 +42,17 @@ enum EndDirection {
     Right,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum BorderSelection {
+    All,
+    EdgeLeft,
+    EdgeTop,
+    EdgeBottom,
+    EdgeRight,
+    InsideVertical,
+    InsideHorizontal,
+}
+
 const MAX_WORKSHEET_ROW: u32 = 1_048_576;
 const MAX_WORKSHEET_COLUMN: u32 = 16_383;
 
@@ -76,6 +87,7 @@ enum HostObject {
     Range(CellRange),
     RangeFont(CellRange),
     RangeInterior(CellRange),
+    RangeBorders(CellRange, BorderSelection),
     RangeCollection(CellRange, RangeAxis),
     Worksheet(usize),
     Worksheets,
@@ -123,6 +135,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Range(_) => "Range",
                 HostObject::RangeFont(_) => "Font",
                 HostObject::RangeInterior(_) => "Interior",
+                HostObject::RangeBorders(_, _) => "Borders",
                 HostObject::RangeCollection(_, RangeAxis::Rows) => "Rows",
                 HostObject::RangeCollection(_, RangeAxis::Columns) => "Columns",
                 HostObject::Worksheet(_) => "Worksheet",
@@ -154,6 +167,22 @@ impl<'a> WorkbookHost<'a> {
             Some(HostObject::RangeInterior(range)) => Some(*range),
             _ => None,
         }
+    }
+
+    fn range_borders(&self, object: &ObjectRef) -> Option<(CellRange, BorderSelection)> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::RangeBorders(range, selection)) => Some((*range, *selection)),
+            _ => None,
+        }
+    }
+
+    fn borders_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let selection = match args {
+            [] => BorderSelection::All,
+            [value] => border_selection(value)?,
+            _ => return Err("Range.Borders expects zero or one border index".to_string()),
+        };
+        Ok(self.object(HostObject::RangeBorders(range, selection)))
     }
 
     fn range_collection(&self, object: &ObjectRef) -> Option<(CellRange, RangeAxis)> {
@@ -874,7 +903,7 @@ impl<'a> WorkbookHost<'a> {
     fn set_range_style(
         &mut self,
         range: CellRange,
-        mut update: impl FnMut(&mut CellStyle),
+        mut update: impl FnMut(CellAddress, &mut CellStyle),
     ) -> Result<(), String> {
         Self::range_cell_count(range)?;
         for address in range.addresses() {
@@ -911,7 +940,7 @@ impl<'a> WorkbookHost<'a> {
                 .iter_mut()
                 .find(|cell| cell.col == address.column)
                 .expect("the destination cell was created");
-            update(&mut cell.style);
+            update(address, &mut cell.style);
         }
         Ok(())
     }
@@ -940,6 +969,33 @@ impl<'a> WorkbookHost<'a> {
             first = Some(value);
         }
         Ok(first)
+    }
+
+    fn uniform_border(
+        &self,
+        range: CellRange,
+        selection: BorderSelection,
+    ) -> Result<Option<bool>, String> {
+        Self::range_cell_count(range)?;
+        let default_style = CellStyle::default();
+        let mut first = None;
+        for address in range.addresses() {
+            let style = self
+                .workbook
+                .sheets
+                .get(address.sheet)
+                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                .map(|cell| &cell.style)
+                .unwrap_or(&default_style);
+            for value in selected_borders(style, address, range, selection) {
+                if first.is_some_and(|first| first != value) {
+                    return Ok(None);
+                }
+                first = Some(value);
+            }
+        }
+        Ok(Some(first.unwrap_or(false)))
     }
 
     fn clear_range(
@@ -1201,6 +1257,9 @@ impl Host for WorkbookHost<'_> {
                 return Ok(None);
             }
             if let Some(range) = self.range(receiver) {
+                if name.eq_ignore_ascii_case("borders") {
+                    return self.borders_object(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("copy") {
                     return self.copy_range(range, args).map(Some);
                 }
@@ -1345,6 +1404,18 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if let Some((range, selection)) = self.range_borders(receiver) {
+            if name.eq_ignore_ascii_case("linestyle") {
+                return self.uniform_border(range, selection).map(|value| {
+                    Some(match value {
+                        Some(true) => Value::Integer(1),
+                        Some(false) => Value::Integer(-4142),
+                        None => Value::Null,
+                    })
+                });
+            }
+            return Ok(None);
+        }
         if let Some(range) = self.range_font(receiver) {
             if name.eq_ignore_ascii_case("bold") {
                 return self
@@ -1478,6 +1549,11 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("interior") {
             return Ok(Some(self.object(HostObject::RangeInterior(range))));
         }
+        if name.eq_ignore_ascii_case("borders") {
+            return Ok(Some(
+                self.object(HostObject::RangeBorders(range, BorderSelection::All)),
+            ));
+        }
         if name.eq_ignore_ascii_case("numberformat") {
             return self
                 .uniform_style(range, |style| style.number_format.clone())
@@ -1523,25 +1599,35 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some((range, selection)) = self.range_borders(receiver) {
+            if name.eq_ignore_ascii_case("linestyle") {
+                let enabled = border_line_style(&value)?;
+                self.set_range_style(range, |address, style| {
+                    set_selected_borders(style, address, range, selection, enabled);
+                })?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if let Some(range) = self.range_font(receiver) {
             if name.eq_ignore_ascii_case("bold") {
                 let value = style_boolean(&value, "Font.Bold")?;
-                self.set_range_style(range, |style| style.bold = value)?;
+                self.set_range_style(range, |_, style| style.bold = value)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("italic") {
                 let value = style_boolean(&value, "Font.Italic")?;
-                self.set_range_style(range, |style| style.italic = value)?;
+                self.set_range_style(range, |_, style| style.italic = value)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("size") {
                 let value = font_size(&value)?;
-                self.set_range_style(range, |style| style.font_size = value)?;
+                self.set_range_style(range, |_, style| style.font_size = value)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("color") {
                 let value = style_color(&value, "Font.Color")?;
-                self.set_range_style(range, |style| style.font_color = value.clone())?;
+                self.set_range_style(range, |_, style| style.font_color = value.clone())?;
                 return Ok(true);
             }
             return Ok(false);
@@ -1549,7 +1635,7 @@ impl Host for WorkbookHost<'_> {
         if let Some(range) = self.range_interior(receiver) {
             if name.eq_ignore_ascii_case("color") {
                 let value = style_color(&value, "Interior.Color")?;
-                self.set_range_style(range, |style| style.bg_color = value.clone())?;
+                self.set_range_style(range, |_, style| style.bg_color = value.clone())?;
                 return Ok(true);
             }
             return Ok(false);
@@ -1572,12 +1658,12 @@ impl Host for WorkbookHost<'_> {
                 Value::String(value) => Some(value),
                 _ => return Err("Range.NumberFormat must be a string".to_string()),
             };
-            self.set_range_style(range, |style| style.number_format = value.clone())?;
+            self.set_range_style(range, |_, style| style.number_format = value.clone())?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("horizontalalignment") {
             let value = horizontal_alignment(&value)?;
-            self.set_range_style(range, |style| style.horizontal_align = value.clone())?;
+            self.set_range_style(range, |_, style| style.horizontal_align = value.clone())?;
             return Ok(true);
         }
         Ok(false)
@@ -1744,6 +1830,128 @@ fn horizontal_alignment_value(value: Option<Option<String>>) -> Value {
     Value::Integer(constant)
 }
 
+fn border_selection(value: &Value) -> Result<BorderSelection, String> {
+    let value = match value {
+        Value::Integer(value) => *value,
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        _ => return Err("Range.Borders index must be an Excel border constant".to_string()),
+    };
+    match value {
+        7 => Ok(BorderSelection::EdgeLeft),
+        8 => Ok(BorderSelection::EdgeTop),
+        9 => Ok(BorderSelection::EdgeBottom),
+        10 => Ok(BorderSelection::EdgeRight),
+        11 => Ok(BorderSelection::InsideVertical),
+        12 => Ok(BorderSelection::InsideHorizontal),
+        _ => Err(format!("unsupported Range.Borders index: {value}")),
+    }
+}
+
+fn border_line_style(value: &Value) -> Result<bool, String> {
+    let value = match value {
+        Value::Empty => return Ok(false),
+        Value::Integer(value) => *value,
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        _ => return Err("Borders.LineStyle must be an Excel line-style constant".to_string()),
+    };
+    match value {
+        1 => Ok(true),
+        -4142 => Ok(false),
+        _ => Err(format!("unsupported Borders.LineStyle constant: {value}")),
+    }
+}
+
+fn selected_borders(
+    style: &CellStyle,
+    address: CellAddress,
+    range: CellRange,
+    selection: BorderSelection,
+) -> Vec<bool> {
+    match selection {
+        BorderSelection::All => vec![
+            style.border_top,
+            style.border_bottom,
+            style.border_left,
+            style.border_right,
+        ],
+        BorderSelection::EdgeLeft if address.column == range.start_column => {
+            vec![style.border_left]
+        }
+        BorderSelection::EdgeTop if address.row == range.start_row => vec![style.border_top],
+        BorderSelection::EdgeBottom if address.row == range.end_row => vec![style.border_bottom],
+        BorderSelection::EdgeRight if address.column == range.end_column => {
+            vec![style.border_right]
+        }
+        BorderSelection::InsideVertical => {
+            let mut values = Vec::with_capacity(2);
+            if address.column > range.start_column {
+                values.push(style.border_left);
+            }
+            if address.column < range.end_column {
+                values.push(style.border_right);
+            }
+            values
+        }
+        BorderSelection::InsideHorizontal => {
+            let mut values = Vec::with_capacity(2);
+            if address.row > range.start_row {
+                values.push(style.border_top);
+            }
+            if address.row < range.end_row {
+                values.push(style.border_bottom);
+            }
+            values
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn set_selected_borders(
+    style: &mut CellStyle,
+    address: CellAddress,
+    range: CellRange,
+    selection: BorderSelection,
+    enabled: bool,
+) {
+    match selection {
+        BorderSelection::All => {
+            style.border_top = enabled;
+            style.border_bottom = enabled;
+            style.border_left = enabled;
+            style.border_right = enabled;
+        }
+        BorderSelection::EdgeLeft if address.column == range.start_column => {
+            style.border_left = enabled;
+        }
+        BorderSelection::EdgeTop if address.row == range.start_row => {
+            style.border_top = enabled;
+        }
+        BorderSelection::EdgeBottom if address.row == range.end_row => {
+            style.border_bottom = enabled;
+        }
+        BorderSelection::EdgeRight if address.column == range.end_column => {
+            style.border_right = enabled;
+        }
+        BorderSelection::InsideVertical => {
+            if address.column > range.start_column {
+                style.border_left = enabled;
+            }
+            if address.column < range.end_column {
+                style.border_right = enabled;
+            }
+        }
+        BorderSelection::InsideHorizontal => {
+            if address.row > range.start_row {
+                style.border_top = enabled;
+            }
+            if address.row < range.end_row {
+                style.border_bottom = enabled;
+            }
+        }
+        _ => {}
+    }
+}
+
 fn rgb_value(args: &[Value]) -> Result<Value, String> {
     let [red, green, blue] = args else {
         return Err("RGB expects red, green, and blue arguments".to_string());
@@ -1842,6 +2050,14 @@ fn host_constant(name: &str) -> Option<Value> {
         "xljustify" => -4130,
         "xlcenteracrossselection" => 7,
         "xldistributed" => -4117,
+        "xlcontinuous" => 1,
+        "xllinestylenone" => -4142,
+        "xledgeleft" => 7,
+        "xledgetop" => 8,
+        "xledgebottom" => 9,
+        "xledgeright" => 10,
+        "xlinsidevertical" => 11,
+        "xlinsidehorizontal" => 12,
         "vbokonly" | "vbapplicationmodal" | "vbdefaultbutton1" => 0,
         "vbokcancel" | "vbok" => 1,
         "vbabortretryignore" | "vbcancel" => 2,
@@ -2779,6 +2995,44 @@ mod tests {
         assert_eq!(cells[2].style.number_format, None);
         assert_eq!(cells[2].style.horizontal_align, None);
         assert_eq!(debug_output, vec!["1\t1\tTrue\t-4108\t0.00".to_string()]);
+    }
+
+    #[test]
+    fn vba_sets_all_or_indexed_range_borders() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub DrawBorders()\n\
+               Range(\"A1\").Value = 5\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"A1:B2\").Borders.LineStyle = xlContinuous\n\
+               Range(\"A1:B2\").Borders(xlEdgeBottom).LineStyle = xlLineStyleNone\n\
+               Debug.Print Range(\"A1:B2\").Borders.LineStyle, Range(\"A1:B2\").Borders(xlEdgeBottom).LineStyle, Range(\"A1:B2\").Borders(xlEdgeTop).LineStyle\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "DrawBorders", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(5.0)
+        ));
+        assert_eq!(
+            workbook.sheets[0].rows[0].cells[1].formula.as_deref(),
+            Some("A1*2")
+        );
+        for (row_index, row) in workbook.sheets[0].rows.iter().enumerate() {
+            for cell in &row.cells {
+                assert!(cell.style.border_top);
+                assert_eq!(cell.style.border_bottom, row_index == 0);
+                assert!(cell.style.border_left);
+                assert!(cell.style.border_right);
+            }
+        }
+        assert_eq!(debug_output, vec!["Null\t-4142\t1".to_string()]);
     }
 
     #[test]
