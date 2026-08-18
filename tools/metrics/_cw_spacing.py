@@ -41,12 +41,18 @@ def esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+BALANCE = os.environ.get("BALANCE", "") == "1"
+ASCII = os.environ.get("ASCII", "")          # "" = same face as the CJK run
+COMPAT = os.environ.get("COMPAT", "15")
+
+
 def build(out, in_cell=True):
     font = "ＭＳ 明朝"
     rows = []
     for sz in SIZES:
         for sp in SPACINGS:
-            rpr = (f'<w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
+            asc = ASCII or font
+            rpr = (f'<w:rFonts w:ascii="{asc}" w:eastAsia="{font}" w:hAnsi="{asc}"/>'
                    + (f'<w:spacing w:val="{sp}"/>' if sp else '')
                    + f'<w:sz w:val="{sz}"/><w:szCs w:val="{sz}"/>')
             para = (f'<w:p><w:pPr><w:jc w:val="left"/><w:rPr>{rpr}</w:rPr></w:pPr>'
@@ -76,8 +82,10 @@ def build(out, in_cell=True):
               '<w:pPr><w:widowControl w:val="0"/></w:pPr></w:style></w:styles>')
     settings = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-                '<w:compat><w:compatSetting w:name="compatibilityMode" '
-                'w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>')
+                + ('<w:balanceSingleByteDoubleByteWidth/>' if BALANCE else '')
+                + '<w:compat><w:compatSetting w:name="compatibilityMode" '
+                f'w:uri="http://schemas.microsoft.com/office/word" w:val="{COMPAT}"/>'
+                '</w:compat></w:settings>')
     ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
           '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
           '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -155,12 +163,16 @@ def oxi_rows(docx):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    docx = os.path.join(OUT, "cw_spacing.docx")
+    tag = (("_bal" if BALANCE else "")
+           + ("_" + ASCII.encode("ascii", "ignore").decode() if ASCII else "")
+           + ("_c" + COMPAT if COMPAT != "15" else ""))
+    docx = os.path.join(OUT, "cw_spacing%s.docx" % (tag or ""))
     if not ("--keep" in sys.argv and os.path.exists(docx)):
         build(docx)
     rows = word_rows(export(docx))
     arms = [(sz, sp) for sz in SIZES for sp in SPACINGS]
-    print(f"{len(rows)} rows read, {len(arms)} expected")
+    print(f"{len(rows)} rows read, {len(arms)} expected; "
+          f"balanceSBDB={BALANCE} ascii={ASCII or '(same)'} compat={COMPAT}")
     ox = oxi_rows(docx) if "--oxi" in sys.argv else []
     print(f"{'sz':>4}{'w:spacing':>11}{'asked':>8} | {'CJK adv':>9}{'got':>8}"
           f" | {'adv(あ) before H':>17}{'CJK->lat gap':>14}{'/em':>7}"
