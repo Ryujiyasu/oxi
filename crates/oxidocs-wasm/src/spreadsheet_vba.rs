@@ -100,6 +100,10 @@ struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
     selection: CellRange,
+    screen_updating: bool,
+    enable_events: bool,
+    display_alerts: bool,
+    calculation: i64,
     objects: Vec<HostObject>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
@@ -120,6 +124,10 @@ impl<'a> WorkbookHost<'a> {
                 row: 1,
                 column: 0,
             }),
+            screen_updating: true,
+            enable_events: true,
+            display_alerts: true,
+            calculation: -4105,
             objects: Vec::new(),
             debug_output: Vec::new(),
             messages: Vec::new(),
@@ -1689,6 +1697,18 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if self.is_application(receiver) {
+            if name.eq_ignore_ascii_case("screenupdating") {
+                return Ok(Some(Value::Boolean(self.screen_updating)));
+            }
+            if name.eq_ignore_ascii_case("enableevents") {
+                return Ok(Some(Value::Boolean(self.enable_events)));
+            }
+            if name.eq_ignore_ascii_case("displayalerts") {
+                return Ok(Some(Value::Boolean(self.display_alerts)));
+            }
+            if name.eq_ignore_ascii_case("calculation") {
+                return Ok(Some(Value::Integer(self.calculation)));
+            }
             if name.eq_ignore_ascii_case("activesheet") {
                 return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
             }
@@ -1864,6 +1884,25 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if self.is_application(receiver) {
+            if name.eq_ignore_ascii_case("screenupdating") {
+                self.screen_updating = style_boolean(&value, "Application.ScreenUpdating")?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("enableevents") {
+                self.enable_events = style_boolean(&value, "Application.EnableEvents")?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("displayalerts") {
+                self.display_alerts = style_boolean(&value, "Application.DisplayAlerts")?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("calculation") {
+                self.calculation = application_calculation(&value)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if let Some((range, selection)) = self.range_borders(receiver) {
             if name.eq_ignore_ascii_case("linestyle") {
                 let enabled = border_line_style(&value)?;
@@ -2008,6 +2047,22 @@ fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
         Value::Integer(value) => Ok(*value != 0),
         Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
         _ => Err(format!("{property} must be Boolean")),
+    }
+}
+
+fn application_calculation(value: &Value) -> Result<i64, String> {
+    let value = match value {
+        Value::Integer(value) => *value,
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        _ => {
+            return Err("Application.Calculation must be an Excel calculation constant".to_string())
+        }
+    };
+    match value {
+        -4105 | -4135 | 2 => Ok(value),
+        _ => Err(format!(
+            "unsupported Application.Calculation constant: {value}"
+        )),
     }
 }
 
@@ -2386,6 +2441,9 @@ fn host_constant(name: &str) -> Option<Value> {
         "xledgeright" => 10,
         "xlinsidevertical" => 11,
         "xlinsidehorizontal" => 12,
+        "xlcalculationautomatic" => -4105,
+        "xlcalculationmanual" => -4135,
+        "xlcalculationsemiautomatic" => 2,
         "vbokonly" | "vbapplicationmodal" | "vbdefaultbutton1" => 0,
         "vbokcancel" | "vbok" => 1,
         "vbabortretryignore" | "vbcancel" => 2,
@@ -3438,6 +3496,40 @@ mod tests {
                 "True\tFalse\tNull".to_string(),
                 "$A$3:$XFD$3\t$C$1:$C$1048576\t1048576".to_string(),
                 "Sheet1\t1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn vba_tracks_excel_application_settings() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ConfigureApplication()\n\
+               Application.ScreenUpdating = False\n\
+               Application.EnableEvents = False\n\
+               Application.DisplayAlerts = False\n\
+               Application.Calculation = xlCalculationManual\n\
+               Debug.Print Application.ScreenUpdating, Application.EnableEvents, Application.DisplayAlerts, Application.Calculation\n\
+               Application.ScreenUpdating = True\n\
+               Application.EnableEvents = True\n\
+               Application.DisplayAlerts = True\n\
+               Application.Calculation = xlCalculationAutomatic\n\
+               Debug.Print Application.ScreenUpdating, Application.EnableEvents, Application.DisplayAlerts, Application.Calculation\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "ConfigureApplication", vec![], &mut host).unwrap();
+
+        assert!(host.screen_updating);
+        assert!(host.enable_events);
+        assert!(host.display_alerts);
+        assert_eq!(host.calculation, -4105);
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "False\tFalse\tFalse\t-4135".to_string(),
+                "True\tTrue\tTrue\t-4105".to_string(),
             ]
         );
     }
