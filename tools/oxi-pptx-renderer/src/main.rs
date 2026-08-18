@@ -1468,6 +1468,12 @@ fn tblcell_on() -> bool {
     std::env::var("OXI_TBLCELL_DISABLE").is_err()
 }
 
+/// A face outside the measured table gets its ascent from GDI unless this is
+/// set, which restores the 0.9685 average for every one of them.
+fn rtbaseline_on() -> bool {
+    std::env::var("OXI_RTBASELINE_DISABLE").is_err()
+}
+
 /// Each line claims its own ascent and leaves its own descent unless this is
 /// set, which restores the flat `prev_size * 1.2` step between paragraphs.
 fn mixpitch_on() -> bool {
@@ -8541,6 +8547,9 @@ const ADVANCE_PROBE_EM: i32 = 2048;
 #[cfg(windows)]
 thread_local! {
     /// (family, weight, italic) -> char -> advance in EM units.
+    static BASELINE_CACHE: std::cell::RefCell<
+        std::collections::HashMap<String, Option<f32>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
     static ADVANCE_CACHE: std::cell::RefCell<
         std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -8876,7 +8885,37 @@ fn gdi_wrap_lines(
 /// fonts to ~±0.0003 em, but the measured table is exact for these fonts, so it
 /// is used directly; unknown fonts fall back to the model1b-style average.
 #[cfg(windows)]
+/// Where the baseline sits inside a line box, as a multiple of the font size.
+///
+/// The line box is `1.2 * size` (probe `lineheight`, 8 faces; `ascentsplit`,
+/// 12 more -- all 1.2010 within the PDF's 0.03pt quantum), and probe
+/// `mixedpitch` showed the step between two lines of DIFFERENT size is
+/// `descent(first) + ascent(second)`, so this one number decides both the first
+/// baseline and every paragraph boundary.
+///
+/// The split is the FONT's own, read from OS/2 (probe `ascentsplit`, 12 faces
+/// spanning 0.88 to 1.06):
+///
+/// * `fsSelection` bit 7 (USE_TYPO_METRICS) clear -> `usWinAscent` /
+///   `usWinDescent`. Arial 0.9724 vs measured 0.9728, Goudy Stout 0.8938 vs
+///   0.8948, Haettenschweiler 1.0614 vs 1.0627 -- worst error 0.0021.
+/// * bit set -> `sTypoAscender + sTypoLineGap` over that plus `-sTypoDescender`.
+///   Noto Serif 0.9419 vs 0.9427, Reem Kufi 0.8800 vs 0.8797, and the two faces
+///   d28 EMBEDS: Calistoga 0.9231 vs 0.9243, Jua (the one with a line gap)
+///   1.0080 vs 1.0083.
+///
+/// The line gap belongs on the ascent side and NOT in the win branch: Jua's
+/// 250-unit gap is what takes it from 0.96 to 1.008, while adding Arial's hhea
+/// gap to its win ascent would give 0.9789 against a measured 0.9728.
 fn font_baseline_offset_em(family: &str) -> f32 {
+    if rtbaseline_on() {
+        if let Some(a) = runtime_baseline_offset_em(family) {
+            return a;
+        }
+    }
+    // Measured before the rule was derived; kept as the offline fallback for a
+    // face GDI cannot hand back tables for. Each is within 0.0005 of what the
+    // rule computes for it.
     match family.to_ascii_lowercase().as_str() {
         "arial" => 0.97274,
         "times new roman" => 0.96587,
@@ -8884,8 +8923,94 @@ fn font_baseline_offset_em(family: &str) -> f32 {
         "segoe ui" => 0.97399,
         "georgia" => 0.96899,
         "verdana" => 0.99275,
-        _ => 0.9685, // avg of the six measured fonts (model1b: 1.2*(win_asc+0.5)/win_total)
+        _ => 0.9685,
     }
+}
+
+/// Read the ascent split straight out of the resolved face's OS/2 table.
+#[cfg(windows)]
+fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    BASELINE_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(family) {
+            return *hit;
+        }
+        let dc = probe_dc();
+        let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -ADVANCE_PROBE_EM,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let os2 = read_font_table(dc, b"OS/2");
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                os2.filter(|t| t.len() >= 78).and_then(|t| {
+                    let u16at = |o: usize| u16::from_be_bytes([t[o], t[o + 1]]) as f32;
+                    let i16at = |o: usize| i16::from_be_bytes([t[o], t[o + 1]]) as f32;
+                    let use_typo = (u16at(62) as u32) & 0x80 != 0;
+                    let (asc, desc) = if use_typo {
+                        (i16at(68) + i16at(72), -i16at(70))
+                    } else {
+                        (u16at(74), u16at(76))
+                    };
+                    if asc + desc > 0.0 {
+                        Some(1.2 * asc / (asc + desc))
+                    } else {
+                        None
+                    }
+                })
+            }
+        };
+        cache.borrow_mut().insert(family.to_string(), value);
+        value
+    })
+}
+
+/// One SFNT table of the font currently selected into `dc`.
+#[cfg(windows)]
+fn read_font_table(dc: windows::Win32::Graphics::Gdi::HDC, tag: &[u8; 4]) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::GetFontData;
+
+    // GetFontData wants the tag as it appears in the file, read little-endian.
+    let t = u32::from_le_bytes(*tag);
+    unsafe {
+        let n = GetFontData(dc, t, 0, None, 0);
+        if n == 0 || n == u32::MAX {
+            return None;
+        }
+        let mut buf = vec![0u8; n as usize];
+        let got = GetFontData(
+            dc,
+            t,
+            0,
+            Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+            n,
+        );
+        if got == u32::MAX { None } else { Some(buf) }
+    }
+}
+
+#[cfg(not(windows))]
+fn runtime_baseline_offset_em(_family: &str) -> Option<f32> {
+    None
 }
 
 /// Bullet / AutoNum marker to draw at the start of a paragraph's first line
