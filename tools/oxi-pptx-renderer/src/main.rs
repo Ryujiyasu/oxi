@@ -344,7 +344,13 @@ fn compute_shape_anchor_off(
             font_baseline_offset_em(&family) * fs
         }
     };
-    let block_h = (cursor_pt - first_off).max(0.0);
+    // With the line-box cursor the run already ends at the block's bottom;
+    // the old cursor ended one ascent lower, hence the subtraction.
+    let block_h = if mixpitch_on() {
+        cursor_pt.max(0.0)
+    } else {
+        (cursor_pt - first_off).max(0.0)
+    };
     if anchor == Some("ctr") {
         // ★A block TALLER than its box still centres on it: d24 slide 1's
         // 60pt title needs 178pt in a 91pt box and PowerPoint puts the block's
@@ -1460,6 +1466,12 @@ fn blipclip_on() -> bool {
 /// runs' real font size unless this is set, which restores the legacy grid.
 fn tblcell_on() -> bool {
     std::env::var("OXI_TBLCELL_DISABLE").is_err()
+}
+
+/// Each line claims its own ascent and leaves its own descent unless this is
+/// set, which restores the flat `prev_size * 1.2` step between paragraphs.
+fn mixpitch_on() -> bool {
+    std::env::var("OXI_MIXPITCH_DISABLE").is_err()
 }
 
 /// A custGeom shape filled with a gradient is left to the gradient painter
@@ -9017,13 +9029,25 @@ fn layout_paragraph_baselines(
     } else {
         font_baseline_offset_em(&family) * fs
     };
-    // The baseline offset (ascent-based first-line placement) applies ONLY to
-    // the text area's FIRST line. Between paragraphs the line grid continues
-    // at the plain `adv` pitch (Word render-truth: paragraph gap == one line
-    // height when space_after == 0). So for paragraphs after the first,
-    // `cursor_pt` already sits at the first-line baseline and we must NOT add
-    // `first_off` again (that double-count was a +16.89pt gap per paragraph).
-    if is_first {
+    // `cursor_pt` between paragraphs is the BOTTOM of the previous line box,
+    // and every paragraph's first baseline sits its own ascent below it. When
+    // the sizes match this is the old flat `adv` step exactly; when they differ
+    // it is not, and PowerPoint's own export says the difference is real.
+    // Probe `mixedpitch` (4 faces x 8 size pairs, 2026-08-18) fits
+    //     step = d * prev_size + a * next_size,   a + d = 1.2004
+    // with d = 0.2284 (Arial) / 0.2322 (Georgia) / 0.2636 (Calibri) / 0.2088
+    // (Verdana) -- each within 0.0015 of that face's own
+    // `1.2 * tmDescent / (tmAscent + tmDescent)`, i.e. the 1.2 line height
+    // split by the FONT's ascent:descent ratio, which is what
+    // `font_baseline_offset_em` already holds for the ascent half. d28's title
+    // is 55pt then 66pt: PowerPoint steps 159px at 150dpi, the flat rule gives
+    // 137px, and this gives 159.7px.
+    //
+    // The `lnSpc != 100%` arms fit the same way once the ascent switches to
+    // 0.75 of the advance (which `first_off` already does): 10->40 at 150%
+    // measures 58.470 / 56.310 / 43.350pt for both / next / prev against a
+    // predicted 58.5 / 56.276 / 43.396.
+    if mixpitch_on() || is_first {
         *cursor_pt += first_off;
     }
 
@@ -9095,7 +9119,9 @@ fn layout_paragraph_baselines(
 
     let mut out = Vec::with_capacity(n_lines);
     for (i, line) in lines.iter().enumerate() {
-        let baseline = text_area_top + if is_first { first_off } else { 0.0 } + i as f32 * adv;
+        let baseline = text_area_top
+            + if mixpitch_on() || is_first { first_off } else { 0.0 }
+            + i as f32 * adv;
         // Logical line width in pt = hmtx design-advance sum of the VISIBLE
         // characters (trailing spaces excluded; final visible char included).
         // GDI's measured width (hinted / pixel-snapped) over-measures a line by
@@ -9130,7 +9156,11 @@ fn layout_paragraph_baselines(
         out.push((line.clone(), baseline, base_off + align_off));
     }
     let _ = unsafe { SelectObject(dc, old_font) };
-    *cursor_pt = text_area_top + if is_first { first_off } else { 0.0 } + n_lines as f32 * adv;
+    // Leaving the paragraph, the cursor stops at the last line box's bottom --
+    // one descent below the last baseline, which is `adv - first_off`.
+    *cursor_pt = text_area_top
+        + if !mixpitch_on() && is_first { first_off } else { 0.0 }
+        + n_lines as f32 * adv;
     if let Some(sa) = para.space_after {
         *cursor_pt += sa;
     }
