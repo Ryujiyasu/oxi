@@ -30860,10 +30860,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // S1174 (opt-in): the derived legacy cell 約物
                                     // compression. Both settings must be declared --
                                     // compat 15 turns the mechanism off entirely.
+                                    // ★The gate is the ALIGNMENT, with compatibility as the
+                                    // second way in -- not compatibility alone. Swept both:
+                                    //   compat 11, jc=left  -> compresses
+                                    //   compat 15, jc=left  -> does not
+                                    //   compat 15, jc=both  -> compresses, identically to 11
+                                    // Reading the first two as "legacy only" missed the third,
+                                    // and the third is a47e: compatibilityMode 15 with justified
+                                    // cells, where Word squeezes 「．」 from 9.599 to 6.125 to
+                                    // hold a line 1.02pt over its budget and Oxi wraps instead.
                                     let s1174_yakucomp =
                                         std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
-                                            && self.compat_mode <= 14
-                                            && self.compress_punctuation;
+                                            && self.compress_punctuation
+                                            && (self.compat_mode <= 14
+                                                || matches!(
+                                                    para.alignment,
+                                                    Alignment::Justify | Alignment::Distribute
+                                                ));
                                     // S1176 (opt-in): the CJK space-shrink. Justified only --
                                     // jc=left gave nothing at all across the sweep.
                                     let s1176_space =
@@ -36824,9 +36837,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             && std::env::var("OXI_S825_DISABLE").is_err();
         // S1174 estimate mirror -- must match the render loop or pagination and
         // drawing disagree about how many lines a cell holds.
+        // Estimate mirror of the corrected gate: alignment first, compatibility second.
         let s1174_yakucomp = std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
-            && self.compat_mode <= 14
-            && self.compress_punctuation;
+            && self.compress_punctuation
+            && (self.compat_mode <= 14
+                || matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
         let s1176_space = std::env::var("OXI_CJKSPACE").ok().as_deref() == Some("1")
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
         let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
