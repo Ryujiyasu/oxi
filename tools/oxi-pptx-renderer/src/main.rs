@@ -8067,6 +8067,214 @@ fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
     (axis_max, div)
 }
 
+/// EM size the runtime advance probe measures at. At 2048 units per em the
+/// integer quantisation `GetCharABCWidthsW` still applies is 1/2048 of an em,
+/// i.e. below 0.05% -- far under the 1.6% error GDI shows at render size.
+#[cfg(windows)]
+const ADVANCE_PROBE_EM: i32 = 2048;
+
+#[cfg(windows)]
+thread_local! {
+    /// (family, weight, italic) -> char -> advance in EM units.
+    static ADVANCE_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// A DC used ONLY for advance probing.
+    ///
+    /// ★Probing on the DC the renderer draws with made the output
+    /// NON-DETERMINISTIC: the same binary rendering d19 twice differed on
+    /// slide 39, an icon row where every glyph shifted by one position, while
+    /// the opt-out arm was byte-stable across runs. Selecting a probe font
+    /// into a DC mid-draw perturbs GDI's font-linking state for the glyphs
+    /// that follow. A private DC keeps the two apart.
+    static PROBE_DC: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+
+/// The dedicated probe DC, created on first use.
+#[cfg(windows)]
+fn probe_dc() -> windows::Win32::Graphics::Gdi::HDC {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::*;
+    PROBE_DC.with(|cell| {
+        let raw = cell.get();
+        if raw != 0 {
+            return HDC(raw as *mut core::ffi::c_void);
+        }
+        unsafe {
+            let screen = GetDC(HWND(std::ptr::null_mut()));
+            let dc = CreateCompatibleDC(screen);
+            let _ = ReleaseDC(HWND(std::ptr::null_mut()), screen);
+            cell.set(dc.0 as isize);
+            dc
+        }
+    })
+}
+
+/// The design advance of `ch` in EM units, read from the font GDI actually
+/// resolved for `family` (including a privately loaded embedded one).
+///
+/// `font_adv`'s tables already encode the rule -- PowerPoint places glyphs at
+/// the TrueType design advance, not at GDI's hinted, pixel-snapped one -- but
+/// they cover three hardcoded families. Every embedded font (262 parts in the
+/// dev corpus) fell through to the hinted path, where a d28 body line measures
+/// **+3.9pt (+1.6%)** wider than its design width; that is what pushes a word
+/// onto the next line. Measured 2026-08-18 against PowerPoint's own PDF, whose
+/// per-character pen positions sit within 0.06pt of the design advances.
+#[cfg(windows)]
+fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let dc = probe_dc();
+
+    let weight = if bold { 700 } else { 400 };
+    let key = (family.to_string(), weight, italic);
+    ADVANCE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let per_font = cache.entry(key).or_default();
+        if let Some(hit) = per_font.get(&ch) {
+            return *hit;
+        }
+        let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -ADVANCE_PROBE_EM,
+                0,
+                0,
+                0,
+                weight,
+                u32::from(italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let mut abc = ABC::default();
+                let code = ch as u32;
+                let ok = GetCharABCWidthsW(dc, code, code, &mut abc).as_bool();
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                if ok {
+                    Some((abc.abcA + abc.abcB as i32 + abc.abcC) as f32 / ADVANCE_PROBE_EM as f32)
+                } else {
+                    None
+                }
+            }
+        };
+        per_font.insert(ch, value);
+        value
+    })
+}
+
+/// True when `family` itself contains a glyph for every char of `text`.
+#[cfg(windows)]
+fn font_has_all_glyphs(family: &str, bold: bool, italic: bool, text: &str) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if text.is_empty() {
+        return false;
+    }
+    let dc = probe_dc();
+    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let wtext: Vec<u16> = text.encode_utf16().collect();
+    unsafe {
+        let font = CreateFontW(
+            -ADVANCE_PROBE_EM,
+            0,
+            0,
+            0,
+            if bold { 700 } else { 400 },
+            u32::from(italic),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return false;
+        }
+        let old = SelectObject(dc, font);
+        let mut indices = vec![0u16; wtext.len()];
+        let wtext_z: Vec<u16> = wtext.iter().copied().chain(std::iter::once(0)).collect();
+        let n = GetGlyphIndicesW(
+            dc,
+            windows::core::PCWSTR(wtext_z.as_ptr()),
+            wtext.len() as i32,
+            indices.as_mut_ptr(),
+            GGI_MARK_NONEXISTING_GLYPHS,
+        );
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        n != GDI_ERROR as u32 && indices.iter().all(|g| *g != 0xFFFF)
+    }
+}
+
+/// Per-character device advances for `text` at the design metrics, or None
+/// when any character has no advance in this font (then the caller keeps the
+/// GDI path rather than mixing two metric sources within one line).
+#[cfg(windows)]
+fn runtime_dx_px(
+    _dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+) -> Option<Vec<i32>> {
+    if !advance_exact_on() {
+        return None;
+    }
+    // ★Only when the font itself has EVERY glyph. `GetCharABCWidthsW` alone
+    // consults GDI's font-link chain and its success is not stable run to run
+    // -- the same binary drew d19 slide 39's icon row shifted by one glyph on
+    // a second run while the layout dump stayed byte-identical, i.e. the
+    // non-determinism was entirely in whether this path was taken. Asking for
+    // glyph indices with GGI_MARK_NONEXISTING_GLYPHS is a direct, stable
+    // question about the font, and it is also the correct one: a fallback
+    // glyph must not be advanced by the base font's metrics.
+    if !font_has_all_glyphs(family, bold, italic, text) {
+        return None;
+    }
+    let mut dx = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        let em = runtime_advance_em(family, bold, italic, ch)?;
+        dx.push((em * fs * scale as f32).round() as i32);
+    }
+    Some(dx)
+}
+
+/// Design width of `text` in device pixels, or None (see `runtime_dx_px`).
+#[cfg(windows)]
+fn runtime_width_px(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+) -> Option<i32> {
+    runtime_dx_px(dc, text, fs, family, bold, italic, scale).map(|dx| dx.iter().sum())
+}
+
+/// Text is measured and drawn at the font's design advances unless this is
+/// set, which restores GDI's hinted metrics.
+fn advance_exact_on() -> bool {
+    std::env::var("OXI_ADVEXACT_DISABLE").is_err()
+}
+
 /// Measure `text` in device pixels with a font this call creates itself.
 ///
 /// `gdi_measure_text_px` needs the caller to have selected the font already;
@@ -8131,6 +8339,10 @@ fn gdi_wrap_lines(
     text: &str,
     effective_width_pt: f32,
     scale: f64,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
 ) -> Vec<String> {
     let width_px = (effective_width_pt as f64 * scale).round().max(1.0) as i32;
     let mut lines: Vec<String> = Vec::new();
@@ -8152,7 +8364,21 @@ fn gdi_wrap_lines(
         let fits = if trim_on {
             let mut candidate = current.clone();
             candidate.push_str(word);
-            gdi_measure_text_px(dc, candidate.trim_end()) <= width_px
+            let trimmed = candidate.trim_end();
+            // The design-advance width is what PowerPoint breaks against; GDI's
+            // hinted width runs ~1.6% long and breaks a word early.
+            let w = if advance_exact_on() {
+                // Both design-advance sources belong to the same change, so
+                // the opt-out must disable BOTH -- otherwise the "off" arm is
+                // not the pre-change build and the A/B is not a real
+                // before-vs-after (it showed up as 6 decks differing).
+                runtime_width_px(dc, trimmed, fs, family, bold, italic, scale)
+                    .or_else(|| font_adv::text_hmtx_px(trimmed, fs, family, scale))
+                    .unwrap_or_else(|| gdi_measure_text_px(dc, trimmed))
+            } else {
+                gdi_measure_text_px(dc, trimmed)
+            };
+            w <= width_px
         } else {
             current_w + gdi_measure_text_px(dc, word) <= width_px
         };
@@ -8302,7 +8528,9 @@ fn layout_paragraph_baselines(
     // many characters per line.
     let font = create_font_for(&family, fs, scale);
     let old_font = unsafe { SelectObject(dc, font) };
-    let lines = gdi_wrap_lines(dc, &text, effective_width, scale);
+    let bold = para.runs.iter().any(|r| r.bold);
+    let italic = para.runs.iter().any(|r| r.italic);
+    let lines = gdi_wrap_lines(dc, &text, effective_width, scale, fs, &family, bold, italic);
     let area_w = effective_width;
     let n_lines = lines.len();
     let adv = fs * 1.2 * n;
@@ -8396,6 +8624,10 @@ fn layout_paragraph_baselines(
         // ~1.5-3.75pt vs PowerPoint, so we prefer the hmtx table and fall back
         // to the GDI measurement only for unsupported fonts/characters.
         let line_w = font_adv::line_hmtx_width_pt(line, fs, &family)
+            .or_else(|| {
+                runtime_width_px(dc, line.trim_end(), fs, &family, bold, italic, scale)
+                    .map(|px| px as f32 / scale as f32)
+            })
             .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32);
         // Spec #6: horizontal alignment resolution — a paragraph with no
         // explicit alignment inherits the master txStyles level's algn (then
@@ -8528,7 +8760,14 @@ fn draw_text_baseline_w(
     // When the family has an hmtx table, draw each char at its design
     // advance (Dx) so glyphs land exactly where PowerPoint's PDF export
     // places them. Otherwise fall back to the hinted GDI text.
-    if let Some(dx) = font_adv::line_hmtx_dx_px(text, font_size, family, scale) {
+    // Draw at the design advances so the glyphs land where the wrap measured
+    // them (and where PowerPoint puts them). The measured `font_adv` tables win
+    // when they cover the family; otherwise the advances come from the font GDI
+    // resolved, which is what makes embedded faces work.
+    let dx = font_adv::line_hmtx_dx_px(text, font_size, family, scale).or_else(|| {
+        runtime_dx_px(dc, text, font_size, family, weight >= 700, false, scale)
+    });
+    if let Some(dx) = dx {
         unsafe {
             let _ = ExtTextOutW(
                 dc,
