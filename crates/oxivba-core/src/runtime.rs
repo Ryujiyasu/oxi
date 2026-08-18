@@ -56,6 +56,16 @@ pub trait Host {
         args: &[Value],
     ) -> Result<Option<Value>, String>;
 
+    fn call_named(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        _argument_names: &[Option<String>],
+    ) -> Result<Option<Value>, String> {
+        self.call(receiver, name, args)
+    }
+
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String>;
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
@@ -2049,7 +2059,9 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 let mut values = Vec::with_capacity(args.len());
+                let mut argument_names = Vec::with_capacity(args.len());
                 for argument in args {
+                    argument_names.push(argument.name.clone());
                     values.push(match argument.value.as_ref() {
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
@@ -2064,31 +2076,37 @@ impl<'a> Runtime<'a> {
                         if is_err_object(&receiver) {
                             return err_call(frame, name, &values, span.line);
                         }
-                        self.host_call(Some(&receiver), name, &values, span.line)?
-                            .ok_or_else(|| {
-                                error(
-                                    RuntimeErrorKind::Unsupported,
-                                    format!(
-                                        "host method is not available: {}.{name}",
-                                        receiver.kind
-                                    ),
-                                    Some(span.line),
-                                )
-                            })
+                        self.host_call_named(
+                            Some(&receiver),
+                            name,
+                            &values,
+                            &argument_names,
+                            span.line,
+                        )?
+                        .ok_or_else(|| {
+                            error(
+                                RuntimeErrorKind::Unsupported,
+                                format!("host method is not available: {}.{name}", receiver.kind),
+                                Some(span.line),
+                            )
+                        })
                     }
                     Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
                         let receiver = current_with_object(frame, span.line)?;
-                        self.host_call(Some(&receiver), name, &values, span.line)?
-                            .ok_or_else(|| {
-                                error(
-                                    RuntimeErrorKind::Unsupported,
-                                    format!(
-                                        "host method is not available: {}.{name}",
-                                        receiver.kind
-                                    ),
-                                    Some(span.line),
-                                )
-                            })
+                        self.host_call_named(
+                            Some(&receiver),
+                            name,
+                            &values,
+                            &argument_names,
+                            span.line,
+                        )?
+                        .ok_or_else(|| {
+                            error(
+                                RuntimeErrorKind::Unsupported,
+                                format!("host method is not available: {}.{name}", receiver.kind),
+                                Some(span.line),
+                            )
+                        })
                     }
                     _ => Err(error(
                         RuntimeErrorKind::Unsupported,
@@ -2597,6 +2615,26 @@ impl<'a> Runtime<'a> {
             return Ok(None);
         };
         host.call(receiver, name, args)
+            .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
+    }
+
+    fn host_call_named(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+        line: u32,
+    ) -> Result<Option<Value>, RuntimeError> {
+        if let Some(receiver) = receiver {
+            if self.internal_objects.contains_key(&receiver.handle) {
+                return self.internal_call(receiver, name, args, line).map(Some);
+            }
+        }
+        let Some(host) = self.host.as_deref_mut() else {
+            return Ok(None);
+        };
+        host.call_named(receiver, name, args, argument_names)
             .map_err(|message| error(RuntimeErrorKind::Host, message, Some(line)))
     }
 

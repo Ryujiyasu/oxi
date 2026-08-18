@@ -1803,6 +1803,40 @@ impl Host for WorkbookHost<'_> {
         Ok(None)
     }
 
+    fn call_named(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+    ) -> Result<Option<Value>, String> {
+        let parameters = if name.eq_ignore_ascii_case("find") {
+            Some(
+                &[
+                    "What",
+                    "After",
+                    "LookIn",
+                    "LookAt",
+                    "SearchOrder",
+                    "SearchDirection",
+                    "MatchCase",
+                    "MatchByte",
+                    "SearchFormat",
+                ][..],
+            )
+        } else if name.eq_ignore_ascii_case("findnext") || name.eq_ignore_ascii_case("findprevious")
+        {
+            Some(&["After"][..])
+        } else {
+            None
+        };
+        if let Some(parameters) = parameters {
+            let args = normalize_named_arguments(args, argument_names, parameters, name)?;
+            return self.call(receiver, name, &args);
+        }
+        self.call(receiver, name, args)
+    }
+
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
         if let Some((range, selection)) = self.range_borders(receiver) {
             if name.eq_ignore_ascii_case("linestyle") {
@@ -2232,6 +2266,53 @@ fn find_integer_argument(value: Option<&Value>, default: i64, label: &str) -> Re
         }
         _ => Err(format!("Range.Find {label} must be an Excel constant")),
     }
+}
+
+fn normalize_named_arguments(
+    args: &[Value],
+    argument_names: &[Option<String>],
+    parameters: &[&str],
+    method: &str,
+) -> Result<Vec<Value>, String> {
+    if args.len() != argument_names.len() {
+        return Err(format!("Range.{method} received invalid argument metadata"));
+    }
+    if argument_names.iter().all(Option::is_none) {
+        return Ok(args.to_vec());
+    }
+    let mut normalized = vec![Value::Missing; parameters.len()];
+    let mut assigned = vec![false; parameters.len()];
+    let mut positional_index = 0;
+    let mut highest_index = None;
+    for (value, argument_name) in args.iter().zip(argument_names) {
+        let index = if let Some(argument_name) = argument_name {
+            parameters
+                .iter()
+                .position(|parameter| parameter.eq_ignore_ascii_case(argument_name))
+                .ok_or_else(|| format!("Range.{method} has no argument named {argument_name}"))?
+        } else {
+            while positional_index < assigned.len() && assigned[positional_index] {
+                positional_index += 1;
+            }
+            if positional_index >= parameters.len() {
+                return Err(format!("Range.{method} received too many arguments"));
+            }
+            let index = positional_index;
+            positional_index += 1;
+            index
+        };
+        if assigned[index] {
+            return Err(format!(
+                "Range.{method} argument {} was supplied more than once",
+                parameters[index]
+            ));
+        }
+        normalized[index] = value.clone();
+        assigned[index] = true;
+        highest_index = Some(highest_index.map_or(index, |highest: usize| highest.max(index)));
+    }
+    normalized.truncate(highest_index.map_or(0, |index| index + 1));
+    Ok(normalized)
 }
 
 fn find_boolean_argument(
@@ -3791,8 +3872,8 @@ mod tests {
             "Public Sub ContinueSearch()\n\
                Range(\"A1\").Value = \"hit\"\n\
                Range(\"A3\").Value = \"hit\"\n\
-               Set first = Range(\"A1:A3\").Find(\"hit\", , xlValues, xlWhole)\n\
-               Set following = Range(\"A1:A3\").FindNext(first)\n\
+               Set first = Range(\"A1:A3\").Find(What:=\"hit\", LookIn:=xlValues, LookAt:=xlWhole, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)\n\
+               Set following = Range(\"A1:A3\").FindNext(After:=first)\n\
                Set preceding = Range(\"A1:A3\").FindPrevious(following)\n\
                Set wrapped = Range(\"A1:A3\").FindNext()\n\
                Debug.Print first.Address(False, False), following.Address(False, False), preceding.Address(False, False), wrapped.Address(False, False)\n\
