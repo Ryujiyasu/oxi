@@ -31853,7 +31853,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 } else {
                                                     0.0
                                                 };
-                                                let pool = yaku + joints + spaces;
+                                                // ★Word does not spend the whole pool. Squeezed lines across d77a58 use
+                                                // 8-72% of what is available; the lines it declines (34140b/04b88e's
+                                                // 「（年度）」 cells) would have needed 85-98%. So the pool is a ceiling
+                                                // with a fraction under it -- swept via OXI_YAKUK.
+                                                let pool = (yaku + joints + spaces)
+                                                    * std::env::var("OXI_YAKUK")
+                                                        .ok()
+                                                        .and_then(|v| v.parse::<f32>().ok())
+                                                        .unwrap_or(1.0);
                                                 // ★Only where it was measured: the
                                                 // 250/250 hang was swept at jc=both. Do not
                                                 // extend an unconditional rule past its
@@ -37182,7 +37190,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         0.0
                     };
-                    let pool = yaku + joints + spaces;
+                    // ★Word does not spend the whole pool. Squeezed lines across d77a58 use
+                    // 8-72% of what is available; the lines it declines (34140b/04b88e's
+                    // 「（年度）」 cells) would have needed 85-98%. So the pool is a ceiling
+                    // with a fraction under it -- swept via OXI_YAKUK.
+                    let pool = (yaku + joints + spaces)
+                        * std::env::var("OXI_YAKUK")
+                            .ok()
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .unwrap_or(1.0);
                     if s1174_yakucomp
                         && kinsoku::cell_yaku_type_a(ch)
                         && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
