@@ -3003,6 +3003,10 @@ fn parse_inherited_shapes(
     // set, which restores refusing the shape.
     let s_inherit_imgalpha = std::env::var("OXI_LMIMGALPHA_DISABLE").is_err();
     let mut ig_img_alpha: Option<f32> = None;
+    // An inherited shape whose FILL is a picture is emitted as that picture,
+    // clipped to its own geometry, unless this is set.
+    let s_inherit_fillimg = std::env::var("OXI_LMFILLIMG_DISABLE").is_err();
+    let mut ig_fill_img = false;
     let mut ig_rot: f32 = 0.0;
     let mut ig_flip = (false, false);
     // A shape whose only unsupported feature is an effect is still emitted --
@@ -3045,6 +3049,25 @@ fn parse_inherited_shapes(
                             // Close the candidate.
                             if ok && have_off && have_ext && w > 0.0 && h > 0.0 {
                                 let content = match kind {
+                                    _ if ig_fill_img && embed.is_some() => {
+                                        embed.take().and_then(|rid| {
+                                            let rx = archive.try_read_part(rels_path).ok()??;
+                                            let rels = parse_relationships(&rx).ok()?;
+                                            let rel = rels.get(&rid)?;
+                                            let p = resolve_slide_relative_path(
+                                                rels_path,
+                                                &rel.target,
+                                            );
+                                            let data = archive.read_binary_part(&p).ok()?;
+                                            if data.is_empty() {
+                                                return None;
+                                            }
+                                            Some(ShapeContent::Image {
+                                                data,
+                                                content_type: detect_content_type(&rel.target),
+                                            })
+                                        })
+                                    }
                                     Some("pic") => embed.take().and_then(|rid| {
                                         let rx = archive.try_read_part(rels_path).ok()??;
                                         let rels = parse_relationships(&rx).ok()?;
@@ -3109,7 +3132,7 @@ fn parse_inherited_shapes(
                                         // there are no adjust values to carry.
                                         adjustments: std::collections::HashMap::new(),
                                         content,
-                                        fill_color: if kind == Some("pic") {
+                                        fill_color: if kind == Some("pic") || ig_fill_img {
                                             None
                                         } else {
                                             fill.clone()
@@ -3207,7 +3230,7 @@ fn parse_inherited_shapes(
                     }
                     "path" if gr_in_path => gr_in_path = false,
                     "gradFill" if gr_in => gr_in = false,
-                    "blipFill" if nest > 0 && !in_sp_pr => in_pic_blip = false,
+                    "blipFill" if nest > 0 => in_pic_blip = false,
                     "ln" if nest > 0 => ln_depth = ln_depth.saturating_sub(1),
                     "solidFill" if nest > 0 => in_solid = false,
                     _ => {}
@@ -3281,6 +3304,7 @@ fn parse_inherited_shapes(
                     ig_rot = 0.0;
                     ig_flip = (false, false);
                     ig_img_alpha = None;
+                    ig_fill_img = false;
                     gr_stops.clear();
                     gr_in = false;
                     gr_in_gs = false;
@@ -3310,10 +3334,18 @@ fn parse_inherited_shapes(
             // p:blipFill (the picture) is a SIBLING of p:spPr; a:blipFill (a
             // shape fill) is inside it, and is a disqualifier below.
             "blipFill" => {
-                if in_sp_pr {
+                // `p:blipFill` is a SIBLING of `p:spPr` and makes the shape a
+                // picture; `a:blipFill` INSIDE `p:spPr` is a picture used as
+                // the shape's fill. The second used to disqualify the shape --
+                // but a picture fill is drawn clipped to the shape's own
+                // outline (S-BLIPCLIP), so the same `blip`/`srcRect`/`fillRect`
+                // handling serves both. 269 layout shapes in the corpus were
+                // being dropped for it (d28 59, d03 57, d22 34, d25 31, d21 28).
+                if in_sp_pr && !s_inherit_fillimg {
                     ok = false;
                 } else if !empty {
                     in_pic_blip = true;
+                    ig_fill_img = in_sp_pr;
                 }
             }
             "ln" => {
