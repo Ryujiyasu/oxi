@@ -1895,10 +1895,36 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     );
                                 }
                             }
+                            let styled = runstyle_on()
+                                && p.runs.len() > 1
+                                && (p.runs.iter().any(|r| r.bold != p.runs[0].bold)
+                                    || p.runs.iter().any(|r| r.color != p.runs[0].color)
+                                    || p.runs.iter().any(|r| r.font_size != p.runs[0].font_size)
+                                    || p.runs.iter().any(|r| r.italic != p.runs[0].italic));
+                            let mut line_off = 0usize;
                             for (i, (line_text, baseline, x_off)) in
                                 lines.into_iter().enumerate()
                             {
+                                let this_off = line_off;
+                                line_off += line_text.chars().count();
                                 if line_text.trim().is_empty() {
+                                    continue;
+                                }
+                                if styled && !(is_justify && i + 1 < n_lines) {
+                                    let line_x = left_x
+                                        + (x_off as f64 * scale).round() as i32;
+                                    draw_line_runs(
+                                        mem_dc,
+                                        line_x,
+                                        baseline,
+                                        &line_text,
+                                        this_off,
+                                        &p.runs,
+                                        &family,
+                                        fs,
+                                        color.as_deref(),
+                                        scale,
+                                    );
                                     continue;
                                 }
                                 if is_justify && i + 1 < n_lines {
@@ -8065,6 +8091,69 @@ fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
     } * mag;
     let div = (axis_max / step).round().max(1.0) as usize;
     (axis_max, div)
+}
+
+/// Draw one wrapped line as its RUN segments, each in its own style.
+///
+/// A paragraph's runs can differ in bold, colour and size -- 75 / 73 / 38
+/// paragraphs in the dev corpus do, on 70 slides across 17 decks -- and the
+/// pre-S-RUNSTYLE path drew the whole line in the FIRST run's colour at one
+/// weight, so "**Lead-in:** rest" came out uniformly styled. (No corpus
+/// paragraph mixes font FAMILIES, so the wrap still measures the line with one
+/// family; only the drawing is split.)
+///
+/// `line_start` is the line's offset in the paragraph's concatenated text,
+/// which is recoverable because the wrap partitions that text in order without
+/// dropping characters.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_line_runs(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    baseline: f32,
+    line_text: &str,
+    line_start: usize,
+    runs: &[oxislides_core::ir::SlideRun],
+    default_family: &str,
+    default_fs: f32,
+    default_color: Option<&str>,
+    scale: f64,
+) {
+    // Walk the runs, clipping each to this line's character range.
+    let line_chars: Vec<char> = line_text.chars().collect();
+    let line_end = line_start + line_chars.len();
+    let mut cursor_x = x;
+    let mut at = 0usize; // char offset of the current run's start
+    for run in runs {
+        let n = run.text.chars().count();
+        let (rs, re) = (at, at + n);
+        at = re;
+        let from = rs.max(line_start);
+        let to = re.min(line_end);
+        if from >= to {
+            continue;
+        }
+        let seg: String = line_chars[from - line_start..to - line_start].iter().collect();
+        if seg.is_empty() {
+            continue;
+        }
+        let fs = run.font_size.unwrap_or(default_fs);
+        let family = run.font_family.as_deref().unwrap_or(default_family);
+        let color = run.color.as_deref().or(default_color);
+        let weight = if run.bold { 700 } else { 400 };
+        draw_text_baseline_w(dc, cursor_x, baseline, &seg, fs, family, color, scale, weight);
+        let w = runtime_width_px(dc, &seg, fs, family, run.bold, run.italic, scale)
+            .or_else(|| font_adv::text_hmtx_px(&seg, fs, family, scale))
+            .unwrap_or_else(|| {
+                measure_text_width(dc, &seg, fs, family, run.bold, scale).round() as i32
+            });
+        cursor_x += w;
+    }
+}
+
+/// Run-level styling within a paragraph is applied unless this is set.
+fn runstyle_on() -> bool {
+    std::env::var("OXI_RUNSTYLE_DISABLE").is_err()
 }
 
 /// EM size the runtime advance probe measures at. At 2048 units per em the
