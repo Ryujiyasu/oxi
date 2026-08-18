@@ -31756,10 +31756,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // half em on top, by hanging -- which is why the
                                                 // five-character arms that ended in one held out to
                                                 // a full em and read as "additive".
-                                                let mid = current_line_chars
-                                                    .iter()
-                                                    .chain(buf_chars.iter())
-                                                    .any(|c| kinsoku::cell_yaku_capacity(c.ch) > 0.0);
                                                 // S1175: each CJK/Latin joint on the line is aki
                                                 // too, and gives up about half of itself before
                                                 // the line breaks -- 501 widths took the gap from
@@ -31815,18 +31811,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 } else {
                                                     0.0
                                                 };
+                                                // S1174 refined: one 0.5em for the line from
+                                                // the closing marks however many there are, plus
+                                                // 0.5em from EACH opening bracket. A line-final
+                                                // closing mark is taken whatever the shortfall --
+                                                // it hangs -- so it short-circuits the pool.
                                                 let yaku = if s1174_yakucomp {
-                                                    (if mid { 0.5 * font_size } else { 0.0 })
-                                                        + if kinsoku::cell_yaku_capacity(ch) > 0.0 {
-                                                            0.5 * cw
-                                                        } else {
-                                                            0.0
+                                                    let mut has_a = false;
+                                                    let mut b = 0.0f32;
+                                                    for c in current_line_chars
+                                                        .iter()
+                                                        .chain(buf_chars.iter())
+                                                    {
+                                                        if kinsoku::cell_yaku_type_b(c.ch) {
+                                                            b += 0.5 * c.natural_advance;
+                                                        } else if kinsoku::cell_yaku_type_a(c.ch) {
+                                                            has_a = true;
                                                         }
+                                                    }
+                                                    (if has_a { 0.5 * font_size } else { 0.0 }) + b
                                                 } else {
                                                     0.0
                                                 };
                                                 let pool = yaku + joints + spaces;
-                                                ((line_x + buf_w + cw) - effective_wrap) > pool
+                                                // ★Only where it was measured: the
+                                                // 250/250 hang was swept at jc=both. Do not
+                                                // extend an unconditional rule past its
+                                                // envelope.
+                                                if s1174_yakucomp
+                                                    && kinsoku::cell_yaku_type_a(ch)
+                                                    && matches!(
+                                                        para.alignment,
+                                                        Alignment::Justify | Alignment::Distribute
+                                                    )
+                                                {
+                                                    false
+                                                } else
+                                                {
+                                                    ((line_x + buf_w + cw) - effective_wrap) > pool
+                                                }
                                             } else if legacy_cell_break
                                                 && !s1174_yakucomp
                                                 && would_overflow_natural
@@ -37076,10 +37099,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 {
                     // S1174 estimate mirror -- half an em for the line, plus half an
                     // em more when the character being placed is itself a 約物.
-                    let mid = current_line_chars
-                        .iter()
-                        .chain(buf_chars.iter())
-                        .any(|c| kinsoku::cell_yaku_capacity(c.ch) > 0.0);
                     // S1175 estimate mirror -- the CJK/Latin joints are aki too.
                     let joints = if std::env::var("OXI_AUTOSPACE2").ok().as_deref() == Some("1") {
                         let mut n = 0.0f32;
@@ -37119,14 +37138,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         0.0
                     };
+                    // S1174 refined -- estimate mirror.
                     let yaku = if s1174_yakucomp {
-                        (if mid { 0.5 * font_size } else { 0.0 })
-                            + if kinsoku::cell_yaku_capacity(ch) > 0.0 { 0.5 * cw } else { 0.0 }
+                        let mut has_a = false;
+                        let mut b = 0.0f32;
+                        for c in current_line_chars.iter().chain(buf_chars.iter()) {
+                            if kinsoku::cell_yaku_type_b(c.ch) {
+                                b += 0.5 * c.natural_advance;
+                            } else if kinsoku::cell_yaku_type_a(c.ch) {
+                                has_a = true;
+                            }
+                        }
+                        (if has_a { 0.5 * font_size } else { 0.0 }) + b
                     } else {
                         0.0
                     };
                     let pool = yaku + joints + spaces;
-                    ((line_x + buf_w + cw) - effective_wrap) > pool
+                    if s1174_yakucomp
+                        && kinsoku::cell_yaku_type_a(ch)
+                        && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                    {
+                        false
+                    } else {
+                        ((line_x + buf_w + cw) - effective_wrap) > pool
+                    }
                 } else if cellpair_est && !s1174_yakucomp && would_overflow_natural {
                     let n_yak = current_line_chars
                         .iter()

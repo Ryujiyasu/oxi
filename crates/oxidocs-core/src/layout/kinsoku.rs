@@ -185,6 +185,24 @@ pub fn is_s473_compressible(ch: char) -> bool {
 ///
 /// An opening bracket's give lands on the PRECEDING character's advance, since its
 /// aki sits to its left; that matters when reading a PDF, not here.
+/// S1174 refined: 約物 fall into two capacity TYPES, measured five classes at a time
+/// over 801 cell widths each (`tools/metrics/_cw_yaku_class.py`).
+///
+/// ```text
+///   、。）・  n=1 and n=2 alike stop dead at 0.5em  -> one 0.5em for the LINE
+///   （        n=1 stops at 0.5em, n=2 runs past 1.0 -> 0.5em EACH, additive
+/// ```
+///
+/// And at the line end they behave oppositely: 、。） are taken 250/250 whatever the
+/// shortfall (they hang), while （ ends a line 0/250 times — the line-end prohibition.
+pub fn cell_yaku_type_b(ch: char) -> bool {
+    YAKUMONO_OPENING.contains(&ch)
+}
+
+pub fn cell_yaku_type_a(ch: char) -> bool {
+    cell_yaku_capacity(ch) > 0.0 && !cell_yaku_type_b(ch)
+}
+
 pub fn cell_yaku_capacity(ch: char) -> f32 {
     if is_s473_compressible(ch) || ch == '\u{3000}' {
         0.5
