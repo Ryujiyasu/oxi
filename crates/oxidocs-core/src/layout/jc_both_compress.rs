@@ -152,6 +152,25 @@ pub fn compute_compression(
     budget: f32,
     gate_active: bool,
 ) -> CompressionResult {
+    compute_compression_floor(chars, budget, gate_active, None)
+}
+
+/// As `compute_compression`, with the 約物 floor overridden.
+///
+/// `yaku_floor` is the fraction of the font size a 約物 may be squeezed down to.
+/// `yakumono_max_savings` floors at `max(fs/2, 6.0)`, and the 6.0 term is a BODY
+/// measurement -- its own comment records that cell 約物 reach half-width. S1174's
+/// sweep (`tools/metrics/_cw_yaku_probe.py`, 421 cell widths x 7 arms) settles it
+/// for cells: every 約物 gives up to exactly half an em and the line takes only what
+/// it is short by, which is the model this function already implements. So a legacy
+/// compressPunctuation cell wants the same code with `Some(0.5)`, not a second
+/// parallel budget bolted on beside it.
+pub fn compute_compression_floor(
+    chars: &[CharContext],
+    budget: f32,
+    gate_active: bool,
+    yaku_floor: Option<f32>,
+) -> CompressionResult {
     let n = chars.len();
     let mut final_advance: Vec<f32> = chars.iter().map(|c| c.natural_advance).collect();
 
@@ -241,12 +260,23 @@ pub fn compute_compression(
         *remaining -= to_absorb;
     };
 
-    apply(&yakumono_idx, &|c| yakumono_max_savings(c.natural_advance, c.font_size),
+    apply(&yakumono_idx,
+          &|c: &CharContext| match yaku_floor {
+              Some(r) => (c.natural_advance - c.font_size * r).max(0.0),
+              None => yakumono_max_savings(c.natural_advance, c.font_size),
+          },
           &mut final_advance, &mut remaining_overflow);
-    apply(&digit_idx, &|c| digit_max_savings(c.natural_advance),
-          &mut final_advance, &mut remaining_overflow);
-    apply(&kanji_idx, &|c| kanji_max_savings(c.natural_advance),
-          &mut final_advance, &mut remaining_overflow);
+    // S1174: a cell under `yaku_floor` compresses 約物 and NOTHING else. The probe's
+    // control arm settles it -- 甲亜亜亜亜, five kanji and no 約物 at all, wraps the
+    // moment it is short by any amount at all, over every one of 421 widths. Letting
+    // the digit and kanji stages run as well is what still had tokyoshugyo 40
+    // paragraphs ahead of Word after the double-count came out.
+    if yaku_floor.is_none() {
+        apply(&digit_idx, &|c| digit_max_savings(c.natural_advance),
+              &mut final_advance, &mut remaining_overflow);
+        apply(&kanji_idx, &|c| kanji_max_savings(c.natural_advance),
+              &mut final_advance, &mut remaining_overflow);
+    }
 
     let final_sum: f32 = final_advance.iter().sum();
     let fits = final_sum <= budget + 0.5; // 0.5pt tolerance for snap rounding

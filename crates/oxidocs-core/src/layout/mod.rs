@@ -31477,20 +31477,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // cell budget Oxi produces MORE lines than Word on
                                             // exactly the twelve legacy compressPunctuation
                                             // documents, because it wraps where Word squeezes.
-                                            let effective_wrap = effective_wrap
-                                                + if s1174_yakucomp {
-                                                    current_line_chars
-                                                        .iter()
-                                                        .chain(buf_chars.iter())
-                                                        .map(|c| {
-                                                            kinsoku::cell_yaku_capacity(c.ch)
-                                                                * c.natural_advance
-                                                        })
-                                                        .sum::<f32>()
-                                                        + kinsoku::cell_yaku_capacity(ch) * cw
-                                                } else {
-                                                    0.0
-                                                };
                                             // Trailing spaces don't trigger line wrapping (Word behavior)
                                             let is_space = ch == ' ' || ch == '\u{3000}';
                                             // S118 wrap-decision lookahead: when env var ON + gate active,
@@ -31699,7 +31685,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 false
                                             } else if s586_overflow_fixed {
                                                 false
-                                            } else if legacy_cell_break && would_overflow_natural {
+                                            } else if s1174_yakucomp && would_overflow_natural {
+                                                // S1174: the derived cell rule, run through the
+                                                // compression model the engine already has rather
+                                                // than beside it -- 約物 give up to half an em each
+                                                // and the line takes only its shortfall.
+                                                let mut trial: Vec<
+                                                    crate::layout::jc_both_compress::CharContext,
+                                                > = Vec::with_capacity(
+                                                    current_line_chars.len() + buf_chars.len() + 1,
+                                                );
+                                                trial.extend(current_line_chars.iter().cloned());
+                                                trial.extend(buf_chars.iter().cloned());
+                                                trial.push(
+                                                    crate::layout::jc_both_compress::CharContext {
+                                                        ch,
+                                                        natural_advance: cw,
+                                                        font_size,
+                                                    },
+                                                );
+                                                !crate::layout::jc_both_compress::compute_compression_floor(
+                                                    &trial, effective_wrap, true, Some(0.5),
+                                                ).fits
+                                            } else if legacy_cell_break
+                                                && !s1174_yakucomp
+                                                && would_overflow_natural
+                                            {
+                                                // ★S1174 SUPERSEDES this branch when it is on.
+                                                // Both are the same shape -- a per-約物 break budget
+                                                // -- so leaving both in place counts the pool twice:
+                                                // the S1174 credit already widened `effective_wrap`,
+                                                // and this then allows another `n_yak * cap` on top.
+                                                // That is what put tokyoshugyo 78 paragraphs AHEAD
+                                                // of Word (delta -1) under OXI_YAKUCOMP=1 while
+                                                // CELLLAW alone left it at 1.0.
+                                                // The caps differ because they were found different
+                                                // ways: this one was tuned to ~2.5pt at 10.5 (0.238em)
+                                                // against the OLD over-wide budget, the S1174 one is
+                                                // 0.5em read off a controlled sweep. They cannot both
+                                                // apply.
                                                 // small-cap capacity: fit a (non-hangable) kanji iff its overflow ≤
                                                 // Σ(small cap per compressible mid-line 約物). cap ~2.5pt@10.5 = the
                                                 // derived kanji-fit budget, scaled by fs. Line-end 約物 hang via cell_bura.
@@ -36896,18 +36920,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } else {
                         0.0
                     };
-                // S1174 estimate mirror of the render-loop credit.
-                let effective_wrap = effective_wrap
-                    + if s1174_yakucomp {
-                        current_line_chars
-                            .iter()
-                            .chain(buf_chars.iter())
-                            .map(|c| kinsoku::cell_yaku_capacity(c.ch) * c.natural_advance)
-                            .sum::<f32>()
-                            + kinsoku::cell_yaku_capacity(ch) * cw
-                    } else {
-                        0.0
-                    };
                 let is_space = ch == ' ' || ch == '\u{3000}';
                 // S123: mirror cell renderer's compute_compression lookahead.
                 // When gate active + this run has neg cs + natural would overflow,
@@ -36926,7 +36938,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let cellpair_est = self.cellpair_active()
                     && self.compress_punctuation
                     && matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
-                let would_overflow = if cellpair_est && would_overflow_natural {
+                // S1174 supersedes this the same way it supersedes the render-side
+                // legacy_cell_break branch -- stacking the two counts the pool twice.
+                let would_overflow = if s1174_yakucomp && would_overflow_natural {
+                    // S1174 estimate mirror.
+                    let mut trial: Vec<crate::layout::jc_both_compress::CharContext> =
+                        Vec::with_capacity(current_line_chars.len() + buf_chars.len() + 1);
+                    trial.extend(current_line_chars.iter().cloned());
+                    trial.extend(buf_chars.iter().cloned());
+                    trial.push(crate::layout::jc_both_compress::CharContext {
+                        ch,
+                        natural_advance: cw,
+                        font_size,
+                    });
+                    !crate::layout::jc_both_compress::compute_compression_floor(
+                        &trial,
+                        effective_wrap,
+                        true,
+                        Some(0.5),
+                    )
+                    .fits
+                } else if cellpair_est && !s1174_yakucomp && would_overflow_natural {
                     let n_yak = current_line_chars
                         .iter()
                         .chain(buf_chars.iter())
