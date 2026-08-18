@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Workbook};
-use oxivba_core::{
-    execute_with_host, parse_module, ArrayDimension, ArrayValue, Host, ObjectRef, Value,
-};
+#[cfg(test)]
+use oxivba_core::execute_with_host;
+use oxivba_core::{parse_module, ArrayDimension, ArrayValue, Host, ObjectRef, Runtime, Value};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -1498,13 +1498,13 @@ pub fn run_spreadsheet_vba(
     let module = parse_module(source).map_err(|error| JsError::new(&error.to_string()))?;
     let mut host =
         WorkbookHost::new(&mut workbook, active_sheet).map_err(|error| JsError::new(&error))?;
-    let result = execute_with_host(
-        &module,
-        procedure,
-        args.into_iter().map(Value::from).collect(),
-        &mut host,
-    )
-    .map_err(|error| JsError::new(&error.to_string()))?;
+    let random_seed =
+        js_sys::Date::now().to_bits() ^ js_sys::Math::random().to_bits().rotate_left(17);
+    let result = Runtime::new(&module)
+        .with_host(&mut host)
+        .with_random_seed(random_seed)
+        .call(procedure, args.into_iter().map(Value::from).collect())
+        .map_err(|error| JsError::new(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&RunResult {
         workbook,
         result: result.into(),

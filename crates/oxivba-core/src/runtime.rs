@@ -174,6 +174,8 @@ pub struct Runtime<'a> {
     module_initialized: bool,
     internal_objects: BTreeMap<u64, InternalObject>,
     next_internal_handle: u64,
+    random_state: u32,
+    random_entropy: u64,
 }
 
 struct Frame {
@@ -265,6 +267,8 @@ impl<'a> Runtime<'a> {
             module_initialized: false,
             internal_objects: BTreeMap::new(),
             next_internal_handle: 1_u64 << 63,
+            random_state: 327_680,
+            random_entropy: 327_680,
         }
     }
 
@@ -276,6 +280,12 @@ impl<'a> Runtime<'a> {
     pub fn with_limits(mut self, max_steps: usize, max_depth: usize) -> Self {
         self.max_steps = max_steps;
         self.max_depth = max_depth;
+        self
+    }
+
+    /// Supplies entropy for `Randomize` calls that omit their numeric seed.
+    pub fn with_random_seed(mut self, seed: u64) -> Self {
+        self.random_entropy = seed;
         self
     }
 
@@ -1865,6 +1875,9 @@ impl<'a> Runtime<'a> {
                         kind: "Err".to_string(),
                     }));
                 }
+                if name.eq_ignore_ascii_case("rnd") {
+                    return self.call_named(name, Vec::new(), Some(span.line));
+                }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
                     return Ok(value);
                 }
@@ -2296,6 +2309,12 @@ impl<'a> Runtime<'a> {
         if name.eq_ignore_ascii_case("createobject") {
             return self.create_object(&args, line);
         }
+        if name.eq_ignore_ascii_case("rnd") {
+            return self.call_rnd(&args, line);
+        }
+        if name.eq_ignore_ascii_case("randomize") {
+            return self.call_randomize(&args, line);
+        }
         if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
         }
@@ -2303,6 +2322,61 @@ impl<'a> Runtime<'a> {
             return Ok(value);
         }
         self.call_procedure(name, args, line)
+    }
+
+    fn call_rnd(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+        if args.len() > 1 {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!("Rnd expects 0 or 1 arguments, received {}", args.len()),
+                line,
+            ));
+        }
+        let argument = match args.first() {
+            None | Some(Value::Missing) => 1.0,
+            Some(value) => number(value)
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?,
+        };
+        if argument < 0.0 {
+            self.random_state = (argument as f32).to_bits() & 0x00ff_ffff;
+        }
+        if argument != 0.0 {
+            self.random_state = self
+                .random_state
+                .wrapping_mul(1_140_671_485)
+                .wrapping_add(12_820_163)
+                & 0x00ff_ffff;
+        }
+        Ok(Value::Double(f64::from(self.random_state) / 16_777_216.0))
+    }
+
+    fn call_randomize(&mut self, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+        if args.len() > 1 {
+            return Err(error(
+                RuntimeErrorKind::ArgumentCount,
+                format!(
+                    "Randomize expects 0 or 1 arguments, received {}",
+                    args.len()
+                ),
+                line,
+            ));
+        }
+        let bits = match args.first() {
+            None | Some(Value::Missing) => {
+                self.random_entropy = self
+                    .random_entropy
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                self.random_entropy
+            }
+            Some(value) => number(value)
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+                .to_bits(),
+        };
+        let folded = (bits as u32) ^ (bits >> 32) as u32;
+        self.random_state = ((folded & 0xffff) ^ (folded >> 16)) << 8 | (self.random_state & 0xff);
+        self.random_state &= 0x00ff_ffff;
+        Ok(Value::Empty)
     }
 
     fn eval_object(
@@ -7850,6 +7924,84 @@ mod tests {
             value,
             Value::String("3.141593|0|1|0|2|98559|255".to_string())
         );
+    }
+
+    #[test]
+    fn executes_stateful_vba_rnd_and_randomize() {
+        let value = run(
+            "Public Function RandomSequence() As String\n\
+               Dim first As Single\n\
+               Dim second As Single\n\
+               Dim repeated As Single\n\
+               Dim seededA As Single\n\
+               Dim seededB As Single\n\
+               first = Rnd\n\
+               second = Rnd()\n\
+               repeated = Rnd(0)\n\
+               seededA = Rnd(-1)\n\
+               seededB = Rnd(-1)\n\
+               Rnd -1\n\
+               Randomize 42\n\
+               Dim replayA As Single\n\
+               replayA = Rnd\n\
+               Rnd -1\n\
+               Randomize 42\n\
+               Dim replayB As Single\n\
+               replayB = Rnd\n\
+               RandomSequence = Round(first, 7) & \"|\" & Round(second, 7) & \"|\" & (second = repeated) & \"|\" & (seededA = seededB) & \"|\" & (replayA = replayB)\n\
+             End Function\n",
+            "RandomSequence",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("0.7055475|0.533424|True|True|True".to_string())
+        );
+    }
+
+    #[test]
+    fn randomize_without_argument_uses_supplied_runtime_entropy() {
+        let module = parse_module(
+            "Public Function Sample() As Double\n\
+               Randomize\n\
+               Sample = Rnd\n\
+             End Function\n",
+        )
+        .unwrap();
+        let first = Runtime::new(&module)
+            .with_random_seed(1)
+            .call("Sample", vec![])
+            .unwrap();
+        let second = Runtime::new(&module)
+            .with_random_seed(2)
+            .call("Sample", vec![])
+            .unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn random_functions_validate_arguments() {
+        let value = run(
+            "Public Function RandomErrors() As String\n\
+               Dim rndCount As Long\n\
+               Dim randomizeCount As Long\n\
+               On Error Resume Next\n\
+               rndCount = Rnd(1, 2)\n\
+               rndCount = Err.Number\n\
+               Err.Clear\n\
+               Randomize 1, 2\n\
+               randomizeCount = Err.Number\n\
+               RandomErrors = rndCount & \"|\" & randomizeCount\n\
+             End Function\n",
+            "RandomErrors",
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(value, Value::String("450|450".to_string()));
     }
 
     #[test]

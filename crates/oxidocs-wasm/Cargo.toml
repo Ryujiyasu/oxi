@@ -17,6 +17,7 @@ oxislides-core = { path = "../oxislides-core", optional = true }
 oxipdf-core = { path = "../oxipdf-core" }
 oxihanko = { path = "../oxihanko", optional = true }
 wasm-bindgen = "0.2"
+js-sys = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
