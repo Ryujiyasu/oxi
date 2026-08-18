@@ -1875,6 +1875,26 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .unwrap_or(m.and_then(|mm| mm.algn).unwrap_or(SlideAlignment::Left));
                             let is_justify = matches!(align, SlideAlignment::Justify);
                             let n_lines = lines.len();
+                            // OXI_DUMP_LINES=1 prints what the text layout
+                            // actually produced. Pixel forensics cannot tell a
+                            // short last line from the next paragraph's first
+                            // line, and that ambiguity is exactly what makes
+                            // line-breaking differences hard to attribute.
+                            if std::env::var("OXI_DUMP_LINES").is_ok() {
+                                eprintln!(
+                                    "LINES slide={} shape=({:.1},{:.1}) para={} fs={:.2} n={} lnSpc={:?}",
+                                    slide.index, sh.x, sh.y, pi, fs, n_lines, p.line_spacing
+                                );
+                                for (li, (t, b, xo)) in lines.iter().enumerate() {
+                                    eprintln!(
+                                        "  L{:<2} baseline={:.2}pt x_off={:.2} {:?}",
+                                        li,
+                                        *b as f64 / scale,
+                                        xo,
+                                        t.chars().take(60).collect::<String>()
+                                    );
+                                }
+                            }
                             for (i, (line_text, baseline, x_off)) in
                                 lines.into_iter().enumerate()
                             {
@@ -8116,14 +8136,32 @@ fn gdi_wrap_lines(
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut current_w = 0i32;
+    let trim_on = std::env::var("OXI_WRAPTRIM_DISABLE").is_err();
     for word in text.split_inclusive(' ') {
-        let w = gdi_measure_text_px(dc, word);
-        if !current.is_empty() && current_w + w > width_px {
+        // A line's trailing space HANGS past the right edge -- it is not part
+        // of the width the break is judged against. Measured on d28 slide 13
+        // (2026-08-18): "National Cemetery in Gettysburg, Pennsylvania. In
+        // just" is 1034px in its own font against a 1036px box and PowerPoint
+        // keeps it whole, but with the trailing space it is 1047px, so the
+        // per-word accumulation broke before "just" and the paragraph needed
+        // 11 lines where PowerPoint needs 10.
+        //
+        // Measuring the candidate PREFIX rather than summing per-word widths
+        // also drops the per-word integer-pixel rounding, which pushed the
+        // same way.
+        let fits = if trim_on {
+            let mut candidate = current.clone();
+            candidate.push_str(word);
+            gdi_measure_text_px(dc, candidate.trim_end()) <= width_px
+        } else {
+            current_w + gdi_measure_text_px(dc, word) <= width_px
+        };
+        if !current.is_empty() && !fits {
             lines.push(std::mem::take(&mut current));
             current_w = 0;
         }
         current.push_str(word);
-        current_w += w;
+        current_w += gdi_measure_text_px(dc, word);
     }
     if !current.is_empty() {
         lines.push(current);
