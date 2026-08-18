@@ -921,6 +921,7 @@ fn parse_slide(
     let mut sg_in_path = false;
     let mut sg_pos: f32 = 0.0;
     let mut sg_color: Option<String> = None;
+    let mut sg_alpha: f32 = 1.0;
     let mut sg_stops: Vec<SlideGradientStop> = Vec::new();
     let mut sg_angle: Option<f32> = None;
     let mut sg_scaled = false;
@@ -1301,6 +1302,14 @@ fn parse_slide(
                         sg_in_gs = true;
                         sg_pos = get_attr(&e, "pos").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
                         sg_color = None;
+                        sg_alpha = 1.0;
+                    }
+                    "alpha" if sg_in_gs => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(a) = v.parse::<f32>() {
+                                sg_alpha = (a / 100000.0).clamp(0.0, 1.0);
+                            }
+                        }
                     }
                     "srgbClr" if sg_in_gs && sg_color.is_none() => {
                         sg_color = get_attr(&e, "val");
@@ -2063,7 +2072,11 @@ fn parse_slide(
                     "gs" if sg_in_gs => {
                         sg_in_gs = false;
                         if let Some(c) = sg_color.take() {
-                            sg_stops.push(SlideGradientStop { pos: sg_pos, color: c });
+                            sg_stops.push(SlideGradientStop {
+                                pos: sg_pos,
+                                color: c,
+                                alpha: sg_alpha,
+                            });
                         }
                     }
                     "path" if sg_in_path => sg_in_path = false,
@@ -2543,6 +2556,7 @@ fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Optio
     let mut in_path = false;
     let mut cur_pos: f32 = 0.0;
     let mut cur_color: Option<String> = None;
+    let mut cur_alpha: f32 = 1.0;
     let mut stops: Vec<SlideGradientStop> = Vec::new();
     let mut angle_deg: Option<f32> = None;
     let mut scaled = false;
@@ -2566,6 +2580,14 @@ fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Optio
                             .and_then(|v| gradient_frac(&v))
                             .unwrap_or(0.0);
                         cur_color = None;
+                        cur_alpha = 1.0;
+                    }
+                    "alpha" if in_gs => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(a) = v.parse::<f32>() {
+                                cur_alpha = (a / 100000.0).clamp(0.0, 1.0);
+                            }
+                        }
                     }
                     "srgbClr" if in_gs && cur_color.is_none() => {
                         cur_color = get_attr(&e, "val");
@@ -2612,6 +2634,7 @@ fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Optio
                 "gs" => {
                     if let Some(c) = cur_color.take() {
                         stops.push(SlideGradientStop {
+                            alpha: cur_alpha,
                             pos: cur_pos,
                             color: c,
                         });
@@ -2878,6 +2901,7 @@ fn parse_inherited_shapes(
     // custGeom paths and a gradient fill are drawable now (S-CUSTGEOM /
     // S-SHAPEGRAD), so inherited shapes carrying them are no longer refused.
     let s_inherit_geom = std::env::var("OXI_LMGEOM_DISABLE").is_err();
+    let s_gradshape = std::env::var("OXI_GRADALPHA_DISABLE").is_err();
     let mut ig_paths: Vec<GeomPath> = Vec::new();
     let mut ig_bad = false;
     let mut ig_cur: Option<GeomPath> = None;
@@ -2888,6 +2912,7 @@ fn parse_inherited_shapes(
     let mut gr_in_path = false;
     let mut gr_pos: f32 = 0.0;
     let mut gr_color: Option<String> = None;
+    let mut gr_alpha: f32 = 1.0;
     let mut gr_stops: Vec<SlideGradientStop> = Vec::new();
     let mut gr_angle: Option<f32> = None;
     let mut gr_scaled = false;
@@ -2937,16 +2962,21 @@ fn parse_inherited_shapes(
                                             content_type: detect_content_type(&rel.target),
                                         })
                                     }),
-                                    // ★A gradient-only shape is NOT emitted yet:
-                                    // its stops carry per-stop `a:alpha`
-                                    // (d06 layout10 is 020F2B at 33.7% over
-                                    // 010C16 at 0%), and painting them opaque
-                                    // put a dark navy slab over the whole
-                                    // slide -- d06 fell 0.8800 -> 0.6489.
-                                    // Stop alpha has to land first.
-                                    _ => fill.as_ref().map(|_| ShapeContent::AutoShape {
-                                        paragraphs: Vec::new(),
-                                    }),
+                                    // A gradient-only shape has ink of its
+                                    // own. Emitting it needed per-stop alpha
+                                    // first: d06's layout wash is 020F2B at
+                                    // 33.7% over 010C16 at 0%, and emitting it
+                                    // while the painter was still opaque laid a
+                                    // navy slab over the slide -- 0.8800 ->
+                                    // 0.6489.
+                                    _ if fill.is_some()
+                                        || (s_gradshape && gr_stops.len() >= 2) =>
+                                    {
+                                        Some(ShapeContent::AutoShape {
+                                            paragraphs: Vec::new(),
+                                        })
+                                    }
+                                    _ => None,
                                 };
                                 if let Some(content) = content {
                                     // A line with <a:noFill/> paints nothing --
@@ -3062,7 +3092,11 @@ fn parse_inherited_shapes(
                     "gs" if gr_in_gs => {
                         gr_in_gs = false;
                         if let Some(c) = gr_color.take() {
-                            gr_stops.push(SlideGradientStop { pos: gr_pos, color: c });
+                            gr_stops.push(SlideGradientStop {
+                                pos: gr_pos,
+                                color: c,
+                                alpha: gr_alpha,
+                            });
                         }
                     }
                     "path" if gr_in_path => gr_in_path = false,
@@ -3273,6 +3307,14 @@ fn parse_inherited_shapes(
                 gr_in_gs = true;
                 gr_pos = get_attr(e, "pos").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
                 gr_color = None;
+                gr_alpha = 1.0;
+            }
+            "alpha" if gr_in_gs => {
+                if let Some(v) = get_attr(e, "val") {
+                    if let Ok(a) = v.parse::<f32>() {
+                        gr_alpha = (a / 100000.0).clamp(0.0, 1.0);
+                    }
+                }
             }
             "lin" if gr_in => {
                 gr_angle = get_attr(e, "ang")

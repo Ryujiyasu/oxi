@@ -191,6 +191,13 @@ pub struct SlideGradientStop {
     pub pos: f32,
     /// RRGGBB, theme colours already resolved.
     pub color: String,
+    /// `<a:alpha>` inside the stop's colour, 0.0..1.0 (1.0 = opaque).
+    #[serde(default = "default_stop_alpha")]
+    pub alpha: f32,
+}
+
+pub fn default_stop_alpha() -> f32 {
+    1.0
 }
 
 /// A slide background gradient. Exactly one of `angle_deg` / `focus` is set:

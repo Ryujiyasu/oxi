@@ -1180,6 +1180,41 @@ fn linear_to_srgb(c: f64) -> f64 {
 /// remains: PowerPoint's ramp is not a plain lerp in any single space (d15
 /// favours cos-squared, the probe favours 1-t^2), so this is the measured best
 /// of the simple models rather than an exact match.
+/// Linear interpolation of the ramp's per-stop alpha at `t` (1.0 = opaque).
+fn gradient_alpha_at(g: &SlideGradient, t: f64) -> f64 {
+    let stops = &g.stops;
+    if stops.is_empty() {
+        return 1.0;
+    }
+    let t = t.clamp(0.0, 1.0);
+    let last = stops.len() - 1;
+    if t <= stops[0].pos as f64 {
+        return stops[0].alpha as f64;
+    }
+    if t >= stops[last].pos as f64 {
+        return stops[last].alpha as f64;
+    }
+    for i in 0..last {
+        let (a, b) = (&stops[i], &stops[i + 1]);
+        if t >= a.pos as f64 && t <= b.pos as f64 {
+            let span = (b.pos - a.pos) as f64;
+            let u = if span.abs() < 1e-9 {
+                0.0
+            } else {
+                (t - a.pos as f64) / span
+            };
+            return a.alpha as f64 + (b.alpha as f64 - a.alpha as f64) * u;
+        }
+    }
+    1.0
+}
+
+/// True when any stop is translucent, i.e. the ramp must be composited rather
+/// than painted as opaque bands.
+fn gradient_has_alpha(g: &SlideGradient) -> bool {
+    g.stops.iter().any(|s| s.alpha < 1.0)
+}
+
 fn gradient_color_at(g: &SlideGradient, t: f64) -> (u8, u8, u8) {
     let stops = &g.stops;
     if stops.is_empty() {
@@ -1518,6 +1553,72 @@ unsafe fn paint_bg_gradient(
 
     const N: i32 = 256;
     if w <= 0 || h <= 0 {
+        return;
+    }
+
+    // A ramp whose stops carry `a:alpha` cannot be painted as opaque bands:
+    // d06's layout wash is 020F2B at 33.7% over 010C16 at 0%, which PowerPoint
+    // renders as a faint darkening and an opaque painter renders as a slab.
+    // Only that case takes the compositing route, so every fully opaque
+    // gradient keeps its existing byte-for-byte output.
+    if gradient_has_alpha(g)
+        && std::env::var("OXI_GRADALPHA_DISABLE").is_err()
+        && (w as i64) * (h as i64) <= 64_000_000
+    {
+        let mut img = image::RgbaImage::new(w as u32, h as u32);
+        let t_at: Box<dyn Fn(f64, f64) -> f64> = if let Some((fx, fy)) = g.focus {
+            let cx = fx as f64 * w as f64;
+            let cy = fy as f64 * h as f64;
+            let r_max = [
+                (0.0, 0.0),
+                (w as f64, 0.0),
+                (0.0, h as f64),
+                (w as f64, h as f64),
+            ]
+            .iter()
+            .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
+            .fold(0.0f64, f64::max);
+            Box::new(move |x, y| {
+                if r_max < 1e-9 {
+                    0.0
+                } else {
+                    (((x - cx).powi(2) + (y - cy).powi(2)).sqrt() / r_max).clamp(0.0, 1.0)
+                }
+            })
+        } else {
+            let th = (g.angle_deg.unwrap_or(0.0) as f64).to_radians();
+            let (mut dx, mut dy) = (th.cos(), th.sin());
+            if g.scaled {
+                dx /= w as f64;
+                dy /= h as f64;
+            }
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-12 {
+                dx = 1.0;
+                dy = 0.0;
+            } else {
+                dx /= len;
+                dy /= len;
+            }
+            let axis = (w as f64 * dx).abs() + (h as f64 * dy).abs();
+            let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+            Box::new(move |x, y| {
+                if axis < 1e-9 {
+                    0.0
+                } else {
+                    (((x - cx) * dx + (y - cy) * dy) / axis + 0.5).clamp(0.0, 1.0)
+                }
+            })
+        };
+        for py in 0..h {
+            for px in 0..w {
+                let t = t_at(px as f64 + 0.5, py as f64 + 0.5);
+                let (r, gg, b) = gradient_color_at(g, t);
+                let a = (gradient_alpha_at(g, t) * 255.0).round().clamp(0.0, 255.0) as u8;
+                img.put_pixel(px as u32, py as u32, image::Rgba([r, gg, b, a]));
+            }
+        }
+        alpha_blit(dc, 0, 0, w, h, 0, 0, w, h, w, h, &img);
         return;
     }
 
