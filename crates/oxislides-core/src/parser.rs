@@ -2937,6 +2937,13 @@ fn parse_inherited_shapes(
                                             content_type: detect_content_type(&rel.target),
                                         })
                                     }),
+                                    // ★A gradient-only shape is NOT emitted yet:
+                                    // its stops carry per-stop `a:alpha`
+                                    // (d06 layout10 is 020F2B at 33.7% over
+                                    // 010C16 at 0%), and painting them opaque
+                                    // put a dark navy slab over the whole
+                                    // slide -- d06 fell 0.8800 -> 0.6489.
+                                    // Stop alpha has to land first.
                                     _ => fill.as_ref().map(|_| ShapeContent::AutoShape {
                                         paragraphs: Vec::new(),
                                     }),
