@@ -2999,6 +2999,10 @@ fn parse_inherited_shapes(
     // An inherited shape keeps its own turn and mirror unless this is set,
     // which restores refusing it outright.
     let s_inherit_rot = std::env::var("OXI_LMROT_DISABLE").is_err();
+    // An inherited picture keeps its `a:alphaModFix` opacity unless this is
+    // set, which restores refusing the shape.
+    let s_inherit_imgalpha = std::env::var("OXI_LMIMGALPHA_DISABLE").is_err();
+    let mut ig_img_alpha: Option<f32> = None;
     let mut ig_rot: f32 = 0.0;
     let mut ig_flip = (false, false);
     // A shape whose only unsupported feature is an effect is still emitted --
@@ -3125,7 +3129,7 @@ fn parse_inherited_shapes(
                                         src_rect,
                                         fill_rect,
                                         rot_with_shape: true,
-                                        image_alpha: None,
+                                        image_alpha: ig_img_alpha.take(),
                                         gradient: if gr_stops.len() >= 2 {
                                             Some(SlideGradient {
                                                 stops: std::mem::take(&mut gr_stops),
@@ -3276,6 +3280,7 @@ fn parse_inherited_shapes(
                     ig_in = false;
                     ig_rot = 0.0;
                     ig_flip = (false, false);
+                    ig_img_alpha = None;
                     gr_stops.clear();
                     gr_in = false;
                     gr_in_gs = false;
@@ -3523,11 +3528,17 @@ fn parse_inherited_shapes(
                     }
                 }
             }
-            // @amt defaults to 100000 = fully opaque; only a real value is
-            // translucency the blit cannot reproduce.
+            // `@amt` is the picture's opacity. The blit CAN reproduce it now
+            // (`image_alpha` / `alpha_blit`), so carry it instead of refusing
+            // the shape -- 46 layout pictures in the corpus were being dropped
+            // for it (d04 34, d06 12).
             "alphaModFix" if in_pic_blip => {
-                if get_attr(e, "amt").is_some_and(|a| a != "100000") {
-                    ok = false;
+                match get_attr(e, "amt").and_then(|a| a.parse::<f32>().ok()) {
+                    Some(a) if s_inherit_imgalpha => {
+                        ig_img_alpha = Some((a / 100000.0).clamp(0.0, 1.0));
+                    }
+                    Some(a) if a != 100000.0 => ok = false,
+                    _ => {}
                 }
             }
             "duotone" | "clrChange" | "grayscl" | "biLevel" | "tile" if in_pic_blip => ok = false,
