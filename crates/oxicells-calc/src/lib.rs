@@ -52,6 +52,7 @@ pub mod value;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};
 pub use engine::{CalcError, RecalcReport, Workbook};
+pub use lexer::translate_formula_references;
 pub use lexer::ParseError;
 pub use parser::parse;
 pub use reference::{CellRef, RangeRef, Reference};

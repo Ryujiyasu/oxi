@@ -10,6 +10,7 @@ pub mod parser;
 pub use editor::{CellEditValue, XlsxEditor};
 pub use formula::{
     evaluate_sheet_formulas, evaluate_workbook_formulas, fill_missing_formula_values,
+    translate_formula_references,
 };
 pub use parser::{parse_xlsx, parse_xlsx_preserving_values};
 

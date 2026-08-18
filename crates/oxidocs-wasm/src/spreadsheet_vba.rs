@@ -887,6 +887,8 @@ impl<'a> WorkbookHost<'a> {
             end_row,
             end_column,
         };
+        let row_offset = i64::from(destination.start_row) - i64::from(source.start_row);
+        let column_offset = i64::from(destination.start_column) - i64::from(source.start_column);
         let worksheet = self
             .workbook
             .sheets
@@ -901,18 +903,26 @@ impl<'a> WorkbookHost<'a> {
                     .find(|row| row.index == address.row)
                     .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
                     .map(|cell| {
-                        if cell.formula.is_some() {
-                            return Err(
-                                "Range.Copy cannot copy formulas until relative references can be adjusted"
-                                    .to_string(),
-                            );
-                        }
-                        Ok((cell.value.clone(), cell.style.clone()))
+                        let formula = cell
+                            .formula
+                            .as_deref()
+                            .map(|formula| {
+                                oxicells_core::translate_formula_references(
+                                    formula,
+                                    row_offset,
+                                    column_offset,
+                                )
+                                .map_err(|error| {
+                                    format!("Range.Copy cannot adjust formula {formula:?}: {error}")
+                                })
+                            })
+                            .transpose()?;
+                        Ok::<_, String>((cell.value.clone(), cell.style.clone(), formula))
                     })
-                    .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default())))
+                    .unwrap_or_else(|| Ok((CellValue::Empty, CellStyle::default(), None)))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        for (address, (value, style)) in destination.addresses().zip(copied) {
+        for (address, (value, style, formula)) in destination.addresses().zip(copied) {
             self.set_cell_value(address, value)?;
             let sheet = &mut self.workbook.sheets[address.sheet];
             let cell = sheet
@@ -922,6 +932,10 @@ impl<'a> WorkbookHost<'a> {
                 .and_then(|row| row.cells.iter_mut().find(|cell| cell.col == address.column))
                 .expect("set_cell_value creates the destination cell");
             cell.style = style;
+            if formula.is_some() {
+                cell.value = CellValue::Empty;
+            }
+            cell.formula = formula;
         }
         Ok(Value::Empty)
     }
@@ -2263,21 +2277,26 @@ mod tests {
     }
 
     #[test]
-    fn vba_rejects_formula_copy_until_references_can_be_adjusted() {
+    fn vba_copies_formulas_with_relative_reference_adjustment() {
         let mut workbook = workbook();
         let module = parse_module(
             "Public Sub CopyFormula()\n\
-               Range(\"A1\").Formula = \"=B1+1\"\n\
-               Range(\"A1\").Copy Destination:=Range(\"A2\")\n\
+               Range(\"A1\").Formula = \"=B1+$C$1+D$2\"\n\
+               Range(\"B1\").Formula = \"=SUM(A1:B1)\"\n\
+               Range(\"A1:B1\").Copy Destination:=Range(\"C2\")\n\
              End Sub\n",
         )
         .unwrap();
-        let failure = {
+        {
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
-            execute_with_host(&module, "CopyFormula", vec![], &mut host).unwrap_err()
-        };
+            execute_with_host(&module, "CopyFormula", vec![], &mut host).unwrap();
+        }
 
-        assert!(failure.message.contains("relative references"));
+        let row = &workbook.sheets[0].rows[1];
+        assert_eq!(row.cells[0].formula.as_deref(), Some("D2+$C$1+F$2"));
+        assert_eq!(row.cells[1].formula.as_deref(), Some("SUM(C2:D2)"));
+        assert!(matches!(row.cells[0].value, CellValue::Empty));
+        assert!(matches!(row.cells[1].value, CellValue::Empty));
     }
 
     #[test]

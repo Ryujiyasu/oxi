@@ -9,6 +9,7 @@
 //! follows and by trying [`crate::reference::parse_a1`]. Deciding in the lexer
 //! would misread `LOG10` as a cell reference.
 
+use crate::reference::{parse_a1, MAX_COL, MAX_ROW};
 use crate::value::ExcelError;
 use std::fmt;
 
@@ -185,6 +186,110 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     Ok(tokens)
 }
 
+/// Move relative A1 references as Excel does when a formula cell is copied.
+///
+/// Only formulas understood by this crate are translated. Rejecting an
+/// unsupported formula is deliberate: copying it verbatim would silently
+/// preserve relative references that Excel would have moved.
+pub fn translate_formula_references(
+    input: &str,
+    row_offset: i64,
+    column_offset: i64,
+) -> Result<String, String> {
+    crate::parser::parse(input).map_err(|error| error.to_string())?;
+    let had_equals = input.trim_start().starts_with('=');
+    let mut tokens = tokenize(input).map_err(|error| error.to_string())?;
+    for index in 0..tokens.len() {
+        let is_function = matches!(tokens.get(index + 1), Some(Token::LParen));
+        let Token::Name { name, .. } = &mut tokens[index] else {
+            continue;
+        };
+        if is_function {
+            continue;
+        }
+        let Some(mut reference) = parse_a1(name) else {
+            continue;
+        };
+        if !reference.row_absolute {
+            reference.row = shifted_coordinate(reference.row, row_offset, MAX_ROW)?;
+        }
+        if !reference.col_absolute {
+            reference.col = shifted_coordinate(reference.col, column_offset, MAX_COL)?;
+        }
+        *name = reference.to_a1();
+    }
+
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in tokens {
+        render_token(&mut output, token);
+    }
+    Ok(output)
+}
+
+fn shifted_coordinate(value: u32, offset: i64, maximum: u32) -> Result<u32, String> {
+    i64::from(value)
+        .checked_add(offset)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value <= maximum)
+        .ok_or_else(|| "copied formula reference moves outside the worksheet".to_string())
+}
+
+fn render_token(output: &mut String, token: Token) {
+    match token {
+        Token::Number(value) => output.push_str(&value.to_string()),
+        Token::Text(value) => {
+            output.push('"');
+            output.push_str(&value.replace('"', "\"\""));
+            output.push('"');
+        }
+        Token::ErrorLit(value) => output.push_str(value.as_str()),
+        Token::Name { sheet, name } => {
+            if let Some(sheet) = sheet {
+                if sheet_needs_quotes(&sheet) {
+                    output.push('\'');
+                    output.push_str(&sheet.replace('\'', "''"));
+                    output.push('\'');
+                } else {
+                    output.push_str(&sheet);
+                }
+                output.push('!');
+            }
+            output.push_str(&name);
+        }
+        Token::Plus => output.push('+'),
+        Token::Minus => output.push('-'),
+        Token::Star => output.push('*'),
+        Token::Slash => output.push('/'),
+        Token::Caret => output.push('^'),
+        Token::Percent => output.push('%'),
+        Token::Amp => output.push('&'),
+        Token::Eq => output.push('='),
+        Token::Ne => output.push_str("<>"),
+        Token::Lt => output.push('<'),
+        Token::Le => output.push_str("<="),
+        Token::Gt => output.push('>'),
+        Token::Ge => output.push_str(">="),
+        Token::Colon => output.push(':'),
+        Token::Comma => output.push(','),
+        Token::LParen => output.push('('),
+        Token::RParen => output.push(')'),
+    }
+}
+
+fn sheet_needs_quotes(name: &str) -> bool {
+    name.is_empty()
+        || name
+            .chars()
+            .any(|character| !(character.is_alphanumeric() || character == '_' || character == '.'))
+        || name
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+}
+
 fn lex_string(src: &str, start: usize) -> Result<(String, usize), ParseError> {
     let bytes = src.as_bytes();
     let mut i = start + 1;
@@ -353,6 +458,35 @@ mod tests {
 
     fn lex(s: &str) -> Vec<Token> {
         tokenize(s).expect("should lex")
+    }
+
+    #[test]
+    fn translates_relative_and_absolute_formula_references() {
+        assert_eq!(
+            translate_formula_references(
+                "=A1+$B2+C$3+$D$4+SUM(E5:F6)+\"A1\"+'Data Sheet'!G7",
+                2,
+                1,
+            )
+            .unwrap(),
+            "=B3+$B4+D$3+$D$4+SUM(F7:G8)+\"A1\"+'Data Sheet'!H9"
+        );
+    }
+
+    #[test]
+    fn formula_translation_rejects_out_of_bounds_and_unsupported_formulas() {
+        assert!(translate_formula_references("=A1", -1, 0)
+            .unwrap_err()
+            .contains("outside the worksheet"));
+        assert!(translate_formula_references("=A1;B1", 1, 1).is_err());
+    }
+
+    #[test]
+    fn formula_translation_does_not_treat_function_names_as_cells() {
+        assert_eq!(
+            translate_formula_references("LOG10(A1)", 1, 1).unwrap(),
+            "LOG10(B2)"
+        );
     }
 
     fn name(n: &str) -> Token {
