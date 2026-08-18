@@ -942,6 +942,38 @@ impl<'a> WorkbookHost<'a> {
         Ok(first)
     }
 
+    fn clear_range(
+        &mut self,
+        range: CellRange,
+        clear_contents: bool,
+        clear_formats: bool,
+    ) -> Result<(), String> {
+        Self::range_cell_count(range)?;
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        for row in &mut sheet.rows {
+            if !(range.start_row..=range.end_row).contains(&row.index) {
+                continue;
+            }
+            for cell in &mut row.cells {
+                if !(range.start_column..=range.end_column).contains(&cell.col) {
+                    continue;
+                }
+                if clear_contents {
+                    cell.value = CellValue::Empty;
+                    cell.formula = None;
+                }
+                if clear_formats {
+                    cell.style = CellStyle::default();
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
         let [Value::Object(destination)] = args else {
             return Err(
@@ -1222,6 +1254,20 @@ impl Host for WorkbookHost<'_> {
                     self.set_range_value(range, Value::Empty)?;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("clearformats") {
+                    if !args.is_empty() {
+                        return Err("Range.ClearFormats does not accept arguments".to_string());
+                    }
+                    self.clear_range(range, false, true)?;
+                    return Ok(Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("clear") {
+                    if !args.is_empty() {
+                        return Err("Range.Clear does not accept arguments".to_string());
+                    }
+                    self.clear_range(range, true, true)?;
+                    return Ok(Some(Value::Empty));
+                }
             }
             return Ok(None);
         }
@@ -1443,6 +1489,11 @@ impl Host for WorkbookHost<'_> {
                     })
                 });
         }
+        if name.eq_ignore_ascii_case("horizontalalignment") {
+            return self
+                .uniform_style(range, |style| style.horizontal_align.clone())
+                .map(|value| Some(horizontal_alignment_value(value)));
+        }
         if name.eq_ignore_ascii_case("row") {
             return Ok(Some(Value::Integer(i64::from(range.start_row))));
         }
@@ -1522,6 +1573,11 @@ impl Host for WorkbookHost<'_> {
                 _ => return Err("Range.NumberFormat must be a string".to_string()),
             };
             self.set_range_style(range, |style| style.number_format = value.clone())?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("horizontalalignment") {
+            let value = horizontal_alignment(&value)?;
+            self.set_range_style(range, |style| style.horizontal_align = value.clone())?;
             return Ok(true);
         }
         Ok(false)
@@ -1644,6 +1700,50 @@ fn style_color_value(value: Option<Option<String>>) -> Value {
     Value::Integer(i64::from(red | (green << 8) | (blue << 16)))
 }
 
+fn horizontal_alignment(value: &Value) -> Result<Option<String>, String> {
+    let value = match value {
+        Value::Empty => return Ok(None),
+        Value::Integer(value) => *value,
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        _ => {
+            return Err("Range.HorizontalAlignment must be an Excel alignment constant".to_string())
+        }
+    };
+    match value {
+        1 => Ok(None),
+        -4131 => Ok(Some("left".to_string())),
+        -4108 => Ok(Some("center".to_string())),
+        -4152 => Ok(Some("right".to_string())),
+        5 => Ok(Some("fill".to_string())),
+        -4130 => Ok(Some("justify".to_string())),
+        7 => Ok(Some("centerContinuous".to_string())),
+        -4117 => Ok(Some("distributed".to_string())),
+        _ => Err(format!(
+            "unsupported Range.HorizontalAlignment constant: {value}"
+        )),
+    }
+}
+
+fn horizontal_alignment_value(value: Option<Option<String>>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let Some(value) = value else {
+        return Value::Integer(1);
+    };
+    let constant = match value.to_ascii_lowercase().as_str() {
+        "left" => -4131,
+        "center" => -4108,
+        "right" => -4152,
+        "fill" => 5,
+        "justify" => -4130,
+        "centercontinuous" => 7,
+        "distributed" => -4117,
+        _ => return Value::Empty,
+    };
+    Value::Integer(constant)
+}
+
 fn rgb_value(args: &[Value]) -> Result<Value, String> {
     let [red, green, blue] = args else {
         return Err("RGB expects red, green, and blue arguments".to_string());
@@ -1734,6 +1834,14 @@ fn host_constant(name: &str) -> Option<Value> {
         "xldown" => -4121,
         "xltoleft" => -4159,
         "xltoright" => -4161,
+        "xlgeneral" => 1,
+        "xlleft" => -4131,
+        "xlcenter" => -4108,
+        "xlright" => -4152,
+        "xlfill" => 5,
+        "xljustify" => -4130,
+        "xlcenteracrossselection" => 7,
+        "xldistributed" => -4117,
         "vbokonly" | "vbapplicationmodal" | "vbdefaultbutton1" => 0,
         "vbokcancel" | "vbok" => 1,
         "vbabortretryignore" | "vbcancel" => 2,
@@ -2627,6 +2735,50 @@ mod tests {
             debug_output,
             vec!["True\t14\t1971210\t65535\t0.00".to_string()]
         );
+    }
+
+    #[test]
+    fn vba_aligns_and_clears_contents_or_formats_independently() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ClearCells()\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"C1\").Value = 3\n\
+               Range(\"A1:C1\").Font.Bold = True\n\
+               Range(\"A1:C1\").NumberFormat = \"0.00\"\n\
+               Range(\"A1:C1\").HorizontalAlignment = xlCenter\n\
+               Range(\"A1\").ClearFormats\n\
+               Range(\"B1\").ClearContents\n\
+               Range(\"C1\").Clear\n\
+               Debug.Print Range(\"A1\").Value, Range(\"A1\").HorizontalAlignment, Range(\"B1\").Font.Bold, Range(\"B1\").HorizontalAlignment, Range(\"B1\").NumberFormat\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ClearCells", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        let cells = &workbook.sheets[0].rows[0].cells;
+        assert!(matches!(cells[0].value, CellValue::Number(1.0)));
+        assert!(!cells[0].style.bold);
+        assert_eq!(cells[0].style.number_format, None);
+        assert_eq!(cells[0].style.horizontal_align, None);
+
+        assert!(matches!(cells[1].value, CellValue::Empty));
+        assert_eq!(cells[1].formula, None);
+        assert!(cells[1].style.bold);
+        assert_eq!(cells[1].style.number_format.as_deref(), Some("0.00"));
+        assert_eq!(cells[1].style.horizontal_align.as_deref(), Some("center"));
+
+        assert!(matches!(cells[2].value, CellValue::Empty));
+        assert_eq!(cells[2].formula, None);
+        assert!(!cells[2].style.bold);
+        assert_eq!(cells[2].style.number_format, None);
+        assert_eq!(cells[2].style.horizontal_align, None);
+        assert_eq!(debug_output, vec!["1\t1\tTrue\t-4108\t0.00".to_string()]);
     }
 
     #[test]
