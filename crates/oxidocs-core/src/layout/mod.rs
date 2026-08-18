@@ -24803,6 +24803,63 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         }
     }
 
+    /// S1173 (opt-in `OXI_CELLLAW=1`): wrap a cell's text inside the content
+    /// area Word actually gives it.
+    ///
+    /// `wrap_base` grew into an eight-condition allowlist — match one of them
+    /// and the cell wraps at `cell_w - pad_l - pad_r`, match none and it wraps
+    /// at the bare `cell_w` — because the budget had never been measured, only
+    /// inferred one document at a time. `tools/metrics/_cw_law.py` measures it:
+    /// fourteen arms of 502 single-cell tables each, cell width swept a twip at
+    /// a time, every cell holding the same fullwidth run, so the width at which
+    /// Word's first line takes one more character pins the budget to a twip.
+    /// Over all 7028 cells one law holds exactly:
+    ///
+    /// ```text
+    /// content width = cell_w - max(marL, bwL/2) - max(marR, bwR/2)
+    /// ```
+    ///
+    /// and it does not care about the alignment (arms I/J/K), the table layout
+    /// algorithm (L), the compatibility mode (M) or the document grid (N) — the
+    /// axes the allowlist conditions are written in terms of.
+    ///
+    /// Half the border is a FLOOR under the margin, never added to it: at the
+    /// default 108tw margin a rule of any weight is invisible to the budget
+    /// (arms E/F), and only a cell that declares a zero margin shows it (arms
+    /// B/G/H: 0.5pt rule -> 0.25pt a side, 3pt rule -> 1.5pt, no rule -> 0).
+    fn celllaw(&self) -> bool {
+        std::env::var("OXI_CELLLAW").ok().as_deref() == Some("1")
+    }
+
+    /// Word does this arithmetic in whole twips, so a cell whose content fits
+    /// its box to the twip fits. In f32 points it does not: 52.8 - 5.4 - 5.4
+    /// lands on 41.99999904, one ulp under the 42.00 four characters need, and
+    /// the last one wraps. That is not a rounding curiosity — a Japanese form
+    /// table sizes its columns to hold exactly N characters, so the exact fit is
+    /// the common case there, and it was the ONLY width (3 of 7028 probe cells,
+    /// all of them the exact fit) where the implemented law still missed Word.
+    fn celllaw_twips(w: f32) -> f32 {
+        (w * 20.0).round() / 20.0
+    }
+
+    fn celllaw_inset(&self, table: &Table, cell: &TableCell, pad: f32, right: bool) -> f32 {
+        let bw = cell
+            .borders
+            .as_ref()
+            .and_then(|b| if right { b.right.as_ref() } else { b.left.as_ref() })
+            .filter(|d| d.style != "none")
+            .map(|d| d.width)
+            .or_else(|| {
+                if table.style.border || table.style.has_inside_v {
+                    Some(table.style.border_width.unwrap_or(0.5))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0);
+        pad.max(bw / 2.0)
+    }
+
     /// S1119: the face a RUN's text should be measured with when the run font
     /// has no glyph for it (see `symbol_fallback_face` for the derived chain).
     ///
@@ -27741,7 +27798,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // construction (doc-level real-CJK gate, 238-doc A/B +0.0000).
                 let s768_latin_wrap =
                     std::env::var("OXI_S768_DISABLE").is_err() && !self.doc_body_has_real_cjk;
-                let inner_w = if self.cellpair_active() || s713_cellmar || s768_latin_wrap {
+                // S1173 estimate side: the derived law supersedes the whole
+                // allowlist (see `celllaw_inset`). Estimate and render must take
+                // the same base or pagination and drawing disagree.
+                let inner_w = if self.celllaw() {
+                    Self::celllaw_twips(
+                        (cell_w
+                            - self.celllaw_inset(table, cell, _pad_l, false)
+                            - self.celllaw_inset(table, cell, _pad_r, true))
+                        .max(0.0),
+                    )
+                } else if self.cellpair_active() || s713_cellmar || s768_latin_wrap {
                     (cell_w - _pad_l - _pad_r).max(0.0)
                 } else {
                     cell_w.max(0.0)
@@ -30381,7 +30448,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // aligned number cell (hmrc's 1-8 boxes: avail 2.40 <
                                     // line 3.55) collapsed to LEFT-aligned.
                                     let mut s1121_pad_in_base = true;
-                                    let wrap_base = if s585c_narrow
+                                    let wrap_base = if self.celllaw() {
+                                        // S1173 render side: the measured law, in
+                                        // front of the allowlist it supersedes.
+                                        Self::celllaw_twips(
+                                            (wrap_cell_w
+                                                - self.celllaw_inset(table, cell, pad_l, false)
+                                                - self.celllaw_inset(table, cell, pad_r, true))
+                                            .max(0.0),
+                                        )
+                                    } else if s585c_narrow
                                         && matches!(
                                             para.alignment,
                                             Alignment::Justify | Alignment::Distribute
