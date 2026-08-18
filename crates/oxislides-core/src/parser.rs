@@ -2875,6 +2875,23 @@ fn parse_inherited_shapes(
     let mut in_pic_blip = false;
     let mut ln_depth: u32 = 0;
     let mut in_solid = false;
+    // custGeom paths and a gradient fill are drawable now (S-CUSTGEOM /
+    // S-SHAPEGRAD), so inherited shapes carrying them are no longer refused.
+    let s_inherit_geom = std::env::var("OXI_LMGEOM_DISABLE").is_err();
+    let mut ig_paths: Vec<GeomPath> = Vec::new();
+    let mut ig_bad = false;
+    let mut ig_cur: Option<GeomPath> = None;
+    let mut ig_pending: Option<(&'static str, Vec<(f32, f32)>)> = None;
+    let mut ig_in = false;
+    let mut gr_in = false;
+    let mut gr_in_gs = false;
+    let mut gr_in_path = false;
+    let mut gr_pos: f32 = 0.0;
+    let mut gr_color: Option<String> = None;
+    let mut gr_stops: Vec<SlideGradientStop> = Vec::new();
+    let mut gr_angle: Option<f32> = None;
+    let mut gr_scaled = false;
+    let mut gr_focus: Option<(f32, f32)> = None;
 
     let pct = |v: Option<String>| -> f32 {
         v.and_then(|s| s.parse::<f32>().ok())
@@ -2970,12 +2987,31 @@ fn parse_inherited_shapes(
                                         fill_rect,
                                         rot_with_shape: true,
                                         image_alpha: None,
-                                        gradient: None,
+                                        gradient: if gr_stops.len() >= 2 {
+                                            Some(SlideGradient {
+                                                stops: std::mem::take(&mut gr_stops),
+                                                angle_deg: gr_angle,
+                                                scaled: gr_scaled,
+                                                focus: gr_focus,
+                                            })
+                                        } else {
+                                            gr_stops.clear();
+                                            None
+                                        },
                                         ph_levels: Vec::new(),
-                                        // The inheritance gate rejects custGeom
-                                        // outright, so an inherited shape never
-                                        // carries one.
-                                        custom_geometry: None,
+                                        // custGeom is accepted now that its
+                                        // paths can be drawn (S-CUSTGEOM).
+                                        custom_geometry: if ig_bad
+                                            || ig_paths.iter().all(|p| p.commands.is_empty())
+                                        {
+                                            ig_paths.clear();
+                                            None
+                                        } else {
+                                            Some(CustomGeometry {
+                                                paths: std::mem::take(&mut ig_paths),
+                                                unsupported: false,
+                                            })
+                                        },
                                     });
                                 }
                             }
@@ -2984,6 +3020,46 @@ fn parse_inherited_shapes(
                         }
                     }
                     "spPr" if nest > 0 => in_sp_pr = false,
+                    "moveTo" | "lnTo" | "cubicBezTo" if ig_in => {
+                        if let Some((k, pts)) = ig_pending.take() {
+                            match (k, pts.as_slice()) {
+                                ("moveTo", [(px, py)]) => {
+                                    if let Some(c) = ig_cur.as_mut() {
+                                        c.commands.push(GeomCmd::MoveTo(*px, *py));
+                                    }
+                                }
+                                ("lnTo", [(px, py)]) => {
+                                    if let Some(c) = ig_cur.as_mut() {
+                                        c.commands.push(GeomCmd::LineTo(*px, *py));
+                                    }
+                                }
+                                ("cubicBezTo", [(a1, b1), (a2, b2), (a3, b3)]) => {
+                                    if let Some(c) = ig_cur.as_mut() {
+                                        c.commands
+                                            .push(GeomCmd::CubicTo(*a1, *b1, *a2, *b2, *a3, *b3));
+                                    }
+                                }
+                                _ => ig_bad = true,
+                            }
+                        }
+                    }
+                    "path" if ig_in => {
+                        if let Some(c) = ig_cur.take() {
+                            ig_paths.push(c);
+                        }
+                    }
+                    "custGeom" if ig_in => {
+                        ig_in = false;
+                        ig_pending = None;
+                    }
+                    "gs" if gr_in_gs => {
+                        gr_in_gs = false;
+                        if let Some(c) = gr_color.take() {
+                            gr_stops.push(SlideGradientStop { pos: gr_pos, color: c });
+                        }
+                    }
+                    "path" if gr_in_path => gr_in_path = false,
+                    "gradFill" if gr_in => gr_in = false,
                     "blipFill" if nest > 0 && !in_sp_pr => in_pic_blip = false,
                     "ln" if nest > 0 => ln_depth = ln_depth.saturating_sub(1),
                     "solidFill" if nest > 0 => in_solid = false,
@@ -3044,6 +3120,25 @@ fn parse_inherited_shapes(
                     ln_color = None;
                     ln_width = None;
                     ln_no_fill = false;
+                    // ★Reset the geometry / gradient accumulators per CANDIDATE,
+                    // not only when one is consumed: a REJECTED shape is never
+                    // pushed, so whatever it accumulated leaked into the next
+                    // accepted one. d06 slide 21 showed it as the layout's
+                    // top-right gradient painted over the full-slide white
+                    // panel, costing that deck 0.0387.
+                    ig_paths.clear();
+                    ig_bad = false;
+                    ig_cur = None;
+                    ig_pending = None;
+                    ig_in = false;
+                    gr_stops.clear();
+                    gr_in = false;
+                    gr_in_gs = false;
+                    gr_in_path = false;
+                    gr_color = None;
+                    gr_angle = None;
+                    gr_scaled = false;
+                    gr_focus = None;
                     in_sp_pr = false;
                     in_pic_blip = false;
                     ln_depth = 0;
@@ -3117,7 +3212,80 @@ fn parse_inherited_shapes(
                 Some(p) if p == "rect" => prst = Some(p),
                 _ => ok = false,
             },
+            "custGeom" if s_inherit_geom => {
+                ig_in = true;
+                ig_paths.clear();
+                ig_bad = false;
+                ig_cur = None;
+                ig_pending = None;
+            }
             "custGeom" => ok = false,
+            "path" if ig_in => {
+                ig_cur = Some(GeomPath {
+                    w: get_attr(e, "w").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0),
+                    h: get_attr(e, "h").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0),
+                    fill_none: get_attr(e, "fill").as_deref() == Some("none"),
+                    commands: Vec::new(),
+                });
+            }
+            "moveTo" | "lnTo" | "cubicBezTo" if ig_in => {
+                ig_pending = Some((
+                    match name.as_str() {
+                        "moveTo" => "moveTo",
+                        "lnTo" => "lnTo",
+                        _ => "cubicBezTo",
+                    },
+                    Vec::new(),
+                ));
+            }
+            "arcTo" | "quadBezTo" if ig_in => ig_bad = true,
+            "close" if ig_in => {
+                if let Some(c) = ig_cur.as_mut() {
+                    c.commands.push(GeomCmd::Close);
+                }
+            }
+            "pt" if ig_pending.is_some() => {
+                if let Some((_, pts)) = ig_pending.as_mut() {
+                    match (
+                        get_attr(e, "x").and_then(|v| v.parse::<f32>().ok()),
+                        get_attr(e, "y").and_then(|v| v.parse::<f32>().ok()),
+                    ) {
+                        (Some(px), Some(py)) => pts.push((px, py)),
+                        _ => ig_bad = true,
+                    }
+                }
+            }
+            "gradFill" if in_sp_pr && ln_depth == 0 && s_inherit_geom => {
+                gr_in = true;
+                gr_stops.clear();
+                gr_angle = None;
+                gr_scaled = false;
+                gr_focus = None;
+            }
+            "gs" if gr_in => {
+                gr_in_gs = true;
+                gr_pos = get_attr(e, "pos").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                gr_color = None;
+            }
+            "lin" if gr_in => {
+                gr_angle = get_attr(e, "ang")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(|v| v / 60_000.0);
+                gr_scaled = get_attr(e, "scaled").as_deref() == Some("1");
+            }
+            "path" if gr_in => {
+                if get_attr(e, "path").as_deref() == Some("circle") {
+                    gr_in_path = true;
+                    gr_focus = Some((0.5, 0.5));
+                }
+            }
+            "fillToRect" if gr_in_path => {
+                let l = get_attr(e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                let t = get_attr(e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                let r = get_attr(e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                let b = get_attr(e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                gr_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
+            }
             "gradFill" | "pattFill" if in_sp_pr && ln_depth == 0 => ok = false,
             "solidFill" if in_sp_pr && ln_depth == 0 => {
                 if !empty {
@@ -3150,6 +3318,18 @@ fn parse_inherited_shapes(
                 if in_solid && ln_depth == 0 =>
             {
                 ok = false;
+            }
+            "srgbClr" | "schemeClr" if gr_in_gs && gr_color.is_none() => {
+                gr_color = if name == "srgbClr" {
+                    get_attr(e, "val")
+                } else {
+                    get_attr(e, "val").map(|v| {
+                        theme_colors
+                            .get(&v)
+                            .cloned()
+                            .unwrap_or_else(|| scheme_color_to_hex(&v))
+                    })
+                };
             }
             "srgbClr" | "schemeClr" if in_solid => {
                 let hex = if name == "srgbClr" {
