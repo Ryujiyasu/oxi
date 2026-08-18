@@ -508,15 +508,18 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_cell_count(range: CellRange) -> Result<usize, String> {
-        let rows = u64::from(range.end_row - range.start_row) + 1;
-        let columns = u64::from(range.end_column - range.start_column) + 1;
-        let count = rows
-            .checked_mul(columns)
-            .ok_or_else(|| "cell range is too large".to_string())?;
+        let count = Self::range_cell_count_large(range)?;
         if count > 1_000_000 {
             return Err("cell range exceeds the 1,000,000-cell execution limit".to_string());
         }
         Ok(count as usize)
+    }
+
+    fn range_cell_count_large(range: CellRange) -> Result<u64, String> {
+        let rows = u64::from(range.end_row - range.start_row) + 1;
+        let columns = u64::from(range.end_column - range.start_column) + 1;
+        rows.checked_mul(columns)
+            .ok_or_else(|| "cell range is too large".to_string())
     }
 
     fn range_value(&self, range: CellRange) -> Result<Value, String> {
@@ -578,6 +581,32 @@ impl<'a> WorkbookHost<'a> {
             element_default: Box::new(Value::String(String::new())),
             resizable: true,
         }))
+    }
+
+    fn range_has_formula(&self, range: CellRange) -> Result<Value, String> {
+        let total = Self::range_cell_count_large(range)?;
+        let sheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let formulas = sheet
+            .rows
+            .iter()
+            .filter(|row| (range.start_row..=range.end_row).contains(&row.index))
+            .flat_map(|row| &row.cells)
+            .filter(|cell| {
+                (range.start_column..=range.end_column).contains(&cell.col)
+                    && cell.formula.is_some()
+            })
+            .count() as u64;
+        Ok(if formulas == 0 {
+            Value::Boolean(false)
+        } else if formulas == total {
+            Value::Boolean(true)
+        } else {
+            Value::Null
+        })
     }
 
     fn range_end(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
@@ -1749,6 +1778,26 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
             return self.range_formula(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("hasformula") {
+            return self.range_has_formula(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("parent") || name.eq_ignore_ascii_case("worksheet") {
+            return Ok(Some(self.object(HostObject::Worksheet(range.sheet))));
+        }
+        if name.eq_ignore_ascii_case("entirerow") {
+            return Ok(Some(self.object(HostObject::Range(CellRange {
+                start_column: 0,
+                end_column: MAX_WORKSHEET_COLUMN,
+                ..range
+            }))));
+        }
+        if name.eq_ignore_ascii_case("entirecolumn") {
+            return Ok(Some(self.object(HostObject::Range(CellRange {
+                start_row: 1,
+                end_row: MAX_WORKSHEET_ROW,
+                ..range
+            }))));
+        }
         if name.eq_ignore_ascii_case("font") {
             return Ok(Some(self.object(HostObject::RangeFont(range))));
         }
@@ -1792,7 +1841,8 @@ impl Host for WorkbookHost<'_> {
             return Ok(Some(Value::Integer(i64::from(range.start_column) + 1)));
         }
         if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
-            return Self::range_cell_count(range).map(|count| Some(Value::Integer(count as i64)));
+            return Self::range_cell_count_large(range)
+                .map(|count| Some(Value::Integer(count as i64)));
         }
         if name.eq_ignore_ascii_case("address") {
             return Ok(Some(Value::String(format_range_address(range, true, true))));
@@ -3351,6 +3401,45 @@ mod tests {
         assert_eq!(sheet.rows[2].height, Some(18.0));
         assert!(sheet.rows[2].cells.is_empty());
         assert_eq!(debug_output, vec!["12.5\tNull\t24\t18".to_string()]);
+    }
+
+    #[test]
+    fn vba_inspects_formulas_and_expands_ranges_to_whole_axes() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub InspectRanges()\n\
+               Range(\"A1\").Formula = \"=1+1\"\n\
+               Range(\"A2\").Formula = \"=A1+1\"\n\
+               Range(\"B1\").Value = 3\n\
+               Range(\"B3\").EntireRow.RowHeight = 22\n\
+               Range(\"C1\").EntireColumn.ColumnWidth = 13\n\
+               Debug.Print Range(\"A1:A2\").HasFormula, Range(\"B1:B2\").HasFormula, Range(\"A1:B1\").HasFormula\n\
+               Debug.Print Range(\"B3\").EntireRow.Address, Range(\"C1\").EntireColumn.Address, Range(\"C1\").EntireColumn.CountLarge\n\
+               Debug.Print Range(\"A1\").Parent.Name, Range(\"A1\").Worksheet.Index\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "InspectRanges", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        let sheet = &workbook.sheets[0];
+        assert_eq!(sheet.col_count, 3);
+        assert_eq!(sheet.col_widths.len(), 3);
+        assert_eq!(sheet.col_widths[2], 13.0);
+        let row = sheet.rows.iter().find(|row| row.index == 3).unwrap();
+        assert_eq!(row.height, Some(22.0));
+        assert!(row.cells.is_empty());
+        assert_eq!(
+            debug_output,
+            vec![
+                "True\tFalse\tNull".to_string(),
+                "$A$3:$XFD$3\t$C$1:$C$1048576\t1048576".to_string(),
+                "Sheet1\t1".to_string(),
+            ]
+        );
     }
 
     #[test]
