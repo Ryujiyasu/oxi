@@ -998,6 +998,108 @@ impl<'a> WorkbookHost<'a> {
         Ok(Some(first.unwrap_or(false)))
     }
 
+    fn range_column_width(&self, range: CellRange) -> Result<Value, String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let mut first = None;
+        for column in range.start_column..=range.end_column {
+            let width = sheet
+                .col_widths
+                .get(column as usize)
+                .copied()
+                .unwrap_or(sheet.default_col_width);
+            if first.is_some_and(|first| first != width) {
+                return Ok(Value::Null);
+            }
+            first = Some(width);
+        }
+        Ok(Value::Double(f64::from(
+            first.unwrap_or(sheet.default_col_width),
+        )))
+    }
+
+    fn set_range_column_width(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let width = optional_dimension(value, "Range.ColumnWidth", 255.0)?;
+        let required = range.end_column as usize + 1;
+        if sheet.col_widths.len() < required {
+            sheet.col_widths.resize(required, sheet.default_col_width);
+        }
+        let width = width.unwrap_or(sheet.default_col_width);
+        for column in range.start_column..=range.end_column {
+            sheet.col_widths[column as usize] = width;
+        }
+        sheet.col_count = sheet.col_count.max(required);
+        Ok(())
+    }
+
+    fn range_row_height(&self, range: CellRange) -> Result<Value, String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let selected_rows = u64::from(range.end_row - range.start_row) + 1;
+        let rows = sheet
+            .rows
+            .iter()
+            .filter(|row| (range.start_row..=range.end_row).contains(&row.index));
+        let existing_rows = rows.clone().count() as u64;
+        let mut first = (existing_rows < selected_rows).then_some(sheet.default_row_height);
+        for row in rows {
+            let height = row.height.unwrap_or(sheet.default_row_height);
+            if first.is_some_and(|first| first != height) {
+                return Ok(Value::Null);
+            }
+            first = Some(height);
+        }
+        Ok(Value::Double(f64::from(
+            first.unwrap_or(sheet.default_row_height),
+        )))
+    }
+
+    fn set_range_row_height(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+        let sheet = self
+            .workbook
+            .sheets
+            .get_mut(range.sheet)
+            .ok_or_else(|| "worksheet no longer exists".to_string())?;
+        let height = optional_dimension(value, "Range.RowHeight", 409.5)?;
+        if range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW {
+            if let Some(height) = height {
+                sheet.default_row_height = height;
+            }
+            for row in &mut sheet.rows {
+                row.height = None;
+            }
+            return Ok(());
+        }
+        for row_index in range.start_row..=range.end_row {
+            if !sheet.rows.iter().any(|row| row.index == row_index) {
+                sheet.rows.push(Row {
+                    index: row_index,
+                    cells: Vec::new(),
+                    height: None,
+                });
+            }
+            let row = sheet
+                .rows
+                .iter_mut()
+                .find(|row| row.index == row_index)
+                .expect("the resized row was created");
+            row.height = height;
+        }
+        sheet.rows.sort_by_key(|row| row.index);
+        Ok(())
+    }
+
     fn clear_range(
         &mut self,
         range: CellRange,
@@ -1570,6 +1672,12 @@ impl Host for WorkbookHost<'_> {
                 .uniform_style(range, |style| style.horizontal_align.clone())
                 .map(|value| Some(horizontal_alignment_value(value)));
         }
+        if name.eq_ignore_ascii_case("columnwidth") {
+            return self.range_column_width(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("rowheight") {
+            return self.range_row_height(range).map(Some);
+        }
         if name.eq_ignore_ascii_case("row") {
             return Ok(Some(Value::Integer(i64::from(range.start_row))));
         }
@@ -1666,6 +1774,14 @@ impl Host for WorkbookHost<'_> {
             self.set_range_style(range, |_, style| style.horizontal_align = value.clone())?;
             return Ok(true);
         }
+        if name.eq_ignore_ascii_case("columnwidth") {
+            self.set_range_column_width(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("rowheight") {
+            self.set_range_row_height(range, value)?;
+            return Ok(true);
+        }
         Ok(false)
     }
 
@@ -1728,6 +1844,19 @@ fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
         Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
         _ => Err(format!("{property} must be Boolean")),
     }
+}
+
+fn optional_dimension(value: Value, property: &str, maximum: f64) -> Result<Option<f32>, String> {
+    let number = match value {
+        Value::Empty => return Ok(None),
+        Value::Integer(value) => value as f64,
+        Value::Double(value) => value,
+        _ => return Err(format!("{property} must be numeric")),
+    };
+    if !number.is_finite() || !(0.0..=maximum).contains(&number) {
+        return Err(format!("{property} must be between 0 and {maximum}"));
+    }
+    Ok(Some(number as f32))
 }
 
 fn font_size(value: &Value) -> Result<Option<f32>, String> {
@@ -3033,6 +3162,46 @@ mod tests {
             }
         }
         assert_eq!(debug_output, vec!["Null\t-4142\t1".to_string()]);
+    }
+
+    #[test]
+    fn vba_reads_and_writes_column_widths_and_row_heights() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ResizeSheet()\n\
+               Range(\"A1\").Value = 7\n\
+               Columns(2).ColumnWidth = 12.5\n\
+               Range(\"C1:D1\").ColumnWidth = 9\n\
+               Columns(4).ColumnWidth = 11\n\
+               Rows(3).RowHeight = 24\n\
+               Range(\"A4\").RowHeight = 18\n\
+               Debug.Print Columns(2).ColumnWidth, Range(\"C1:D1\").ColumnWidth, Rows(3).RowHeight, Rows(4).RowHeight\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ResizeSheet", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        let sheet = &workbook.sheets[0];
+        assert_eq!(sheet.col_count, 4);
+        assert_eq!(
+            sheet.col_widths,
+            vec![sheet.default_col_width, 12.5, 9.0, 11.0]
+        );
+        assert!(matches!(
+            sheet.rows[0].cells[0].value,
+            CellValue::Number(7.0)
+        ));
+        assert_eq!(sheet.rows[1].index, 3);
+        assert_eq!(sheet.rows[1].height, Some(24.0));
+        assert!(sheet.rows[1].cells.is_empty());
+        assert_eq!(sheet.rows[2].index, 4);
+        assert_eq!(sheet.rows[2].height, Some(18.0));
+        assert!(sheet.rows[2].cells.is_empty());
+        assert_eq!(debug_output, vec!["12.5\tNull\t24\t18".to_string()]);
     }
 
     #[test]
