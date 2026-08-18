@@ -31800,14 +31800,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // (S825/S1082's mechanism) and not the 約物 one.
                                                 // Measured both ways: jc=both holds out to 0.748em
                                                 // of shortfall, jc=left wraps the moment it is short.
+                                                // Capped at one em: the sweep can only ever ask about ONE extra
+                                                // character, so a shortfall never exceeds an em and "two spaces still
+                                                // hold at 1.0em" is the most the measurement can say. Granting 0.75em
+                                                // per space uncapped extrapolates far past that -- a form line with six
+                                                // of them would get four and a half ems -- and that is what put the
+                                                // tokumei documents 0.048 down on SSIM.
                                                 let spaces = if s1176_space {
-                                                    0.75
+                                                    (0.75
                                                         * current_line_chars
                                                             .iter()
                                                             .chain(buf_chars.iter())
                                                             .filter(|c| c.ch == '\u{3000}')
                                                             .map(|c| c.natural_advance)
-                                                            .sum::<f32>()
+                                                            .sum::<f32>())
+                                                    .min(font_size)
                                                 } else {
                                                     0.0
                                                 };
@@ -37127,14 +37134,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         0.0
                     };
                     // S1176 estimate mirror.
+                    // Capped at one em: the sweep can only ever ask about ONE extra
+                    // character, so a shortfall never exceeds an em and "two spaces still
+                    // hold at 1.0em" is the most the measurement can say. Granting 0.75em
+                    // per space uncapped extrapolates far past that -- a form line with six
+                    // of them would get four and a half ems -- and that is what put the
+                    // tokumei documents 0.048 down on SSIM.
                     let spaces = if s1176_space {
-                        0.75
+                        (0.75
                             * current_line_chars
                                 .iter()
                                 .chain(buf_chars.iter())
                                 .filter(|c| c.ch == '\u{3000}')
                                 .map(|c| c.natural_advance)
-                                .sum::<f32>()
+                                .sum::<f32>())
+                        .min(font_size)
                     } else {
                         0.0
                     };

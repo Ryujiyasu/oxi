@@ -26,7 +26,8 @@ import _cw_law as L  # noqa: E402
 import _cw_yaku_probe as P  # noqa: E402
 
 EM = L.SZ / 2.0
-CLASSES = {"C1": "、", "C2": "。", "C3": "）", "C4": "（", "C5": "・"}
+CLASSES = {"C1": "、", "C2": "。", "C3": "）", "C4": "（", "C5": "・",
+           "C6": "　"}
 NCH = 30
 
 
