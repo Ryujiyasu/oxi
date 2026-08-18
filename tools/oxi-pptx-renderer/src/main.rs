@@ -1868,11 +1868,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     Some(acc.map_or(x, |a| a.max(x)))
                                 })
                                 .unwrap_or(m_fs.unwrap_or(18.0));
-                            let family = p
-                                .runs
-                                .iter()
-                                .find_map(|r| r.font_family.clone())
-                                .unwrap_or_else(|| resolve_font(pres, sh));
+                            let family = effective_family(
+                                mem_dc,
+                                &p.runs
+                                    .iter()
+                                    .find_map(|r| r.font_family.clone())
+                                    .unwrap_or_else(|| resolve_font(pres, sh)),
+                            );
                             let color = p
                                 .runs
                                 .iter()
@@ -2115,11 +2117,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         cursor_y += advance.round() as i32;
                                         continue;
                                     }
-                                    let family = p
-                                        .runs
-                                        .iter()
-                                        .find_map(|r| r.font_family.clone())
-                                        .unwrap_or_else(|| resolve_font(pres, sh));
+                                    let family = effective_family(
+                                        mem_dc,
+                                        &p.runs
+                                            .iter()
+                                            .find_map(|r| r.font_family.clone())
+                                            .unwrap_or_else(|| resolve_font(pres, sh)),
+                                    );
                                     let color = p.runs.iter().find_map(|r| r.color.clone());
                                     let bold = p.runs.iter().any(|r| r.bold);
                                     let w = measure_text_width(
@@ -8133,6 +8137,90 @@ fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
     (axis_max, div)
 }
 
+/// Fonts PowerPoint could not resolve are drawn in Calibri unless this is set.
+fn fontsub_on() -> bool {
+    std::env::var("OXI_FONTSUB_DISABLE").is_err()
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// requested family -> the family to actually draw with.
+    static FAMILY_CACHE: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The family to draw `requested` with.
+///
+/// PowerPoint render-truth (`fontfallback` probe, 2026-08-18): a face it
+/// cannot resolve is rendered in **Calibri** -- Mali, Jua, "Zzyzx
+/// Nonexistent", Fira Sans and Lobster all came back as Calibri in
+/// PowerPoint's own PDF, while Nunito (which IS present here) stayed Nunito.
+/// It is NOT the theme font: d19 asks for Mali, its theme is Arial, and
+/// PowerPoint drew Calibri.
+///
+/// Oxi previously handed the name to GDI's font mapper, which picks by PANOSE
+/// and gave a face 15% taller in the caps (33.1pt against PowerPoint's 37.9pt
+/// on d19 slide 1 at 52pt). Asking GDI what it actually selected is the
+/// portable way to detect the substitution: a resolved family answers with its
+/// own name.
+#[cfg(windows)]
+fn effective_family(dc: windows::Win32::Graphics::Gdi::HDC, requested: &str) -> String {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if !fontsub_on() || requested.is_empty() {
+        return requested.to_string();
+    }
+    FAMILY_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(requested) {
+            return hit.clone();
+        }
+        let probe = probe_dc();
+        let wide: Vec<u16> = requested.encode_utf16().chain(std::iter::once(0)).collect();
+        let resolved = unsafe {
+            let font = CreateFontW(
+                -64,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                requested.to_string()
+            } else {
+                let old = SelectObject(probe, font);
+                let mut name = [0u16; 64];
+                let n = GetTextFaceW(probe, Some(&mut name));
+                SelectObject(probe, old);
+                let _ = DeleteObject(font);
+                let got = if n > 0 {
+                    String::from_utf16_lossy(&name[..(n as usize).saturating_sub(1)])
+                } else {
+                    String::new()
+                };
+                if got.eq_ignore_ascii_case(requested) {
+                    requested.to_string()
+                } else {
+                    "Calibri".to_string()
+                }
+            }
+        };
+        let _ = dc;
+        cache
+            .borrow_mut()
+            .insert(requested.to_string(), resolved.clone());
+        resolved
+    })
+}
+
 /// Draw one wrapped line as its RUN segments, each in its own style.
 ///
 /// A paragraph's runs can differ in bold, colour and size -- 75 / 73 / 38
@@ -8178,7 +8266,7 @@ unsafe fn draw_line_runs(
             continue;
         }
         let fs = run.font_size.unwrap_or(default_fs);
-        let family = run.font_family.as_deref().unwrap_or(default_family);
+        let family = &effective_family(dc, run.font_family.as_deref().unwrap_or(default_family));
         let color = run.color.as_deref().or(default_color);
         let weight = if run.bold { 700 } else { 400 };
         draw_text_baseline_w(dc, cursor_x, baseline, &seg, fs, family, color, scale, weight);
@@ -8650,11 +8738,14 @@ fn layout_paragraph_baselines(
     // 60pt title step 64.8pt instead of 72pt).
     let n = para.line_spacing.or(m.line_spacing).unwrap_or(1.0);
     let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
-    let family = para
-        .runs
-        .iter()
-        .find_map(|r| r.font_family.clone())
-        .unwrap_or_else(|| default_family.to_string());
+    let family = effective_family(
+        dc,
+        &para
+            .runs
+            .iter()
+            .find_map(|r| r.font_family.clone())
+            .unwrap_or_else(|| default_family.to_string()),
+    );
     let mar_l = para.mar_l.unwrap_or(m.mar_l);
     let indent = para.indent.unwrap_or(m.indent);
     let bullet = if matches!(para.bullet, SlideBullet::Inherit) {
