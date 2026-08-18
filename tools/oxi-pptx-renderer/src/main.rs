@@ -1433,6 +1433,7 @@ unsafe fn alpha_blit(
         return false;
     }
     let old = SelectObject(src_dc, hbm);
+    let old_stretch = begin_smooth_blit(dst, (sw, sh), (dw, dh));
     let bf = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
@@ -1440,6 +1441,7 @@ unsafe fn alpha_blit(
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
     let ok = AlphaBlend(dst, dx, dy, dw, dh, src_dc, sx0, sy0, sw, sh, bf).as_bool();
+    end_smooth_blit(dst, old_stretch);
     SelectObject(src_dc, old);
     let _ = DeleteDC(src_dc);
     let _ = DeleteObject(hbm);
@@ -1461,6 +1463,47 @@ fn custgeom_on() -> bool {
 /// set, which restores the bounding-box fill.
 fn geomalpha_on() -> bool {
     std::env::var("OXI_GEOMALPHA_DISABLE").is_err()
+}
+
+/// Images are resampled with GDI's HALFTONE filter unless this is set, which
+/// restores the default BLACKONWHITE (drop-sample) mode.
+fn imgsmooth_on() -> bool {
+    std::env::var("OXI_IMGSMOOTH_DISABLE").is_err()
+}
+
+/// Set HALFTONE for the duration of a blit; returns the previous mode.
+///
+/// GDI's default stretch mode is BLACKONWHITE, which DROPS rows and columns
+/// when it shrinks a bitmap. d28's engraved Lincoln portrait is a fine halftone
+/// scaled down by more than 2x, and drop-sampling it produces a different moire
+/// than PowerPoint's filtered one -- the portrait sits at exactly the right
+/// place (best-fit shift 0,0) and still carries mean|d| 17.3 across its box.
+/// MSDN requires SetBrushOrgEx after selecting HALFTONE.
+#[cfg(windows)]
+unsafe fn begin_smooth_blit(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    src: (i32, i32),
+    dst: (i32, i32),
+) -> i32 {
+    use windows::Win32::Graphics::Gdi::*;
+    // Only when the blit SHRINKS. Averaging is what a downscale needs, and the
+    // corpus agrees (d05 +0.0065, d10 +0.0038, d08 +0.0032 with it on); on an
+    // upscale it only softens edges PowerPoint keeps, which is where the same
+    // arm lost ground (d36 -0.0009, d12 / d29 -0.0005).
+    if !imgsmooth_on() || (dst.0 >= src.0 && dst.1 >= src.1) {
+        return 0;
+    }
+    let old = SetStretchBltMode(dc, HALFTONE);
+    let _ = SetBrushOrgEx(dc, 0, 0, None);
+    old
+}
+
+#[cfg(windows)]
+unsafe fn end_smooth_blit(dc: windows::Win32::Graphics::Gdi::HDC, old: i32) {
+    use windows::Win32::Graphics::Gdi::*;
+    if old != 0 {
+        SetStretchBltMode(dc, STRETCH_BLT_MODE(old));
+    }
 }
 
 /// Each line wraps against the width left between its own start and the shared
@@ -7722,6 +7765,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 } else {
                                     sy0
                                 };
+                                let old_stretch = begin_smooth_blit(mem_dc, (sw, shh), (dw, dh));
                                 let _ = StretchDIBits(
                                     mem_dc,
                                     dx,
@@ -7737,6 +7781,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     DIB_RGB_COLORS,
                                     SRCCOPY,
                                 );
+                                end_smooth_blit(mem_dc, old_stretch);
                                 }
                                 if clipped {
                                     let _ = SelectClipRgn(mem_dc, None);
