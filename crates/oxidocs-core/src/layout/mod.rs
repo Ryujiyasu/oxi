@@ -30819,6 +30819,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         )
                                         && std::env::var("OXI_S1082_DISABLE").is_err()
                                         && std::env::var("OXI_S825_DISABLE").is_err();
+                                    // S1174 (opt-in): the derived legacy cell 約物
+                                    // compression. Both settings must be declared --
+                                    // compat 15 turns the mechanism off entirely.
+                                    let s1174_yakucomp =
+                                        std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
+                                            && self.compat_mode <= 14
+                                            && self.compress_punctuation;
                                     // S497b FALSIFIED (2026-06-05): extending the compute_compression wrap
                                     // lookahead to left-aligned compressPunctuation cells (to model Word's
                                     // end-of-line yakumono oikomi at wrap for non-justified paras) was a NO-OP
@@ -31455,6 +31462,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         .map(|c| c.natural_advance)
                                                         .sum::<f32>())
                                                         * 0.25
+                                                } else {
+                                                    0.0
+                                                };
+                                            // S1174 (opt-in `OXI_YAKUCOMP=1`): a LEGACY
+                                            // compressPunctuation cell line does not break the
+                                            // moment it runs out of room -- it takes the shortfall
+                                            // out of its 約物, half an em each, and breaks only
+                                            // when that pool cannot cover it. See
+                                            // `kinsoku::cell_yaku_capacity` for the sweep this
+                                            // comes from. Adding the pool to the budget is the
+                                            // same shape S1082 uses for justified Latin spaces.
+                                            // ★This is the second half of S1173: at Word's true
+                                            // cell budget Oxi produces MORE lines than Word on
+                                            // exactly the twelve legacy compressPunctuation
+                                            // documents, because it wraps where Word squeezes.
+                                            let effective_wrap = effective_wrap
+                                                + if s1174_yakucomp {
+                                                    current_line_chars
+                                                        .iter()
+                                                        .chain(buf_chars.iter())
+                                                        .map(|c| {
+                                                            kinsoku::cell_yaku_capacity(c.ch)
+                                                                * c.natural_advance
+                                                        })
+                                                        .sum::<f32>()
+                                                        + kinsoku::cell_yaku_capacity(ch) * cw
                                                 } else {
                                                     0.0
                                                 };
@@ -36615,6 +36648,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
             && std::env::var("OXI_S1082_DISABLE").is_err()
             && std::env::var("OXI_S825_DISABLE").is_err();
+        // S1174 estimate mirror -- must match the render loop or pagination and
+        // drawing disagree about how many lines a cell holds.
+        let s1174_yakucomp = std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
+            && self.compat_mode <= 14
+            && self.compress_punctuation;
         let mut current_line_chars: Vec<crate::layout::jc_both_compress::CharContext> = Vec::new();
         // S1082: paragraph-wide char stream + running offset, so the estimate can
         // answer the same "is this the paragraph's last word?" question the render
@@ -36855,6 +36893,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             .map(|c| c.natural_advance)
                             .sum::<f32>())
                             * 0.25
+                    } else {
+                        0.0
+                    };
+                // S1174 estimate mirror of the render-loop credit.
+                let effective_wrap = effective_wrap
+                    + if s1174_yakucomp {
+                        current_line_chars
+                            .iter()
+                            .chain(buf_chars.iter())
+                            .map(|c| kinsoku::cell_yaku_capacity(c.ch) * c.natural_advance)
+                            .sum::<f32>()
+                            + kinsoku::cell_yaku_capacity(ch) * cw
                     } else {
                         0.0
                     };

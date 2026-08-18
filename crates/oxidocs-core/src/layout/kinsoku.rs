@@ -153,6 +153,38 @@ pub fn is_s473_compressible(ch: char) -> bool {
     YAKUMONO_CLOSING.contains(&ch) || YAKUMONO_OPENING.contains(&ch)
 }
 
+/// S1174: the aki a character carries that a LEGACY `compressPunctuation` cell can
+/// take back, as a fraction of that character's own advance.
+///
+/// Derived by `tools/metrics/_cw_yaku_probe.py`: 421 cell widths a twip apart, seven
+/// arms varying which 約物 the line holds, so the line's shortfall walks from one em
+/// of slack to one em of overflow and the response is read off directly.
+///
+/// ```text
+///   ）0.520em   、0.510em   。0.510em   （0.497em   　0.497em
+/// ```
+///
+/// Half an em each, and the line gives up EXACTLY what it is short by out of that
+/// pool -- never more (supplied - demand, median +0.07pt over 421 widths, which is
+/// the device grid). A line whose shortfall exceeds the pool cannot be saved and
+/// wraps; a line with no 約物 at all wraps the moment it is short.
+///
+/// Two settings gate the whole mechanism, and both are invisible unless declared:
+/// `compatibilityMode <= 14` and `characterSpacingControl = compressPunctuation`.
+/// At compatibilityMode 15 Word does not compress in a cell at all. Twelve of the
+/// corpus's 369 documents qualify -- among them tokyoshugyo, parttime, ohnoitaku
+/// and harassmanual, the documents the cell-wrap wall was named after.
+///
+/// An opening bracket's give lands on the PRECEDING character's advance, since its
+/// aki sits to its left; that matters when reading a PDF, not here.
+pub fn cell_yaku_capacity(ch: char) -> f32 {
+    if is_s473_compressible(ch) || ch == '\u{3000}' {
+        0.5
+    } else {
+        0.0
+    }
+}
+
 /// S475 (2026-06-01) — break-time max yakumono compression capacity for char `c`
 /// given its right neighbour `next`. MEASURED (workflow wtvi6fvix, Word per-char
 /// COM): a punct immediately FOLLOWED by a bracket (the first of an adjacent pair)

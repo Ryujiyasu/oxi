@@ -14,6 +14,7 @@ whatever `PDFS` names for the ones held elsewhere.
 """
 import difflib
 import glob
+import unicodedata
 import json
 import os
 import subprocess
@@ -80,11 +81,24 @@ def main():
             print(f"{prefix:<10} no cached Word PDF -- skipped")
             continue
         ox, wd = dump(docx), word_lines(pdf)
+
+        def norm(t):
+            """Whitespace is not a wrap decision.
+
+            Word's PDF export puts a trailing space on most lines, renders U+3000 as
+            an ordinary space, and MuPDF invents one wherever a gap is wide enough.
+            Comparing raw strings scored kojin 63/605 when the wrap decisions largely
+            agree; what the metric is asking is only which characters landed on which
+            line."""
+            return "".join(c for c in unicodedata.normalize("NFKC", t) if not c.isspace())
+
         m = w = 0
         per_page = []
         for i in range(max(len(ox), len(wd))):
-            o = [t[3] for t in ox[i]] if i < len(ox) else []
-            r = [t[3] for t in wd[i]] if i < len(wd) else []
+            o = [norm(t[3]) for t in ox[i]] if i < len(ox) else []
+            r = [norm(t[3]) for t in wd[i]] if i < len(wd) else []
+            o = [t for t in o if t]
+            r = [t for t in r if t]
             k = sum(b.size for b in difflib.SequenceMatcher(None, o, r, autojunk=False)
                     .get_matching_blocks())
             m += k
