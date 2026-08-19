@@ -964,6 +964,13 @@ fn parse_slide(
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
     let mut in_ln = false;    // inside <a:ln> (line/border properties)
+    // Inside <a:effectLst>. Its colours belong to the shadow / glow, not to the
+    // shape, but it is a child of p:spPr like a:solidFill is -- so without this
+    // the LAST colour in spPr wins and a drop shadow repaints the shape.
+    // d06 slide 14 is a white world map with a black `a:outerShdw`, and Oxi drew
+    // the continents BLACK; 110 shapes across seven decks are shaped like that.
+    let mut in_effect_lst = false;
+    let s_effectclr = std::env::var("OXI_EFFECTCLR_DISABLE").is_err();
     // Inside <a:solidFill>. `a:alpha` also appears under a gradient stop and a
     // line colour, and only a solid shape fill is composited (S-FILLALPHA).
     let mut in_solid_fill = false;
@@ -1418,6 +1425,9 @@ fn parse_slide(
                     "spPr" if in_shape => {
                         in_sp_pr = true;
                     }
+                    "effectLst" => {
+                        in_effect_lst = true;
+                    }
                     "ln" if in_sp_pr => {
                         in_ln = true;
                         // Width attribute in EMU; 12700 EMU = 1pt
@@ -1644,7 +1654,7 @@ fn parse_slide(
                                 slide_background_color = Some(val);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(val);
-                            } else if in_sp_pr && !in_ln {
+                            } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(val);
                             } else if in_run {
                                 run_color = Some(val);
@@ -1658,7 +1668,7 @@ fn parse_slide(
                                 slide_background_color = Some(hex);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(hex);
-                            } else if in_sp_pr && !in_ln {
+                            } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(hex);
                             } else if in_run {
                                 run_color = Some(hex);
@@ -2067,7 +2077,7 @@ fn parse_slide(
                                 slide_background_color = Some(val);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(val);
-                            } else if in_sp_pr && !in_ln {
+                            } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(val);
                             } else if in_run {
                                 run_color = Some(val);
@@ -2081,7 +2091,7 @@ fn parse_slide(
                                 slide_background_color = Some(hex);
                             } else if in_ln && in_sp_pr {
                                 shape_border_color = Some(hex);
-                            } else if in_sp_pr && !in_ln {
+                            } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(hex);
                             } else if in_run {
                                 run_color = Some(hex);
@@ -2117,6 +2127,9 @@ fn parse_slide(
                     }
                     "ln" if in_ln => {
                         in_ln = false;
+                    }
+                    "effectLst" if in_effect_lst => {
+                        in_effect_lst = false;
                     }
                     "gs" if sg_in_gs => {
                         sg_in_gs = false;
