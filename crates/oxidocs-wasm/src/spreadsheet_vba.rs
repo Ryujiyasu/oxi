@@ -723,6 +723,93 @@ impl<'a> WorkbookHost<'a> {
         })
     }
 
+    /// `Index` over a cell range answers with a *reference*, so `Set` on the
+    /// result and `Range.Address` both work and the result feeds back into
+    /// other worksheet functions. Over a VBA array it answers with values.
+    fn worksheet_index(&mut self, args: &[Value]) -> Result<Value, String> {
+        let (array, row, column) = match args {
+            [array, row] => (array, row, None),
+            [array, row, column] => (array, row, Some(column)),
+            _ => return Err("WorksheetFunction.Index expects two or three arguments".to_string()),
+        };
+        let row = index_argument(row, "row")?;
+        let column = match column {
+            None | Some(Value::Missing) => None,
+            Some(column) => Some(index_argument(column, "column")?),
+        };
+
+        if let Value::Object(object) = array {
+            if let Some(range) = self.range(object) {
+                let rows = (range.end_row - range.start_row + 1) as usize;
+                let columns = (range.end_column - range.start_column + 1) as usize;
+                let (row, column) = index_selection(rows, columns, row, column, true)?;
+                let selected = CellRange {
+                    sheet: range.sheet,
+                    start_row: range.start_row + row.saturating_sub(1) as u32,
+                    end_row: if row == 0 {
+                        range.end_row
+                    } else {
+                        range.start_row + row as u32 - 1
+                    },
+                    start_column: range.start_column + column.saturating_sub(1) as u32,
+                    end_column: if column == 0 {
+                        range.end_column
+                    } else {
+                        range.start_column + column as u32 - 1
+                    },
+                };
+                return Ok(self.object(HostObject::Range(selected)));
+            }
+        }
+
+        let table = self.lookup_table(array, "Index")?;
+        let (row, column) = index_selection(table.rows, table.columns, row, column, false)?;
+        let (first_row, last_row) = if row == 0 {
+            (0, table.rows)
+        } else {
+            (row - 1, row)
+        };
+        let (first_column, last_column) = if column == 0 {
+            (0, table.columns)
+        } else {
+            (column - 1, column)
+        };
+        let mut values = Vec::new();
+        for row in first_row..last_row {
+            for column in first_column..last_column {
+                values.push(table.get(row, column));
+            }
+        }
+        if values.len() == 1 {
+            return Ok(values.remove(0));
+        }
+        let selected_rows = last_row - first_row;
+        let selected_columns = last_column - first_column;
+        let dimensions = if selected_rows > 1 && selected_columns > 1 {
+            vec![
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: selected_rows,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: selected_columns,
+                },
+            ]
+        } else {
+            vec![ArrayDimension {
+                lower_bound: 1,
+                length: values.len(),
+            }]
+        };
+        Ok(Value::Array(ArrayValue {
+            dimensions,
+            values,
+            element_default: Box::new(Value::Empty),
+            resizable: true,
+        }))
+    }
+
     fn worksheet_match(&self, args: &[Value]) -> Result<Value, String> {
         let (needle, array) = match args {
             [needle, array] | [needle, array, _] => (needle, array),
@@ -749,7 +836,7 @@ impl<'a> WorkbookHost<'a> {
             .ok_or_else(|| "WorksheetFunction.Match did not find a matching value".to_string())
     }
 
-    fn worksheet_function(&self, name: &str, args: &[Value]) -> Result<Value, String> {
+    fn worksheet_function(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if args.is_empty() {
             return Err(format!(
                 "WorksheetFunction.{name} expects at least one argument"
@@ -763,6 +850,9 @@ impl<'a> WorkbookHost<'a> {
         }
         if name.eq_ignore_ascii_case("match") {
             return self.worksheet_match(args);
+        }
+        if name.eq_ignore_ascii_case("index") {
+            return self.worksheet_index(args);
         }
         let mut values = Vec::new();
         for value in args {
@@ -2895,6 +2985,51 @@ fn lookup_index_argument(value: &Value, name: &str) -> Result<usize, String> {
     Ok(number as usize)
 }
 
+fn index_argument(value: &Value, label: &str) -> Result<usize, String> {
+    let number = match value {
+        Value::Integer(value) => *value as f64,
+        Value::Double(value) if value.is_finite() => *value,
+        _ => return Err(format!("WorksheetFunction.Index {label} must be numeric")),
+    };
+    let number = number.trunc();
+    if !(0.0..=u32::MAX as f64).contains(&number) {
+        return Err(format!(
+            "WorksheetFunction.Index {label} must be zero or greater"
+        ));
+    }
+    Ok(number as usize)
+}
+
+/// Resolves `Index` arguments to a one-based row and column, where zero selects
+/// a whole row or column. Omitting the column walks the length of a table that
+/// has only one row or column; for anything wider Excel accepts the shorthand
+/// from an array, taking a whole row, but rejects it from a cell reference.
+fn index_selection(
+    rows: usize,
+    columns: usize,
+    row: usize,
+    column: Option<usize>,
+    reference: bool,
+) -> Result<(usize, usize), String> {
+    let (row, column) = match column {
+        Some(column) => (row, column),
+        None if rows == 1 => (1, row),
+        None if columns == 1 => (row, 1),
+        None if reference => {
+            return Err(
+                "WorksheetFunction.Index needs a column for a two-dimensional reference".to_string(),
+            )
+        }
+        None => (row, 0),
+    };
+    if row > rows || column > columns {
+        return Err(format!(
+            "WorksheetFunction.Index {row},{column} is outside a {rows}-by-{columns} array"
+        ));
+    }
+    Ok((row, column))
+}
+
 fn lookup_boolean_argument(value: Option<&Value>, name: &str) -> Result<bool, String> {
     match value {
         None | Some(Value::Missing) => Ok(true),
@@ -4818,6 +4953,156 @@ mod tests {
         assert_eq!(
             debug_output,
             vec!["2".to_string(), "15".to_string(), "5".to_string()]
+        );
+    }
+
+    #[test]
+    fn vba_indexes_cells_by_row_and_column() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub IndexCells()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"B1\").Value = \"ten\"\n\
+               Range(\"B2\").Value = \"twenty\"\n\
+               Range(\"B3\").Value = \"thirty\"\n\
+               Debug.Print WorksheetFunction.Index(Range(\"A1:B3\"), 2, 2).Value\n\
+               Debug.Print WorksheetFunction.Index(Range(\"A1:A3\"), 2).Value\n\
+               Debug.Print WorksheetFunction.Index(Range(\"B1:B3\"), WorksheetFunction.Match(20, Range(\"A1:A3\"), 0)).Value\n\
+               Debug.Print WorksheetFunction.Index(Range(\"A1:B3\"), 2.9, 1).Value\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "IndexCells", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "twenty".to_string(),
+                "20".to_string(),
+                "twenty".to_string(),
+                "20".to_string(),
+            ]
+        );
+    }
+
+    /// A zero row or column widens the answer to the whole column or row, and
+    /// the reference it hands back is a real range: addressable, and countable
+    /// by the aggregating functions.
+    #[test]
+    fn vba_indexes_whole_rows_and_columns_as_references() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub IndexReferences()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"B1\").Value = \"ten\"\n\
+               Range(\"B2\").Value = \"twenty\"\n\
+               Range(\"B3\").Value = \"thirty\"\n\
+               Debug.Print WorksheetFunction.Index(Range(\"A1:B3\"), 0, 2).Address(False, False)\n\
+               Debug.Print WorksheetFunction.Index(Range(\"A1:B3\"), 2, 0).Address(False, False)\n\
+               Debug.Print WorksheetFunction.Index(Range(\"A1:B3\"), 0, 0).Address(False, False)\n\
+               Debug.Print WorksheetFunction.Sum(WorksheetFunction.Index(Range(\"A1:B3\"), 0, 1))\n\
+               Debug.Print WorksheetFunction.Sum(WorksheetFunction.Index(Range(\"A1:B3\"), 2, 0))\n\
+               Debug.Print WorksheetFunction.Count(WorksheetFunction.Index(Range(\"A1:B3\"), 0, 0))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "IndexReferences", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "B1:B3".to_string(),
+                "A2:B2".to_string(),
+                "A1:B3".to_string(),
+                "60".to_string(),
+                "20".to_string(),
+                "3".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn vba_index_rejects_what_excel_rejects() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Pick(row As Variant, column As Variant) As Variant\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"B3\").Value = 30\n\
+               If IsMissing(column) Then\n\
+                 Set Pick = WorksheetFunction.Index(Range(\"A1:B3\"), row)\n\
+               Else\n\
+                 Set Pick = WorksheetFunction.Index(Range(\"A1:B3\"), row, column)\n\
+               End If\n\
+             End Function\n",
+        )
+        .unwrap();
+        for args in [
+            vec![Value::Integer(4), Value::Integer(1)],
+            vec![Value::Integer(1), Value::Integer(3)],
+            vec![Value::Integer(-1), Value::Integer(1)],
+            vec![Value::Integer(1), Value::Missing],
+        ] {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let error = execute_with_host(&module, "Pick", args, &mut host)
+                .expect_err("Excel raises rather than returning an error value");
+            assert!(
+                error.to_string().contains("Index"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    /// Only an array accepts the one-argument shorthand on a two-dimensional
+    /// table, where it takes a whole row; a cell reference rejects it.
+    #[test]
+    fn vba_indexes_arrays_by_value() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub IndexArray()\n\
+               Dim flat(1 To 3) As Variant\n\
+               Dim grid(1 To 2, 1 To 3) As Variant\n\
+               flat(1) = 5\n\
+               flat(2) = 15\n\
+               flat(3) = 25\n\
+               grid(1, 1) = 1\n\
+               grid(1, 2) = 2\n\
+               grid(1, 3) = 3\n\
+               grid(2, 1) = 4\n\
+               grid(2, 2) = 5\n\
+               grid(2, 3) = 6\n\
+               Debug.Print WorksheetFunction.Index(flat, 2), WorksheetFunction.Index(flat, 1, 2)\n\
+               Debug.Print WorksheetFunction.Index(grid, 2, 3), WorksheetFunction.Index(grid, 1, 1)\n\
+               Debug.Print WorksheetFunction.Sum(WorksheetFunction.Index(grid, 2))\n\
+               Debug.Print WorksheetFunction.Sum(WorksheetFunction.Index(grid, 0, 2))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "IndexArray", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "15\t15".to_string(),
+                "6\t1".to_string(),
+                "15".to_string(),
+                "7".to_string(),
+            ]
         );
     }
 
