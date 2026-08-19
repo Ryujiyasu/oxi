@@ -21,6 +21,7 @@
 //! first-line baseline from the measured models (multi: +0.75 x advance /
 //! single: +A_font x fs), space_before / space_after added per paragraph.
 
+mod emoji;
 mod font_adv;
 
 use oxislides_core::ir::{
@@ -186,6 +187,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 anchor_off,
                                                 &mut counters,
                                                 &mut prev_fs,
+                                                sh.wrap_text,
                                             );
                                             // Spec #11: surface the marker text so autonum
                                             // number strings can be verified in the dump.
@@ -316,6 +318,7 @@ fn compute_shape_anchor_off(
             0.0,
             &mut counters,
             &mut prev_fs,
+            sh.wrap_text,
         );
     }
     // block_h = the block's advance minus the first paragraph's first_off.
@@ -2242,6 +2245,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 anchor_off,
                                 &mut counters,
                                 &mut prev_fs,
+                                sh.wrap_text,
                             );
                             if let Some(m) = &marker {
                                 let marker_x =
@@ -2299,16 +2303,24 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             };
                             let para_italic = p.runs.iter().any(|r| r.italic);
                             let para_ul = p.runs.iter().any(|r| r.underline);
+                            // A highlight needs the per-run path even when the
+                            // paragraph is one run, since only that path knows
+                            // where a run starts and ends on the line.
+                            let has_highlight =
+                                highlight_on() && p.runs.iter().any(|r| r.highlight.is_some());
                             let styled = runstyle_on()
-                                && p.runs.len() > 1
-                                && (p.runs.iter().any(|r| r.bold != p.runs[0].bold)
-                                    || p.runs.iter().any(|r| r.color != p.runs[0].color)
-                                    || p.runs.iter().any(|r| r.font_size != p.runs[0].font_size)
-                                    || p.runs.iter().any(|r| r.italic != p.runs[0].italic)
-                                    || (underline_on()
-                                        && p.runs
-                                            .iter()
-                                            .any(|r| r.underline != p.runs[0].underline)));
+                                && (has_highlight
+                                    || (p.runs.len() > 1
+                                        && (p.runs.iter().any(|r| r.bold != p.runs[0].bold)
+                                            || p.runs.iter().any(|r| r.color != p.runs[0].color)
+                                            || p.runs
+                                                .iter()
+                                                .any(|r| r.font_size != p.runs[0].font_size)
+                                            || p.runs.iter().any(|r| r.italic != p.runs[0].italic)
+                                            || (underline_on()
+                                                && p.runs.iter().any(|r| {
+                                                    r.underline != p.runs[0].underline
+                                                })))));
                             let mut line_off = 0usize;
                             for (i, (line_text, baseline, x_off)) in
                                 lines.into_iter().enumerate()
@@ -8766,6 +8778,32 @@ unsafe fn draw_line_runs(
     // Walk the runs, clipping each to this line's character range.
     let line_chars: Vec<char> = line_text.chars().collect();
     let line_end = line_start + line_chars.len();
+
+    // The highlight box is the LINE's, not the run's: a 48pt neighbour made
+    // an 18pt highlighted run's box 53.64pt tall, exactly the 48pt face's
+    // ascent plus descent (`highlight` probe, 2026-08-19). So the tallest run
+    // on this line sets both edges.
+    let mut box_up = 0.0f32;
+    let mut box_down = 0.0f32;
+    if highlight_on() && runs.iter().any(|r| r.highlight.is_some()) {
+        let mut at = 0usize;
+        for run in runs {
+            let n = run.text.chars().count();
+            let (rs, re) = (at, at + n);
+            at = re;
+            if rs.max(line_start) >= re.min(line_end) {
+                continue;
+            }
+            let fs = run.font_size.unwrap_or(default_fs);
+            let family = effective_family(dc, run.font_family.as_deref().unwrap_or(default_family));
+            let (up, down) = highlight_extent_pt(&family, fs);
+            if up + down > box_up + box_down {
+                box_up = up;
+                box_down = down;
+            }
+        }
+    }
+
     let mut cursor_x = x;
     let mut at = 0usize; // char offset of the current run's start
     for run in runs {
@@ -8785,15 +8823,40 @@ unsafe fn draw_line_runs(
         let family = &effective_family(dc, run.font_family.as_deref().unwrap_or(default_family));
         let color = run.color.as_deref().or(default_color);
         let weight = if run.bold { 700 } else { 400 };
-        draw_text_baseline_wiu(
-            dc, cursor_x, baseline, &seg, fs, family, color, scale, weight, run.italic,
-            run.underline,
-        );
         let w = runtime_width_px(dc, &seg, fs, family, run.bold, run.italic, scale)
             .or_else(|| font_adv::text_hmtx_px(&seg, fs, family, scale))
             .unwrap_or_else(|| {
                 measure_text_width(dc, &seg, fs, family, run.bold, scale).round() as i32
             });
+        // Behind the glyphs, and exactly as wide as this run's advance -- the
+        // probe's `HIGH ` arm put the box's right edge on the trailing space's
+        // right edge, not on the last letter's.
+        if highlight_on() {
+            if let Some(hex) = run.highlight.as_deref().filter(|_| box_up + box_down > 0.0) {
+                if let Some((r, g, b)) = parse_hex_rgb(hex) {
+                    let base_px = (baseline as f64 * scale).round() as i32;
+                    let rect = windows::Win32::Foundation::RECT {
+                        left: cursor_x,
+                        top: base_px - (box_up as f64 * scale).round() as i32,
+                        right: cursor_x + w,
+                        bottom: base_px + (box_down as f64 * scale).round() as i32,
+                    };
+                    let brush = windows::Win32::Graphics::Gdi::CreateSolidBrush(
+                        windows::Win32::Foundation::COLORREF(colorref(r, g, b)),
+                    );
+                    if !brush.is_invalid() {
+                        unsafe {
+                            windows::Win32::Graphics::Gdi::FillRect(dc, &rect, brush);
+                            let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+                        }
+                    }
+                }
+            }
+        }
+        draw_text_baseline_wiu(
+            dc, cursor_x, baseline, &seg, fs, family, color, scale, weight, run.italic,
+            run.underline,
+        );
         cursor_x += w;
     }
 }
@@ -8981,17 +9044,6 @@ fn runtime_dx_px(
     if !advance_exact_on() {
         return None;
     }
-    // ★Only when the font itself has EVERY glyph. `GetCharABCWidthsW` alone
-    // consults GDI's font-link chain and its success is not stable run to run
-    // -- the same binary drew d19 slide 39's icon row shifted by one glyph on
-    // a second run while the layout dump stayed byte-identical, i.e. the
-    // non-determinism was entirely in whether this path was taken. Asking for
-    // glyph indices with GGI_MARK_NONEXISTING_GLYPHS is a direct, stable
-    // question about the font, and it is also the correct one: a fallback
-    // glyph must not be advanced by the base font's metrics.
-    if !font_has_all_glyphs(family, bold, italic, text) {
-        return None;
-    }
     // Round the CUMULATIVE position, not each advance. `ExtTextOutW` needs
     // integer steps, but rounding every advance on its own makes the drawn line
     // the sum of 55 roundings -- several pixels adrift of the design width, which
@@ -9002,8 +9054,34 @@ fn runtime_dx_px(
     let mut dx = Vec::with_capacity(text.len());
     let mut acc = 0.0f64;
     let mut prev = 0i32;
-    for ch in text.chars() {
-        let em = runtime_advance_em(family, bold, italic, ch)?;
+    let plan = if emoji_on() {
+        run_plan(family, bold, italic, text)
+    } else {
+        None
+    };
+    // ★Without a plan, only a font that has EVERY glyph may be measured.
+    // `GetCharABCWidthsW` alone consults GDI's font-link chain and its success
+    // is not stable run to run -- the same binary drew d19 slide 39's icon row
+    // shifted by one glyph on a second run while the layout dump stayed
+    // byte-identical, i.e. the non-determinism was entirely in whether this
+    // path was taken. Asking for glyph indices with
+    // GGI_MARK_NONEXISTING_GLYPHS is a direct, stable question about the font,
+    // and it is also the correct one: a fallback glyph must not be advanced by
+    // the base font's metrics.
+    //
+    // A plan is the stable answer to the same question, character by
+    // character: every one of them names the face that owns it, so an emoji
+    // the family lacks is measured against the emoji face's own advance
+    // instead of disqualifying the whole run.
+    if plan.is_none() && !font_has_all_glyphs(family, bold, italic, text) {
+        return None;
+    }
+    for (i, ch) in text.chars().enumerate() {
+        let em = match plan.as_ref().map(|p| p[i]) {
+            Some(CharPlan::Base(em) | CharPlan::Color(_, em) | CharPlan::Symbol(_, em)) => em,
+            Some(CharPlan::Skip) => 0.0,
+            None => runtime_advance_em(family, bold, italic, ch)?,
+        };
         acc += em as f64 * fs as f64 * scale;
         let pos = if advwidth_on() {
             acc.round() as i32
@@ -9105,6 +9183,31 @@ fn gdi_measure_text_px(dc: windows::Win32::Graphics::Gdi::HDC, text: &str) -> i3
     size.cx
 }
 
+/// The width the wrap judges against -- the same chain the `fits` test uses.
+#[cfg(windows)]
+fn measure_wrap(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+) -> i32 {
+    if advance_exact_on() {
+        runtime_width_px(dc, text, fs, family, bold, italic, scale)
+            .or_else(|| font_adv::text_hmtx_px(text, fs, family, scale))
+            .unwrap_or_else(|| gdi_measure_text_px(dc, text))
+    } else {
+        gdi_measure_text_px(dc, text)
+    }
+}
+
+/// A word wider than its line breaks inside itself unless this is set.
+fn charwrap_on() -> bool {
+    std::env::var("OXI_CHARWRAP_DISABLE").is_err()
+}
+
 /// Wrap `text` at word boundaries to fit `effective_width_pt`.
 #[cfg(windows)]
 fn gdi_wrap_lines(
@@ -9164,6 +9267,49 @@ fn gdi_wrap_lines(
             // Every line after the first is judged against the continuation
             // width, which a hanging indent or a bullet makes narrower.
             width_px = rest_px;
+        }
+        // A single "word" wider than the line has to break INSIDE itself --
+        // splitting on spaces alone leaves it as one overflowing line. d11 and
+        // d24 slide 38 are 53 emoji with no space between them in a 490pt box;
+        // PowerPoint lays them out in four rows and Oxi drew one that ran off
+        // the page. 45 paragraphs across nine decks carry a space-free run of
+        // 30 characters or more (long URLs are the other kind).
+        if charwrap_on() && current.is_empty() {
+            let mut rest = word;
+            loop {
+                let trimmed = rest.trim_end();
+                if trimmed.is_empty() || measure_wrap(dc, trimmed, fs, family, bold, italic, scale)
+                    <= width_px
+                {
+                    break;
+                }
+                // Longest prefix that fits, never empty so the loop ends.
+                let mut cut = 0usize;
+                let mut last_ok = 0usize;
+                for (i, ch) in rest.char_indices() {
+                    let end = i + ch.len_utf8();
+                    if measure_wrap(dc, rest[..end].trim_end(), fs, family, bold, italic, scale)
+                        <= width_px
+                    {
+                        last_ok = end;
+                    } else {
+                        break;
+                    }
+                    cut = end;
+                }
+                let take = if last_ok > 0 {
+                    last_ok
+                } else {
+                    rest.char_indices().nth(1).map(|(i, _)| i).unwrap_or(rest.len())
+                };
+                let _ = cut;
+                lines.push(rest[..take].to_string());
+                rest = &rest[take..];
+                width_px = rest_px;
+            }
+            current.push_str(rest);
+            current_w += gdi_measure_text_px(dc, rest);
+            continue;
         }
         current.push_str(word);
         current_w += gdi_measure_text_px(dc, word);
@@ -9289,6 +9435,370 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
     })
 }
 
+/// `a:bodyPr/@wrap="none"` is honoured unless this is set.
+fn wrapnone_on() -> bool {
+    std::env::var("OXI_WRAPNONE_DISABLE").is_err()
+}
+
+/// `a:highlight` boxes are drawn unless this is set.
+fn highlight_on() -> bool {
+    std::env::var("OXI_HIGHLIGHT_DISABLE").is_err()
+}
+
+#[cfg(windows)]
+thread_local! {
+    static HHEA_CACHE: std::cell::RefCell<
+        std::collections::HashMap<String, Option<(f32, f32)>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A face's hhea ascent and descent, in em.
+///
+/// This is the pair the highlight box is built from, and it is NOT the pair
+/// `runtime_baseline_offset_em` uses: that one follows fsSelection bit 7 to the
+/// typo metrics, and the two faces measured that set the bit -- Bahnschrift
+/// (0.7527 / 0.2473) and Cascadia Mono (0.9201 / 0.2420) -- came out of
+/// PowerPoint's export on their hhea values, not their typo ones
+/// (`highlight` probe, 2026-08-19).
+#[cfg(windows)]
+fn hhea_extent_em(family: &str) -> Option<(f32, f32)> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    HHEA_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(family) {
+            return *hit;
+        }
+        let dc = probe_dc();
+        let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -ADVANCE_PROBE_EM,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let parsed = (|| {
+                    let hhea = read_font_table(dc, b"hhea")?;
+                    let head = read_font_table(dc, b"head")?;
+                    let upem = u16::from_be_bytes([*head.get(18)?, *head.get(19)?]) as f32;
+                    let asc = i16::from_be_bytes([*hhea.get(4)?, *hhea.get(5)?]) as f32;
+                    let desc = i16::from_be_bytes([*hhea.get(6)?, *hhea.get(7)?]) as f32;
+                    if upem <= 0.0 {
+                        return None;
+                    }
+                    Some((asc / upem, -desc / upem))
+                })();
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                parsed
+            }
+        };
+        cache.borrow_mut().insert(family.to_string(), value);
+        value
+    })
+}
+
+/// The highlight box for a run of this face and size: how far it reaches above
+/// the baseline and below it, in points.
+///
+/// Measured on seven faces: the box is the font's DESIGN height, ascent plus
+/// descent, with its bottom on the line box's bottom -- which is the 1.2 em
+/// line split in the same ascent-to-descent proportion. Arial 18pt came back
+/// 0.891 / 0.228 em against the rule's 0.8896 / 0.2276, Courier New 0.814 /
+/// 0.319 against 0.8147 / 0.3181, Georgia 0.906 / 0.231 against 0.9050 /
+/// 0.2312. Line spacing does not move it (150% and 70% arms are identical).
+#[cfg(windows)]
+fn highlight_extent_pt(family: &str, fs: f32) -> (f32, f32) {
+    match hhea_extent_em(family) {
+        Some((a, d)) if a + d > 0.0 => {
+            let below = 1.2 * d / (a + d);
+            ((a + d - below) * fs, below * fs)
+        }
+        // A face GDI cannot hand tables for keeps the line box itself, which
+        // is the same box about 7% too tall at the top.
+        _ => {
+            let a = font_baseline_offset_em(family);
+            (a * fs, (1.2 - a) * fs)
+        }
+    }
+}
+
+/// Colour emoji are drawn from their COLR layers unless this is set.
+fn emoji_on() -> bool {
+    std::env::var("OXI_EMOJI_DISABLE").is_err()
+}
+
+/// The face Windows resolves emoji to. PowerPoint's own PDF export draws them
+/// in colour, and this is the only colour font on a stock Windows install.
+const EMOJI_FAMILY: &str = "Segoe UI Emoji";
+
+#[cfg(windows)]
+thread_local! {
+    static EMOJI_FONT: std::cell::RefCell<Option<Option<std::rc::Rc<emoji::ColorFont>>>> =
+        const { std::cell::RefCell::new(None) };
+    /// (family, weight, italic, char) -> does the family itself have the glyph?
+    static GLYPH_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(String, i32, bool, char), bool>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The parsed colour font, or None when this machine has no COLR emoji face.
+#[cfg(windows)]
+fn emoji_font() -> Option<std::rc::Rc<emoji::ColorFont>> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if !emoji_on() {
+        return None;
+    }
+    EMOJI_FONT.with(|cell| {
+        if let Some(hit) = cell.borrow().as_ref() {
+            return hit.clone();
+        }
+        let dc = probe_dc();
+        let wide: Vec<u16> = EMOJI_FAMILY
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -ADVANCE_PROBE_EM,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let parsed = (|| {
+                    emoji::ColorFont::from_tables(
+                        read_font_table(dc, b"COLR")?,
+                        read_font_table(dc, b"CPAL")?,
+                        read_font_table(dc, b"cmap")?,
+                        read_font_table(dc, b"hmtx")?,
+                        &read_font_table(dc, b"hhea")?,
+                        &read_font_table(dc, b"head")?,
+                    )
+                })()
+                .map(std::rc::Rc::new);
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                parsed
+            }
+        };
+        *cell.borrow_mut() = Some(value.clone());
+        value
+    })
+}
+
+/// True when `family` has its own glyph for `ch`.
+///
+/// A false here is what sends the character to the font-link chain, and it is
+/// the discriminator for colour: PowerPoint paints an emoji in colour exactly
+/// when the requested face could not supply it and Windows reached for Segoe
+/// UI Emoji instead.
+#[cfg(windows)]
+fn family_has_glyph(family: &str, bold: bool, italic: bool, ch: char) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let weight = if bold { 700 } else { 400 };
+    let key = (family.to_string(), weight, italic, ch);
+    GLYPH_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(&key) {
+            return *hit;
+        }
+        let dc = probe_dc();
+        let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -ADVANCE_PROBE_EM,
+                0,
+                0,
+                0,
+                weight,
+                u32::from(italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                false
+            } else {
+                let old = SelectObject(dc, font);
+                let mut buf = [0u16; 3];
+                let n = ch.encode_utf16(&mut buf).len();
+                buf[n] = 0;
+                let mut idx = [0u16; 2];
+                let got = GetGlyphIndicesW(
+                    dc,
+                    windows::core::PCWSTR(buf.as_ptr()),
+                    n as i32,
+                    idx.as_mut_ptr(),
+                    GGI_MARK_NONEXISTING_GLYPHS,
+                );
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                got != GDI_ERROR as u32 && idx[..n].iter().all(|g| *g != 0xFFFF)
+            }
+        };
+        cache.borrow_mut().insert(key, value);
+        value
+    })
+}
+
+/// The face that supplies an emoji's TEXT presentation. Measured: PowerPoint
+/// advanced U+2764 by 0.9719 em and U+1F321 by 0.9989 em, and this font's own
+/// hmtx holds 0.9717 and 1.0000 (`emojiadv` probe, 2026-08-19). The colour
+/// arms all advanced 1.3709 em against Segoe UI Emoji's 1.3730.
+const SYMBOL_FAMILY: &str = "Segoe UI Symbol";
+
+#[cfg(windows)]
+thread_local! {
+    static SYMBOL_FONT: std::cell::RefCell<Option<Option<std::rc::Rc<emoji::ColorFont>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The monochrome fallback face, read for its metrics only.
+#[cfg(windows)]
+fn symbol_font() -> Option<std::rc::Rc<emoji::ColorFont>> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    SYMBOL_FONT.with(|cell| {
+        if let Some(hit) = cell.borrow().as_ref() {
+            return hit.clone();
+        }
+        let dc = probe_dc();
+        let wide: Vec<u16> = SYMBOL_FAMILY
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -ADVANCE_PROBE_EM,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let parsed = (|| {
+                    emoji::ColorFont::metrics_only(
+                        read_font_table(dc, b"cmap")?,
+                        read_font_table(dc, b"hmtx")?,
+                        &read_font_table(dc, b"hhea")?,
+                        &read_font_table(dc, b"head")?,
+                    )
+                })()
+                .map(std::rc::Rc::new);
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                parsed
+            }
+        };
+        *cell.borrow_mut() = Some(value.clone());
+        value
+    })
+}
+
+/// What one character of a run needs.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+enum CharPlan {
+    /// The requested face draws it, at this advance in em.
+    Base(f32),
+    /// Colour emoji: the COLR layers of this glyph of the emoji face.
+    Color(u16, f32),
+    /// Text presentation: this glyph of the monochrome face, painted in the
+    /// run's own colour.
+    Symbol(u16, f32),
+    /// A variation selector. It chooses the presentation and takes no width.
+    Skip,
+}
+
+/// How to draw every character of `text`, or None when any of them needs
+/// something this does not model -- in which case the caller keeps the plain
+/// path, which is what every non-emoji run in the corpus takes.
+///
+/// The rule is PowerPoint's, measured (`emojipres` + `emojiadv`, 2026-08-19):
+/// a face that owns the glyph draws it (Arial keeps its own U+263A even with
+/// U+FE0F after it), otherwise Emoji_Presentation -- or the variation
+/// selector overriding it -- picks between the colour face and the monochrome
+/// one.
+#[cfg(windows)]
+fn run_plan(family: &str, bold: bool, italic: bool, text: &str) -> Option<Vec<CharPlan>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::with_capacity(chars.len());
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch == emoji::VS16 || ch == emoji::VS15 {
+            out.push(CharPlan::Skip);
+            continue;
+        }
+        if family_has_glyph(family, bold, italic, ch) {
+            out.push(CharPlan::Base(runtime_advance_em(family, bold, italic, ch)?));
+            continue;
+        }
+        // Not an emoji at all -- a missing CJK glyph, say -- so this function
+        // has nothing to offer and the run keeps GDI's font linking.
+        let cf = emoji_font()?;
+        let egid = cf.gid(ch)?;
+        cf.layers(egid)?;
+        let colored = match chars.get(i + 1) {
+            Some(&n) if n == emoji::VS16 => true,
+            Some(&n) if n == emoji::VS15 => false,
+            _ => emoji::emoji_presentation(ch),
+        };
+        if colored {
+            out.push(CharPlan::Color(egid, cf.advance_em(egid)?));
+        } else {
+            let sf = symbol_font()?;
+            let sgid = sf.gid(ch)?;
+            out.push(CharPlan::Symbol(sgid, sf.advance_em(sgid)?));
+        }
+    }
+    Some(out)
+}
+
 /// One SFNT table of the font currently selected into `dc`.
 #[cfg(windows)]
 fn read_font_table(dc: windows::Win32::Graphics::Gdi::HDC, tag: &[u8; 4]) -> Option<Vec<u8>> {
@@ -9369,6 +9879,8 @@ fn layout_paragraph_baselines(
     anchor_off: f32,
     counters: &mut std::collections::HashMap<(u32, String), (Option<u32>, u32)>,
     prev_fs: &mut Option<f32>,
+    // `a:bodyPr/@wrap` -- false lets the paragraph run past the box.
+    wrap_text: bool,
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
@@ -9568,17 +10080,24 @@ fn layout_paragraph_baselines(
     // the same 316.8. Wrapping everything at the full 237.6 and shifting
     // afterwards let a continuation run 18pt past the inset, which is what put
     // an extra word on `bulletph`'s line 0.
-    let lines = gdi_wrap_lines(
-        dc,
-        &text,
-        (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0),
-        (effective_width - if wrapwidth_on() { para_left_rel } else { 0.0 }).max(1.0),
-        scale,
-        fs,
-        &family,
-        bold,
-        italic,
-    );
+    // `wrap="none"` means the text does not break at all: PowerPoint draws it
+    // past the box edge. Every arm of the COM-built `embedsplit` probes is
+    // such a box, auto-sized to 14.5pt around 20pt of text.
+    let lines = if wrap_text || !wrapnone_on() {
+        gdi_wrap_lines(
+            dc,
+            &text,
+            (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0),
+            (effective_width - if wrapwidth_on() { para_left_rel } else { 0.0 }).max(1.0),
+            scale,
+            fs,
+            &family,
+            bold,
+            italic,
+        )
+    } else {
+        vec![text.clone()]
+    };
     let n_lines = lines.len();
 
     let mut out = Vec::with_capacity(n_lines);
@@ -9734,6 +10253,196 @@ fn draw_text_baseline_wi(
     )
 }
 
+/// Draw a line that contains colour emoji, one character at a time.
+///
+/// Returns false when the line has no colour character, so the caller keeps
+/// its single `ExtTextOutW`. GDI cannot paint a COLR glyph -- it draws the
+/// base outline, which is why Oxi's emoji were black line art against
+/// PowerPoint's colour ones -- so each emoji is painted here as its own stack
+/// of layer glyphs, back to front, at one pen position.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn draw_color_run(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    baseline_px: i32,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    scale: f64,
+    weight: i32,
+    italic: bool,
+    underline: bool,
+) -> bool {
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
+
+    let bold = weight >= 700;
+    let cf = match emoji_font() {
+        Some(cf) => cf,
+        None => return false,
+    };
+    let plan = match run_plan(family, bold, italic, text) {
+        Some(p) => p,
+        None => return false,
+    };
+    // Every character is the requested face's own: nothing to do here.
+    if plan.iter().all(|p| matches!(p, CharPlan::Base(_))) {
+        return false;
+    }
+    let dx = match runtime_dx_px(dc, text, font_size, family, bold, italic, scale) {
+        Some(dx) if dx.len() == plan.len() => dx,
+        // Without agreeing advances the characters would not land where the
+        // wrap measured them; the plain path at least keeps them adjacent.
+        _ => return false,
+    };
+
+    // The emoji face has its own ascent, so its glyphs sit on the line's
+    // baseline rather than on the base font's cell top.
+    let efont = create_font_for_wiu(EMOJI_FAMILY, font_size, 400, false, false, scale);
+    if efont.is_invalid() {
+        return false;
+    }
+    let old_font = unsafe { SelectObject(dc, efont) };
+    let mut tm = TEXTMETRICW::default();
+    unsafe {
+        let _ = GetTextMetricsW(dc, &mut tm);
+    }
+    let emoji_y = baseline_px - tm.tmAscent;
+    unsafe {
+        SelectObject(dc, old_font);
+    }
+
+    // The monochrome face needs the same treatment as the colour one: its own
+    // handle, and its own ascent.
+    let sfont = if plan.iter().any(|p| matches!(p, CharPlan::Symbol(..))) {
+        create_font_for_wiu(SYMBOL_FAMILY, font_size, weight, italic, underline, scale)
+    } else {
+        windows::Win32::Graphics::Gdi::HFONT::default()
+    };
+    let symbol_y = if sfont.is_invalid() {
+        emoji_y
+    } else {
+        let mut stm = TEXTMETRICW::default();
+        unsafe {
+            let old = SelectObject(dc, sfont);
+            let _ = GetTextMetricsW(dc, &mut stm);
+            SelectObject(dc, old);
+        }
+        baseline_px - stm.tmAscent
+    };
+
+    // Ordinary characters in the same line keep the base font, and its own
+    // ascent -- the two faces do not share one.
+    let base = create_font_for_wiu(family, font_size, weight, italic, underline, scale);
+    let base_y = if base.is_invalid() {
+        emoji_y
+    } else {
+        let mut btm = TEXTMETRICW::default();
+        unsafe {
+            let old = SelectObject(dc, base);
+            let _ = GetTextMetricsW(dc, &mut btm);
+            SelectObject(dc, old);
+        }
+        baseline_px - btm.tmAscent
+    };
+    let mut text_color = unsafe { GetTextColor(dc) };
+    let mut pen = x;
+    let mut i = 0usize;
+    for (ci, ch) in text.chars().enumerate() {
+        match plan[ci] {
+            CharPlan::Color(gid, _) => {
+                let layers = cf.layers(gid).unwrap_or_default();
+                unsafe {
+                    let old = SelectObject(dc, efont);
+                    for (lg, pi) in layers {
+                        let paint = if pi == 0xFFFF {
+                            None
+                        } else {
+                            match cf.color(pi) {
+                                // A fully transparent layer paints nothing;
+                                // GDI text has no alpha to honour a partial
+                                // one, so it is drawn opaque.
+                                Some((_, _, _, 0)) => continue,
+                                Some((r, g, b, _)) => Some(colorref(r, g, b)),
+                                None => None,
+                            }
+                        };
+                        if let Some(c) = paint {
+                            text_color = SetTextColor(dc, COLORREF(c));
+                        }
+                        let one = [lg];
+                        let _ = ExtTextOutW(
+                            dc,
+                            pen,
+                            emoji_y,
+                            ETO_GLYPH_INDEX,
+                            None,
+                            PCWSTR(one.as_ptr()),
+                            1,
+                            None,
+                        );
+                        if paint.is_some() {
+                            text_color = SetTextColor(dc, COLORREF(text_color.0));
+                        }
+                    }
+                    SelectObject(dc, old);
+                }
+            }
+            // The monochrome presentation, painted in the run's own colour --
+            // which is why d11 slide 38's U+2764 is the deck's dark navy in
+            // PowerPoint and not Segoe UI Emoji's red.
+            CharPlan::Symbol(gid, _) if !sfont.is_invalid() => unsafe {
+                let old = SelectObject(dc, sfont);
+                let one = [gid];
+                let _ = ExtTextOutW(
+                    dc,
+                    pen,
+                    symbol_y,
+                    ETO_GLYPH_INDEX,
+                    None,
+                    PCWSTR(one.as_ptr()),
+                    1,
+                    None,
+                );
+                SelectObject(dc, old);
+            },
+            CharPlan::Base(_) if !base.is_invalid() => {
+                let mut buf = [0u16; 2];
+                let wch = ch.encode_utf16(&mut buf);
+                unsafe {
+                    let old = SelectObject(dc, base);
+                    let _ = ExtTextOutW(
+                        dc,
+                        pen,
+                        base_y,
+                        ETO_OPTIONS(0),
+                        None,
+                        PCWSTR(wch.as_ptr()),
+                        wch.len() as u32,
+                        None,
+                    );
+                    SelectObject(dc, old);
+                }
+            }
+            _ => {}
+        }
+        pen += dx[i];
+        i += 1;
+    }
+    unsafe {
+        let _ = DeleteObject(efont);
+        if !base.is_invalid() {
+            let _ = DeleteObject(base);
+        }
+        if !sfont.is_invalid() {
+            let _ = DeleteObject(sfont);
+        }
+    }
+    true
+}
+
 /// As `draw_text_baseline_wi`, with the underline.
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
@@ -9766,6 +10475,29 @@ fn draw_text_baseline_wiu(
     }
     let ascent_px = tm.tmAscent as i32;
     let y = (baseline_pt as f64 * scale).round() as i32 - ascent_px;
+    // A line carrying colour emoji is painted character by character, since
+    // one ExtTextOutW can only use one font and cannot paint COLR layers.
+    if emoji_on()
+        && draw_color_run(
+            dc,
+            x,
+            (baseline_pt as f64 * scale).round() as i32,
+            text,
+            font_size,
+            family,
+            scale,
+            weight,
+            italic,
+            underline,
+        )
+    {
+        unsafe {
+            SelectObject(dc, old_font);
+            SetTextColor(dc, old_color);
+            let _ = DeleteObject(font);
+        }
+        return;
+    }
     let wtext: Vec<u16> = text.encode_utf16().collect();
     // When the family has an hmtx table, draw each char at its design
     // advance (Dx) so glyphs land exactly where PowerPoint's PDF export

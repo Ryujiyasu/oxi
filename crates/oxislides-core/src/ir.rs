@@ -232,6 +232,10 @@ pub struct SlideGradient {
     pub focus: Option<(f32, f32)>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
     pub x: f32,      // position in points
@@ -294,6 +298,11 @@ pub struct Shape {
     /// placeholders; layout3 title uses "t", layout8/9 "b".
     #[serde(default)]
     pub anchor: Option<String>,
+    /// `a:bodyPr/@wrap` -- false for `wrap="none"`, where PowerPoint lets the
+    /// text run past the box instead of breaking it. No dev-corpus shape asks
+    /// for it; every arm of the COM-built `embedsplit` probes does.
+    #[serde(default = "default_true")]
+    pub wrap_text: bool,
     /// `a:blipFill/@rotWithShape` — whether the picture inside a shape turns
     /// with the shape's `@rot`. True (the default) for a `p:pic`, whose raster
     /// always follows the shape.
@@ -811,5 +820,12 @@ pub struct SlideRun {
     #[serde(default)]
     pub underline: bool,
     pub color: Option<String>,     // hex color
+    /// `a:rPr/a:highlight` -- a filled box behind the run's glyphs, as hex.
+    /// PowerPoint draws it the height of the LINE's font (hhea ascent plus
+    /// descent) with its bottom on the line box's bottom, and as wide as the
+    /// run's own advance including a trailing space (`highlight` probe,
+    /// 2026-08-19). 65 runs across 19 slides in 8 of the 40 dev decks have one.
+    #[serde(default)]
+    pub highlight: Option<String>,
     pub font_family: Option<String>,
 }

@@ -309,3 +309,55 @@ fn gradient_stop_alpha_is_read_from_the_self_closing_element() {
         g.stops[2].alpha
     );
 }
+
+// --- a:rPr/a:highlight ----------------------------------------------------
+// The highlight carries a colour element of exactly the shape `a:solidFill`
+// carries, so a parser that does not track the container reads it as the run's
+// TEXT colour. d11 slide 38's "and many more..." is white on dk1 and Oxi drew
+// it dk1 with no box. The colour element is Event::Empty when self-closing and
+// Event::Start when it wraps a modifier, and both arms have to route it.
+
+const HIGHLIGHT_PPTX: &[u8] = include_bytes!("../../../tests/fixtures/highlight_test.pptx");
+
+fn highlight_runs() -> Vec<oxislides_core::ir::SlideRun> {
+    let p = parse_pptx(HIGHLIGHT_PPTX).expect("highlight_test.pptx must parse");
+    p.slides[0]
+        .shapes
+        .iter()
+        .find_map(|s| match &s.content {
+            ShapeContent::AutoShape { paragraphs } if !paragraphs.is_empty() => {
+                Some(paragraphs[0].runs.clone())
+            }
+            _ => None,
+        })
+        .expect("the text box's one paragraph")
+}
+
+#[test]
+fn highlight_is_read_from_both_quick_xml_arms() {
+    let runs = highlight_runs();
+    assert_eq!(runs.len(), 3, "three runs");
+    assert_eq!(runs[0].highlight, None, "the first run asks for no highlight");
+    assert_eq!(
+        runs[1].highlight.as_deref(),
+        Some("FF0000"),
+        "a self-closing a:srgbClr arrives as Event::Empty"
+    );
+    assert_eq!(
+        runs[2].highlight.as_deref(),
+        Some("00FF00"),
+        "an a:srgbClr wrapping a:lumMod arrives as Event::Start"
+    );
+}
+
+#[test]
+fn a_highlight_does_not_become_the_run_colour() {
+    let runs = highlight_runs();
+    assert_eq!(runs[0].color.as_deref(), Some("112233"));
+    assert_eq!(
+        runs[1].color.as_deref(),
+        Some("FFFFFF"),
+        "white text on a red highlight stays white"
+    );
+    assert_eq!(runs[2].color.as_deref(), Some("000000"));
+}

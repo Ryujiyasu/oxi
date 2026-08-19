@@ -917,6 +917,11 @@ fn parse_slide(
     // a:custGeom — explicit outline paths. `cg_pending` is the command being
     // filled with its <a:pt> children (a cubicBezTo takes three of them, so the
     // points cannot be turned into a command until its end tag).
+    // The highlight's opt-out has to reach the PARSER too: routing the colour
+    // out of `run_color` is a content change, so a flag that only silences the
+    // renderer leaves the "off" arm drawing the text in the highlight's colour
+    // rather than reproducing the pre-change build. 8 decks / 16 pages proved it.
+    let s_highlight = std::env::var("OXI_HIGHLIGHT_DISABLE").is_err();
     let s_custgeom = std::env::var("OXI_CUSTGEOM_DISABLE").is_err();
     let mut in_cust_geom = false;
     let mut cg_paths: Vec<GeomPath> = Vec::new();
@@ -980,6 +985,7 @@ fn parse_slide(
     // Spec #6: vertical text-anchor from the shape's own a:bodyPr/@anchor
     // (resolved through the placeholder chain at shape end).
     let mut shape_anchor: Option<String> = None;
+    let mut shape_wrap = true;
 
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
@@ -1032,6 +1038,13 @@ fn parse_slide(
     let mut run_underline = false;
     let mut run_font_size: Option<f32> = None;
     let mut run_color: Option<String> = None;
+    // `a:rPr/a:highlight` -- the run's text highlight. It holds a colour
+    // element of exactly the shape `a:solidFill` does, so without this flag
+    // the colour dispatch below reads it as the run's own text colour: d11
+    // slide 38's "and many more..." is white on dk1 and Oxi drew it dk1 on
+    // nothing.
+    let mut in_highlight = false;
+    let mut run_highlight: Option<String> = None;
     let mut run_font_family: Option<String> = None;
 
     let mut in_text = false;
@@ -1159,6 +1172,7 @@ fn parse_slide(
                         shape_t_ins = 3.6;
                         shape_b_ins = 3.6;
                         shape_anchor = None;
+                        shape_wrap = true;
                     }
                     "graphicFrame" if in_sp_tree => {
                         // A graphicFrame (table/chart/SmartArt). Reuse the shape
@@ -1208,6 +1222,7 @@ fn parse_slide(
                         shape_t_ins = 3.6;
                         shape_b_ins = 3.6;
                         shape_anchor = None;
+                        shape_wrap = true;
                     }
                     "tbl" if in_graphic_frame => {
                         in_table = true;
@@ -1579,6 +1594,15 @@ fn parse_slide(
                         if let Some(a) = get_attr(&e, "anchor") {
                             shape_anchor = Some(a);
                         }
+                        // a:bodyPr/@wrap="none" — the text runs past the box
+                        // instead of breaking. The `embedsplit` probes are
+                        // COM-built and every arm's box is auto-sized to
+                        // 14.5pt around 20pt text, so a renderer that wraps
+                        // them anyway shreds "AAABBB" into six lines where
+                        // PowerPoint draws one.
+                        if let Some(w) = get_attr(&e, "wrap") {
+                            shape_wrap = w != "none";
+                        }
                     }
                     "pPr" if in_paragraph => {
                         // Spec #6: a:pPr/@algn — the paragraph's own alignment
@@ -1647,6 +1671,7 @@ fn parse_slide(
                         run_underline = false;
                         run_font_size = None;
                         run_color = None;
+                        run_highlight = None;
                         run_font_family = None;
                     }
                     "endParaRPr" if in_paragraph => {
@@ -1673,6 +1698,7 @@ fn parse_slide(
                     }
                     // container — context determines where color goes
                     "solidFill" => in_solid_fill = true,
+                    "highlight" if in_run => in_highlight = true,
                     "srgbClr" => {
                         if let Some(val) = get_attr(&e, "val") {
                             if in_bg_pr {
@@ -1681,6 +1707,8 @@ fn parse_slide(
                                 shape_border_color = Some(val);
                             } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(val);
+                            } else if in_run && in_highlight && s_highlight {
+                                run_highlight = Some(val);
                             } else if in_run {
                                 run_color = Some(val);
                             }
@@ -1695,6 +1723,8 @@ fn parse_slide(
                                 shape_border_color = Some(hex);
                             } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(hex);
+                            } else if in_run && in_highlight && s_highlight {
+                                run_highlight = Some(hex);
                             } else if in_run {
                                 run_color = Some(hex);
                             }
@@ -2030,6 +2060,15 @@ fn parse_slide(
                         if let Some(a) = get_attr(&e, "anchor") {
                             shape_anchor = Some(a);
                         }
+                        // a:bodyPr/@wrap="none" — the text runs past the box
+                        // instead of breaking. The `embedsplit` probes are
+                        // COM-built and every arm's box is auto-sized to
+                        // 14.5pt around 20pt text, so a renderer that wraps
+                        // them anyway shreds "AAABBB" into six lines where
+                        // PowerPoint draws one.
+                        if let Some(w) = get_attr(&e, "wrap") {
+                            shape_wrap = w != "none";
+                        }
                     }
                     "pPr" if in_paragraph => {
                         if let Some(algn) = get_attr(&e, "algn") {
@@ -2107,6 +2146,8 @@ fn parse_slide(
                                 shape_border_color = Some(val);
                             } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(val);
+                            } else if in_run && in_highlight && s_highlight {
+                                run_highlight = Some(val);
                             } else if in_run {
                                 run_color = Some(val);
                             }
@@ -2121,6 +2162,8 @@ fn parse_slide(
                                 shape_border_color = Some(hex);
                             } else if in_sp_pr && !in_ln && !(in_effect_lst && s_effectclr) {
                                 shape_fill_color = Some(hex);
+                            } else if in_run && in_highlight && s_highlight {
+                                run_highlight = Some(hex);
                             } else if in_run {
                                 run_color = Some(hex);
                             }
@@ -2158,6 +2201,9 @@ fn parse_slide(
                     }
                     "effectLst" if in_effect_lst => {
                         in_effect_lst = false;
+                    }
+                    "highlight" if in_highlight => {
+                        in_highlight = false;
                     }
                     "gs" if sg_in_gs => {
                         sg_in_gs = false;
@@ -2402,6 +2448,7 @@ fn parse_slide(
                             t_ins: shape_t_ins,
                             b_ins: shape_b_ins,
                             anchor: resolved_anchor,
+                            wrap_text: std::mem::replace(&mut shape_wrap, true),
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
@@ -2540,6 +2587,7 @@ fn parse_slide(
                             }
                         };
                         shapes.push(Shape {
+                            wrap_text: true,
                             x: shape_x,
                             y: shape_y,
                             width: shape_w,
@@ -2582,6 +2630,7 @@ fn parse_slide(
                                 italic: run_italic,
                             underline: run_underline,
                                 color: run_color.take(),
+                                highlight: run_highlight.take(),
                                 font_family: run_font_family.take(),
                             });
                         }
@@ -3282,6 +3331,10 @@ fn parse_inherited_shapes(
                                         (ln_color.clone(), ln_width)
                                     };
                                     out.push(Shape {
+                                        // Group members are walked without a
+                                        // bodyPr, and no corpus group asks for
+                                        // wrap="none".
+                                        wrap_text: true,
                                         x,
                                         y,
                                         width: w,
