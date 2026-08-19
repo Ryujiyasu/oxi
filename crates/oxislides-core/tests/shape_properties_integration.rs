@@ -361,3 +361,31 @@ fn a_highlight_does_not_become_the_run_colour() {
     );
     assert_eq!(runs[2].color.as_deref(), Some("000000"));
 }
+
+// --- a placeholder whose idx matches nothing -------------------------------
+// d24 slide 22's body is `<p:ph idx="4294967295" type="body"/>` -- the sentinel
+// PowerPoint writes for an unset idx. Its layout has no body placeholder and
+// the master's is idx="1", so an exact-key lookup finds nothing and the size
+// falls all the way to the master's `p:txStyles/p:bodyStyle`. PowerPoint drew
+// that paragraph at exactly 24.00pt, the master PLACEHOLDER's sz, not the 14pt
+// txStyles says.
+
+const PHANYIDX_PPTX: &[u8] = include_bytes!("../../../tests/fixtures/phanyidx_test.pptx");
+
+#[test]
+fn a_placeholder_with_an_unmatched_idx_still_inherits_the_master_level() {
+    let p = parse_pptx(PHANYIDX_PPTX).expect("phanyidx_test.pptx must parse");
+    let shape = p.slides[0]
+        .shapes
+        .iter()
+        .find(|s| matches!(&s.content, ShapeContent::AutoShape { paragraphs }
+                           if !paragraphs.is_empty()))
+        .expect("the body placeholder");
+    let lvl = shape.ph_levels.first().expect("the master body level");
+    assert_eq!(
+        lvl.font_size,
+        Some(24.0),
+        "the master's body PLACEHOLDER declares 24pt; its txStyles say 14pt"
+    );
+    assert_eq!(lvl.font_family.as_deref(), Some("Arial"));
+}

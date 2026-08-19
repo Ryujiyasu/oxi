@@ -2432,10 +2432,11 @@ fn parse_slide(
                                     shape_ph_type.as_ref(),
                                     shape_ph_idx.as_ref(),
                                 ),
-                                lookup_ph_levels(
+                                lookup_ph_levels_in(
                                     &master_ph_styles,
                                     shape_ph_type.take().as_ref(),
                                     shape_ph_idx.as_ref(),
+                                    true,
                                 ),
                             ),
                             content,
@@ -4196,10 +4197,23 @@ fn merge_ph_levels(
         .collect()
 }
 
-fn lookup_ph_levels(
+/// The placeholder levels a shape inherits from one map.
+///
+/// `any_idx` is for the MASTER map only. A master carries ONE placeholder per
+/// type and every slide placeholder of that type inherits it whatever its idx
+/// says, which is what d24 slide 22 needs: its shape is
+/// `<p:ph idx="4294967295" type="body"/>` -- the sentinel PowerPoint writes for
+/// an unset idx -- layout10 has no body placeholder at all, and the master's
+/// is `idx="1"`. PowerPoint drew that paragraph at exactly 24.00pt, the master
+/// PLACEHOLDER's `sz="2400"`, not the 14pt its `p:txStyles/p:bodyStyle` says.
+///
+/// A LAYOUT may hold several placeholders of one type with different styles,
+/// so matching by type alone there would pick an arbitrary one.
+fn lookup_ph_levels_in(
     layout: &HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>>,
     ph_type: Option<&String>,
     ph_idx: Option<&String>,
+    any_idx: bool,
 ) -> Vec<MasterStyleLevel> {
     let mut keys: Vec<(Option<String>, Option<String>)> = Vec::new();
     keys.push((ph_type.cloned(), ph_idx.cloned()));
@@ -4223,7 +4237,36 @@ fn lookup_ph_levels(
             return v.clone();
         }
     }
+    if any_idx && phanyidx_on() {
+        if let Some(ty) = ph_type {
+            // Deterministic: several entries of one type would otherwise
+            // depend on HashMap order.
+            let mut hit: Option<(&Option<String>, &Vec<MasterStyleLevel>)> = None;
+            for ((t, i), v) in layout {
+                if t.as_ref() == Some(ty) && hit.is_none_or(|(bi, _)| i < bi) {
+                    hit = Some((i, v));
+                }
+            }
+            if let Some((_, v)) = hit {
+                return v.clone();
+            }
+        }
+    }
     Vec::new()
+}
+
+/// A master placeholder is inherited by type regardless of idx unless this is
+/// set.
+fn phanyidx_on() -> bool {
+    std::env::var("OXI_PHANYIDX_DISABLE").is_err()
+}
+
+fn lookup_ph_levels(
+    layout: &HashMap<(Option<String>, Option<String>), Vec<MasterStyleLevel>>,
+    ph_type: Option<&String>,
+    ph_idx: Option<&String>,
+) -> Vec<MasterStyleLevel> {
+    lookup_ph_levels_in(layout, ph_type, ph_idx, false)
 }
 
 fn lookup_ph_anchor(
