@@ -1932,6 +1932,28 @@ impl Host for WorkbookHost<'_> {
             Some(&["RowOffset", "ColumnOffset"][..])
         } else if name.eq_ignore_ascii_case("resize") {
             Some(&["RowSize", "ColumnSize"][..])
+        } else if name.eq_ignore_ascii_case("address") {
+            Some(
+                &[
+                    "RowAbsolute",
+                    "ColumnAbsolute",
+                    "ReferenceStyle",
+                    "External",
+                    "RelativeTo",
+                ][..],
+            )
+        } else if name.eq_ignore_ascii_case("copy") {
+            Some(&["Destination"][..])
+        } else if name.eq_ignore_ascii_case("merge") {
+            Some(&["Across"][..])
+        } else if name.eq_ignore_ascii_case("borders") {
+            Some(&["Index"][..])
+        } else if name.eq_ignore_ascii_case("range") {
+            Some(&["Cell1", "Cell2"][..])
+        } else if name.eq_ignore_ascii_case("cells") {
+            Some(&["RowIndex", "ColumnIndex"][..])
+        } else if name.eq_ignore_ascii_case("msgbox") {
+            Some(&["Prompt", "Buttons", "Title", "HelpFile", "Context"][..])
         } else {
             None
         };
@@ -3034,14 +3056,25 @@ fn optional_integer_offset(value: &Value, default: i64, label: &str) -> Result<i
 fn range_address_from_args(range: CellRange, args: &[Value]) -> Result<String, String> {
     let (row_absolute, column_absolute) = match args {
         [] => (true, true),
-        [row_absolute] => (boolean_argument(row_absolute, "row absolute")?, true),
+        [row_absolute] => (
+            optional_boolean_argument(row_absolute, true, "row absolute")?,
+            true,
+        ),
         [row_absolute, column_absolute] => (
-            boolean_argument(row_absolute, "row absolute")?,
-            boolean_argument(column_absolute, "column absolute")?,
+            optional_boolean_argument(row_absolute, true, "row absolute")?,
+            optional_boolean_argument(column_absolute, true, "column absolute")?,
         ),
         _ => return Err("Range.Address supports up to two arguments".to_string()),
     };
     Ok(format_range_address(range, row_absolute, column_absolute))
+}
+
+fn optional_boolean_argument(value: &Value, default: bool, label: &str) -> Result<bool, String> {
+    if matches!(value, Value::Missing) {
+        Ok(default)
+    } else {
+        boolean_argument(value, label)
+    }
 }
 
 fn boolean_argument(value: &Value, label: &str) -> Result<bool, String> {
@@ -3730,6 +3763,33 @@ mod tests {
                 .value,
             CellValue::Number(7.0)
         ));
+    }
+
+    #[test]
+    fn vba_binds_named_cell_copy_address_and_merge_arguments() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub NamedRangeCalls()\n\
+               Range(Cell1:=\"A1\").Value = 11\n\
+               Set target = Cells(RowIndex:=3, ColumnIndex:=2)\n\
+               Range(Cell1:=\"A1\").Copy Destination:=target\n\
+               Range(Cell1:=\"D1\", Cell2:=\"E2\").Merge Across:=False\n\
+               Range(Cell1:=\"D1:E2\").Borders(Index:=xlEdgeBottom).LineStyle = xlContinuous\n\
+               MsgBox Prompt:=\"finished\", Title:=\"Named calls\"\n\
+               Debug.Print target.Address(ColumnAbsolute:=False), target.Address(RowAbsolute:=False), target.Value, Range(\"D1:E2\").MergeCells, Range(\"D1:E2\").Borders(xlEdgeBottom).LineStyle\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let (debug_output, messages) = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "NamedRangeCalls", vec![], &mut host).unwrap();
+            (host.take_debug_output(), host.take_messages())
+        };
+
+        assert_eq!(debug_output, vec!["B$3\t$B3\t11\tTrue\t1".to_string()]);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].prompt, "finished");
+        assert_eq!(messages[0].title, "Named calls");
     }
 
     #[test]
