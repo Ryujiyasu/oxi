@@ -428,17 +428,90 @@ impl<'a> WorkbookHost<'a> {
             .expect("a workbook cannot hold every possible sheet name")
     }
 
+    /// Where a sheet being copied or moved should land. Excel takes Before or
+    /// After, never both, and in the browser there is no second workbook to
+    /// send it to when neither is given.
+    fn worksheet_destination(&self, args: &[Value], name: &str) -> Result<usize, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let placed = |value: &Value| match value {
+            Value::Object(object) => self.worksheet(object).ok_or_else(|| {
+                format!(
+                    "Worksheet.{name} expects a worksheet, not a {} object",
+                    object.kind
+                )
+            }),
+            value => self.worksheet_from_value(value),
+        };
+        match (given(0), given(1)) {
+            (Some(_), Some(_)) => Err(format!(
+                "Worksheet.{name} takes Before or After, not both"
+            )),
+            (Some(before), None) => placed(before),
+            (None, Some(after)) => placed(after).map(|after| after + 1),
+            (None, None) => Err(format!(
+                "Worksheet.{name} needs Before or After; the browser has one workbook"
+            )),
+        }
+    }
+
+    fn copy_worksheet(&mut self, sheet: usize, args: &[Value]) -> Result<(), String> {
+        let at = self.worksheet_destination(args, "Copy")?;
+        let mut copy = self.workbook.sheets[sheet].clone();
+        copy.name = self.unused_copy_name(&self.workbook.sheets[sheet].name);
+        self.workbook.sheets.insert(at, copy);
+        // Objects already handed out name sheets by position, so the ones past
+        // the new sheet would now point at their neighbour.
+        self.invalidate_worksheets_from(at);
+        self.active_sheet = at;
+        Ok(())
+    }
+
+    fn move_worksheet(&mut self, sheet: usize, args: &[Value]) -> Result<(), String> {
+        let at = self.worksheet_destination(args, "Move")?;
+        if at == sheet || at == sheet + 1 {
+            return Ok(());
+        }
+        let moved = self.workbook.sheets.remove(sheet);
+        // Taking it out shifts everything after it down one.
+        let at = if at > sheet { at - 1 } else { at };
+        self.workbook.sheets.insert(at, moved);
+        self.invalidate_worksheets_from(0);
+        self.active_sheet = at;
+        Ok(())
+    }
+
+    /// Excel names a copy after the sheet it came from, numbered from two.
+    fn unused_copy_name(&self, base: &str) -> String {
+        (2..)
+            .map(|number| format!("{base} ({number})"))
+            .find(|candidate| {
+                !self
+                    .workbook
+                    .sheets
+                    .iter()
+                    .any(|sheet| sheet.name.eq_ignore_ascii_case(candidate))
+            })
+            .expect("a workbook cannot hold every possible sheet name")
+    }
+
+    fn invalidate_worksheets_from(&mut self, first: usize) {
+        self.objects.retain(|object| match object {
+            HostObject::Worksheet(index) => *index < first,
+            _ => true,
+        });
+    }
+
     fn delete_worksheet(&mut self, sheet: usize) -> Result<(), String> {
         if self.workbook.sheets.len() <= 1 {
             return Err("a workbook must keep at least one worksheet".to_string());
         }
         self.workbook.sheets.remove(sheet);
-        // Objects already handed out still name sheets by position, so the ones
-        // past the hole would now point at their neighbour.
-        self.objects.retain(|object| match object {
-            HostObject::Worksheet(index) => *index != sheet,
-            _ => true,
-        });
+        // Objects already handed out name sheets by position, so the ones past
+        // the hole would now point at their neighbour.
+        self.invalidate_worksheets_from(sheet);
         if self.active_sheet >= self.workbook.sheets.len() {
             self.active_sheet = self.workbook.sheets.len() - 1;
         }
@@ -3043,6 +3116,12 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("delete") {
                     return self.delete_worksheet(sheet).map(|()| Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("copy") {
+                    return self.copy_worksheet(sheet, args).map(|()| Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("move") {
+                    return self.move_worksheet(sheet, args).map(|()| Some(Value::Empty));
+                }
                 if name.eq_ignore_ascii_case("evaluate") {
                     return self.evaluate_object(sheet, args).map(Some);
                 }
@@ -3413,7 +3492,14 @@ impl Host for WorkbookHost<'_> {
                 ][..],
             )
         } else if name.eq_ignore_ascii_case("copy") {
-            Some(&["Destination"][..])
+            // A worksheet is copied somewhere among the sheets; a range is
+            // copied onto other cells.
+            match receiver.is_some_and(|receiver| self.worksheet(receiver).is_some()) {
+                true => Some(&["Before", "After"][..]),
+                false => Some(&["Destination"][..]),
+            }
+        } else if name.eq_ignore_ascii_case("move") {
+            Some(&["Before", "After"][..])
         } else if name.eq_ignore_ascii_case("pastespecial") {
             Some(&["Paste", "Operation", "SkipBlanks", "Transpose"][..])
         } else if name.eq_ignore_ascii_case("merge") {
@@ -7705,6 +7791,88 @@ mod tests {
                 "Public Sub Act()\n  Range(\"A1\").Value = 10\n  Range(\"A2\").Value = 20\n  {call}\nEnd Sub\n"
             ))
             .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
+        }
+    }
+
+    fn sheet_names(workbook: &Workbook) -> String {
+        workbook
+            .sheets
+            .iter()
+            .map(|sheet| sheet.name.clone())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn with_base(body: &str) -> Workbook {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "Base".to_string();
+        let module = parse_module(&format!("Public Sub Act()\n{body}\nEnd Sub\n")).unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        workbook
+    }
+
+    /// A copy is named after the sheet it came from, numbered from two, and
+    /// becomes the active sheet. Measured against Excel.
+    #[test]
+    fn vba_copies_a_worksheet_beside_another() {
+        let workbook = with_base(
+            "  Range(\"A1\").Value = 42\n\
+             \x20 Range(\"A1\").Font.Bold = True\n\
+             \x20 Worksheets(\"Base\").Copy After:=Worksheets(\"Base\")\n",
+        );
+        assert_eq!(sheet_names(&workbook), "Base,Base (2)");
+        // The copy carries the cells and their formatting.
+        let copied = &workbook.sheets[1].rows[0].cells[0];
+        assert_eq!(copied.value.display(), "42");
+        assert!(copied.style.bold);
+
+        let workbook = with_base(
+            "  Worksheets.Add.Name = \"Second\"\n\
+             \x20 Worksheets(\"Base\").Copy Before:=Worksheets(\"Second\")\n",
+        );
+        assert_eq!(sheet_names(&workbook), "Base (2),Second,Base");
+    }
+
+    /// Copying twice takes the next unused number, while the position still
+    /// follows the argument — so the later copy sits in front of the earlier.
+    #[test]
+    fn a_second_copy_takes_the_next_number() {
+        let workbook = with_base(
+            "  Worksheets(\"Base\").Copy After:=Worksheets(\"Base\")\n\
+             \x20 Worksheets(\"Base\").Copy After:=Worksheets(\"Base\")\n",
+        );
+        assert_eq!(sheet_names(&workbook), "Base,Base (3),Base (2)");
+    }
+
+    #[test]
+    fn vba_moves_a_worksheet_without_making_another() {
+        let workbook = with_base(
+            "  Worksheets.Add.Name = \"Second\"\n\
+             \x20 Worksheets(\"Base\").Move After:=Worksheets(\"Second\")\n",
+        );
+        assert_eq!(sheet_names(&workbook), "Second,Base");
+        assert_eq!(workbook.sheets.len(), 2);
+    }
+
+    #[test]
+    fn vba_refuses_a_placement_it_cannot_make() {
+        for body in [
+            // Excel refuses Before and After together.
+            "  Worksheets.Add.Name = \"Second\"\n\
+             \x20 Worksheets(\"Base\").Copy Before:=Worksheets(\"Second\"), After:=Worksheets(\"Second\")\n",
+            // With neither, Excel copies into a new workbook, which the browser
+            // host has no room for.
+            "  Worksheets(\"Base\").Copy\n",
+            "  Worksheets(\"Base\").Move\n",
+        ] {
+            let mut workbook = workbook();
+            workbook.sheets[0].name = "Base".to_string();
+            let module = parse_module(&format!("Public Sub Act()\n{body}\nEnd Sub\n")).unwrap();
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
             execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
         }
