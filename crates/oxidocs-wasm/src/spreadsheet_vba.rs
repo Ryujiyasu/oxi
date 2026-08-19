@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Workbook};
+use oxicells_core::ShiftAxis;
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
@@ -1974,6 +1975,150 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// A whole band of rows or columns, which is what `Insert` and `Delete`
+    /// move. A range covering only part of one is refused rather than guessed
+    /// at, since the cells around it would have to shift as well.
+    fn band(range: CellRange, name: &str) -> Result<(ShiftAxis, u32, u32), String> {
+        let whole_row = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
+        let whole_column = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
+        if whole_row && !whole_column {
+            return Ok((
+                ShiftAxis::Rows,
+                range.start_row,
+                range.end_row - range.start_row + 1,
+            ));
+        }
+        if whole_column && !whole_row {
+            return Ok((
+                ShiftAxis::Columns,
+                range.start_column + 1,
+                range.end_column - range.start_column + 1,
+            ));
+        }
+        Err(format!(
+            "Range.{name} needs whole rows or whole columns in the browser"
+        ))
+    }
+
+    fn insert_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if !args.is_empty() {
+            return Err("Range.Insert does not take a shift in the browser".to_string());
+        }
+        let (axis, at, count) = Self::band(range, "Insert")?;
+        self.shift_band(range.sheet, axis, at, count as i64)?;
+        Ok(Value::Empty)
+    }
+
+    fn delete_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        if !args.is_empty() {
+            return Err("Range.Delete does not take a shift in the browser".to_string());
+        }
+        let (axis, at, count) = Self::band(range, "Delete")?;
+        self.shift_band(range.sheet, axis, at, -(count as i64))
+            .map(|()| Value::Empty)
+    }
+
+    /// Moves everything at or past `at` by `count`, dropping what a removal
+    /// covers, then rewrites the sheet's formulas to match.
+    fn shift_band(
+        &mut self,
+        sheet: usize,
+        axis: ShiftAxis,
+        at: u32,
+        count: i64,
+    ) -> Result<(), String> {
+        let removed = if count < 0 {
+            count.unsigned_abs() as u32
+        } else {
+            0
+        };
+        let past = at.saturating_add(removed);
+        let moved = |value: u32| -> Option<u32> {
+            if value < at {
+                return Some(value);
+            }
+            if removed > 0 {
+                if value < past {
+                    return None;
+                }
+                return Some(value - removed);
+            }
+            Some(value.saturating_add(count as u32))
+        };
+
+        let Some(worksheet) = self.workbook.sheets.get_mut(sheet) else {
+            return Err("worksheet is out of range".to_string());
+        };
+        match axis {
+            ShiftAxis::Rows => {
+                worksheet.rows.retain_mut(|row| match moved(row.index) {
+                    Some(index) => {
+                        row.index = index;
+                        true
+                    }
+                    None => false,
+                });
+            }
+            ShiftAxis::Columns => {
+                for row in &mut worksheet.rows {
+                    // A cell's column is counted from zero, the band from one.
+                    row.cells.retain_mut(|cell| match moved(cell.col + 1) {
+                        Some(column) => {
+                            cell.col = column - 1;
+                            true
+                        }
+                        None => false,
+                    });
+                }
+            }
+        }
+
+        worksheet.merge_cells.retain_mut(|merge| {
+            let (start, end) = match axis {
+                ShiftAxis::Rows => (merge.start_row, merge.end_row),
+                ShiftAxis::Columns => (merge.start_col + 1, merge.end_col + 1),
+            };
+            // A merge the removal swallows whole goes; one it clips shrinks.
+            let start = match moved(start) {
+                Some(start) => start,
+                None => at,
+            };
+            let end = match moved(end) {
+                Some(end) => end,
+                None => at.saturating_sub(1),
+            };
+            if start > end {
+                return false;
+            }
+            match axis {
+                ShiftAxis::Rows => {
+                    merge.start_row = start;
+                    merge.end_row = end;
+                }
+                ShiftAxis::Columns => {
+                    merge.start_col = start - 1;
+                    merge.end_col = end - 1;
+                }
+            }
+            true
+        });
+
+        for row in &mut worksheet.rows {
+            for cell in &mut row.cells {
+                let Some(formula) = cell.formula.as_ref() else {
+                    continue;
+                };
+                match oxicells_core::shift_formula_references(formula, axis, at, count) {
+                    Ok(shifted) => cell.formula = Some(shifted),
+                    // A formula this build cannot read is left as the author
+                    // wrote it rather than silently half-moved.
+                    Err(_) => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn merge_range(&mut self, range: CellRange) -> Result<(), String> {
         if range.is_single() {
             return Ok(());
@@ -2365,6 +2510,12 @@ impl Host for WorkbookHost<'_> {
                     }
                     self.clear_range(range, true, true)?;
                     return Ok(Some(Value::Empty));
+                }
+                if name.eq_ignore_ascii_case("insert") {
+                    return self.insert_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("delete") {
+                    return self.delete_range(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("merge") {
                     match args {
@@ -5781,6 +5932,218 @@ mod tests {
                 // A whole Double still reads back without a trailing zero.
                 "42\tx42\t43".to_string(),
             ]
+        );
+    }
+
+    /// Reads the top-left corner of a sheet the way the Excel probes printed it,
+    /// so the expectations below are the grids Excel actually left behind.
+    fn grid(workbook: &Workbook, rows: u32, columns: u32) -> String {
+        (1..=rows)
+            .map(|row| {
+                (0..columns)
+                    .map(|column| {
+                        workbook.sheets[0]
+                            .rows
+                            .iter()
+                            .find(|candidate| candidate.index == row)
+                            .and_then(|found| found.cells.iter().find(|cell| cell.col == column))
+                            .map(|cell| match &cell.value {
+                                CellValue::String(value) => value.clone(),
+                                value => value.display(),
+                            })
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or_else(|| ".".to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
+
+    fn filled_grid() -> Workbook {
+        let mut workbook = workbook();
+        workbook.sheets[0].rows = (1..=4)
+            .map(|row| Row {
+                index: row,
+                height: None,
+                cells: (0..4)
+                    .map(|column| Cell {
+                        col: column,
+                        value: CellValue::String(format!(
+                            "{}{row}",
+                            (b'A' + column as u8) as char
+                        )),
+                        style: CellStyle::default(),
+                        formula: None,
+                    })
+                    .collect(),
+            })
+            .collect();
+        workbook
+    }
+
+    fn run_on_grid(source: &str) -> Workbook {
+        let mut workbook = filled_grid();
+        let module = parse_module(source).unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        workbook
+    }
+
+    #[test]
+    fn vba_inserts_and_deletes_whole_rows_and_columns() {
+        let workbook = run_on_grid(
+            "Public Sub Act()\n  Range(\"A2\").EntireRow.Insert\nEnd Sub\n",
+        );
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / .,.,.,. / A2,B2,C2,D2 / A3,B3,C3,D3"
+        );
+
+        let workbook = run_on_grid(
+            "Public Sub Act()\n  Range(\"B1\").EntireColumn.Insert\nEnd Sub\n",
+        );
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,.,B1,C1 / A2,.,B2,C2 / A3,.,B3,C3 / A4,.,B4,C4"
+        );
+
+        let workbook = run_on_grid(
+            "Public Sub Act()\n  Range(\"A2\").EntireRow.Delete\nEnd Sub\n",
+        );
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A3,B3,C3,D3 / A4,B4,C4,D4 / .,.,.,."
+        );
+
+        let workbook = run_on_grid(
+            "Public Sub Act()\n  Range(\"B1\").EntireColumn.Delete\nEnd Sub\n",
+        );
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,C1,D1,. / A2,C2,D2,. / A3,C3,D3,. / A4,C4,D4,."
+        );
+
+        // A band wider than one row moves everything below it that much further.
+        let workbook = run_on_grid(
+            "Public Sub Act()\n  Range(\"A2:A3\").EntireRow.Insert\nEnd Sub\n",
+        );
+        assert_eq!(
+            grid(&workbook, 5, 2),
+            "A1,B1 / .,. / .,. / A2,B2 / A3,B3"
+        );
+    }
+
+    #[test]
+    fn vba_moves_formulas_across_an_inserted_or_deleted_row() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"C1\").Formula = \"=SUM(A1:A2)\"\n\
+               Range(\"D3\").Formula = \"=A2*2\"\n\
+               Range(\"A1\").EntireRow.Insert\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        let formula = |row: u32, column: u32| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|candidate| candidate.index == row)
+                .and_then(|found| found.cells.iter().find(|cell| cell.col == column))
+                .and_then(|cell| cell.formula.clone())
+                .unwrap_or_default()
+        };
+        // A sheet keeps a formula without its leading '=', so that is what the
+        // shifted formula reads as too.
+        assert_eq!(formula(2, 1), "A2*2");
+        assert_eq!(formula(2, 2), "SUM(A2:A3)");
+        assert_eq!(formula(4, 3), "A3*2");
+    }
+
+    #[test]
+    fn a_formula_pointing_at_a_deleted_row_reads_ref() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"B1\").Formula = \"=A2*2\"\n\
+               Range(\"A2\").EntireRow.Delete\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        let cell = workbook.sheets[0].rows[0]
+            .cells
+            .iter()
+            .find(|cell| cell.col == 1)
+            .expect("B1 still holds its formula");
+        assert_eq!(cell.formula.as_deref(), Some("#REF!*2"));
+    }
+
+    /// A merge follows the rows under it, and one whose rows all go, goes too.
+    #[test]
+    fn merges_follow_an_inserted_or_deleted_row() {
+        let mut workbook = filled_grid();
+        workbook.sheets[0].merge_cells.push(MergeCell {
+            start_row: 2,
+            start_col: 1,
+            end_row: 2,
+            end_col: 2,
+        });
+        let module =
+            parse_module("Public Sub Act()\n  Range(\"A1\").EntireRow.Insert\nEnd Sub\n").unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        let merge = &workbook.sheets[0].merge_cells[0];
+        assert_eq!(
+            (merge.start_row, merge.end_row, merge.start_col, merge.end_col),
+            (3, 3, 1, 2)
+        );
+
+        let mut workbook = filled_grid();
+        workbook.sheets[0].merge_cells.push(MergeCell {
+            start_row: 2,
+            start_col: 1,
+            end_row: 2,
+            end_col: 2,
+        });
+        let module =
+            parse_module("Public Sub Act()\n  Range(\"A2\").EntireRow.Delete\nEnd Sub\n").unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        assert!(workbook.sheets[0].merge_cells.is_empty());
+    }
+
+    /// Part of a row is refused rather than shifted the wrong way.
+    #[test]
+    fn vba_refuses_to_insert_part_of_a_row() {
+        let mut workbook = filled_grid();
+        let module =
+            parse_module("Public Sub Act()\n  Range(\"B2\").Insert\nEnd Sub\n").unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let error = execute_with_host(&module, "Act", vec![], &mut host)
+            .expect_err("a partial range needs a shift this build does not model");
+        assert!(
+            error.to_string().contains("whole rows"),
+            "unexpected error: {error}"
         );
     }
 

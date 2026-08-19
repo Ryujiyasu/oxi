@@ -287,7 +287,9 @@ pub fn shift_formula_references(
             index += 1;
             continue;
         }
-        let Some(start) = parse_a1(name) else {
+        // A reference naming another sheet points at rows this change never
+        // touched, so it stays as it is.
+        let Some(start) = parse_a1(name).filter(|_| sheet.is_none()) else {
             shifted.push(tokens[index].clone());
             index += 1;
             continue;
@@ -800,6 +802,14 @@ mod shift_tests {
                 "{formula} with {count} at column {at}"
             );
         }
+    }
+
+    #[test]
+    fn a_reference_to_another_sheet_stays_put() {
+        assert_eq!(
+            shift_formula_references("=Sheet2!A2*2", ShiftAxis::Rows, 1, 1).unwrap(),
+            "=Sheet2!A2*2"
+        );
     }
 
     /// A function's name is not a reference, however much it reads like one.
