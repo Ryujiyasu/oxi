@@ -1398,6 +1398,27 @@ unsafe fn alpha_blit(
     if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || iw <= 0 || ih <= 0 {
         return false;
     }
+    // `AlphaBlend` scales with its own sampler and ignores the DC's stretch
+    // mode, so S-IMGSMOOTH (which sets HALFTONE for `StretchDIBits`) never
+    // reached this path -- d28's engraved portrait comes through it and stayed
+    // byte-identical. Shrinking here instead, with a real filter, is the same
+    // fix for the same reason: the picture sits in exactly the right place
+    // (best-fit shift 0,0) and still carried mean|d| 17.34, its halftone
+    // measurably harsher than PowerPoint's (detail energy 43.67 vs 34.19).
+    let shrunk;
+    let (rgba, sx0, sy0, sw, sh, iw, ih) = if alphasmooth_on() && (dw < sw || dh < sh) {
+        let sub = image::imageops::crop_imm(rgba, sx0 as u32, sy0 as u32, sw as u32, sh as u32)
+            .to_image();
+        shrunk = image::imageops::resize(
+            &sub,
+            dw.max(1) as u32,
+            dh.max(1) as u32,
+            image::imageops::FilterType::Triangle,
+        );
+        (&shrunk, 0, 0, dw, dh, dw, dh)
+    } else {
+        (rgba, sx0, sy0, sw, sh, iw, ih)
+    };
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -1463,6 +1484,12 @@ fn custgeom_on() -> bool {
 /// set, which restores the bounding-box fill.
 fn geomalpha_on() -> bool {
     std::env::var("OXI_GEOMALPHA_DISABLE").is_err()
+}
+
+/// A picture blended with per-pixel alpha is shrunk with a real filter before
+/// the blend unless this is set, which leaves it to AlphaBlend's own sampler.
+fn alphasmooth_on() -> bool {
+    std::env::var("OXI_ALPHASMOOTH_DISABLE").is_err()
 }
 
 /// Images are resampled with GDI's HALFTONE filter unless this is set, which
