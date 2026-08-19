@@ -2292,6 +2292,173 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// Sorts the rows or columns of a range by up to three keys.
+    ///
+    /// Excel orders values by kind before value — numbers, then text, then
+    /// Booleans — and leaves blanks at the end whichever way the sort runs.
+    /// Text compares without regard to case, and equal values keep the order
+    /// they were already in.
+    fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        if given(9).is_some_and(|value| matches!(value, Value::Boolean(true))) {
+            return Err("Range.Sort cannot tell case apart in the browser".to_string());
+        }
+        let sideways = match given(10) {
+            None => false,
+            Some(value) => match sort_number(value, "Orientation")? {
+                1 => false,
+                2 => true,
+                other => return Err(format!("Range.Sort has no orientation {other}")),
+            },
+        };
+        let header = match given(7) {
+            None => false,
+            Some(value) => match sort_number(value, "Header")? {
+                2 => false,
+                1 => true,
+                0 => {
+                    return Err(
+                        "Range.Sort cannot guess whether a range has a header row".to_string()
+                    )
+                }
+                other => return Err(format!("Range.Sort has no header setting {other}")),
+            },
+        };
+
+        let mut keys = Vec::new();
+        for (key, order) in [(0, 1), (2, 4), (5, 6)] {
+            let Some(key) = given(key) else { continue };
+            let Value::Object(object) = key else {
+                return Err("Range.Sort takes a cell as a key".to_string());
+            };
+            let Some(key) = self.range(object) else {
+                return Err("Range.Sort takes a cell as a key".to_string());
+            };
+            let lane = if sideways {
+                key.start_row
+            } else {
+                key.start_column
+            };
+            let (first, last) = if sideways {
+                (range.start_row, range.end_row)
+            } else {
+                (range.start_column, range.end_column)
+            };
+            if lane < first || lane > last {
+                // Excel quietly sorts nothing here; saying so is more use.
+                return Err("Range.Sort was given a key outside the range".to_string());
+            }
+            let descending = match given(order) {
+                None => false,
+                Some(value) => match sort_number(value, "Order")? {
+                    1 => false,
+                    2 => true,
+                    other => return Err(format!("Range.Sort has no order {other}")),
+                },
+            };
+            keys.push((lane, descending));
+        }
+        if keys.is_empty() {
+            return Err("Range.Sort expects at least one key".to_string());
+        }
+
+        // Each line is one row of the range, or one column when sorting sideways.
+        let (first, last) = if sideways {
+            (range.start_column, range.end_column)
+        } else {
+            (range.start_row, range.end_row)
+        };
+        let first = if header { first + 1 } else { first };
+        if first > last {
+            return Ok(());
+        }
+        let mut lines: Vec<u32> = (first..=last).collect();
+        let cell_at = |line: u32, lane: u32| {
+            if sideways {
+                CellAddress {
+                    sheet: range.sheet,
+                    row: lane,
+                    column: line,
+                }
+            } else {
+                CellAddress {
+                    sheet: range.sheet,
+                    row: line,
+                    column: lane,
+                }
+            }
+        };
+        lines.sort_by(|left, right| {
+            for (lane, descending) in &keys {
+                let ordering = sort_compare(
+                    &self.cell_value(cell_at(*left, *lane)),
+                    &self.cell_value(cell_at(*right, *lane)),
+                    *descending,
+                );
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            Ordering::Equal
+        });
+        // Read every line out before writing any back, since they swap places.
+        let across = if sideways {
+            (range.start_row, range.end_row)
+        } else {
+            (range.start_column, range.end_column)
+        };
+        let taken: Vec<Vec<Option<Cell>>> = lines
+            .iter()
+            .map(|line| {
+                (across.0..=across.1)
+                    .map(|lane| {
+                        let address = cell_at(*line, lane);
+                        self.workbook.sheets[address.sheet]
+                            .rows
+                            .iter()
+                            .find(|row| row.index == address.row)
+                            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                            .cloned()
+                    })
+                    .collect()
+            })
+            .collect();
+
+        for (offset, held) in taken.into_iter().enumerate() {
+            let line = first + offset as u32;
+            for (lane, cell) in (across.0..=across.1).zip(held) {
+                let address = cell_at(line, lane);
+                let sheet = &mut self.workbook.sheets[address.sheet];
+                let row = match sheet.rows.iter().position(|row| row.index == address.row) {
+                    Some(position) => &mut sheet.rows[position],
+                    None => {
+                        sheet.rows.push(Row {
+                            index: address.row,
+                            cells: Vec::new(),
+                            height: None,
+                        });
+                        sheet.rows.sort_by_key(|row| row.index);
+                        sheet
+                            .rows
+                            .iter_mut()
+                            .find(|row| row.index == address.row)
+                            .unwrap()
+                    }
+                };
+                row.cells.retain(|held| held.col != address.column);
+                if let Some(mut cell) = cell {
+                    cell.col = address.column;
+                    row.cells.push(cell);
+                    row.cells.sort_by_key(|cell| cell.col);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn merge_range(&mut self, range: CellRange) -> Result<(), String> {
         if range.is_single() {
             return Ok(());
@@ -2690,6 +2857,9 @@ impl Host for WorkbookHost<'_> {
                     self.clear_range(range, true, true)?;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("sort") {
+                    return self.sort_range(range, args).map(|()| Some(Value::Empty));
+                }
                 if name.eq_ignore_ascii_case("insert") {
                     return self.insert_range(range, args).map(Some);
                 }
@@ -2854,6 +3024,26 @@ impl Host for WorkbookHost<'_> {
             )
         } else if name.eq_ignore_ascii_case("add") {
             Some(&["Before", "After", "Count"][..])
+        } else if name.eq_ignore_ascii_case("sort") {
+            Some(
+                &[
+                    "Key1",
+                    "Order1",
+                    "Key2",
+                    "Type",
+                    "Order2",
+                    "Key3",
+                    "Order3",
+                    "Header",
+                    "OrderCustom",
+                    "MatchCase",
+                    "Orientation",
+                    "SortMethod",
+                    "DataOption1",
+                    "DataOption2",
+                    "DataOption3",
+                ][..],
+            )
         } else if name.eq_ignore_ascii_case("copy") {
             Some(&["Destination"][..])
         } else if name.eq_ignore_ascii_case("merge") {
@@ -3711,6 +3901,62 @@ fn numeric_result(value: f64) -> Value {
     }
 }
 
+fn sort_number(value: &Value, label: &str) -> Result<i64, String> {
+    match value {
+        Value::Integer(value) => Ok(*value),
+        Value::Double(value) if value.is_finite() => Ok(value.trunc() as i64),
+        _ => Err(format!("Range.Sort {label} must be numeric")),
+    }
+}
+
+/// Excel's sort order: numbers first, then text, then Booleans, with blanks
+/// last however the sort runs. Text ignores case.
+fn sort_rank(value: &Value) -> u8 {
+    match value {
+        Value::Integer(_) | Value::Double(_) => 0,
+        Value::String(_) => 1,
+        Value::Boolean(_) => 2,
+        _ => 3,
+    }
+}
+
+fn sort_compare(left: &Value, right: &Value, descending: bool) -> Ordering {
+    let (left_rank, right_rank) = (sort_rank(left), sort_rank(right));
+    if left_rank == 3 || right_rank == 3 {
+        // A blank sinks to the bottom whichever way the rest is going.
+        return left_rank.cmp(&right_rank);
+    }
+    let ordering = if left_rank != right_rank {
+        left_rank.cmp(&right_rank)
+    } else {
+        match (left, right) {
+            (Value::String(left), Value::String(right)) => {
+                left.to_lowercase().cmp(&right.to_lowercase())
+            }
+            (Value::Boolean(left), Value::Boolean(right)) => left.cmp(right),
+            _ => match (number_of(left), number_of(right)) {
+                (Some(left), Some(right)) => {
+                    left.partial_cmp(&right).unwrap_or(Ordering::Equal)
+                }
+                _ => Ordering::Equal,
+            },
+        }
+    };
+    if descending {
+        ordering.reverse()
+    } else {
+        ordering
+    }
+}
+
+fn number_of(value: &Value) -> Option<f64> {
+    match value {
+        Value::Integer(value) => Some(*value as f64),
+        Value::Double(value) if value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
 fn index_argument(value: &Value, label: &str) -> Result<usize, String> {
     let number = match value {
         Value::Integer(value) => *value as f64,
@@ -4220,6 +4466,13 @@ fn host_constant(name: &str) -> Option<Value> {
         "xldown" => -4121,
         "xltoleft" => -4159,
         "xltoright" => -4161,
+        "xlascending" => 1,
+        "xldescending" => 2,
+        "xlyes" => 1,
+        "xlno" => 2,
+        "xlguess" => 0,
+        "xltoptobottom" => 1,
+        "xllefttoright" => 2,
         // The shift an Insert or Delete takes, which share these numbers.
         "xlshiftdown" => -4121,
         "xlshifttoright" => -4161,
@@ -6676,6 +6929,182 @@ mod tests {
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         execute_with_host(&module, "Act", vec![], &mut host)
             .expect_err("two sheets cannot share a name");
+    }
+
+    fn sorted_grid(fill: &str, call: &str, rows: u32, columns: u32) -> String {
+        let mut workbook = workbook();
+        let module = parse_module(&format!(
+            "Public Sub Act()\n{fill}  {call}\nEnd Sub\n"
+        ))
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        grid(&workbook, rows, columns)
+    }
+
+    /// Each expectation is the grid Excel 16 left after the same call.
+    #[test]
+    fn vba_sorts_a_range_by_a_key_column() {
+        let fill = "  Range(\"A1\").Value = 30\n  Range(\"B1\").Value = \"c\"\n\
+                    \x20 Range(\"A2\").Value = 10\n  Range(\"B2\").Value = \"a\"\n\
+                    \x20 Range(\"A3\").Value = 20\n  Range(\"B3\").Value = \"b\"\n";
+
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:B3\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlNo",
+                3,
+                2
+            ),
+            "10,a / 20,b / 30,c"
+        );
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:B3\").Sort Key1:=Range(\"A1\"), Order1:=xlDescending, Header:=xlNo",
+                3,
+                2
+            ),
+            "30,c / 20,b / 10,a"
+        );
+        // The whole row travels with its key, whichever column the key is in.
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:B3\").Sort Key1:=Range(\"B1\"), Order1:=xlDescending, Header:=xlNo",
+                3,
+                2
+            ),
+            "30,c / 20,b / 10,a"
+        );
+    }
+
+    #[test]
+    fn a_header_row_stays_where_it_is() {
+        let fill = "  Range(\"A1\").Value = \"Name\"\n  Range(\"B1\").Value = \"Score\"\n\
+                    \x20 Range(\"A2\").Value = \"c\"\n  Range(\"B2\").Value = 30\n\
+                    \x20 Range(\"A3\").Value = \"a\"\n  Range(\"B3\").Value = 10\n\
+                    \x20 Range(\"A4\").Value = \"b\"\n  Range(\"B4\").Value = 20\n";
+
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:B4\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlYes",
+                4,
+                2
+            ),
+            "Name,Score / a,10 / b,20 / c,30"
+        );
+        // Left out, the header is just another row — Excel sorts it in.
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:B4\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending",
+                4,
+                2
+            ),
+            "a,10 / b,20 / c,30 / Name,Score"
+        );
+    }
+
+    /// Numbers come first, then text, then Booleans, and a blank stays at the
+    /// bottom whichever way the sort runs.
+    #[test]
+    fn a_sort_orders_values_by_kind_before_value() {
+        let fill = "  Range(\"A1\").Value = 10\n  Range(\"A2\").Value = \"apple\"\n\
+                    \x20 Range(\"A4\").Value = 2\n  Range(\"A5\").Value = True\n\
+                    \x20 Range(\"A6\").Value = \"Banana\"\n";
+
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:A6\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlNo",
+                6,
+                1
+            ),
+            // Excel shows a Boolean cell as TRUE; the probe read it back through
+            // CStr, which spells it True. Only the order is being checked here.
+            "2 / 10 / apple / Banana / TRUE / ."
+        );
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:A6\").Sort Key1:=Range(\"A1\"), Order1:=xlDescending, Header:=xlNo",
+                6,
+                1
+            ),
+            "TRUE / Banana / apple / 10 / 2 / ."
+        );
+    }
+
+    /// Text ignores case, and values that compare equal keep the order they
+    /// arrived in — b before B because b was already first.
+    #[test]
+    fn equal_values_keep_the_order_they_had() {
+        let fill = "  Range(\"A1\").Value = \"b\"\n  Range(\"A2\").Value = \"A\"\n\
+                    \x20 Range(\"A3\").Value = \"a\"\n  Range(\"A4\").Value = \"B\"\n";
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:A4\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, Header:=xlNo",
+                4,
+                1
+            ),
+            "A / a / b / B"
+        );
+    }
+
+    #[test]
+    fn a_second_key_settles_a_tie() {
+        let fill = "  Range(\"A1\").Value = 1\n  Range(\"B1\").Value = \"b\"\n\
+                    \x20 Range(\"A2\").Value = 1\n  Range(\"B2\").Value = \"a\"\n\
+                    \x20 Range(\"A3\").Value = 2\n  Range(\"B3\").Value = \"a\"\n";
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:B3\").Sort Key1:=Range(\"A1\"), Key2:=Range(\"B1\"), Header:=xlNo",
+                3,
+                2
+            ),
+            "1,a / 1,b / 2,a"
+        );
+    }
+
+    #[test]
+    fn a_sort_can_run_left_to_right() {
+        let fill = "  Range(\"A1\").Value = 3\n  Range(\"B1\").Value = 1\n  Range(\"C1\").Value = 2\n\
+                    \x20 Range(\"A2\").Value = \"c\"\n  Range(\"B2\").Value = \"a\"\n  Range(\"C2\").Value = \"b\"\n";
+        assert_eq!(
+            sorted_grid(
+                fill,
+                "Range(\"A1:C2\").Sort Key1:=Range(\"A1\"), Header:=xlNo, Orientation:=xlLeftToRight",
+                2,
+                3
+            ),
+            "1,2,3 / a,b,c"
+        );
+    }
+
+    #[test]
+    fn vba_refuses_a_sort_it_cannot_carry_out() {
+        for call in [
+            // Excel quietly sorts nothing for a key outside the range.
+            "Range(\"A1:A2\").Sort Key1:=Range(\"D1\"), Header:=xlNo",
+            "Range(\"A1:A2\").Sort Key1:=Range(\"A1\"), Header:=xlGuess",
+            "Range(\"A1:A2\").Sort Key1:=Range(\"A1\"), Header:=xlNo, MatchCase:=True",
+            "Range(\"A1:A2\").Sort Header:=xlNo",
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Range(\"A1\").Value = 2\n  Range(\"A2\").Value = 1\n  {call}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host)
+                .unwrap_err();
+        }
     }
 
     #[test]
