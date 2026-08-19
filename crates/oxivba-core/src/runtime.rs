@@ -181,6 +181,9 @@ pub struct Runtime<'a> {
     module_constants: BTreeSet<String>,
     module_auto_new: BTreeMap<String, String>,
     module_fixed_strings: BTreeMap<String, usize>,
+    /// The type each module-level variable was declared with, read alongside a
+    /// frame's own table when narrowing an assignment.
+    module_declared: BTreeMap<String, String>,
     module_variants: BTreeSet<String>,
     static_values: BTreeMap<(String, String), ValueSlot>,
     module_initialized: bool,
@@ -278,6 +281,7 @@ impl<'a> Runtime<'a> {
             module_constants: BTreeSet::new(),
             module_auto_new: BTreeMap::new(),
             module_fixed_strings: BTreeMap::new(),
+            module_declared: BTreeMap::new(),
             module_variants: BTreeSet::new(),
             static_values: BTreeMap::new(),
             module_initialized: false,
@@ -332,6 +336,7 @@ impl<'a> Runtime<'a> {
             self.module_constants.clear();
             self.module_auto_new.clear();
             self.module_fixed_strings.clear();
+            self.module_declared.clear();
             self.module_variants.clear();
             self.internal_objects.clear();
             self.next_internal_handle = 1_u64 << 63;
@@ -364,6 +369,13 @@ impl<'a> Runtime<'a> {
                             && variable.type_name.name.eq_ignore_ascii_case("variant")
                         {
                             self.module_variants.insert(name.clone());
+                        }
+                        if variable.array_bounds.is_none()
+                            && !variable.type_name.is_new
+                            && !declaration.is_const
+                        {
+                            self.module_declared
+                                .insert(name.clone(), variable.type_name.name.clone());
                         }
                         self.module_values
                             .insert(name.clone(), Rc::new(RefCell::new(value)));
@@ -1710,7 +1722,12 @@ impl<'a> Runtime<'a> {
     }
 
     fn declared_type(&self, frame: &Frame, name: &str) -> Option<String> {
-        frame.declared.get(&key(name)).cloned()
+        let name = key(name);
+        frame
+            .declared
+            .get(&name)
+            .or_else(|| self.module_declared.get(&name))
+            .cloned()
     }
 
     fn fixed_string_width(&self, frame: &Frame, name: &str) -> Option<usize> {
@@ -7999,6 +8016,51 @@ mod tests {
             Value::String(
                 "Long:43|Long:42|Long:17|Long:5|Long:10|String:42|Double:42.6".to_string()
             )
+        );
+    }
+
+    /// A module-level variable narrows the same way a local one does, and keeps
+    /// its type across the calls that share it.
+    #[test]
+    fn a_module_variable_narrows_what_it_is_given() {
+        let module = parse_module(
+            "Private total As Long\n\
+             Private label As String\n\
+             Public Sub Add()\n\
+               total = total + 21.3\n\
+             End Sub\n\
+             Public Function Report() As String\n\
+               label = 42\n\
+               Report = total & \"|\" & TypeName(total) & \"|\" & label & \"|\" & TypeName(label)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut runtime = Runtime::new(&module);
+        runtime.call("Add", vec![]).unwrap();
+        runtime.call("Add", vec![]).unwrap();
+
+        // 21.3 rounds to 21 on the way in, so two calls leave 42 rather than 43.
+        assert_eq!(
+            runtime.call("Report", vec![]).unwrap(),
+            Value::String("42|Long|42|String".to_string())
+        );
+    }
+
+    /// A local declaration shadows a module one, so the local's type governs.
+    #[test]
+    fn a_local_declaration_governs_over_a_module_one() {
+        let module = parse_module(
+            "Private slot As Long\n\
+             Public Function Shadowed() As String\n\
+               Dim slot As Double\n\
+               slot = 42.6\n\
+               Shadowed = slot & \"|\" & TypeName(slot)\n\
+             End Function\n",
+        )
+        .unwrap();
+        assert_eq!(
+            execute(&module, "Shadowed", vec![]).unwrap(),
+            Value::String("42.6|Double".to_string())
         );
     }
 
