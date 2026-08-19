@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+pub mod runtime;
 pub mod math_constants;
 pub mod math_glyphs;
 pub mod math_substitute;
@@ -1025,6 +1026,46 @@ impl FontMetricsRegistry {
     /// back through the bold logic. Vertical metrics of TNR Italic equal
     /// Regular (1825/-443/87) so this is width-only where it applies.
     /// Opt-out for A/B: OXI_ITALIC_METRICS_DISABLE.
+    /// Does the SHIPPED table carry this family (under any of its spellings)?
+    /// Used to keep the S1171 runtime resolver strictly subordinate: a measured
+    /// table always wins, and the disk is read only when the alternative is a
+    /// fallback to some other face entirely.
+    fn table_has_family(&self, family: &str) -> bool {
+        self.fonts.contains_key(family)
+            || self.fonts.contains_key(&normalize_family_name(family))
+            || self.fonts.contains_key(&base_family_name(family))
+    }
+
+    /// Does Oxi hold GDI-measured advances for this family? Those are the
+    /// calibrated basis the whole Latin pipeline is tuned against, so a face
+    /// that has them must never be replaced by unhinted outline metrics.
+    fn has_gdi_widths(&self, family: &str) -> bool {
+        self.gdi_widths.contains_key(family)
+            || self.gdi_widths.contains_key(&normalize_family_name(family))
+            || self.gdi_widths.contains_key(&base_family_name(family))
+    }
+
+    /// Does the shipped table carry the BOLD/ITALIC face itself, as opposed to
+    /// only the roman it would otherwise be approximated by?
+    fn table_has_styled_face(&self, family: &str, bold: bool, italic: bool) -> bool {
+        if !bold && !italic {
+            return self.table_has_family(family);
+        }
+        let normalized = normalize_family_name(family);
+        let base = if normalized.ends_with(" Regular") {
+            normalized[..normalized.len() - 8].to_string()
+        } else {
+            normalized
+        };
+        let suffix = match (bold, italic) {
+            (true, true) => " Bold Italic",
+            (true, false) => " Bold",
+            (false, true) => " Italic",
+            (false, false) => unreachable!(),
+        };
+        self.fonts.contains_key(&format!("{}{}", base, suffix))
+    }
+
     pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> &FontMetrics {
         if italic && std::env::var("OXI_ITALIC_METRICS_DISABLE").is_err() {
             let normalized = normalize_family_name(family);
@@ -1039,6 +1080,37 @@ impl FontMetricsRegistry {
                 }
             }
             if let Some(m) = self.fonts.get(&format!("{} Italic", base)) {
+                return m;
+            }
+        }
+        // S1171: every styled lookup above has missed, so the next line would
+        // hand an ITALIC (or bold) run the REGULAR face's advances. That is not
+        // a small approximation -- for Gill Sans Nova the italic is ~6% narrower
+        // than the roman, and educational__00252fa88ac64d0d measures Word's own
+        // p3 line 1 at 499.64 in the italic against 532.67 in the roman, on a
+        // 510.22 content width: the roman OVERFLOWS a line Word fits, so Oxi
+        // breaks a word early, gains a line, and loses one at the page bottom.
+        // The family IS in the shipped table; what is missing is the italic
+        // FACE, so gate on the style being unavailable rather than the family
+        // being unknown. Read the machine for that face before substituting.
+        // ...but ONLY where Oxi holds no measurement of its own. The shipped
+        // widths are GDI-measured: hinted, rounded to whole device pixels at a
+        // given ppem. `skrifa` reads the UNHINTED outline advances, so mixing
+        // the two swaps one calibrated basis for another that disagrees by up
+        // to a pixel per glyph. MEASURED: reports__0018715b4769984f names only
+        // Times New Roman and carries no italic run, yet S1171's first cut
+        // resolved Calibri Italic / Bold Italic for it (the table has the
+        // family but not those faces) and cost it 0.9560 -> 0.9341, one page
+        // SHORT -- the unhinted italic is narrower than the hinted face Word
+        // draws. Calibri's italic is nearly the roman's width, so substituting
+        // the roman had been the better approximation all along.
+        // Gill Sans Nova has no GDI data at all and an italic 6% narrower than
+        // its roman, which is where reading the file wins.
+        if (bold || italic)
+            && !self.table_has_styled_face(family, bold, italic)
+            && !self.has_gdi_widths(family)
+        {
+            if let Some(m) = runtime::resolve(family, bold, italic) {
                 return m;
             }
         }
@@ -1110,6 +1182,18 @@ impl FontMetricsRegistry {
                 {
                     return m;
                 }
+            }
+        }
+        // S1171 (2026-08-19, opt-out OXI_S1171_DISABLE): every table lookup has
+        // missed, so the next line decides between "the face Word actually
+        // used" and "a face nobody asked for". Read the machine first: the
+        // shipped tables cover what CI measured, not what is installed here,
+        // and Office CLOUD fonts (educational__00252fa8's Gill Sans Nova) live
+        // outside the system font directory entirely. S1146 below is the right
+        // answer only for a name Word could NOT resolve either.
+        if !self.has_gdi_widths(family) {
+            if let Some(m) = runtime::resolve(family, false, false) {
+                return m;
             }
         }
         // S1146 (2026-08-16, opt-out OXI_S1146_DISABLE): a font Word cannot
