@@ -2391,7 +2391,23 @@ impl<'a> Runtime<'a> {
                 frame.error_state.line.unwrap_or(0) as i64
             }));
         }
-        if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
+        let read_args = if builtin_reads_values(name)
+            && args.iter().any(|value| matches!(value, Value::Object(_)))
+        {
+            let mut read = Vec::with_capacity(args.len());
+            for value in &args {
+                read.push(self.read_argument(value, line.unwrap_or(0))?);
+            }
+            Some(read)
+        } else {
+            None
+        };
+        if let Some(result) = call_builtin(
+            name,
+            read_args.as_deref().unwrap_or(&args),
+            line,
+            self.option_compare_text(),
+        ) {
             return result;
         }
         let host_value = if argument_names.is_empty() {
@@ -2605,6 +2621,18 @@ impl<'a> Runtime<'a> {
             Value::Object(_) => self.let_value(value, line),
             value => Ok(value),
         }
+    }
+
+    /// Reads a builtin's argument as a value. An object with a default member
+    /// stands for it, but one without keeps its place rather than failing:
+    /// `VarType` answers 9 for a worksheet instead of raising.
+    fn read_argument(&mut self, value: &Value, line: u32) -> Result<Value, RuntimeError> {
+        let Value::Object(object) = value else {
+            return Ok(value.clone());
+        };
+        Ok(self
+            .host_get(object, "Value", line)?
+            .unwrap_or_else(|| value.clone()))
     }
 
     fn let_value(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
@@ -3595,6 +3623,34 @@ fn preserve_array_values(existing: &ArrayValue, replacement: &mut ArrayValue) {
         replacement.values[new_start..new_start + shared]
             .clone_from_slice(&existing.values[old_start..old_start + shared]);
     }
+}
+
+/// Whether a builtin reads its arguments as values, in which case an object
+/// argument stands for its default member — `Len(Range("A1"))` measures the
+/// cell's text. Measured across the conversion, string, maths, date and
+/// type-predicate builtins, which all read values; `VarType` reads a value too,
+/// answering `5` for a numeric cell rather than `9` for the object.
+///
+/// The exceptions keep the object. `TypeName`, `IsObject` and `IsMissing` ask
+/// about the argument itself. `IIf`, `Array` and `Choose` hand Variants
+/// straight back, leaving resolution to whatever consumes the result. The
+/// array builtins want an array rather than a scalar, and probing what Excel
+/// does when handed a range instead wedges it, so they are left alone.
+fn builtin_reads_values(name: &str) -> bool {
+    !matches!(
+        name.to_ascii_lowercase().as_str(),
+        "typename"
+            | "isobject"
+            | "ismissing"
+            | "iif"
+            | "array"
+            | "choose"
+            | "lbound"
+            | "ubound"
+            | "join"
+            | "filter"
+            | "split"
+    )
 }
 
 fn call_builtin(
@@ -7706,6 +7762,42 @@ mod tests {
         );
     }
 
+    /// Builtins that read values see through an object to its default member,
+    /// while the ones asking about the argument itself do not. Measured in VBA
+    /// against a cell holding 42, one holding text, and an empty one: VarType
+    /// answered 5, 8 and 0 rather than 9 for the object. It reads 3 rather than
+    /// 5 here because this host keeps the Integer it was handed, where every
+    /// number in an Excel cell is a Double.
+    #[test]
+    fn builtins_read_values_through_an_objects_default_member() {
+        let module = parse_module(
+            "Public Function ReadThrough() As String\n\
+               Dim number As Object\n\
+               Dim word As Object\n\
+               Dim blank As Object\n\
+               Range(\"A1\").Value = 42\n\
+               Range(\"A3\").Value = \"text\"\n\
+               Set number = Range(\"A1\")\n\
+               Set word = Range(\"A3\")\n\
+               Set blank = Range(\"A2\")\n\
+               ReadThrough = VarType(number) & \"|\" & VarType(word) & \"|\" & VarType(blank)\n\
+               ReadThrough = ReadThrough & \"|\" & Len(word) & \"|\" & UCase(word) & \"|\" & CStr(number)\n\
+               ReadThrough = ReadThrough & \"|\" & Abs(number) & \"|\" & IsNumeric(number) & \"|\" & IsNumeric(word)\n\
+               ReadThrough = ReadThrough & \"|\" & IsEmpty(blank) & \"|\" & TypeName(number) & \"|\" & IsObject(number)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "ReadThrough", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            value,
+            Value::String(
+                "3|8|0|4|TEXT|42|42|True|False|True|Cell|True".to_string()
+            )
+        );
+    }
+
     #[test]
     fn nothing_object_identity_and_typeof_follow_vba_object_semantics() {
         let module = parse_module(
@@ -7728,7 +7820,10 @@ mod tests {
 
         assert_eq!(
             value,
-            Value::String("True|True|False|True|True|Cell|9|True|True|Nothing".to_string())
+            // VarType reports the type behind an object's default member, so an
+            // unset cell reads as vbEmpty. Nothing, having no member to read,
+            // stays vbObject.
+            Value::String("True|True|False|True|True|Cell|0|True|True|Nothing".to_string())
         );
     }
 
