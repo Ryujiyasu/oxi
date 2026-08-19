@@ -9353,6 +9353,43 @@ fn charwrap_on() -> bool {
     std::env::var("OXI_CHARWRAP_DISABLE").is_err()
 }
 
+/// A hyphen offers a break after it unless this is set.
+fn hyphbrk_on() -> bool {
+    std::env::var("OXI_HYPHBRK_DISABLE").is_err()
+}
+
+/// The pieces a line may end on.
+///
+/// Spaces are the obvious opportunity; a hyphen is the other one PowerPoint
+/// honours. The `charwrap` probe's `alpha-beta-gamma-delta-epsilon-zeta-...`
+/// in a 165.6pt box came back as `alpha-beta-gamma-` / `delta-epsilon-zeta-` /
+/// `eta-theta-iota`, so the break lands AFTER the hyphen and not at the last
+/// character that fits (which would have left `...gamma-de` on line 0).
+///
+/// Slash and dot are NOT opportunities: the same probe's
+/// `https://www.example.com/some/rather/long/path/index.html` broke inside
+/// `long` rather than after `rather/`.
+///
+/// 76 paragraphs across 31 dev decks carry a mid-word hyphen.
+fn break_pieces(text: &str) -> Vec<&str> {
+    if !hyphbrk_on() {
+        return text.split_inclusive(' ').collect();
+    }
+    let mut out = Vec::new();
+    for chunk in text.split_inclusive(' ') {
+        let mut start = 0usize;
+        for (i, ch) in chunk.char_indices() {
+            // A trailing hyphen would otherwise produce an empty tail piece.
+            if ch == '-' && i + 1 < chunk.len() {
+                out.push(&chunk[start..i + 1]);
+                start = i + 1;
+            }
+        }
+        out.push(&chunk[start..]);
+    }
+    out
+}
+
 /// Wrap `text` at word boundaries to fit `effective_width_pt`.
 #[cfg(windows)]
 fn gdi_wrap_lines(
@@ -9373,7 +9410,7 @@ fn gdi_wrap_lines(
     let mut current = String::new();
     let mut current_w = 0i32;
     let trim_on = std::env::var("OXI_WRAPTRIM_DISABLE").is_err();
-    for word in text.split_inclusive(' ') {
+    for word in break_pieces(text) {
         // A line's trailing space HANGS past the right edge -- it is not part
         // of the width the break is judged against. Measured on d28 slide 13
         // (2026-08-18): "National Cemetery in Gettysburg, Pennsylvania. In
