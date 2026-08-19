@@ -797,6 +797,11 @@ pub struct SlideRun {
     pub font_size: Option<f32>,    // in points
     pub bold: bool,
     pub italic: bool,
+    /// `a:rPr/@u` -- any value but `none` underlines the run. PowerPoint draws
+    /// the rule; 86 runs across 12 dev decks ask for one, most of them the
+    /// hyperlinks a template puts in its instructions.
+    #[serde(default)]
+    pub underline: bool,
     pub color: Option<String>,     // hex color
     pub font_family: Option<String>,
 }

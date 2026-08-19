@@ -1009,6 +1009,7 @@ fn parse_slide(
     let mut run_text = String::new();
     let mut run_bold = false;
     let mut run_italic = false;
+    let mut run_underline = false;
     let mut run_font_size: Option<f32> = None;
     let mut run_color: Option<String> = None;
     let mut run_font_family: Option<String> = None;
@@ -1623,6 +1624,7 @@ fn parse_slide(
                         run_text.clear();
                         run_bold = false;
                         run_italic = false;
+                        run_underline = false;
                         run_font_size = None;
                         run_color = None;
                         run_font_family = None;
@@ -1638,6 +1640,9 @@ fn parse_slide(
                         }
                         if let Some(i) = get_attr(&e, "i") {
                             run_italic = i == "1" || i == "true";
+                        }
+                        if let Some(u) = get_attr(&e, "u") {
+                            run_underline = u != "none";
                         }
                         if let Some(sz) = get_attr(&e, "sz") {
                             // Font size in hundredths of a point
@@ -1969,6 +1974,9 @@ fn parse_slide(
                         }
                         if let Some(i) = get_attr(&e, "i") {
                             run_italic = i == "1" || i == "true";
+                        }
+                        if let Some(u) = get_attr(&e, "u") {
+                            run_underline = u != "none";
                         }
                         if let Some(sz) = get_attr(&e, "sz") {
                             if let Ok(v) = sz.parse::<f32>() {
@@ -2552,6 +2560,7 @@ fn parse_slide(
                                 font_size: run_font_size,
                                 bold: run_bold,
                                 italic: run_italic,
+                            underline: run_underline,
                                 color: run_color.take(),
                                 font_family: run_font_family.take(),
                             });
