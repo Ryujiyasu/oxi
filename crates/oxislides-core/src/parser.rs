@@ -2968,6 +2968,35 @@ fn media_has_alpha(data: &[u8]) -> bool {
 /// Redundant shapes are NOT filtered: an inherited picture that the slide also
 /// draws, with the same media and the same box, is simply covered by it, which
 /// is exactly what PowerPoint's own layout-then-slide draw order does.
+/// Place a box stated in a group's child space: mirror, then turn its CENTRE
+/// about the group's own centre, keeping its size. OOXML mirrors before it
+/// rotates, and the same operation serves a nested group's box and a leaf
+/// shape's.
+fn place_in_group(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    g: &(f32, f32, f32, f32, f32, f32, f32, bool, bool),
+) -> (f32, f32) {
+    let (_, _, _, _, rot, cx, cy, fh, fv) = *g;
+    if rot.abs() <= 1e-4 && !fh && !fv {
+        return (x, y);
+    }
+    let (mut t, mut u) = (x + w / 2.0 - cx, y + h / 2.0 - cy);
+    if fh {
+        t = -t;
+    }
+    if fv {
+        u = -u;
+    }
+    let (sn, cs) = (rot.to_radians().sin(), rot.to_radians().cos());
+    // Two steps, not one expression: f32 associates differently and a 1-ulp
+    // coordinate can flip a pixel, which is enough to break a byte-identity arm.
+    let (nx, ny) = (cx + t * cs - u * sn, cy + t * sn + u * cs);
+    (nx - w / 2.0, ny - h / 2.0)
+}
+
 fn parse_inherited_shapes(
     xml: &str,
     rels_path: &str,
@@ -3028,11 +3057,17 @@ fn parse_inherited_shapes(
     // slide 1 is built from. Descend instead, carrying the group's child-space
     // mapping the way `parse_slide` does.
     let s_inherit_grp = std::env::var("OXI_LMGRP_DISABLE").is_err();
-    // (origin x, origin y, scale x, scale y, rotation deg, centre x, centre y)
-    let mut ig_grp: Vec<(f32, f32, f32, f32, f32, f32, f32)> = Vec::new();
+    // Composing a NESTED group's own placement through its parent's turn and
+    // mirror ships after the descent itself, so it needs its own opt-out --
+    // disabling both together would compare against the pre-descent build.
+    let s_grp_nest = std::env::var("OXI_LMGRPNEST_DISABLE").is_err();
+    // (origin x, origin y, scale x, scale y, rotation deg, centre x, centre y,
+    //  flipH, flipV) -- the accumulated turn and mirror of the enclosing groups
+    let mut ig_grp: Vec<(f32, f32, f32, f32, f32, f32, f32, bool, bool)> = Vec::new();
     let mut in_grp_pr = false;
     let mut gg = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
     let mut gg_rot: f32 = 0.0;
+    let mut gg_flip = (false, false);
     let mut ig_fill_img = false;
     let mut ig_rot: f32 = 0.0;
     let mut ig_flip = (false, false);
@@ -3075,12 +3110,29 @@ fn parse_inherited_shapes(
                         let base = if ig_grp.len() >= 2 {
                             ig_grp[ig_grp.len() - 2]
                         } else {
-                            (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0)
+                            (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, false)
                         };
-                        let bx = base.0 + gg.0 * base.2;
-                        let by = base.1 + gg.1 * base.3;
-                        let sx = if gg.6 != 0.0 { gg.2 * base.2 / gg.6 } else { base.2 };
-                        let sy = if gg.7 != 0.0 { gg.3 * base.3 / gg.7 } else { base.3 };
+                        // The group's own box sits in the PARENT's child space,
+                        // so it is placed exactly like a shape: translate and
+                        // scale, then swing about the parent's centre. Leaving
+                        // that swing out fanned d19's top pencil stack across
+                        // the page -- those 14 sub-groups carry no rotation of
+                        // their own, only their parent's -90.
+                        let bw = gg.2 * base.2;
+                        let bh = gg.3 * base.3;
+                        let (bx, by) = if s_grp_nest {
+                            place_in_group(
+                                base.0 + gg.0 * base.2,
+                                base.1 + gg.1 * base.3,
+                                bw,
+                                bh,
+                                &base,
+                            )
+                        } else {
+                            (base.0 + gg.0 * base.2, base.1 + gg.1 * base.3)
+                        };
+                        let sx = if gg.6 != 0.0 { bw / gg.6 } else { base.2 };
+                        let sy = if gg.7 != 0.0 { bh / gg.7 } else { base.3 };
                         if let Some(top) = ig_grp.last_mut() {
                             *top = (
                                 bx - gg.4 * sx,
@@ -3088,8 +3140,10 @@ fn parse_inherited_shapes(
                                 sx,
                                 sy,
                                 base.4 + gg_rot,
-                                bx + gg.2 * base.2 / 2.0,
-                                by + gg.3 * base.3 / 2.0,
+                                bx + bw / 2.0,
+                                by + bh / 2.0,
+                                base.7 ^ (gg_flip.0 && s_grp_nest),
+                                base.8 ^ (gg_flip.1 && s_grp_nest),
                             );
                         }
                     }
@@ -3101,11 +3155,19 @@ fn parse_inherited_shapes(
                         if nest == 0 {
                             // A shape inside a p:grpSp states its geometry in
                             // the group's child space.
-                            if let Some(&(ox, oy, sx, sy, grot, gcx, gcy)) = ig_grp.last() {
+                            if let Some(&entry) = ig_grp.last() {
+                                let (ox, oy, sx, sy, grot, _, _, gfh, gfv) = entry;
                                 x = ox + x * sx;
                                 y = oy + y * sy;
                                 w *= sx;
                                 h *= sy;
+                                let placed = place_in_group(x, y, w, h, &entry);
+                                x = placed.0;
+                                y = placed.1;
+                                ig_flip = (ig_flip.0 ^ gfh, ig_flip.1 ^ gfv);
+                                if gfh ^ gfv {
+                                    ig_rot = -ig_rot;
+                                }
                                 if grot.abs() > 1e-4 {
                                     // The group turns as a whole (S-GRPROT):
                                     // the child's centre swings about the
@@ -3115,13 +3177,6 @@ fn parse_inherited_shapes(
                                     // them rotated -- placing their children
                                     // square left a second, offset copy of the
                                     // frame beside the right one.
-                                    let (t, u) = (x + w / 2.0 - gcx, y + h / 2.0 - gcy);
-                                    let (sn, cs) =
-                                        (grot.to_radians().sin(), grot.to_radians().cos());
-                                    let (nx, ny) =
-                                        (gcx + t * cs - u * sn, gcy + t * sn + u * cs);
-                                    x = nx - w / 2.0;
-                                    y = ny - h / 2.0;
                                     ig_rot += grot;
                                 }
                             }
@@ -3349,7 +3404,7 @@ fn parse_inherited_shapes(
                     let base = ig_grp
                         .last()
                         .copied()
-                        .unwrap_or((0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0));
+                        .unwrap_or((0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, false));
                     ig_grp.push(base);
                 }
             }
@@ -3358,6 +3413,7 @@ fn parse_inherited_shapes(
                     in_grp_pr = true;
                     gg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
                     gg_rot = 0.0;
+                    gg_flip = (false, false);
                 }
             }
             "xfrm" if in_grp_pr => {
@@ -3365,6 +3421,10 @@ fn parse_inherited_shapes(
                     .and_then(|v| v.parse::<f32>().ok())
                     .map(|v| v / 60000.0)
                     .unwrap_or(0.0);
+                gg_flip = (
+                    get_attr(e, "flipH").as_deref() == Some("1"),
+                    get_attr(e, "flipV").as_deref() == Some("1"),
+                );
             }
             "off" if in_grp_pr => {
                 gg.0 = get_attr(e, "x").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
