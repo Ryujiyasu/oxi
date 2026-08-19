@@ -30,7 +30,7 @@ use crate::ir::{CellValue, Sheet, Workbook};
 use oxicells_calc::reference::col_to_letters;
 use oxicells_calc::{ExcelError, Value};
 
-pub use oxicells_calc::translate_formula_references;
+pub use oxicells_calc::{shift_formula_references, translate_formula_references, ShiftAxis};
 
 /// Recalculate every formula in a single sheet, overwriting cached values.
 ///

@@ -9,7 +9,7 @@
 //! follows and by trying [`crate::reference::parse_a1`]. Deciding in the lexer
 //! would misread `LOG10` as a cell reference.
 
-use crate::reference::{parse_a1, MAX_COL, MAX_ROW};
+use crate::reference::{parse_a1, CellRef, MAX_COL, MAX_ROW};
 use crate::value::ExcelError;
 use std::fmt;
 
@@ -227,6 +227,179 @@ pub fn translate_formula_references(
         render_token(&mut output, token);
     }
     Ok(output)
+}
+
+/// Which way a band of inserted or removed cells runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShiftAxis {
+    Rows,
+    Columns,
+}
+
+/// Move A1 references across rows or columns put in above them or taken out
+/// from under them, the way Excel rewrites formulas after an insert or delete.
+///
+/// `at` is the one-based first index of the band and `count` how many were put
+/// in (positive) or taken out (negative). Unlike a copy, this moves absolute
+/// references too: inserting a row above `$A$2` leaves `$A$3`. A reference to
+/// something removed becomes `#REF!`, while a range only partly overlapped
+/// shrinks, and one an insertion lands inside grows.
+pub fn shift_formula_references(
+    input: &str,
+    axis: ShiftAxis,
+    at: u32,
+    count: i64,
+) -> Result<String, String> {
+    crate::parser::parse(input).map_err(|error| error.to_string())?;
+    let had_equals = input.trim_start().starts_with('=');
+    let tokens = tokenize(input).map_err(|error| error.to_string())?;
+
+    // Callers count rows and columns the way a worksheet does; a CellRef counts
+    // from zero.
+    let at = at.saturating_sub(1);
+    let maximum = match axis {
+        ShiftAxis::Rows => MAX_ROW,
+        ShiftAxis::Columns => MAX_COL,
+    };
+    let coordinate = |reference: &CellRef| match axis {
+        ShiftAxis::Rows => reference.row,
+        ShiftAxis::Columns => reference.col,
+    };
+    let with_coordinate = |mut reference: CellRef, value: u32| {
+        match axis {
+            ShiftAxis::Rows => reference.row = value,
+            ShiftAxis::Columns => reference.col = value,
+        }
+        reference
+    };
+
+    let mut shifted = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        let is_function = matches!(tokens.get(index + 1), Some(Token::LParen));
+        let Token::Name { sheet, name } = &tokens[index] else {
+            shifted.push(tokens[index].clone());
+            index += 1;
+            continue;
+        };
+        if is_function {
+            shifted.push(tokens[index].clone());
+            index += 1;
+            continue;
+        }
+        let Some(start) = parse_a1(name) else {
+            shifted.push(tokens[index].clone());
+            index += 1;
+            continue;
+        };
+
+        // A range moves as a whole, so its ends are decided together.
+        let range_end = match (tokens.get(index + 1), tokens.get(index + 2)) {
+            (Some(Token::Colon), Some(Token::Name { name, .. })) => parse_a1(name),
+            _ => None,
+        };
+        if let Some(end) = range_end {
+            let (low, high) = (coordinate(&start), coordinate(&end));
+            match shifted_range(low, high, at, count, maximum)? {
+                Some((low, high)) => {
+                    shifted.push(Token::Name {
+                        sheet: sheet.clone(),
+                        name: with_coordinate(start, low).to_a1(),
+                    });
+                    shifted.push(Token::Colon);
+                    let end_sheet = match &tokens[index + 2] {
+                        Token::Name { sheet, .. } => sheet.clone(),
+                        _ => None,
+                    };
+                    shifted.push(Token::Name {
+                        sheet: end_sheet,
+                        name: with_coordinate(end, high).to_a1(),
+                    });
+                }
+                None => shifted.push(Token::ErrorLit(ExcelError::Ref)),
+            }
+            index += 3;
+            continue;
+        }
+
+        match shifted_cell(coordinate(&start), at, count, maximum)? {
+            Some(value) => shifted.push(Token::Name {
+                sheet: sheet.clone(),
+                name: with_coordinate(start, value).to_a1(),
+            }),
+            None => shifted.push(Token::ErrorLit(ExcelError::Ref)),
+        }
+        index += 1;
+    }
+
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in shifted {
+        render_token(&mut output, token);
+    }
+    Ok(output)
+}
+
+/// Where one coordinate lands, or `None` once it has been taken out.
+fn shifted_cell(value: u32, at: u32, count: i64, maximum: u32) -> Result<Option<u32>, String> {
+    if value < at {
+        return Ok(Some(value));
+    }
+    if count >= 0 {
+        return shifted_coordinate(value, count, maximum).map(Some);
+    }
+    let removed = count.unsigned_abs() as u32;
+    if value < at.saturating_add(removed) {
+        return Ok(None);
+    }
+    shifted_coordinate(value, count, maximum).map(Some)
+}
+
+/// Where a range's ends land. A range wholly taken out answers `None`; one only
+/// partly overlapped closes up to the edge of what went, and an insertion
+/// landing inside pushes the far end out.
+fn shifted_range(
+    low: u32,
+    high: u32,
+    at: u32,
+    count: i64,
+    maximum: u32,
+) -> Result<Option<(u32, u32)>, String> {
+    if count >= 0 {
+        let low = if low >= at {
+            shifted_coordinate(low, count, maximum)?
+        } else {
+            low
+        };
+        let high = if high >= at {
+            shifted_coordinate(high, count, maximum)?
+        } else {
+            high
+        };
+        return Ok(Some((low, high)));
+    }
+    let removed = count.unsigned_abs() as u32;
+    let past = at.saturating_add(removed);
+    if low >= at && high < past {
+        return Ok(None);
+    }
+    let low = if low >= past {
+        shifted_coordinate(low, count, maximum)?
+    } else if low >= at {
+        at
+    } else {
+        low
+    };
+    let high = if high >= past {
+        shifted_coordinate(high, count, maximum)?
+    } else if high >= at {
+        at.saturating_sub(1)
+    } else {
+        high
+    };
+    Ok(Some((low, high)))
 }
 
 fn shifted_coordinate(value: u32, offset: i64, maximum: u32) -> Result<u32, String> {
@@ -563,5 +736,78 @@ mod tests {
     fn japanese_text_and_names_survive() {
         assert_eq!(lex(r#""単価""#), vec![Token::Text("単価".to_string())]);
         assert_eq!(lex("税率"), vec![name("税率")]);
+    }
+}
+
+#[cfg(test)]
+mod shift_tests {
+    use super::{shift_formula_references, ShiftAxis};
+
+    /// Every case here is what Excel 16 left in the cell after the operation.
+    #[test]
+    fn references_follow_inserted_and_removed_rows() {
+        for (formula, at, count, expected) in [
+            // A row put in above a reference pushes it down, absolute or not.
+            ("=$A$2*2", 1, 1, "=$A$3*2"),
+            ("=A$2+$A3", 1, 1, "=A$3+$A4"),
+            ("=A1*2", 3, 1, "=A1*2"),
+            ("=A2*2", 2, 2, "=A4*2"),
+            // Taking rows out pulls what is below them up.
+            ("=$A$4*2", 1, -1, "=$A$3*2"),
+            ("=A4*2", 2, -2, "=A2*2"),
+            // A reference to a row that went becomes #REF!.
+            ("=A2*2", 2, -1, "=#REF!*2"),
+        ] {
+            assert_eq!(
+                shift_formula_references(formula, ShiftAxis::Rows, at, count).unwrap(),
+                expected,
+                "{formula} with {count} at row {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_grows_and_shrinks_around_the_change() {
+        for (formula, at, count, expected) in [
+            // An insertion inside a range stretches it.
+            ("=SUM(A1:A3)", 2, 1, "=SUM(A1:A4)"),
+            // A range straddling what went closes up.
+            ("=SUM(A1:A3)", 2, -1, "=SUM(A1:A2)"),
+            ("=SUM(A1:A3)", 1, -1, "=SUM(A1:A2)"),
+            // One wholly inside what went is left with nothing to point at.
+            ("=SUM(A2:A2)", 2, -1, "=SUM(#REF!)"),
+            ("=SUM(A2:A3)", 2, -2, "=SUM(#REF!)"),
+        ] {
+            assert_eq!(
+                shift_formula_references(formula, ShiftAxis::Rows, at, count).unwrap(),
+                expected,
+                "{formula} with {count} at row {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn columns_move_the_same_way_rows_do() {
+        for (formula, at, count, expected) in [
+            ("=B1*2", 1, 1, "=C1*2"),
+            ("=B1*2", 1, -1, "=A1*2"),
+            ("=B1*2", 2, -1, "=#REF!*2"),
+            ("=SUM(A1:C1)", 2, -1, "=SUM(A1:B1)"),
+        ] {
+            assert_eq!(
+                shift_formula_references(formula, ShiftAxis::Columns, at, count).unwrap(),
+                expected,
+                "{formula} with {count} at column {at}"
+            );
+        }
+    }
+
+    /// A function's name is not a reference, however much it reads like one.
+    #[test]
+    fn a_function_name_is_left_alone() {
+        assert_eq!(
+            shift_formula_references("=LOG10(A2)", ShiftAxis::Rows, 1, 1).unwrap(),
+            "=LOG10(A3)"
+        );
     }
 }
