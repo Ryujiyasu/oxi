@@ -1149,6 +1149,158 @@ impl<'a> WorkbookHost<'a> {
             .ok_or_else(|| "WorksheetFunction.Match did not find a matching value".to_string())
     }
 
+    /// The worksheet functions that read their arguments by position rather than
+    /// aggregating everything handed to them.
+    ///
+    /// `Round` here is the worksheet's, which sends a half away from zero, so
+    /// 2.5 becomes 3 and -2.5 becomes -3. VBA's own `Round` sends a half to the
+    /// even neighbour instead and leaves 2.5 at 2; both are right, in their own
+    /// language.
+    fn worksheet_arithmetic(
+        &self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let rounding = ["round", "roundup", "rounddown"]
+            .iter()
+            .find(|candidate| name.eq_ignore_ascii_case(candidate));
+        if let Some(rounding) = rounding {
+            let (value, digits) = match args {
+                [value] => (value, None),
+                [value, digits] => (value, Some(digits)),
+                _ => return Err(format!("WorksheetFunction.{name} expects a number and digits")),
+            };
+            let value = worksheet_number(value, name)?;
+            let digits = match digits {
+                None | Some(Value::Missing) => 0.0,
+                Some(digits) => worksheet_number(digits, name)?.trunc(),
+            };
+            let scale = 10_f64.powf(digits);
+            let scaled = value * scale;
+            let rounded = match *rounding {
+                "roundup" => scaled.abs().ceil() * scaled.signum(),
+                "rounddown" => scaled.abs().floor() * scaled.signum(),
+                _ => scaled.abs().round() * scaled.signum(),
+            };
+            return Ok(Some(numeric_result(rounded / scale)));
+        }
+
+        if name.eq_ignore_ascii_case("power") {
+            let [base, exponent] = args else {
+                return Err("WorksheetFunction.Power expects a number and a power".to_string());
+            };
+            let result = worksheet_number(base, name)?.powf(worksheet_number(exponent, name)?);
+            if !result.is_finite() {
+                return Err("WorksheetFunction.Power has no answer for those".to_string());
+            }
+            return Ok(Some(numeric_result(result)));
+        }
+
+        if name.eq_ignore_ascii_case("trim") {
+            let [value] = args else {
+                return Err("WorksheetFunction.Trim expects one value".to_string());
+            };
+            // The worksheet's Trim squeezes runs of spaces as well as stripping
+            // the ends, where VBA's only strips the ends.
+            let text = find_value_text(&self.criteria_value(value)?);
+            return Ok(Some(Value::String(
+                text.split_whitespace().collect::<Vec<_>>().join(" "),
+            )));
+        }
+
+        if name.eq_ignore_ascii_case("proper") {
+            let [value] = args else {
+                return Err("WorksheetFunction.Proper expects one value".to_string());
+            };
+            let text = find_value_text(&self.criteria_value(value)?);
+            let mut proper = String::with_capacity(text.len());
+            let mut starting = true;
+            for character in text.chars() {
+                if starting {
+                    proper.extend(character.to_uppercase());
+                } else {
+                    proper.extend(character.to_lowercase());
+                }
+                // Anything that is not a letter starts a new word, so an
+                // apostrophe or a digit capitalises what follows it.
+                starting = !character.is_alphabetic();
+            }
+            return Ok(Some(Value::String(proper)));
+        }
+
+        let ranking = ["large", "small"]
+            .iter()
+            .find(|candidate| name.eq_ignore_ascii_case(candidate));
+        if let Some(ranking) = ranking {
+            let [values, rank] = args else {
+                return Err(format!("WorksheetFunction.{name} expects values and a rank"));
+            };
+            let rank = worksheet_number(rank, name)?.trunc();
+            let mut numbers = self.worksheet_numbers(values, name)?;
+            if rank < 1.0 || rank > numbers.len() as f64 {
+                return Err(format!(
+                    "WorksheetFunction.{name} has no value ranked {rank}"
+                ));
+            }
+            numbers.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+            let index = if *ranking == "large" {
+                numbers.len() - rank as usize
+            } else {
+                rank as usize - 1
+            };
+            return Ok(Some(numeric_result(numbers[index])));
+        }
+
+        if name.eq_ignore_ascii_case("median") {
+            let mut numbers = Vec::new();
+            for value in args {
+                numbers.append(&mut self.worksheet_numbers(value, name)?);
+            }
+            if numbers.is_empty() {
+                return Err("WorksheetFunction.Median has no numeric values".to_string());
+            }
+            numbers.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+            let middle = numbers.len() / 2;
+            let median = if numbers.len() % 2 == 0 {
+                (numbers[middle - 1] + numbers[middle]) / 2.0
+            } else {
+                numbers[middle]
+            };
+            return Ok(Some(numeric_result(median)));
+        }
+
+        if name.eq_ignore_ascii_case("sumproduct") {
+            if args.len() < 2 {
+                return Err("WorksheetFunction.SumProduct expects two or more ranges".to_string());
+            }
+            let columns = args
+                .iter()
+                .map(|value| self.worksheet_numbers(value, name))
+                .collect::<Result<Vec<_>, _>>()?;
+            let length = columns[0].len();
+            if columns.iter().any(|column| column.len() != length) {
+                return Err(
+                    "WorksheetFunction.SumProduct needs ranges of the same size".to_string(),
+                );
+            }
+            let total = (0..length)
+                .map(|index| columns.iter().map(|column| column[index]).product::<f64>())
+                .sum::<f64>();
+            return Ok(Some(numeric_result(total)));
+        }
+
+        Ok(None)
+    }
+
+    /// The numbers inside a range or array, with text and blanks passed over
+    /// the way the ranking functions do.
+    fn worksheet_numbers(&self, value: &Value, name: &str) -> Result<Vec<f64>, String> {
+        let mut values = Vec::new();
+        self.append_worksheet_function_values(value, &mut values)
+            .map_err(|_| format!("WorksheetFunction.{name} cannot read those values"))?;
+        Ok(values.iter().filter_map(criteria_number).collect())
+    }
+
     fn worksheet_function(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if args.is_empty() {
             return Err(format!(
@@ -1166,6 +1318,9 @@ impl<'a> WorkbookHost<'a> {
         }
         if name.eq_ignore_ascii_case("index") {
             return self.worksheet_index(args);
+        }
+        if let Some(result) = self.worksheet_arithmetic(name, args)? {
+            return Ok(result);
         }
         for (conditional, kind) in [
             ("countif", ConditionalKind::Count),
@@ -3898,6 +4053,19 @@ fn numeric_result(value: f64) -> Value {
         Value::Integer(value as i64)
     } else {
         Value::Double(value)
+    }
+}
+
+fn worksheet_number(value: &Value, name: &str) -> Result<f64, String> {
+    match value {
+        Value::Integer(value) => Ok(*value as f64),
+        Value::Double(value) if value.is_finite() => Ok(*value),
+        Value::Boolean(value) => Ok(f64::from(*value)),
+        Value::String(value) => value
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| format!("WorksheetFunction.{name} expects a number")),
+        _ => Err(format!("WorksheetFunction.{name} expects a number")),
     }
 }
 
@@ -7105,6 +7273,121 @@ mod tests {
             execute_with_host(&module, "Act", vec![], &mut host)
                 .unwrap_err();
         }
+    }
+
+    /// The worksheet's Round sends a half away from zero while VBA's sends it to
+    /// the even neighbour. Both answers below came from Excel in one macro.
+    #[test]
+    fn the_worksheets_round_and_vbas_round_disagree_at_a_half() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Debug.Print WorksheetFunction.Round(2.5, 0), WorksheetFunction.Round(3.5, 0), WorksheetFunction.Round(-2.5, 0)\n\
+               Debug.Print Round(2.5, 0), Round(3.5, 0)\n\
+               Debug.Print WorksheetFunction.Round(2.345, 2), WorksheetFunction.Round(25, -1)\n\
+               Debug.Print WorksheetFunction.RoundUp(2.1, 0), WorksheetFunction.RoundUp(-2.1, 0)\n\
+               Debug.Print WorksheetFunction.RoundDown(2.9, 0), WorksheetFunction.RoundDown(-2.9, 0)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "3\t4\t-3".to_string(),
+                "2\t4".to_string(),
+                "2.35\t30".to_string(),
+                "3\t-3".to_string(),
+                "2\t-2".to_string(),
+            ]
+        );
+    }
+
+    /// The worksheet's Trim squeezes runs of spaces; VBA's only strips the ends.
+    #[test]
+    fn the_worksheets_trim_squeezes_what_vbas_leaves() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Debug.Print \"[\" & WorksheetFunction.Trim(\"  a   b  \") & \"]\"\n\
+               Debug.Print \"[\" & Trim(\"  a   b  \") & \"]\"\n\
+               Debug.Print WorksheetFunction.Proper(\"hello wORLD\"), WorksheetFunction.Proper(\"o'neil 3rd\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "[a b]".to_string(),
+                "[a   b]".to_string(),
+                // A letter after anything that is not a letter starts a word, so
+                // both the apostrophe and the digit capitalise what follows.
+                "Hello World\tO'Neil 3Rd".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn vba_ranks_and_averages_the_numbers_in_a_range() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 30\n\
+               Range(\"A2\").Value = 10\n\
+               Range(\"A3\").Value = 20\n\
+               Range(\"A4\").Value = 20\n\
+               Range(\"C1\").Value = 5\n\
+               Range(\"C3\").Value = \"text\"\n\
+               Range(\"C4\").Value = 1\n\
+               Debug.Print WorksheetFunction.Large(Range(\"A1:A4\"), 1), WorksheetFunction.Large(Range(\"A1:A4\"), 2), WorksheetFunction.Small(Range(\"A1:A4\"), 1)\n\
+               Debug.Print WorksheetFunction.Median(Range(\"A1:A4\")), WorksheetFunction.Median(Range(\"A1:A3\"))\n\
+               Debug.Print WorksheetFunction.Large(Range(\"C1:C4\"), 1), WorksheetFunction.Median(Range(\"C1:C4\"))\n\
+               Debug.Print WorksheetFunction.Power(2, 10), WorksheetFunction.SumProduct(Range(\"A1:A2\"), Range(\"A3:A4\"))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "30\t20\t10".to_string(),
+                "20\t20".to_string(),
+                // Text and blanks are passed over, leaving 5 and 1.
+                "5\t3".to_string(),
+                "1024\t800".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rank_beyond_the_values_is_refused() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Act() As Variant\n\
+               Range(\"A1\").Value = 30\n\
+               Act = WorksheetFunction.Large(Range(\"A1:A4\"), 9)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host)
+            .expect_err("Excel raises for a rank it cannot reach");
     }
 
     #[test]
