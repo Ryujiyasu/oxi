@@ -93,6 +93,7 @@ enum HostObject {
     Worksheets,
     Workbook,
     Application,
+    WorksheetFunction,
     DebugConsole,
 }
 
@@ -159,6 +160,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Worksheets => "Worksheets",
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
+                HostObject::WorksheetFunction => "WorksheetFunction",
                 HostObject::DebugConsole => "Debug",
             }
             .to_string(),
@@ -234,6 +236,13 @@ impl<'a> WorkbookHost<'a> {
         matches!(
             self.objects.get(object.handle as usize),
             Some(HostObject::Application)
+        )
+    }
+
+    fn is_worksheet_function(&self, object: &ObjectRef) -> bool {
+        matches!(
+            self.objects.get(object.handle as usize),
+            Some(HostObject::WorksheetFunction)
         )
     }
 
@@ -562,6 +571,95 @@ impl<'a> WorkbookHost<'a> {
             element_default: Box::new(Value::Empty),
             resizable: true,
         }))
+    }
+
+    fn append_worksheet_function_values(
+        &self,
+        value: &Value,
+        values: &mut Vec<Value>,
+    ) -> Result<(), String> {
+        match value {
+            Value::Array(array) => {
+                for value in &array.values {
+                    self.append_worksheet_function_values(value, values)?;
+                }
+            }
+            Value::Object(object) => {
+                let Some(range) = self.range(object) else {
+                    return Err(format!(
+                        "WorksheetFunction cannot aggregate a {} object",
+                        object.kind
+                    ));
+                };
+                let value = self.range_value(range)?;
+                self.append_worksheet_function_values(&value, values)?;
+            }
+            value => values.push(value.clone()),
+        }
+        Ok(())
+    }
+
+    fn worksheet_function(&self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if args.is_empty() {
+            return Err(format!(
+                "WorksheetFunction.{name} expects at least one argument"
+            ));
+        }
+        let mut values = Vec::new();
+        for value in args {
+            self.append_worksheet_function_values(value, &mut values)?;
+        }
+        if name.eq_ignore_ascii_case("counta") {
+            let count = values
+                .iter()
+                .filter(|value| {
+                    !matches!(
+                        value,
+                        Value::Empty | Value::Missing | Value::Nothing | Value::Null
+                    )
+                })
+                .count();
+            return Ok(Value::Integer(count as i64));
+        }
+
+        let mut numbers = Vec::new();
+        for value in values {
+            match value {
+                Value::Integer(value) => numbers.push(value as f64),
+                Value::Double(value) if value.is_finite() => numbers.push(value),
+                Value::Error(value) => {
+                    return Err(format!(
+                        "WorksheetFunction.{name} encountered Error {value}"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if name.eq_ignore_ascii_case("count") {
+            return Ok(Value::Integer(numbers.len() as i64));
+        }
+
+        let result = if name.eq_ignore_ascii_case("sum") {
+            numbers.iter().sum()
+        } else if name.eq_ignore_ascii_case("average") {
+            if numbers.is_empty() {
+                return Err("WorksheetFunction.Average has no numeric values".to_string());
+            }
+            numbers.iter().sum::<f64>() / numbers.len() as f64
+        } else if name.eq_ignore_ascii_case("min") {
+            numbers.into_iter().reduce(f64::min).unwrap_or(0.0)
+        } else if name.eq_ignore_ascii_case("max") {
+            numbers.into_iter().reduce(f64::max).unwrap_or(0.0)
+        } else {
+            return Err(format!(
+                "WorksheetFunction.{name} is not supported in the browser"
+            ));
+        };
+        if result.fract() == 0.0 && result >= i64::MIN as f64 && result <= i64::MAX as f64 {
+            Ok(Value::Integer(result as i64))
+        } else {
+            Ok(Value::Double(result))
+        }
     }
 
     fn cell_formula(&self, address: CellAddress) -> Value {
@@ -1606,6 +1704,9 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         if let Some(receiver) = receiver {
+            if self.is_worksheet_function(receiver) {
+                return self.worksheet_function(name, args).map(Some);
+            }
             if self.is_debug_console(receiver) && name.eq_ignore_ascii_case("print") {
                 self.debug_output.push(
                     args.iter()
@@ -1851,6 +1952,12 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("application") {
             return Ok(Some(self.object(HostObject::Application)));
         }
+        if name.eq_ignore_ascii_case("worksheetfunction") {
+            if !args.is_empty() {
+                return Err("WorksheetFunction does not accept arguments".to_string());
+            }
+            return Ok(Some(self.object(HostObject::WorksheetFunction)));
+        }
         if name.eq_ignore_ascii_case("selection") || name.eq_ignore_ascii_case("activecell") {
             if !args.is_empty() {
                 return Err(format!("{name} does not accept arguments"));
@@ -2015,6 +2122,9 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if self.is_application(receiver) {
+            if name.eq_ignore_ascii_case("worksheetfunction") {
+                return Ok(Some(self.object(HostObject::WorksheetFunction)));
+            }
             if name.eq_ignore_ascii_case("screenupdating") {
                 return Ok(Some(Value::Boolean(self.screen_updating)));
             }
@@ -4069,6 +4179,40 @@ mod tests {
                 "True\tFalse\tNull".to_string(),
                 "$A$3:$XFD$3\t$C$1:$C$1048576\t1048576".to_string(),
                 "Sheet1\t1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn vba_aggregates_ranges_arrays_and_scalars_with_worksheet_functions() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub AggregateCells()\n\
+               Dim values(1 To 2) As Variant\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = \"text\"\n\
+               Range(\"B1\").Value = 5\n\
+               values(1) = 2\n\
+               values(2) = 3\n\
+               Debug.Print Application.WorksheetFunction.Sum(Range(\"A1:B1\"), values)\n\
+               Debug.Print WorksheetFunction.Average(Range(\"A1:A3\")), WorksheetFunction.Min(Range(\"A1:B2\")), WorksheetFunction.Max(Range(\"A1:B2\"))\n\
+               Debug.Print WorksheetFunction.Count(Range(\"A1:A3\")), WorksheetFunction.CountA(Range(\"A1:A3\")), WorksheetFunction.Sum(0.5, 1)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "AggregateCells", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "20".to_string(),
+                "15\t5\t20".to_string(),
+                "2\t3\t1.5".to_string(),
             ]
         );
     }
