@@ -975,10 +975,10 @@ impl<'a> WorkbookHost<'a> {
     fn offset_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let (row_offset, column_offset) = match args {
             [] => (0, 0),
-            [row] => (integer_offset(row, "row")?, 0),
+            [row] => (optional_integer_offset(row, 0, "row")?, 0),
             [row, column] => (
-                integer_offset(row, "row")?,
-                integer_offset(column, "column")?,
+                optional_integer_offset(row, 0, "row")?,
+                optional_integer_offset(column, 0, "column")?,
             ),
             _ => return Err("Range.Offset expects zero, one, or two offsets".to_string()),
         };
@@ -1008,10 +1008,13 @@ impl<'a> WorkbookHost<'a> {
         let current_columns = range.end_column - range.start_column + 1;
         let (rows, columns) = match args {
             [] => (range.end_row - range.start_row + 1, current_columns),
-            [rows] => (positive_index(rows, "row size")?, current_columns),
+            [rows] => (
+                optional_positive_index(rows, range.end_row - range.start_row + 1, "row size")?,
+                current_columns,
+            ),
             [rows, columns] => (
-                positive_index(rows, "row size")?,
-                positive_index(columns, "column size")?,
+                optional_positive_index(rows, range.end_row - range.start_row + 1, "row size")?,
+                optional_positive_index(columns, current_columns, "column size")?,
             ),
             _ => return Err("Range.Resize expects zero, one, or two sizes".to_string()),
         };
@@ -1925,6 +1928,10 @@ impl Host for WorkbookHost<'_> {
                     "ReplaceFormat",
                 ][..],
             )
+        } else if name.eq_ignore_ascii_case("offset") {
+            Some(&["RowOffset", "ColumnOffset"][..])
+        } else if name.eq_ignore_ascii_case("resize") {
+            Some(&["RowSize", "ColumnSize"][..])
         } else {
             None
         };
@@ -2984,6 +2991,14 @@ fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
     Ok(number as u32)
 }
 
+fn optional_positive_index(value: &Value, default: u32, label: &str) -> Result<u32, String> {
+    if matches!(value, Value::Missing) {
+        Ok(default)
+    } else {
+        positive_index(value, label)
+    }
+}
+
 fn range_axis_name(axis: RangeAxis) -> &'static str {
     match axis {
         RangeAxis::Rows => "Rows",
@@ -3006,6 +3021,14 @@ fn integer_offset(value: &Value, label: &str) -> Result<i64, String> {
         ));
     }
     Ok(number as i64)
+}
+
+fn optional_integer_offset(value: &Value, default: i64, label: &str) -> Result<i64, String> {
+    if matches!(value, Value::Missing) {
+        Ok(default)
+    } else {
+        integer_offset(value, label)
+    }
 }
 
 fn range_address_from_args(range: CellRange, args: &[Value]) -> Result<String, String> {
@@ -3657,6 +3680,54 @@ mod tests {
         ));
         assert!(matches!(
             workbook.sheets[0].rows[1].cells[2].value,
+            CellValue::Number(7.0)
+        ));
+    }
+
+    #[test]
+    fn vba_binds_sparse_named_range_dimensions() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub NamedDimensions()\n\
+               Set horizontal = Range(\"B2:C3\").Offset(ColumnOffset:=2).Resize(ColumnSize:=3)\n\
+               Set vertical = Range(\"B2:C3\").Offset(RowOffset:=2).Resize(RowSize:=1)\n\
+               horizontal.Value = 5\n\
+               vertical.Value = 7\n\
+               Debug.Print horizontal.Address(False, False), vertical.Address(False, False)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "NamedDimensions", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(debug_output, vec!["D2:F3\tB4:C4".to_string()]);
+        assert!(matches!(
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|row| row.index == 2)
+                .unwrap()
+                .cells
+                .iter()
+                .find(|cell| cell.col == 3)
+                .unwrap()
+                .value,
+            CellValue::Number(5.0)
+        ));
+        assert!(matches!(
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|row| row.index == 4)
+                .unwrap()
+                .cells
+                .iter()
+                .find(|cell| cell.col == 1)
+                .unwrap()
+                .value,
             CellValue::Number(7.0)
         ));
     }

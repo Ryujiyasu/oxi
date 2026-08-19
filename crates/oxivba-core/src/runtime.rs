@@ -1909,7 +1909,7 @@ impl<'a> Runtime<'a> {
                     .iter()
                     .any(|builtin| name.eq_ignore_ascii_case(builtin))
                 {
-                    return self.call_named(name, Vec::new(), Some(span.line), frame);
+                    return self.call_named(name, Vec::new(), &[], Some(span.line), frame);
                 }
                 if let Some(value) = self.host_call(None, name, &[], span.line)? {
                     return Ok(value);
@@ -2069,7 +2069,7 @@ impl<'a> Runtime<'a> {
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
-                        self.call_named(name, values, Some(span.line), frame)
+                        self.call_named(name, values, &argument_names, Some(span.line), frame)
                     }
                     Expr::Member { object, name, .. } => {
                         let receiver = self.eval_object(object, frame, span.line)?;
@@ -2116,7 +2116,7 @@ impl<'a> Runtime<'a> {
                 }
             }
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
-                self.call_named(name, Vec::new(), Some(span.line), frame)
+                self.call_named(name, Vec::new(), &[], Some(span.line), frame)
             }
             Expr::Member {
                 object, name, span, ..
@@ -2340,6 +2340,7 @@ impl<'a> Runtime<'a> {
         &mut self,
         name: &str,
         args: Vec<Value>,
+        argument_names: &[Option<String>],
         line: Option<u32>,
         frame: &Frame,
     ) -> Result<Value, RuntimeError> {
@@ -2383,7 +2384,12 @@ impl<'a> Runtime<'a> {
         if let Some(result) = call_builtin(name, &args, line, self.option_compare_text()) {
             return result;
         }
-        if let Some(value) = self.host_call(None, name, &args, line.unwrap_or(0))? {
+        let host_value = if argument_names.is_empty() {
+            self.host_call(None, name, &args, line.unwrap_or(0))?
+        } else {
+            self.host_call_named(None, name, &args, argument_names, line.unwrap_or(0))?
+        };
+        if let Some(value) = host_value {
             return Ok(value);
         }
         self.call_procedure(name, args, line)
