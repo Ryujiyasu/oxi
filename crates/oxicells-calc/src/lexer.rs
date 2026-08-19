@@ -229,6 +229,30 @@ pub fn translate_formula_references(
     Ok(output)
 }
 
+/// A band of rows or columns that was inserted or removed, and how far its
+/// effect reaches.
+///
+/// `across` is how far the band reaches along the other axis, one-based and
+/// inclusive — the columns a row band spans, or the rows a column band spans.
+/// Only a reference lying wholly within it moves, which is what makes a partial
+/// insert leave neighbouring columns alone: shifting `B2` down rewrites `B3`
+/// but not `C3`, and leaves `SUM(A1:C3)` alone because it reaches past B. Use
+/// the sheet's full extent for a whole-row or whole-column band.
+#[derive(Debug, Clone, Copy)]
+pub struct ReferenceShift<'a> {
+    pub axis: ShiftAxis,
+    /// One-based first index of the band.
+    pub at: u32,
+    /// How many were put in (positive) or taken out (negative).
+    pub count: i64,
+    /// One-based inclusive reach along the other axis.
+    pub across: (u32, u32),
+    /// The sheet whose cells moved. A reference naming a different sheet is
+    /// left alone, while one naming this sheet moves even from another sheet's
+    /// formula, which is how `=Data!A5` follows a row inserted on `Data`.
+    pub sheet: Option<&'a str>,
+}
+
 /// Which way a band of inserted or removed cells runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShiftAxis {
@@ -245,19 +269,18 @@ pub enum ShiftAxis {
 /// something removed becomes `#REF!`, while a range only partly overlapped
 /// shrinks, and one an insertion lands inside grows.
 ///
-/// `across` is how far the band reaches along the other axis, one-based and
-/// inclusive — the columns a row band spans, or the rows a column band spans.
-/// Only a reference lying wholly within it moves, which is what makes a partial
-/// insert leave neighbouring columns alone: shifting `B2` down rewrites `B3`
-/// but not `C3`, and leaves `SUM(A1:C3)` alone because it reaches past B. Pass
-/// the full extent of the sheet for a whole-row or whole-column band.
+/// See [`ReferenceShift`] for what the band covers and which sheet it moved.
 pub fn shift_formula_references(
     input: &str,
-    axis: ShiftAxis,
-    at: u32,
-    count: i64,
-    across: (u32, u32),
+    shift: &ReferenceShift<'_>,
 ) -> Result<String, String> {
+    let ReferenceShift {
+        axis,
+        at,
+        count,
+        across,
+        sheet: moved_sheet,
+    } = *shift;
     crate::parser::parse(input).map_err(|error| error.to_string())?;
     let had_equals = input.trim_start().starts_with('=');
     let tokens = tokenize(input).map_err(|error| error.to_string())?;
@@ -302,9 +325,14 @@ pub fn shift_formula_references(
             index += 1;
             continue;
         }
-        // A reference naming another sheet points at rows this change never
+        // A reference naming another sheet points at cells this change never
         // touched, so it stays as it is.
-        let Some(start) = parse_a1(name).filter(|_| sheet.is_none()) else {
+        let names_moved_sheet = match (sheet.as_deref(), moved_sheet) {
+            (None, _) => true,
+            (Some(named), Some(moved)) => named.eq_ignore_ascii_case(moved),
+            (Some(_), None) => false,
+        };
+        let Some(start) = parse_a1(name).filter(|_| names_moved_sheet) else {
             shifted.push(tokens[index].clone());
             index += 1;
             continue;
@@ -772,7 +800,7 @@ mod tests {
 
 #[cfg(test)]
 mod shift_tests {
-    use super::{shift_formula_references, ShiftAxis};
+    use super::{shift_formula_references, ReferenceShift, ShiftAxis};
     use crate::reference::{MAX_COL, MAX_ROW};
 
     /// Every case here is what Excel 16 left in the cell after the operation.
@@ -791,7 +819,17 @@ mod shift_tests {
             ("=A2*2", 2, -1, "=#REF!*2"),
         ] {
             assert_eq!(
-                shift_formula_references(formula, ShiftAxis::Rows, at, count, (1, MAX_COL + 1)).unwrap(),
+                shift_formula_references(
+                    formula,
+                    &ReferenceShift {
+                        axis: ShiftAxis::Rows,
+                        at,
+                        count,
+                        across: (1, MAX_COL + 1),
+                        sheet: None,
+                    },
+                )
+                .unwrap(),
                 expected,
                 "{formula} with {count} at row {at}"
             );
@@ -811,7 +849,17 @@ mod shift_tests {
             ("=SUM(A2:A3)", 2, -2, "=SUM(#REF!)"),
         ] {
             assert_eq!(
-                shift_formula_references(formula, ShiftAxis::Rows, at, count, (1, MAX_COL + 1)).unwrap(),
+                shift_formula_references(
+                    formula,
+                    &ReferenceShift {
+                        axis: ShiftAxis::Rows,
+                        at,
+                        count,
+                        across: (1, MAX_COL + 1),
+                        sheet: None,
+                    },
+                )
+                .unwrap(),
                 expected,
                 "{formula} with {count} at row {at}"
             );
@@ -827,17 +875,64 @@ mod shift_tests {
             ("=SUM(A1:C1)", 2, -1, "=SUM(A1:B1)"),
         ] {
             assert_eq!(
-                shift_formula_references(formula, ShiftAxis::Columns, at, count, (1, MAX_ROW + 1)).unwrap(),
+                shift_formula_references(
+                    formula,
+                    &ReferenceShift {
+                        axis: ShiftAxis::Columns,
+                        at,
+                        count,
+                        across: (1, MAX_ROW + 1),
+                        sheet: None,
+                    },
+                )
+                .unwrap(),
                 expected,
                 "{formula} with {count} at column {at}"
             );
         }
     }
 
+    fn whole_rows(at: u32, count: i64, sheet: Option<&str>) -> ReferenceShift<'_> {
+        ReferenceShift {
+            axis: ShiftAxis::Rows,
+            at,
+            count,
+            across: (1, MAX_COL + 1),
+            sheet,
+        }
+    }
+
+    /// A formula on another sheet follows the rows of the sheet it names.
+    /// Measured against Excel after inserting a row on a sheet called Data.
+    #[test]
+    fn a_reference_follows_the_sheet_it_names() {
+        for (formula, expected) in [
+            ("=Data!A5*2", "=Data!A6*2"),
+            ("=SUM(Data!A1:A6)", "=SUM(Data!A2:A7)"),
+            // A sheet the change never touched keeps its references.
+            ("=Report!A5*2", "=Report!A5*2"),
+            // An unqualified reference belongs to whichever sheet holds it.
+            ("=A5*2", "=A6*2"),
+        ] {
+            assert_eq!(
+                shift_formula_references(formula, &whole_rows(1, 1, Some("Data"))).unwrap(),
+                expected,
+                "{formula} after a row went into Data"
+            );
+        }
+        // Excel writes `=Data!#REF!*2` here, keeping a sheet name that no longer
+        // points anywhere. This crate collapses a broken reference to the error
+        // value itself, which reads the same when evaluated.
+        assert_eq!(
+            shift_formula_references("=Data!A5*2", &whole_rows(5, -1, Some("Data"))).unwrap(),
+            "=#REF!*2"
+        );
+    }
+
     #[test]
     fn a_reference_to_another_sheet_stays_put() {
         assert_eq!(
-            shift_formula_references("=Sheet2!A2*2", ShiftAxis::Rows, 1, 1, (1, MAX_COL + 1)).unwrap(),
+            shift_formula_references("=Sheet2!A2*2", &whole_rows(1, 1, None)).unwrap(),
             "=Sheet2!A2*2"
         );
     }
@@ -864,7 +959,17 @@ mod shift_tests {
             ("=B2*2", -1, "=#REF!*2"),
         ] {
             assert_eq!(
-                shift_formula_references(formula, ShiftAxis::Rows, 2, count, column_b).unwrap(),
+                shift_formula_references(
+                    formula,
+                    &ReferenceShift {
+                        axis: ShiftAxis::Rows,
+                        at: 2,
+                        count,
+                        across: column_b,
+                        sheet: None,
+                    },
+                )
+                .unwrap(),
                 expected,
                 "{formula} with {count} at row 2 across column B"
             );
@@ -882,7 +987,17 @@ mod shift_tests {
             ("=C2*2", -1, "=B2*2"),
         ] {
             assert_eq!(
-                shift_formula_references(formula, ShiftAxis::Columns, 2, count, row_2).unwrap(),
+                shift_formula_references(
+                    formula,
+                    &ReferenceShift {
+                        axis: ShiftAxis::Columns,
+                        at: 2,
+                        count,
+                        across: row_2,
+                        sheet: None,
+                    },
+                )
+                .unwrap(),
                 expected,
                 "{formula} with {count} at column 2 across row 2"
             );
@@ -893,7 +1008,7 @@ mod shift_tests {
     #[test]
     fn a_function_name_is_left_alone() {
         assert_eq!(
-            shift_formula_references("=LOG10(A2)", ShiftAxis::Rows, 1, 1, (1, MAX_COL + 1)).unwrap(),
+            shift_formula_references("=LOG10(A2)", &whole_rows(1, 1, None)).unwrap(),
             "=LOG10(A3)"
         );
     }

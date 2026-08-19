@@ -52,7 +52,9 @@ pub mod value;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};
 pub use engine::{CalcError, RecalcReport, Workbook};
-pub use lexer::{shift_formula_references, translate_formula_references, ShiftAxis};
+pub use lexer::{
+    shift_formula_references, translate_formula_references, ReferenceShift, ShiftAxis,
+};
 pub use lexer::ParseError;
 pub use parser::parse;
 pub use reference::{CellRef, RangeRef, Reference};

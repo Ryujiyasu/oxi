@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Workbook};
-use oxicells_core::ShiftAxis;
+use oxicells_core::{ReferenceShift, ShiftAxis};
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
@@ -2162,17 +2162,27 @@ impl<'a> WorkbookHost<'a> {
             true
         });
 
-        for row in &mut worksheet.rows {
-            for cell in &mut row.cells {
-                let Some(formula) = cell.formula.as_ref() else {
-                    continue;
-                };
-                // A formula this build cannot read is left as the author wrote
-                // it rather than silently half-moved.
-                if let Ok(shifted) =
-                    oxicells_core::shift_formula_references(formula, axis, at, count, across)
-                {
-                    cell.formula = Some(shifted);
+        // Every sheet's formulas are rewritten, not just this one: a formula on
+        // another sheet naming this one follows the cells that moved.
+        let moved_sheet = self.workbook.sheets[range.sheet].name.clone();
+        let shift = ReferenceShift {
+            axis,
+            at,
+            count,
+            across,
+            sheet: Some(&moved_sheet),
+        };
+        for worksheet in &mut self.workbook.sheets {
+            for row in &mut worksheet.rows {
+                for cell in &mut row.cells {
+                    let Some(formula) = cell.formula.as_ref() else {
+                        continue;
+                    };
+                    // A formula this build cannot read is left as the author
+                    // wrote it rather than silently half-moved.
+                    if let Ok(shifted) = oxicells_core::shift_formula_references(formula, &shift) {
+                        cell.formula = Some(shifted);
+                    }
                 }
             }
         }
@@ -6306,6 +6316,46 @@ mod tests {
             execute_with_host(&module, "Act", vec![], &mut host)
                 .expect_err("that shift belongs to the other operation");
         }
+    }
+
+    /// A formula on one sheet follows rows inserted on the sheet it names.
+    /// Measured against Excel with sheets called Data and Report.
+    #[test]
+    fn formulas_on_other_sheets_follow_the_rows_that_moved() {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "Data".to_string();
+        let mut report = workbook.sheets[0].clone();
+        report.name = "Report".to_string();
+        report.rows = Vec::new();
+        workbook.sheets.push(report);
+
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Worksheets(\"Report\").Range(\"A1\").Formula = \"=Data!A5*2\"\n\
+               Worksheets(\"Report\").Range(\"A2\").Formula = \"=SUM(Data!A1:A6)\"\n\
+               Worksheets(\"Report\").Range(\"A3\").Formula = \"=Report!A5*2\"\n\
+               Worksheets(\"Data\").Range(\"A1\").EntireRow.Insert\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+
+        let formula = |row: u32| {
+            workbook.sheets[1]
+                .rows
+                .iter()
+                .find(|candidate| candidate.index == row)
+                .and_then(|found| found.cells.iter().find(|cell| cell.col == 0))
+                .and_then(|cell| cell.formula.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(formula(1), "Data!A6*2");
+        assert_eq!(formula(2), "SUM(Data!A2:A7)");
+        // Report's own rows never moved, so a reference to them stays.
+        assert_eq!(formula(3), "Report!A5*2");
     }
 
     #[test]
