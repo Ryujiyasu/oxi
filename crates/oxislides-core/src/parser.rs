@@ -3021,6 +3021,18 @@ fn parse_inherited_shapes(
     let s_inherit_fillimg = std::env::var("OXI_LMFILLIMG_DISABLE").is_err();
     // An inherited shape may keep a preset the renderer can actually draw.
     let s_inherit_prst = std::env::var("OXI_LMPRST_DISABLE").is_err();
+    // A layout/master shape can live inside a `p:grpSp`, and this walk treated
+    // the whole group as ONE candidate it then refused -- so every shape in it
+    // was invisible. 1241 shapes across 452 groups are like that (d19 460,
+    // d10 408, d01 64, d03 54, d12 46, d18 42), including the pencils d19
+    // slide 1 is built from. Descend instead, carrying the group's child-space
+    // mapping the way `parse_slide` does.
+    let s_inherit_grp = std::env::var("OXI_LMGRP_DISABLE").is_err();
+    // (origin x, origin y, scale x, scale y, rotation deg, centre x, centre y)
+    let mut ig_grp: Vec<(f32, f32, f32, f32, f32, f32, f32)> = Vec::new();
+    let mut in_grp_pr = false;
+    let mut gg = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let mut gg_rot: f32 = 0.0;
     let mut ig_fill_img = false;
     let mut ig_rot: f32 = 0.0;
     let mut ig_flip = (false, false);
@@ -3058,9 +3070,61 @@ fn parse_inherited_shapes(
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "spTree" => in_tree = false,
+                    "grpSpPr" if in_grp_pr => {
+                        in_grp_pr = false;
+                        let base = if ig_grp.len() >= 2 {
+                            ig_grp[ig_grp.len() - 2]
+                        } else {
+                            (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0)
+                        };
+                        let bx = base.0 + gg.0 * base.2;
+                        let by = base.1 + gg.1 * base.3;
+                        let sx = if gg.6 != 0.0 { gg.2 * base.2 / gg.6 } else { base.2 };
+                        let sy = if gg.7 != 0.0 { gg.3 * base.3 / gg.7 } else { base.3 };
+                        if let Some(top) = ig_grp.last_mut() {
+                            *top = (
+                                bx - gg.4 * sx,
+                                by - gg.5 * sy,
+                                sx,
+                                sy,
+                                base.4 + gg_rot,
+                                bx + gg.2 * base.2 / 2.0,
+                                by + gg.3 * base.3 / 2.0,
+                            );
+                        }
+                    }
+                    "grpSp" if s_inherit_grp && in_tree && nest == 0 => {
+                        ig_grp.pop();
+                    }
                     "sp" | "pic" | "grpSp" | "cxnSp" | "graphicFrame" if in_tree => {
                         nest = nest.saturating_sub(1);
                         if nest == 0 {
+                            // A shape inside a p:grpSp states its geometry in
+                            // the group's child space.
+                            if let Some(&(ox, oy, sx, sy, grot, gcx, gcy)) = ig_grp.last() {
+                                x = ox + x * sx;
+                                y = oy + y * sy;
+                                w *= sx;
+                                h *= sy;
+                                if grot.abs() > 1e-4 {
+                                    // The group turns as a whole (S-GRPROT):
+                                    // the child's centre swings about the
+                                    // group's and the child keeps its size,
+                                    // turned by the same angle on top of its
+                                    // own. d10's layout2 has 12 groups, SIX of
+                                    // them rotated -- placing their children
+                                    // square left a second, offset copy of the
+                                    // frame beside the right one.
+                                    let (t, u) = (x + w / 2.0 - gcx, y + h / 2.0 - gcy);
+                                    let (sn, cs) =
+                                        (grot.to_radians().sin(), grot.to_radians().cos());
+                                    let (nx, ny) =
+                                        (gcx + t * cs - u * sn, gcy + t * sn + u * cs);
+                                    x = nx - w / 2.0;
+                                    y = ny - h / 2.0;
+                                    ig_rot += grot;
+                                }
+                            }
                             // Close the candidate.
                             if ok && have_off && have_ext && w > 0.0 && h > 0.0 {
                                 let content = match kind {
@@ -3280,6 +3344,44 @@ fn parse_inherited_shapes(
         }
 
         match name.as_str() {
+            "grpSp" if s_inherit_grp && nest == 0 => {
+                if !empty {
+                    let base = ig_grp
+                        .last()
+                        .copied()
+                        .unwrap_or((0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0));
+                    ig_grp.push(base);
+                }
+            }
+            "grpSpPr" if s_inherit_grp && !ig_grp.is_empty() => {
+                if !empty {
+                    in_grp_pr = true;
+                    gg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+                    gg_rot = 0.0;
+                }
+            }
+            "xfrm" if in_grp_pr => {
+                gg_rot = get_attr(e, "rot")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(|v| v / 60000.0)
+                    .unwrap_or(0.0);
+            }
+            "off" if in_grp_pr => {
+                gg.0 = get_attr(e, "x").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+                gg.1 = get_attr(e, "y").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+            }
+            "ext" if in_grp_pr => {
+                gg.2 = get_attr(e, "cx").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+                gg.3 = get_attr(e, "cy").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+            }
+            "chOff" if in_grp_pr => {
+                gg.4 = get_attr(e, "x").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+                gg.5 = get_attr(e, "y").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+            }
+            "chExt" if in_grp_pr => {
+                gg.6 = get_attr(e, "cx").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+                gg.7 = get_attr(e, "cy").and_then(|v| v.parse().ok()).map(emu_to_pt).unwrap_or(0.0);
+            }
             "sp" | "pic" | "grpSp" | "cxnSp" | "graphicFrame" => {
                 if nest == 0 {
                     // Only p:sp and p:pic can be faithful; a grpSp/cxnSp/
