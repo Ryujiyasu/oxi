@@ -573,7 +573,12 @@ impl<'a> Runtime<'a> {
                 .remove(&frame.procedure_name)
                 .map(|value| value.borrow().clone())
                 .unwrap_or(Value::Empty);
-            value
+            match procedure.return_type.as_ref() {
+                Some(return_type) => {
+                    coerce_declared(value, return_type, procedure.span.line)?
+                }
+                None => value,
+            }
         };
         Ok(value)
     }
@@ -6872,6 +6877,76 @@ fn numeric_literal(value: f64) -> Value {
     }
 }
 
+/// Narrows a value to a declared VBA type, the way `Function Total() As Long`
+/// hands back a Long whatever it was given. Whole types round half to even, so
+/// both 42.5 and 43.5 land on an even number, and a value too large for the
+/// type is the overflow VBA reports rather than a wrapped number.
+///
+/// Types this runtime holds no distinct value for — Currency, Date, Decimal,
+/// Variant and the object types — pass through untouched.
+fn coerce_declared(value: Value, type_name: &TypeName, line: u32) -> Result<Value, RuntimeError> {
+    let (low, high) = match type_name.name.to_ascii_lowercase().as_str() {
+        "byte" => (0.0, 255.0),
+        "integer" => (-32_768.0, 32_767.0),
+        "long" => (-2_147_483_648.0, 2_147_483_647.0),
+        "longlong" | "longptr" => (i64::MIN as f64, i64::MAX as f64),
+        "single" => {
+            let number = coerce_number(&value, type_name, line)?;
+            let narrowed = number as f32;
+            if !narrowed.is_finite() && number.is_finite() {
+                return Err(overflow(type_name, line));
+            }
+            return Ok(Value::Double(narrowed as f64));
+        }
+        "double" => return Ok(Value::Double(coerce_number(&value, type_name, line)?)),
+        "boolean" => {
+            return Ok(Value::Boolean(match &value {
+                Value::Boolean(value) => *value,
+                Value::String(_) | Value::Integer(_) | Value::Double(_) => {
+                    coerce_number(&value, type_name, line)? != 0.0
+                }
+                _ => return Ok(value),
+            }))
+        }
+        "string" => {
+            return match &value {
+                Value::Empty => Ok(Value::String(String::new())),
+                Value::Object(_) | Value::Nothing | Value::Null => Ok(value),
+                value => text(value)
+                    .map(Value::String)
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line))),
+            }
+        }
+        _ => return Ok(value),
+    };
+    if matches!(value, Value::Object(_) | Value::Nothing | Value::Null) {
+        return Ok(value);
+    }
+    let number = coerce_number(&value, type_name, line)?.round_ties_even();
+    if !(low..=high).contains(&number) {
+        return Err(overflow(type_name, line));
+    }
+    Ok(Value::Integer(number as i64))
+}
+
+fn coerce_number(value: &Value, type_name: &TypeName, line: u32) -> Result<f64, RuntimeError> {
+    number(value).map_err(|_| {
+        error(
+            RuntimeErrorKind::TypeMismatch,
+            format!("type mismatch storing {} in {}", value_type_name(value), type_name.name),
+            Some(line),
+        )
+    })
+}
+
+fn overflow(type_name: &TypeName, line: u32) -> RuntimeError {
+    error(
+        RuntimeErrorKind::Overflow,
+        format!("value is outside the range of {}", type_name.name),
+        Some(line),
+    )
+}
+
 fn default_value(type_name: &TypeName) -> Value {
     match type_name.name.to_ascii_lowercase().as_str() {
         "boolean" => Value::Boolean(false),
@@ -7796,6 +7871,53 @@ mod tests {
                 "3|8|0|4|TEXT|42|42|True|False|True|Cell|True".to_string()
             )
         );
+    }
+
+    /// A typed function narrows whatever it was given. Measured in VBA: whole
+    /// types round half to even, so 42.5 falls to 42 while 43.5 climbs to 44.
+    #[test]
+    fn a_functions_result_takes_its_declared_type() {
+        for (declared, assigned, expected) in [
+            ("Long", "42.4", Value::Integer(42)),
+            ("Long", "42.5", Value::Integer(42)),
+            ("Long", "43.5", Value::Integer(44)),
+            ("Long", "42.6", Value::Integer(43)),
+            ("Long", "-42.5", Value::Integer(-42)),
+            ("Integer", "42.5", Value::Integer(42)),
+            ("Long", "\"17\"", Value::Integer(17)),
+            ("Double", "42", Value::Double(42.0)),
+            ("Single", "0.5", Value::Double(0.5)),
+            ("String", "42", Value::String("42".to_string())),
+            ("Boolean", "3", Value::Boolean(true)),
+            ("Boolean", "0", Value::Boolean(false)),
+            ("Variant", "42", Value::Integer(42)),
+        ] {
+            let source =
+                format!("Public Function Narrow() As {declared}\n  Narrow = {assigned}\nEnd Function\n");
+            let module = parse_module(&source).unwrap();
+            assert_eq!(
+                execute(&module, "Narrow", vec![]).unwrap(),
+                expected,
+                "{declared} holding {assigned}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_type_refuses_what_will_not_fit() {
+        for (declared, assigned, kind) in [
+            ("Integer", "40000", RuntimeErrorKind::Overflow),
+            ("Byte", "300", RuntimeErrorKind::Overflow),
+            ("Long", "3000000000", RuntimeErrorKind::Overflow),
+            ("Long", "\"abc\"", RuntimeErrorKind::TypeMismatch),
+        ] {
+            let source =
+                format!("Public Function Narrow() As {declared}\n  Narrow = {assigned}\nEnd Function\n");
+            let module = parse_module(&source).unwrap();
+            let error = execute(&module, "Narrow", vec![])
+                .expect_err(&format!("{declared} cannot hold {assigned}"));
+            assert_eq!(error.kind, kind, "{declared} holding {assigned}");
+        }
     }
 
     #[test]
