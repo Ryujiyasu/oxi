@@ -55,7 +55,14 @@ SPACINGS = [("a240", 240), ("a276", 276)]
 #   model C  factor x hhea_max, floor 1.2em    -> 17.2485 / 22.998 (G+A)
 # and Cambria (hhea 11.724) vs Arial (11.499) pins WHICH hhea enters the term.
 MIXED = [("Garamond", "Arial"), ("Garamond", "Cambria"),
-         ("Garamond", "Garamond"), ("Garamond", "!Arial")]
+         ("Garamond", "Garamond"), ("Garamond", "!Arial"),
+         # 2026-08-20 fourth cut: in the REAL forms document the only foreign-
+         # font fragment on the heading line is the marker-suffix TAB (a space,
+         # Arial-BoldMT in Word's own PDF) -- and the ink-corrected span reads
+         # 33.75-33.84 = the PLAIN Garamond height, not the composed 34.51.
+         # Hypothesis: a WHITESPACE-ONLY fragment does not join the line-height
+         # composition. "~Name" = the second run is a single space in Name.
+         ("Garamond", "~Arial"), ("Garamond", "~Cambria")]
 MIX_SPACINGS = [("a240", 240), ("a276", 276), ("a360", 360), ("a480", 480)]
 NLINES = 20
 # One WRAPPED paragraph per arm too: within-paragraph advance can differ from
@@ -146,8 +153,9 @@ def gen():
         elif kind == "mixed":
             # identical mixed lines: FONT text, one styled fb word, FONT tail.
             # fb "!Name" = REGULAR (no bold) second family.
-            nobold = fb.startswith("!")
-            fb2 = fb.lstrip("!")
+            nobold = fb.startswith("!") or fb.startswith("~")
+            ws_only = fb.startswith("~")
+            fb2 = fb.lstrip("!~")
             for j in range(NLINES):
                 body.append(
                     '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="%d"'
@@ -155,10 +163,11 @@ def gen():
                     '<w:sz w:val="20"/></w:rPr></w:pPr>'
                     "<w:r>%s<w:t xml:space=\"preserve\">a%dP%d Hxg </w:t></w:r>"
                     '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>%s'
-                    '<w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">BOLD</w:t></w:r>'
+                    '<w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r>'
                     "<w:r>%s<w:t xml:space=\"preserve\"> pqj kern</w:t></w:r></w:p>"
                     % (sv, font, font, rpr(font), ai, j, fb2, fb2,
-                       "" if nobold else "<w:b/>", rpr(font)))
+                       "" if nobold else "<w:b/>", " " if ws_only else "BOLD",
+                       rpr(font)))
         else:
             # marked line / EMPTY / marked line / EMPTY ... : the step between
             # marked lines = one marked + one empty advance
