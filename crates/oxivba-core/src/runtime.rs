@@ -198,6 +198,9 @@ struct Frame {
     constants: BTreeSet<String>,
     auto_new: BTreeMap<String, String>,
     fixed_strings: BTreeMap<String, usize>,
+    /// The type each variable was declared with, so an assignment can
+    /// narrow to it the way VBA does.
+    declared: BTreeMap<String, String>,
     variants: BTreeSet<String>,
     static_procedure: bool,
     with_objects: Vec<ObjectRef>,
@@ -491,6 +494,7 @@ impl<'a> Runtime<'a> {
             constants: BTreeSet::new(),
             auto_new: BTreeMap::new(),
             fixed_strings: BTreeMap::new(),
+            declared: BTreeMap::new(),
             variants: BTreeSet::new(),
             static_procedure: procedure.is_static,
             with_objects: Vec::new(),
@@ -506,7 +510,20 @@ impl<'a> Runtime<'a> {
                 BoundArgument::Value(value) => Rc::new(RefCell::new(value)),
                 BoundArgument::Reference(value) => value,
             };
+            let narrowed = !param.is_array
+                && param.mode == ParamMode::ByVal
+                && !param.type_name.is_new;
+            if narrowed {
+                let taken = value.borrow().clone();
+                *value.borrow_mut() =
+                    coerce_declared(taken, &param.type_name.name, procedure.span.line)?;
+            }
             frame.values.insert(key(&param.name), value);
+            if narrowed {
+                frame
+                    .declared
+                    .insert(key(&param.name), param.type_name.name.clone());
+            }
             if !param.is_array
                 && param.mode != ParamMode::ParamArray
                 && param.type_name.name.eq_ignore_ascii_case("variant")
@@ -575,7 +592,7 @@ impl<'a> Runtime<'a> {
                 .unwrap_or(Value::Empty);
             match procedure.return_type.as_ref() {
                 Some(return_type) => {
-                    coerce_declared(value, return_type, procedure.span.line)?
+                    coerce_declared(value, &return_type.name, procedure.span.line)?
                 }
                 None => value,
             }
@@ -693,6 +710,7 @@ impl<'a> Runtime<'a> {
                 constants: BTreeSet::new(),
                 auto_new: BTreeMap::new(),
                 fixed_strings: BTreeMap::new(),
+                declared: BTreeMap::new(),
                 variants: BTreeSet::new(),
                 static_procedure: false,
                 with_objects: Vec::new(),
@@ -1296,6 +1314,11 @@ impl<'a> Runtime<'a> {
             {
                 frame.variants.insert(name.clone());
             }
+            if variable.array_bounds.is_none() && !variable.type_name.is_new {
+                frame
+                    .declared
+                    .insert(name.clone(), variable.type_name.name.clone());
+            }
             frame.values.insert(name.clone(), slot);
             if variable.type_name.is_new {
                 frame
@@ -1686,6 +1709,10 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn declared_type(&self, frame: &Frame, name: &str) -> Option<String> {
+        frame.declared.get(&key(name)).cloned()
+    }
+
     fn fixed_string_width(&self, frame: &Frame, name: &str) -> Option<usize> {
         let name = key(name);
         if frame.values.contains_key(&name) {
@@ -1734,7 +1761,11 @@ impl<'a> Runtime<'a> {
             }
             Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
                 let implicit_variant = self.lookup_slot(frame, name).is_none();
-                let mut value = match self.fixed_string_width(frame, name) {
+                let mut value = match self.declared_type(frame, name) {
+                    Some(declared) => coerce_declared(value, &declared, line)?,
+                    None => value,
+                };
+                value = match self.fixed_string_width(frame, name) {
                     Some(width) => coerce_string_width(value, width, Some(line))?,
                     None => value,
                 };
@@ -3191,6 +3222,7 @@ fn empty_frame() -> Frame {
         constants: BTreeSet::new(),
         auto_new: BTreeMap::new(),
         fixed_strings: BTreeMap::new(),
+        declared: BTreeMap::new(),
         variants: BTreeSet::new(),
         static_procedure: false,
         with_objects: Vec::new(),
@@ -6884,26 +6916,26 @@ fn numeric_literal(value: f64) -> Value {
 ///
 /// Types this runtime holds no distinct value for — Currency, Date, Decimal,
 /// Variant and the object types — pass through untouched.
-fn coerce_declared(value: Value, type_name: &TypeName, line: u32) -> Result<Value, RuntimeError> {
-    let (low, high) = match type_name.name.to_ascii_lowercase().as_str() {
+fn coerce_declared(value: Value, declared: &str, line: u32) -> Result<Value, RuntimeError> {
+    let (low, high) = match declared.to_ascii_lowercase().as_str() {
         "byte" => (0.0, 255.0),
         "integer" => (-32_768.0, 32_767.0),
         "long" => (-2_147_483_648.0, 2_147_483_647.0),
         "longlong" | "longptr" => (i64::MIN as f64, i64::MAX as f64),
         "single" => {
-            let number = coerce_number(&value, type_name, line)?;
+            let number = coerce_number(&value, declared, line)?;
             let narrowed = number as f32;
             if !narrowed.is_finite() && number.is_finite() {
-                return Err(overflow(type_name, line));
+                return Err(overflow(declared, line));
             }
             return Ok(Value::Double(narrowed as f64));
         }
-        "double" => return Ok(Value::Double(coerce_number(&value, type_name, line)?)),
+        "double" => return Ok(Value::Double(coerce_number(&value, declared, line)?)),
         "boolean" => {
             return Ok(Value::Boolean(match &value {
                 Value::Boolean(value) => *value,
                 Value::String(_) | Value::Integer(_) | Value::Double(_) => {
-                    coerce_number(&value, type_name, line)? != 0.0
+                    coerce_number(&value, declared, line)? != 0.0
                 }
                 _ => return Ok(value),
             }))
@@ -6922,27 +6954,30 @@ fn coerce_declared(value: Value, type_name: &TypeName, line: u32) -> Result<Valu
     if matches!(value, Value::Object(_) | Value::Nothing | Value::Null) {
         return Ok(value);
     }
-    let number = coerce_number(&value, type_name, line)?.round_ties_even();
+    let number = coerce_number(&value, declared, line)?.round_ties_even();
     if !(low..=high).contains(&number) {
-        return Err(overflow(type_name, line));
+        return Err(overflow(declared, line));
     }
     Ok(Value::Integer(number as i64))
 }
 
-fn coerce_number(value: &Value, type_name: &TypeName, line: u32) -> Result<f64, RuntimeError> {
+fn coerce_number(value: &Value, declared: &str, line: u32) -> Result<f64, RuntimeError> {
     number(value).map_err(|_| {
         error(
             RuntimeErrorKind::TypeMismatch,
-            format!("type mismatch storing {} in {}", value_type_name(value), type_name.name),
+            format!(
+                "type mismatch storing {} in {declared}",
+                value_type_name(value)
+            ),
             Some(line),
         )
     })
 }
 
-fn overflow(type_name: &TypeName, line: u32) -> RuntimeError {
+fn overflow(declared: &str, line: u32) -> RuntimeError {
     error(
         RuntimeErrorKind::Overflow,
-        format!("value is outside the range of {}", type_name.name),
+        format!("value is outside the range of {declared}"),
         Some(line),
     )
 }
@@ -7900,6 +7935,87 @@ mod tests {
                 expected,
                 "{declared} holding {assigned}"
             );
+        }
+    }
+
+    /// A declared variable narrows what it is given, on every assignment rather
+    /// than only where it was declared. Measured in VBA.
+    #[test]
+    fn a_declared_variable_narrows_what_it_is_given() {
+        let module = parse_module(
+            "Public Function Narrow() As String\n\
+               Dim whole As Long\n\
+               Dim word As String\n\
+               Dim flag As Boolean\n\
+               Dim loose As Variant\n\
+               whole = 42.6\n\
+               Narrow = whole & \"|\"\n\
+               whole = 42.5\n\
+               Narrow = Narrow & whole & \"|\"\n\
+               whole = 43.5\n\
+               Narrow = Narrow & whole & \"|\"\n\
+               whole = \"17\"\n\
+               Narrow = Narrow & whole & \"|\"\n\
+               word = 42\n\
+               flag = 3\n\
+               loose = 42.6\n\
+               Narrow = Narrow & TypeName(whole) & \"|\" & TypeName(word) & \"|\" & word\n\
+               Narrow = Narrow & \"|\" & flag & \"|\" & loose & \"|\" & TypeName(loose)\n\
+             End Function\n",
+        )
+        .unwrap();
+        assert_eq!(
+            execute(&module, "Narrow", vec![]).unwrap(),
+            Value::String("43|42|44|17|Long|String|42|True|42.6|Double".to_string())
+        );
+    }
+
+    /// A ByVal parameter narrows its argument, including the value standing in
+    /// for an omitted optional one.
+    #[test]
+    fn a_byval_parameter_narrows_its_argument() {
+        let module = parse_module(
+            "Public Function Narrow() As String\n\
+               Narrow = TakesLong(42.6) & \"|\" & TakesLong(42.5) & \"|\" & TakesLong(\"17\")\n\
+               Narrow = Narrow & \"|\" & TakesOptional() & \"|\" & TakesOptional(9.7)\n\
+               Narrow = Narrow & \"|\" & TakesString(42) & \"|\" & TakesLoose(42.6)\n\
+             End Function\n\
+             Private Function TakesLong(ByVal n As Long) As String\n\
+               TakesLong = TypeName(n) & \":\" & n\n\
+             End Function\n\
+             Private Function TakesOptional(Optional ByVal n As Long = 5) As String\n\
+               TakesOptional = TypeName(n) & \":\" & n\n\
+             End Function\n\
+             Private Function TakesString(ByVal s As String) As String\n\
+               TakesString = TypeName(s) & \":\" & s\n\
+             End Function\n\
+             Private Function TakesLoose(ByVal v As Variant) As String\n\
+               TakesLoose = TypeName(v) & \":\" & v\n\
+             End Function\n",
+        )
+        .unwrap();
+        assert_eq!(
+            execute(&module, "Narrow", vec![]).unwrap(),
+            Value::String(
+                "Long:43|Long:42|Long:17|Long:5|Long:10|String:42|Double:42.6".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn a_declared_variable_refuses_what_will_not_fit() {
+        for (declared, assigned, kind) in [
+            ("Integer", "40000", RuntimeErrorKind::Overflow),
+            ("Byte", "300", RuntimeErrorKind::Overflow),
+            ("Long", "\"abc\"", RuntimeErrorKind::TypeMismatch),
+        ] {
+            let source = format!(
+                "Public Sub Store()\n  Dim slot As {declared}\n  slot = {assigned}\nEnd Sub\n"
+            );
+            let module = parse_module(&source).unwrap();
+            let error = execute(&module, "Store", vec![])
+                .expect_err(&format!("{declared} cannot hold {assigned}"));
+            assert_eq!(error.kind, kind, "{declared} holding {assigned}");
         }
     }
 
