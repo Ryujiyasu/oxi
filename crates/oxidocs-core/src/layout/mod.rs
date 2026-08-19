@@ -29053,7 +29053,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         _ => false,
                     }
                 });
-            // S1168 (2026-08-19, OPT-IN OXI_S1168=1) retires this veto.
+            // S1168 (2026-08-19, default ON, opt-out OXI_S1168_DISABLE) retires
+            // this veto.
             // Pushing every image-bearing row whole was S533's stand-in for
             // "an image is atomic", adopted because the element splitter
             // stranded images across the boundary -- but the atomicity is
@@ -29073,10 +29074,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // -- it is that the image does NOT FIT, so the line must move above
             // it and lands at the row top.
             //
-            // ★WHY OPT-IN: EN Phase 1 A/B over 248 docs moves exactly TWO, and
-            // one of them is a PASS: 002a301d 0.6846 -> 0.9692 (pcd +2 -> +1),
-            // 00161422 1.0000 -> 0.9824 (4 paragraphs at ONE p12/p13 boundary).
-            // n_pass 221 -> 220, so both merge-gate clauses fail.
+            // ★GATE: shipped WITH S1169, and only together. Alone, S1168 cost
+            // educational__00161422 its PASS (1.0000 -> 0.9824) -- not because
+            // the rule is wrong but because retiring the veto stopped hiding a
+            // dropped trailing-<w:br/> line in cells, which S1169 fixes. As a
+            // bundle the EN Phase-1 A/B is n_pass 221 -> 221 with NO doc going
+            // PASS -> FAIL, and two improve: 002a301d 0.6846 -> 0.9692 (pcd
+            // +2 -> +1) and legal__0010437a7f75f636 0.9452 -> 0.9952 (pcd
+            // -2 -> -1). Do not ship one without the other.
             // ★The residual is NOT a gap in this rule -- it is a pre-existing
             // drift the veto used to hide. Measured, not assumed:
             // `_pb_imgrowfit_gen.py` (k lines above a NON-fitting image, image
@@ -29097,7 +29102,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // a page is not the lowest thing on it. Use the PDF for page-bottom
             // questions -- the same trap as the Info6 caveat.)
             // So default-ON waits on that spacing bug, not on this rule.
-            let image_atomic_push = std::env::var("OXI_S1168").is_err()
+            let image_atomic_push = std::env::var("OXI_S1168_DISABLE").is_ok()
                 && row_has_image_block
                 && row_height <= content_height
                 && !s998_interior_image;
@@ -31249,6 +31254,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         crate::layout::jc_both_compress::CharContext,
                                     > = Vec::new();
                                     let mut is_first_line = true;
+                                    // S1169 (2026-08-19, default ON, opt-out
+                                    // OXI_S1169_DISABLE): a paragraph that ENDS
+                                    // with a hard break keeps the empty line that
+                                    // break opened. The break handler below pushes
+                                    // the finished line and leaves `current_line`
+                                    // empty; the final flush then skips it because
+                                    // it is empty, so the line silently vanishes --
+                                    // in CELLS only, since the body path builds its
+                                    // lines elsewhere and already agrees with Word.
+                                    // This cell renderer also disagreed with its OWN
+                                    // line-count estimate, which counts the break
+                                    // (`lines += 1`, the Session-109 mirror) -- the
+                                    // estimate==render invariant that path exists to
+                                    // keep. Probe `_pb_trailbr_gen.py`: Word puts TWO
+                                    // pitches between a paragraph ending in <w:br/>
+                                    // and the next (27.60 vs 13.80 plain, 41.40 for
+                                    // two breaks), in a cell exactly as in the body;
+                                    // Oxi matched the body arms and lost the cell one.
+                                    // Cost: educational__00161422's p12 fits 29 lines
+                                    // where Word fits 26, moving the row boundary a
+                                    // line late (S927 fixed this same class for
+                                    // <w:cr>: "dropping it collapsed a genuine
+                                    // trailing empty line").
+                                    let mut s1169_trailing_break = false;
                                     // R7.51 (2026-05-13): autoSpaceDE state for CJK↔Latin transitions.
                                     // Tracks the last emitted character across runs/buffers so we can
                                     // detect transitions and add Word's 2.5pt (10.5pt font) gap. The
@@ -31500,6 +31529,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     current_line_chars.extend(buf_chars.drain(..));
                                                 }
                                                 lines.push(std::mem::take(&mut current_line));
+                                                s1169_trailing_break = true;
                                                 line_x = 0.0;
                                                 current_line_chars.clear();
                                                 is_first_line = false;
@@ -32909,7 +32939,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         }
                                         s586_run_offset += s586_run_chars.len();
                                     }
-                                    if !current_line.is_empty() {
+                                    if !current_line.is_empty()
+                                        || (s1169_trailing_break
+                                            && std::env::var("OXI_S1169_DISABLE").is_err())
+                                    {
                                         lines.push(current_line);
                                     }
 
@@ -35040,7 +35073,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     page_bottom
                 };
-                // S1168 (2026-08-19, OPT-IN OXI_S1168=1 -- gate below):
+                // S1168 (2026-08-19, default ON, opt-out OXI_S1168_DISABLE):
                 // a row-split line is ONE horizontal line and an image is
                 // ATOMIC, so the line may not cross an image. Word's rule,
                 // derived by `_pb_cellimgtail_gen.py` (2-cell row, cell =
@@ -35070,7 +35103,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // site). S1130b tried pulling the line back WITHOUT the row-top
                 // case and scored 0.3524 -- "cut higher up" is not the rule,
                 // "if no line can be drawn, move the row" is.
-                let s1168 = std::env::var("OXI_S1168").is_ok();
+                let s1168 = std::env::var("OXI_S1168_DISABLE").is_err();
                 let row_top = cursor.cursor_y;
                 let split_y = if s1168 {
                     let mut cand = split_y;
