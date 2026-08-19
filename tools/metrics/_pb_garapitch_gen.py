@@ -40,6 +40,19 @@ from _pb_pxgrid_gen import CT, DRELS, NS, RELS  # noqa: E402
 PGW, PGH, MARG = 12240, 15840, 1440
 FONTS = ["Garamond", "Arial", "Times New Roman"]
 SPACINGS = [("a240", 240), ("a276", 276)]
+# MIXED arms (2026-08-20): forms__002fbe2c's whole p2 drift lives in two spans
+# whose heading line mixes Garamond with Arial Bold. Ink-corrected, Word's
+# advance for that line reads ~11.28 (= the Garamond-ish uniform pitch) while
+# Oxi bumps it to 11.75 -- so: which fragment governs a mixed line's advance?
+# Each mixed arm is a run of identical lines "gara-word ARIAL-BOLD-word
+# gara-word", so the pitch is again exact. The empty arms interleave EMPTY
+# paragraphs (the other half of those spans) between marked lines: the pitch
+# then reads (marked k+1) - (marked k) = empty + marked advance.
+MIXED = [("Garamond", "Arial"), ("Garamond", "Times New Roman"),
+         # same family, bold run only: is the trigger the FAMILY or the RUN?
+         ("Garamond", "Garamond"),
+         # no bold at all, second family regular: pure family mix
+         ("Garamond", "!Arial")]
 NLINES = 8
 # One WRAPPED paragraph per arm too: within-paragraph advance can differ from
 # the paragraph-to-paragraph step (spacing after / contextual gaps ride the
@@ -61,7 +74,12 @@ def para(text, font, line, pbb=False):
 
 
 def arms():
-    return [(f, sk, sv) for f in FONTS for sk, sv in SPACINGS]
+    base = [("plain", f, None, sk, sv) for f in FONTS for sk, sv in SPACINGS]
+    mixed = [("mixed", fa, fb, sk, sv) for fa, fb in MIXED for sk, sv in SPACINGS]
+    empty = [("empty", f, None, "a240", 240) for f in FONTS]
+    # size scaling: if the mixed advance is 1.2em it must be 14.4 at 12pt
+    big = [("mixed12", "Garamond", "Arial", "a240", 240)]
+    return base + mixed + empty + big
 
 
 def docx():
@@ -71,13 +89,47 @@ def docx():
 def gen():
     os.makedirs(OUT, exist_ok=True)
     body = []
-    for ai, (font, _sk, sv) in enumerate(arms()):
+    for ai, (kind, font, fb, _sk, sv) in enumerate(arms()):
         body.append(para("M%02d" % ai, font, sv, pbb=ai > 0))
-        # (a) N single-line paragraphs, identical text: para-to-para step
-        for j in range(NLINES):
-            body.append(para("a%dP%d Hxg pqj kern" % (ai, j), font, sv))
-        # (b) one wrapped paragraph, identical word: within-para line advance
-        body.append(para(" ".join("a%dWx" % ai for _ in range(WRAP_WORDS)), font, sv))
+        if kind == "plain":
+            for j in range(NLINES):
+                body.append(para("a%dP%d Hxg pqj kern" % (ai, j), font, sv))
+            body.append(para(" ".join("a%dWx" % ai for _ in range(WRAP_WORDS)), font, sv))
+        elif kind == "mixed12":
+            for j in range(NLINES):
+                body.append(
+                    '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
+                    ' w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="Garamond" w:hAnsi="Garamond"/>'
+                    '<w:sz w:val="24"/></w:rPr></w:pPr>'
+                    '<w:r><w:rPr><w:rFonts w:ascii="Garamond" w:hAnsi="Garamond"/>'
+                    '<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">a%dP%d Hxg </w:t></w:r>'
+                    '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/>'
+                    '<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">BOLD</w:t></w:r>'
+                    '<w:r><w:rPr><w:rFonts w:ascii="Garamond" w:hAnsi="Garamond"/>'
+                    '<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve"> pqj kern</w:t></w:r></w:p>'
+                    % (ai, j))
+        elif kind == "mixed":
+            # identical mixed lines: FONT text, one styled fb word, FONT tail.
+            # fb "!Name" = REGULAR (no bold) second family.
+            nobold = fb.startswith("!")
+            fb2 = fb.lstrip("!")
+            for j in range(NLINES):
+                body.append(
+                    '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="%d"'
+                    ' w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                    '<w:sz w:val="20"/></w:rPr></w:pPr>'
+                    "<w:r>%s<w:t xml:space=\"preserve\">a%dP%d Hxg </w:t></w:r>"
+                    '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>%s'
+                    '<w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">BOLD</w:t></w:r>'
+                    "<w:r>%s<w:t xml:space=\"preserve\"> pqj kern</w:t></w:r></w:p>"
+                    % (sv, font, font, rpr(font), ai, j, fb2, fb2,
+                       "" if nobold else "<w:b/>", rpr(font)))
+        else:
+            # marked line / EMPTY / marked line / EMPTY ... : the step between
+            # marked lines = one marked + one empty advance
+            for j in range(NLINES):
+                body.append(para("a%dP%d Hxg pqj kern" % (ai, j), font, sv))
+                body.append(para("", font, sv))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="%d" w:h="%d"/>'
@@ -105,15 +157,16 @@ def gen():
 
 def report(per, who):
     print("== %s ==" % who)
-    print("%-16s %-6s %-10s %-10s" % ("font", "line", "para_step", "wrap_step"))
-    for ai, (font, sk, _sv) in enumerate(arms()):
+    print("%-7s %-16s %-16s %-6s %-10s %-10s"
+          % ("kind", "font", "second", "line", "para_step", "wrap_step"))
+    for ai, (kind, font, fb, sk, _sv) in enumerate(arms()):
         g = per.get(ai)
         if not g:
-            print("%-16s %-6s MISSING" % (font[:16], sk))
+            print("%-7s %-16s %-16s %-6s MISSING" % (kind, font[:16], (fb or "")[:16], sk))
             continue
         pstep, wstep = g
-        print("%-16s %-6s %-10s %-10s"
-              % (font[:16], sk,
+        print("%-7s %-16s %-16s %-6s %-10s %-10s"
+              % (kind, font[:16], (fb or "")[:16], sk,
                  "%.3f" % pstep if pstep else "-",
                  "%.3f" % wstep if wstep else "-"))
 
