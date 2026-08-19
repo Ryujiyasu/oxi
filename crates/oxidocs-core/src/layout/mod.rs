@@ -29053,8 +29053,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         _ => false,
                     }
                 });
-            let image_atomic_push =
-                row_has_image_block && row_height <= content_height && !s998_interior_image;
+            // S1168 (2026-08-19, OPT-IN OXI_S1168=1) retires this veto.
+            // Pushing every image-bearing row whole was S533's stand-in for
+            // "an image is atomic", adopted because the element splitter
+            // stranded images across the boundary -- but the atomicity is
+            // GEOMETRIC, and the split site enforces it directly by refusing
+            // to let the break line cross an image.
+            // The probe settles that the veto is not Word: in
+            // `_pb_cellimgtail_gen.py` the cell is [image, tail lines] with
+            // NOTHING above the image, and Word still splits it, keeping the
+            // image plus 3/2/1/0 tail lines as the image walks down the page.
+            // Oxi kept ZERO in all seven arms under the veto; opt-in it
+            // reproduces Word's 3/2/1/0 with image bottoms inside 0.5pt.
+            // It also corrects two things the ledger had backwards: S998's
+            // "terminal image" reading (002a301d's image IS terminal and Word
+            // splits it anyway) and the before/after-content predicate (the
+            // probe cell has nothing before its image). What makes
+            // educational__00161422 push whole is not what surrounds the image
+            // -- it is that the image does NOT FIT, so the line must move above
+            // it and lands at the row top.
+            //
+            // ★WHY OPT-IN: EN Phase 1 A/B over 248 docs moves exactly TWO, and
+            // one of them is a PASS: 002a301d 0.6846 -> 0.9692 (pcd +2 -> +1),
+            // 00161422 1.0000 -> 0.9824 (4 paragraphs at ONE p12/p13 boundary).
+            // n_pass 221 -> 220, so both merge-gate clauses fail.
+            // The residual is a case this rule does not yet cover: at that
+            // boundary Word leaves 230pt of p12 BLANK and moves row 4 whole,
+            // while Oxi keeps 2 lines -- no image crosses the line there (the
+            // images sit wholly below it), so the pull-back never fires. The
+            // missing discriminator is when a fragment may be left behind AT
+            // ALL once the row's image has to move. Next instrument: a
+            // multi-cell variant of _pb_cellimgtail_gen.py that sweeps the free
+            // space above a row whose image cannot fit, and reads where Word
+            // switches from "keep the lines above" (technical__0061c884 keeps
+            // 9 paragraphs) to "move the row whole" (00161422). Needs the Word
+            // PDF for that page; the EN benchmark has COM truth only.
+            let image_atomic_push = std::env::var("OXI_S1168").is_err()
+                && row_has_image_block
+                && row_height <= content_height
+                && !s998_interior_image;
 
             // needs_row_split: only when overflow + table allows split.
             // widow_break_needed overrides split — we want the whole table on next page.
@@ -29309,10 +29346,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             _ => None,
                         })
                         .unwrap_or_default();
-                    eprintln!("[ROWPUSH] row={} cur={:.1} pbot={:.1} row_h={:.1} ovf={} lrpb_brk={} widow={} single={} midlrpb={} s754={} veto={} trH={:?} txt={:?}",
+                    // `veto` is the LRPB veto; the image veto and cantSplit are
+                    // separate and were the two that mattered when this was read
+                    // as a single flag -- print all three.
+                    eprintln!("[ROWPUSH] row={} cur={:.1} pbot={:.1} row_h={:.1} ovf={} lrpb_brk={} widow={} single={} midlrpb={} s754={} veto={} imgveto={} interiorimg={} cantsplit={} trH={:?} txt={:?}",
                         row_idx, cursor.cursor_y, page_bottom, row_height,
                         row_overflows, lrpb_row_should_break, widow_break_needed,
                         is_single_cell_row, has_lrpb_mid_row, s754_split, s814_lrpb_veto,
+                        image_atomic_push, s998_interior_image, row.cant_split,
                         row.height, txt);
                 }
                 // S1083 (2026-08-06, default ON, opt-out OXI_S1083_DISABLE):
@@ -34990,6 +35031,58 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     page_bottom
                 };
+                // S1168 (2026-08-19, OPT-IN OXI_S1168=1 -- gate below):
+                // a row-split line is ONE horizontal line and an image is
+                // ATOMIC, so the line may not cross an image. Word's rule,
+                // derived by `_pb_cellimgtail_gen.py` (2-cell row, cell =
+                // 220pt image + tail lines, filler swept a line at a time,
+                // image coordinates read back with PDF get_image_info):
+                //   fill26 img 445.1-665.1 keeps 3 tail lines
+                //   fill27 img 458.9-678.9 keeps 2
+                //   fill28 img 472.7-692.7 keeps 1
+                //   fill29 img 486.5-706.5 keeps 0 -- the image still stays
+                //   fill30 img bottom 720.3 (0.3pt over) -- the image moves
+                // i.e. the image stays whenever its BOTTOM fits and the tail
+                // packs in whatever is left (zero lines is a legal outcome);
+                // when it does not fit the line must move above it. Pulling
+                // up can expose a second image, so iterate to a fixed point.
+                //
+                // Landing at the row top means no line can be drawn at all,
+                // which is Word's whole-row push (educational__00161422 p4:
+                // Word leaves 113pt blank because the next row's tallest cell
+                // holds a 161pt image and only 113.5 is free). That falls out
+                // of the partition below for free -- every element's bottom is
+                // then past the line, so the entire row moves -- so this needs
+                // no separate branch, and the vertical borders / shading self-
+                // suppress because both test strictly against the line.
+                //
+                // This replaces the `image_atomic_push` whole-row veto, which
+                // was S533's stand-in for exactly this geometry (see the veto
+                // site). S1130b tried pulling the line back WITHOUT the row-top
+                // case and scored 0.3524 -- "cut higher up" is not the rule,
+                // "if no line can be drawn, move the row" is.
+                let s1168 = std::env::var("OXI_S1168").is_ok();
+                let row_top = cursor.cursor_y;
+                let split_y = if s1168 {
+                    let mut cand = split_y;
+                    loop {
+                        let crossed = row_elements
+                            .iter()
+                            .filter(|e| matches!(e.content, LayoutContent::Image { .. }))
+                            .filter(|e| e.y < cand - 0.1 && e.y + e.height > cand + 0.1)
+                            .map(|e| e.y)
+                            .fold(f32::INFINITY, f32::min);
+                        if !crossed.is_finite() {
+                            break cand;
+                        }
+                        if crossed <= row_top + 0.1 {
+                            break row_top;
+                        }
+                        cand = crossed;
+                    }
+                } else {
+                    split_y
+                };
                 // S819 (2026-07-13, default ON, opt-out OXI_S819_DISABLE, Latin
                 // exact-cell bundle): Word's split-row fill keeps a text line only when
                 // line_box_bottom + tcMar_b + border_width fits the content
@@ -35333,7 +35426,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // image in min_overflow and in the adjust keeps the image + its
                 // following text coupled (image lands at page_top+tcMar_t, the
                 // suffix text lands after it with the full image height reserved).
-                let s998_reanchor_img = s998_interior_image
+                // S1168 widens this to EVERY split that carried an image over,
+                // not just S998's interior case: with the whole-row veto gone,
+                // any image-bearing row can now split, and a text-only re-anchor
+                // leaves the image at its raw shift while the text jumps to the
+                // page top -- the S533 stranding (S1130 saw it as an image at
+                // y=-26.9 on the continuation page).
+                let s998_reanchor_img = (s998_interior_image || s1168)
                     && next_page_elems
                         .iter()
                         .any(|e| matches!(e.content, LayoutContent::Image { .. }));
@@ -36354,6 +36453,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if std::env::var("OXI_DBG_SPLIT").is_ok() {
                         eprintln!("[SPLIT-CURSOR] branch=geom cursor={:.2} (row_bottom={:.2} split_y={:.2})",
                             cursor.cursor_y, row_bottom, split_y);
+                    }
+                }
+                // S1168: the line landed at the row top, so nothing stayed
+                // behind -- this is a whole-row PUSH wearing a split's clothes,
+                // not a continuation. Every branch above prices a continuation
+                // (S817's tail, the measured cont_max_y, the pages_used
+                // geometry), and on educational__00161422 that left the cursor
+                // 24.7pt low: the next row slid down, its last line no longer
+                // fit, and it landed alone on a page of its own -- an empty p6
+                // and +1 for the rest of the document. A row that moved whole
+                // advances exactly like one laid out at the top of a fresh page.
+                if s1168 && split_y <= row_top + 0.1 {
+                    cursor.set(page_top + row_height);
+                    if std::env::var("OXI_DBG_SPLIT").is_ok() {
+                        eprintln!(
+                            "[SPLIT-CURSOR] branch=s1168-wholepush cursor={:.2}",
+                            cursor.cursor_y
+                        );
                     }
                 }
                 // S942 post-clamp (all split cursor branches): the continuation
