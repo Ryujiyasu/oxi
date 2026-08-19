@@ -579,6 +579,11 @@ fn parse_hex_rgb(s: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+/// `a:prstGeom prst="pie"` is drawn as its wedge unless this is set.
+fn pie_on() -> bool {
+    std::env::var("OXI_PIE_DISABLE").is_err()
+}
+
 fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
@@ -592,7 +597,11 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     use windows::Win32::Graphics::Gdi::*;
 
     let prst = match sh.shape_type.as_deref() {
-        Some(p @ ("ellipse" | "roundRect" | "homePlate" | "teardrop")) => p,
+        Some(p @ ("ellipse" | "roundRect" | "homePlate" | "teardrop" | "pie"))
+            if p != "pie" || pie_on() =>
+        {
+            p
+        }
         _ => return false,
     };
     // A translucent fill is composited by the caller's AlphaBlend path, which
@@ -668,6 +677,36 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
             let p = map(0.0, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
             line(map(w - d, 0.0)); line(map(w, h / 2.0));
             line(map(w - d, h)); line(map(0.0, h));
+        }
+        "pie" => {
+            // ECMA-376's `pie`: a wedge of the box's ellipse from `adj1` to
+            // `adj2`, both in 60000ths of a degree measured clockwise from 3
+            // o'clock (y grows downward), closed through the centre. 34 shapes
+            // over 7 dev decks ask for one; d19 slide 30 is four of them at
+            // adj1=10788866 adj2=16200000, rotated 0 / 90 / 180 / 270 to make
+            // the SWOT circle Oxi was drawing as a teal square.
+            let st = sh.adjustments.get("adj1").copied().unwrap_or(0.0);
+            let en = sh.adjustments.get("adj2").copied().unwrap_or(16_200_000.0);
+            let mut sw = en - st;
+            if sw <= 0.0 {
+                sw += 21_600_000.0;
+            }
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let at = |units: f32| {
+                let a = (units / 60_000.0).to_radians();
+                (rx + rx * a.cos(), ry + ry * a.sin())
+            };
+            let (sx, sy) = at(st);
+            let p = map(sx, sy);
+            let _ = MoveToEx(dc, p.x, p.y, None);
+            // One segment per degree keeps the polyline inside half a device
+            // pixel of the true arc for any shape that fits on a slide.
+            let steps = ((sw / 60_000.0).abs().ceil() as usize).clamp(2, 720);
+            for i in 1..=steps {
+                let (px, py) = at(st + sw * i as f32 / steps as f32);
+                line(map(px, py));
+            }
+            line(map(rx, ry));
         }
         "teardrop" => {
             // Default adj=100000: an ellipse whose upper-right quadrant is
