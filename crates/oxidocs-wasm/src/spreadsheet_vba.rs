@@ -2141,6 +2141,11 @@ impl<'a> WorkbookHost<'a> {
             if !taking_part(near) && !taking_part(far) {
                 return true;
             }
+            // A band reaching only part of the way across a merge cannot carry
+            // it, so Excel takes the merge apart and moves the cells alone.
+            if !taking_part(near) || !taking_part(far) {
+                return false;
+            }
             let (start, end) = if sideways {
                 (merge.start_col + 1, merge.end_col + 1)
             } else {
@@ -6356,6 +6361,94 @@ mod tests {
         assert_eq!(formula(2), "SUM(Data!A2:A7)");
         // Report's own rows never moved, so a reference to them stays.
         assert_eq!(formula(3), "Report!A5*2");
+    }
+
+    /// Renders the merges a sheet holds, in the address form the Excel probe
+    /// printed, so the expectations below are what Excel actually left.
+    fn merges(workbook: &Workbook) -> String {
+        if workbook.sheets[0].merge_cells.is_empty() {
+            return "none".to_string();
+        }
+        workbook.sheets[0]
+            .merge_cells
+            .iter()
+            .map(|merge| {
+                format!(
+                    "{}{}:{}{}",
+                    (b'A' + merge.start_col as u8) as char,
+                    merge.start_row,
+                    (b'A' + merge.end_col as u8) as char,
+                    merge.end_row
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn merged_grid(start_row: u32, start_col: u32, end_row: u32, end_col: u32) -> Workbook {
+        let mut workbook = filled_grid();
+        workbook.sheets[0].merge_cells.push(MergeCell {
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        });
+        workbook
+    }
+
+    fn act_on(mut workbook: Workbook, body: &str) -> Workbook {
+        let module = parse_module(&format!("Public Sub Act()\n  {body}\nEnd Sub\n")).unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        workbook
+    }
+
+    /// A band carries a merge it covers and takes apart one it only half
+    /// reaches. Every expectation is what Excel 16 left behind.
+    #[test]
+    fn a_merge_survives_only_a_band_that_covers_it() {
+        // The band is column B alone, so the B2:C2 merge cannot come along.
+        let workbook = act_on(
+            merged_grid(2, 1, 2, 2),
+            "Range(\"B2\").Insert xlShiftDown",
+        );
+        assert_eq!(merges(&workbook), "none");
+
+        let workbook = act_on(merged_grid(2, 1, 2, 2), "Range(\"B2\").Delete xlShiftUp");
+        assert_eq!(merges(&workbook), "none");
+
+        // A band as wide as the merge carries it down whole.
+        let workbook = act_on(
+            merged_grid(2, 1, 2, 2),
+            "Range(\"B2:C2\").Insert xlShiftDown",
+        );
+        assert_eq!(merges(&workbook), "B3:C3");
+
+        // Taking one of its two rows leaves the merge a row shorter.
+        let workbook = act_on(
+            merged_grid(2, 1, 3, 2),
+            "Range(\"B2:C2\").Delete xlShiftUp",
+        );
+        assert_eq!(merges(&workbook), "B2:C2");
+
+        // A column band cannot carry a merge that spans two rows.
+        let workbook = act_on(
+            merged_grid(2, 1, 3, 1),
+            "Range(\"B2\").Insert xlShiftToRight",
+        );
+        assert_eq!(merges(&workbook), "none");
+
+        // Whole rows reach across everything, so these always carry.
+        let workbook = act_on(merged_grid(2, 1, 2, 2), "Range(\"A2\").EntireRow.Delete");
+        assert_eq!(merges(&workbook), "none");
+
+        let workbook = act_on(merged_grid(2, 1, 3, 2), "Range(\"A2\").EntireRow.Delete");
+        assert_eq!(merges(&workbook), "B2:C2");
+
+        let workbook = act_on(merged_grid(2, 1, 3, 2), "Range(\"A1\").EntireRow.Insert");
+        assert_eq!(merges(&workbook), "B3:C4");
     }
 
     #[test]
