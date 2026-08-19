@@ -5828,7 +5828,8 @@ impl LayoutEngine {
                             false,
                             false,
                             None,
-                            None,
+                            None,          // S758
+                            None,          // S-TWOSEG
                             false,
                             0.0,
                             None,  // S900
@@ -5915,7 +5916,8 @@ impl LayoutEngine {
                             false,
                             false,
                             None,
-                            None,
+                            None,          // S758
+                            None,          // S-TWOSEG
                             false,
                             0.0,
                             None,  // S900
@@ -6024,6 +6026,7 @@ impl LayoutEngine {
                             false,
                             None,  // S755
                             None,  // S758
+                            None,  // S-TWOSEG
                             false, // S835
                             0.0,
                             None,  // S900
@@ -7710,6 +7713,57 @@ impl LayoutEngine {
                             }
                         })
                         .find(|(_, red, _)| *red > 6.0);
+                    // S-TWOSEG: the same band, asked a different question -- does
+                    // this paragraph have usable room on BOTH sides of the float?
+                    // If it does, the single-segment answer above is the wrong
+                    // shape (it would put the whole row in one strip and need
+                    // nearly twice Word's rows), so the geometry of both strips is
+                    // carried instead and the row is broken through the pair.
+                    let s758_two_seg: Option<(f32, f32, f32, f32)> = if std::env::var(
+                        "OXI_TWOSEG_DISABLE",
+                    )
+                    .is_err()
+                    {
+                        s758_bands
+                            .iter()
+                            .filter(|(pg, top, bot, bx0, bx1)| {
+                                *pg == current_page_idx
+                                    && cursor.cursor_y >= *top - 0.5
+                                    && cursor.cursor_y < *bot - 0.5
+                                    && *bx0 < start_x + content_width - 6.0
+                                    && *bx1 > start_x + 6.0
+                            })
+                            .find_map(|(_, _, _, bx0, bx1)| {
+                                let content_right = start_x + content_width;
+                                let ind_l = para
+                                    .style
+                                    .indent_left
+                                    .or_else(|| {
+                                        para.style.indent_left_chars.map(|c| c / 100.0 * 10.5)
+                                    })
+                                    .unwrap_or(0.0)
+                                    .max(0.0);
+                                let ind_r = para
+                                    .style
+                                    .indent_right
+                                    .or_else(|| {
+                                        para.style.indent_right_chars.map(|c| c / 100.0 * 10.5)
+                                    })
+                                    .unwrap_or(0.0)
+                                    .max(0.0);
+                                let pl = start_x + ind_l;
+                                let pr = content_right - ind_r;
+                                let left = bx0 - pl;
+                                let right = pr - bx1;
+                                // The same 30pt floor the single-segment arm uses to
+                                // call a strip unusable. Below it Word does not put
+                                // text there, so the pair is not a pair.
+                                (left >= 30.0 && right >= 30.0)
+                                    .then_some((pl, left, *bx1, right))
+                            })
+                    } else {
+                        None
+                    };
                     if std::env::var("OXI_DBG773").is_ok() {
                         for s in &para.shapes {
                             eprintln!(
@@ -7829,6 +7883,7 @@ impl LayoutEngine {
                         footer_tight,                                        // S726
                         s755_geom.as_ref(),                                  // S755
                         s758_para_band,                                      // S758
+                        s758_two_seg,                                        // S-TWOSEG
                         (footnote_reserve_current + delta_if_current) > 0.0, // S835
                         footnote_reserve_current,                            // S900
                         Some(&mut s900_para_deferred),                       // S900
@@ -9081,9 +9136,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 // banding it exploded its notes into 30pt-floor
                                 // strips. hmrc: Types box 240.65 / number boxes
                                 // ~490 → banded.
+                                // S-TWOSEG: the case this gate was holding open a
+                                // place for. When BOTH free sides are wide enough
+                                // to hold text, the float is banded too and the
+                                // paragraph flows through the pair of strips.
+                                // ed025c and hmrc are untouched by it: their floats
+                                // run to (or past) one column edge, so the narrow
+                                // side is ~0 and the pair never forms.
+                                let two_seg_ok = std::env::var("OXI_TWOSEG_DISABLE").is_err()
+                                    && left_gap.min(right_gap) >= 30.0;
                                 let offset_ok = std::env::var("OXI_S772_DISABLE").is_err()
-                                    && left_gap.min(right_gap) <= 24.0
-                                    && left_gap.max(right_gap) >= 100.0;
+                                    && ((left_gap.min(right_gap) <= 24.0
+                                        && left_gap.max(right_gap) >= 100.0)
+                                        || two_seg_ok);
+                                if std::env::var("OXI_DBG_TWOSEG").is_ok() {
+                                    eprintln!(
+                                        "[TWOSEG] band_x0={:.1} w={:.1} left_gap={:.1} right_gap={:.1} two_seg_ok={} is_align={}",
+                                        band_x0, table_w_pt, left_gap, right_gap, two_seg_ok, is_align
+                                    );
+                                }
                                 if band_x0 >= start_x - 1.0
                                     && band_x0 + table_w_pt <= start_x + content_width + 6.0
                                     && (is_align || offset_ok)
@@ -9586,6 +9657,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false,
                             None,  // S755
                             None,  // S758
+                            None,  // S-TWOSEG
                             false, // S835
                             0.0,
                             None,  // S900
@@ -9994,6 +10066,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S726: header bottom differs
                             None,  // S755
                             None,  // S758
+                            None,  // S-TWOSEG
                             false, // S835
                             0.0,
                             None,  // S900
@@ -10169,6 +10242,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S726: footer bottom differs
                             None,  // S755
                             None,  // S758
+                            None,  // S-TWOSEG
                             false, // S835
                             0.0,
                             None,  // S900
@@ -10733,6 +10807,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                         false, // S726
                                         None,  // S755
                                         None,  // S758
+                                        None,  // S-TWOSEG
                                         false, // S835
                                         0.0,
                                         None,  // S900
@@ -11243,6 +11318,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         false, // S726
                         None,  // S755
                         None,  // S758
+                        None,  // S-TWOSEG
                         false, // S835
                         0.0,
                         None,  // S900
@@ -13025,6 +13101,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // v1 = floating IMAGES only (all corpus wrapSquare anchors are
         // textboxes → corpus-inert by construction).
         s758_band: Option<(f32, f32, f32)>,
+        // S-TWOSEG: (left strip x, left width, right strip x, right width)
+        // when the float leaves usable room on both sides.
+        s758_two_seg: Option<(f32, f32, f32, f32)>,
         // S835 (2026-07-14): the page's CURRENT footnote reserve is non-zero —
         // the content bottom this paragraph tests against is the FOOTNOTE-AREA
         // top (a SOFT boundary: Word grants fs/16 of line-box relief there;
@@ -14189,6 +14268,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // S758: the paragraph starts inside a wrapSquare band — break at the
         // narrowed width; s758_wrap_full is the rebreak target at band exit.
         let s758_wrap_full = wrap_width;
+        // S-TWOSEG: the pair supplies its own two widths, so the single-segment
+        // narrowing and shift are dropped. The band BOTTOM is kept, because the
+        // rebreak at the band exit is what returns the paragraph to full width
+        // once it clears the float.
+        let s758_band = if s758_two_seg.is_some() {
+            s758_band.map(|(bot, _, _)| (bot, 0.0, 0.0))
+        } else {
+            s758_band
+        };
         let wrap_width = if let Some((_, red, _)) = s758_band {
             (wrap_width - red).max(30.0)
         } else {
@@ -14227,6 +14315,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             para_has_lrpb,
             caps_active,
         );
+        // S-TWOSEG: replace the full-width break with one row per pair of strips.
+        if let Some((_, seg1_w, _, seg2_w)) = s758_two_seg {
+            let two = self.break_two_segment_lines(
+                &fragments,
+                seg1_w,
+                seg2_w,
+                effective_first_indent,
+                &para.style,
+                effective_char_pitch,
+                effective_cw_ratio,
+                page.doc_grid_lines_and_chars,
+                true,
+                matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
+                page.doc_grid_no_type,
+                para_has_lrpb,
+                caps_active,
+            );
+            if !two.is_empty() {
+                lines = two;
+            }
+        }
         let s1026_replay_first_nlines = lines.len();
         // S721 body arm (2026-07-03, default ON, opt-out OXI_S721_DISABLE):
         // PARAGRAPH-TAIL ORPHAN ELIMINATION via a two-pass re-break. Word accepts
@@ -17555,7 +17664,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 0.0
             };
-            let line_x = start_x + indent_left + extra_indent + s758_line_shift;
+            // S-TWOSEG: a two-segment row starts at the left strip's own x, not
+            // at the paragraph indent, and jumps to the right strip mid-row (the
+            // fragment loop below does the jump at `seg2_at`).
+            let line_x = match (s758_two_seg, line.seg2_at) {
+                (Some((seg1_x, _, _, _)), Some(_)) if !s758_rebroken => seg1_x + extra_indent,
+                _ => start_x + indent_left + extra_indent + s758_line_shift,
+            };
 
             // Alignment offset
             let line_text_width: f32 = line.fragments.iter().map(|f| f.width).sum();
@@ -18341,7 +18456,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s706_on = std::env::var("OXI_S706_DISABLE").is_err();
             let mut run_bdr_acc: Option<(f32, f32, BorderDef)> = None;
 
+            // S-TWOSEG: where this row crosses the float, and to what x.
+            let two_seg_jump: Option<(usize, f32)> = match (s758_two_seg, line.seg2_at) {
+                (Some((_, _, seg2_x, _)), Some(at)) if !s758_rebroken && at > 0 => {
+                    Some((at, seg2_x))
+                }
+                _ => None,
+            };
             for (frag_idx, frag) in line.fragments.iter().enumerate() {
+                if let Some((at, seg2_x)) = two_seg_jump {
+                    if frag_idx == at {
+                        x = seg2_x;
+                    }
+                }
                 let base_font_size = frag.style.font_size.unwrap_or(para_font_size);
                 // Round 29: superscript/subscript rendering. Word default for
                 // <w:vertAlign w:val="superscript"/> and "subscript":
@@ -19948,6 +20075,145 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     }
 
     #[allow(unused_assignments)]
+    /// S-TWOSEG (2026-08-19, ★default ON, opt-out `OXI_TWOSEG_DISABLE`): lay a
+    /// paragraph through BOTH free strips beside an offset float.
+    ///
+    /// `s758_band` narrows a line to ONE strip, which is exact only while the
+    /// other strip is too thin to hold text -- hence S772's "narrow side <=24pt"
+    /// scope. probeqtbloffset's first float is not like that: it sits at tblpX
+    /// 3200tw in a 453.5pt column and leaves 152.9pt on its left and 116.4pt on
+    /// its right, and Word fills both. MEASURED (Word COM vs Oxi layout): the
+    /// 118-character paragraph beside it takes Word 90.1pt = 5 rows, exactly the
+    /// 25.5 characters per row that 152.9 + 116.4 buys; Oxi drew it full-width
+    /// through the float's own rectangle at 54.0pt = 3 rows, so each page held
+    /// one paragraph too many.
+    ///
+    /// One row is broken TWICE -- once at the left strip's width, once at the
+    /// right's -- rather than once at their sum, so kinsoku, yakumono capacity
+    /// and the kern/LATINEM widths all decide at the width they will be drawn
+    /// at. The two results become a single `Line` (one row = one cursor
+    /// advance) carrying the fragment index where the right strip begins.
+    ///
+    /// GATES: probeqtbloffset FAIL 0.9531 (-1 x 3) -> PASS 1.0000 {0: 64}, and
+    /// its two banded paragraphs go 3 -> 5 and 3 -> 4 rows, which is Word's
+    /// 90.1pt and 72.0pt exactly. Phase 1 95/96 mean 0.9995 -> **96/96 mean
+    /// 1.0000** with that one document the only change. Corpus SSIM A/B 238
+    /// checked / 0 changed bytes -- ed025c and hmrc, the floats S772 was
+    /// calibrated around, never form a pair because one of their sides is ~0.
+    /// `cargo test -p oxidocs-core` 36 suites / 412 passed.
+    #[allow(clippy::too_many_arguments)]
+    fn break_two_segment_lines(
+        &self,
+        fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
+        seg1_width: f32,
+        seg2_width: f32,
+        first_line_indent: f32,
+        para_style: &ParagraphStyle,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+        lines_and_chars: bool,
+        s476_body: bool,
+        is_justified: bool,
+        doc_grid_no_type: bool,
+        para_has_lrpb: bool,
+        caps_size_split: bool,
+    ) -> Vec<Line> {
+        type Owned = (String, RunStyle, Option<FieldType>, usize, usize);
+        let carry = |ls: &[Line]| -> Vec<Owned> {
+            ls.iter()
+                .flat_map(|l| {
+                    l.fragments.iter().map(|f| {
+                        (
+                            f.text.clone(),
+                            f.style.clone(),
+                            f.field_type.clone(),
+                            f.run_index,
+                            f.char_offset,
+                        )
+                    })
+                })
+                .collect()
+        };
+        let mut rest: Vec<Owned> = fragments
+            .iter()
+            .map(|(t, st, ft, ri, co)| {
+                ((*t).to_string(), (*st).clone(), ft.clone(), *ri, *co)
+            })
+            .collect();
+        let mut out: Vec<Line> = Vec::new();
+        let mut first_row = true;
+        let remaining_chars =
+            |v: &[Owned]| -> usize { v.iter().map(|(t, ..)| t.chars().count()).sum() };
+        while !rest.is_empty() {
+            // ★Count CHARACTERS, not entries: break_into_lines splits one run into
+            // one fragment per word (or per glyph in CJK), so the entry count GROWS
+            // on the first pass and a fragment-count guard fires immediately --
+            // which collapsed every banded paragraph to a single row.
+            let before = remaining_chars(&rest);
+            let mut row: Vec<LineFragment> = Vec::new();
+            let mut seam = 0usize;
+            let mut brk = LineBreakType::Normal;
+            let mut natural = 0.0f32;
+            let mut compressed = false;
+            for (seg, width) in [seg1_width, seg2_width].iter().enumerate() {
+                if rest.is_empty() {
+                    break;
+                }
+                let refs: Vec<(&str, &RunStyle, Option<FieldType>, usize, usize)> = rest
+                    .iter()
+                    .map(|(t, st, ft, ri, co)| (t.as_str(), st, ft.clone(), *ri, *co))
+                    .collect();
+                let broken = self.break_into_lines(
+                    &refs,
+                    *width,
+                    // Only the paragraph's very first row carries the first-line
+                    // indent, and only in the strip it actually starts in.
+                    if first_row && seg == 0 { first_line_indent } else { 0.0 },
+                    para_style,
+                    grid_char_pitch,
+                    grid_char_cw_ratio,
+                    lines_and_chars,
+                    s476_body,
+                    is_justified,
+                    doc_grid_no_type,
+                    para_has_lrpb,
+                    caps_size_split,
+                );
+                let Some(head) = broken.first() else { break };
+                if seg == 0 {
+                    seam = head.fragments.len();
+                }
+                natural += head.natural_total_width;
+                compressed |= head.was_compressed;
+                brk = head.break_type;
+                row.extend(head.fragments.iter().cloned());
+                rest = carry(&broken[1..]);
+                // A hard break inside the row ends the row there -- the rest of
+                // the text belongs on the next one.
+                if !matches!(brk, LineBreakType::Normal) {
+                    break;
+                }
+            }
+            first_row = false;
+            if row.is_empty() {
+                break;
+            }
+            out.push(Line {
+                fragments: row,
+                break_type: brk,
+                natural_total_width: natural,
+                was_compressed: compressed,
+                seg2_at: Some(seam),
+            });
+            // break_into_lines always consumes something; this only guards against
+            // a width so small that it cannot place even one fragment.
+            if remaining_chars(&rest) >= before {
+                break;
+            }
+        }
+        out
+    }
+
     fn break_into_lines(
         &self,
         fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
@@ -19991,6 +20257,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
         let mut lines = Vec::new();
         let mut current_line = Line {
+            seg2_at: None,
             fragments: vec![],
             ..Default::default()
         };
@@ -24071,6 +24338,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // Ensure at least one empty line for empty paragraphs
         if lines.is_empty() {
             lines.push(Line {
+                seg2_at: None,
                 fragments: vec![],
                 ..Default::default()
             });
@@ -24396,6 +24664,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let nat: f32 = frags.iter().map(|f| f.natural_width).sum();
                         let comp: f32 = frags.iter().map(|f| f.width).sum();
                         new_lines.push(Line {
+                            seg2_at: None,
                             fragments: frags,
                             break_type: LineBreakType::Normal,
                             natural_total_width: nat,
@@ -39169,6 +39438,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 #[derive(Default)]
 struct Line {
     fragments: Vec<LineFragment>,
+    /// S-TWOSEG: where the RIGHT free strip of a two-sided float band starts,
+    /// as an index into `fragments`. `None` = an ordinary line drawn at one x.
+    /// A line beside a float that leaves usable room on BOTH sides is one row
+    /// of text drawn in two places, which is what Word does and what a single
+    /// `line_x` cannot express.
+    seg2_at: Option<usize>,
     /// What kind of break follows this line (normal line break, page break, or column break)
     break_type: LineBreakType,
     /// 2-pass wrap: sum of fragment.natural_width (un-compressed). Used to determine
