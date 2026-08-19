@@ -13844,6 +13844,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // Symbol font bullets (•/●) have large glyphs relative to em-square.
             // No font size adjustment needed — use the paragraph's font size directly.
             let marker_metrics = self.metrics_for(marker_style, &para.style);
+            if std::env::var("OXI_DBG_MARKER").is_ok() {
+                eprintln!("[MARKER] text={:?} style_fam={:?} style_sz={:?} -> resolved fam={:?} fs={:.2} | first_run_fam={:?} ppr_fam={:?} drs={:?}",
+                    marker, marker_style.font_family, marker_style.font_size,
+                    marker_metrics.family, marker_font_size,
+                    para.runs.first().map(|r| r.style.font_family.clone()),
+                    para.style.ppr_rpr.as_ref().and_then(|r| r.font_family.clone()),
+                    para.style.default_run_style.as_ref().map(|r| r.font_family.clone()));
+            }
             // S692 (2026-06-29, SHIPPED default ON, opt-out OXI_MARKERCJK_DISABLE): a numbered-list label that is
             // CJK/full-width (e.g. 「第３４条」, the tokyoshugyo regulation article
             // markers) had its WIDTH computed with metrics_for (the ASCII font, Century),
@@ -19835,10 +19843,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // COM-confirmed (2026-04-16, 683f p2 + minimal repro): content paragraphs
         // adjacent to a RUN of ≥2 consecutive empty paragraphs get +0.5pt extra advance.
         // Only applies to LM0 no-grid single spacing. Skip if paragraph caused page break.
+        //
+        // S1173 (2026-08-20, default ON, opt-out OXI_S1173_DISABLE): CJK docs
+        // only. The 2026-04-16 derivation doc is 683f -- JP -- and its COM read
+        // predates the Info6 quantization lesson (Information(6) is 0.75pt-
+        // quantized in Latin docs; a phantom +0.5 is exactly its resolution).
+        // Word PDF truth 2026-08-20 falsifies the rule for Latin no-grid TWICE:
+        // the bisect3_e2 minimal repro (Garamond 10, [4 content, 2 empty,
+        // 4 content]) measures m03->t00 = 33.720 = 3 x 11.24 EXACT and
+        // t00->t01 = 11.28 -- no +0.5 on either side -- and forms__002fbe2c's
+        // real [empty, empty, numbered heading] spans measure 33.73/33.84
+        // (line-box) where Oxi's +0.5 made 34.25. That +0.5 x 2 spans is the
+        // document's whole p2 drift: it loses the last line and slips its one
+        // FAIL paragraph. 683f (JP) keeps the rule -- today's falsification is
+        // Latin-scoped, and 683f sits in the golden 96 to catch any flip.
         if adjacent_to_empty_run
             && is_single_lm0
             && grid_pitch.is_none()
             && (cursor.cursor_y - page_top).abs() > 0.1
+            && (self.doc_body_has_real_cjk || std::env::var("OXI_S1173_DISABLE").is_ok())
         {
             cursor.advance(0.5);
         }
