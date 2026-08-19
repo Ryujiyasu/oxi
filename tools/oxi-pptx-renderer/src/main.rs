@@ -380,6 +380,44 @@ fn compute_shape_anchor_off(
 ///     the theme MINOR font (`<a:minorFont><a:latin typeface=.../>`).
 /// An explicit run font (already resolved by the caller via `font_family`) wins
 /// over the theme; this function is only the fallback for unset runs.
+/// The face a paragraph asks for, through the chain ECMA-376 defines: the run
+/// first, then the PLACEHOLDER's own `a:lstStyle` (layout, then master), then
+/// the master `p:txStyles` level, and only then the theme's major/minor.
+///
+/// d15's master `body` placeholder declares Barlow Light while every level Oxi
+/// used to read -- master txStyles, theme minor, presentation default -- says
+/// Arial, so its body text came out in the wrong face and measured wider,
+/// wrapping a word early. 188 layout/master placeholders in the dev corpus name
+/// a font this way.
+fn paragraph_family(
+    pres: &Presentation,
+    sh: &Shape,
+    para: &oxislides_core::ir::SlideParagraph,
+    ph_levels: &[MasterStyleLevel],
+    master: &[MasterStyleLevel],
+) -> String {
+    if let Some(f) = para.runs.iter().find_map(|r| r.font_family.clone()) {
+        return f;
+    }
+    if phfont_on() {
+        let lvl = para.lvl as usize;
+        for levels in [ph_levels, master] {
+            if let Some(l) = levels.get(lvl.min(levels.len().saturating_sub(1))) {
+                if let Some(f) = l.font_family.clone() {
+                    return f;
+                }
+            }
+        }
+    }
+    resolve_font(pres, sh)
+}
+
+/// A placeholder's declared face is honoured unless this is set, which restores
+/// resolving straight to the theme.
+fn phfont_on() -> bool {
+    std::env::var("OXI_PHFONT_DISABLE").is_err()
+}
+
 fn resolve_font(pres: &Presentation, sh: &Shape) -> String {
     match sh.ph_type.as_deref() {
         // A centered title placeholder is still a TITLE: it uses the theme
@@ -2176,10 +2214,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let fs = paragraph_font_size(p, m_fs, prev_fs);
                             let family = effective_family(
                                 mem_dc,
-                                &p.runs
-                                    .iter()
-                                    .find_map(|r| r.font_family.clone())
-                                    .unwrap_or_else(|| resolve_font(pres, sh)),
+                                &paragraph_family(
+                                    pres,
+                                    sh,
+                                    p,
+                                    &sh.ph_levels[..],
+                                    m.map(std::slice::from_ref).unwrap_or(&[]),
+                                ),
                             );
                             let color = p
                                 .runs
@@ -2447,10 +2488,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     }
                                     let family = effective_family(
                                         mem_dc,
-                                        &p.runs
-                                            .iter()
-                                            .find_map(|r| r.font_family.clone())
-                                            .unwrap_or_else(|| resolve_font(pres, sh)),
+                                        &paragraph_family(
+                                            pres, sh, p, &sh.ph_levels[..], &[],
+                                        ),
                                     );
                                     let color = p.runs.iter().find_map(|r| r.color.clone());
                                     let bold = p.runs.iter().any(|r| r.bold);
@@ -9369,12 +9409,26 @@ fn layout_paragraph_baselines(
     // 60pt title step 64.8pt instead of 72pt).
     let n = para.line_spacing.or(m.line_spacing).unwrap_or(1.0);
     let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+    // The same chain the draw path uses, so the wrap measures the face that
+    // will actually be drawn: run, then the placeholder's own lstStyle (layout
+    // then master), then whatever the caller resolved.
     let family = effective_family(
         dc,
         &para
             .runs
             .iter()
             .find_map(|r| r.font_family.clone())
+            .or_else(|| {
+                if !phfont_on() {
+                    return None;
+                }
+                let lvl = para.lvl as usize;
+                [ph_levels, master].into_iter().find_map(|levels| {
+                    levels
+                        .get(lvl.min(levels.len().saturating_sub(1)))
+                        .and_then(|l| l.font_family.clone())
+                })
+            })
             .unwrap_or_else(|| default_family.to_string()),
     );
     let mar_l = para.mar_l.unwrap_or(m.mar_l);

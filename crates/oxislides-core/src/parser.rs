@@ -158,6 +158,7 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
     // Accumulation for the current a:lvlNpPr.
     let mut cur_level = MasterStyleLevel::default();
     let mut in_level = false;
+    let mut in_def_rpr_lvl = false;
     let mut in_spc_bef = false;
     let mut level_bullet_font: Option<String> = None;
 
@@ -215,7 +216,15 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                     // level's own paragraph run properties override it at
                     // render time; a layout-level txStyles is NOT inherited
                     // (Word render-truth, phfs probe).
+                    "latin" if in_level && in_def_rpr_lvl => {
+                        if let Some(t) = get_attr(&e, "typeface") {
+                            if !t.is_empty() && cur_level.font_family.is_none() {
+                                cur_level.font_family = Some(t);
+                            }
+                        }
+                    }
                     "defRPr" if in_level => {
+                        in_def_rpr_lvl = true;
                         if let Some(sz) = get_attr(&e, "sz") {
                             if let Ok(v) = sz.parse::<f32>() {
                                 cur_level.font_size = Some(v / 100.0);
@@ -298,7 +307,9 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                     "bodyStyle" => in_body_style = false,
                     "otherStyle" => in_other_style = false,
                     "spcBef" => in_spc_bef = false,
+                    "defRPr" if in_def_rpr_lvl => in_def_rpr_lvl = false,
                     n if is_master_lvl(n) && in_level => {
+                        in_def_rpr_lvl = false;
                         push_level!();
                         cur_level = MasterStyleLevel::default();
                         in_level = false;
@@ -511,6 +522,15 @@ fn parse_layout_ph_lststyles(
                         }
                     }
                     "lnSpc" if in_lst => in_ln_spc_lvl = true,
+                    "latin" if in_lst && cur_lvl.is_some() => {
+                        if let Some(idx) = cur_lvl {
+                            if let Some(t) = get_attr(&e, "typeface") {
+                                if !t.is_empty() && levels[idx].font_family.is_none() {
+                                    levels[idx].font_family = Some(t);
+                                }
+                            }
+                        }
+                    }
                     "defRPr" if in_lst && cur_lvl.is_some() => {
                         in_def_rpr = true;
                         if let (Some(idx), Some(sz)) = (cur_lvl, get_attr(&e, "sz")) {

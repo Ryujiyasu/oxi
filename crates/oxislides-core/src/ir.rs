@@ -102,6 +102,14 @@ pub struct MasterStyleLevel {
     /// always wins.
     #[serde(default)]
     pub font_size: Option<f32>,
+    /// `a:defRPr/a:latin@typeface` -- the face this outline level asks for.
+    /// The MASTER's placeholder SHAPE carries it: d15's `body` placeholder
+    /// declares Barlow Light while every other level of the chain (layout,
+    /// master txStyles, theme minor, presentation default) says Arial, and
+    /// PowerPoint follows the placeholder. 188 layout/master placeholders in
+    /// the dev corpus name a font this way.
+    #[serde(default)]
+    pub font_family: Option<String>,
     /// `a:lnSpc/a:spcPct` as a multiple (90000 -> 0.9). PowerPoint render-truth
     /// (d24 slide 1, 2026-08-18): the MASTER's title PLACEHOLDER carries
     /// `lnSpc 90%` while the master's `p:txStyles/p:titleStyle` says 100%, and
