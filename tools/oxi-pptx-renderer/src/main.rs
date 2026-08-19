@@ -1398,27 +1398,6 @@ unsafe fn alpha_blit(
     if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || iw <= 0 || ih <= 0 {
         return false;
     }
-    // `AlphaBlend` scales with its own sampler and ignores the DC's stretch
-    // mode, so S-IMGSMOOTH (which sets HALFTONE for `StretchDIBits`) never
-    // reached this path -- d28's engraved portrait comes through it and stayed
-    // byte-identical. Shrinking here instead, with a real filter, is the same
-    // fix for the same reason: the picture sits in exactly the right place
-    // (best-fit shift 0,0) and still carried mean|d| 17.34, its halftone
-    // measurably harsher than PowerPoint's (detail energy 43.67 vs 34.19).
-    let shrunk;
-    let (rgba, sx0, sy0, sw, sh, iw, ih) = if alphasmooth_on() && (dw < sw || dh < sh) {
-        let sub = image::imageops::crop_imm(rgba, sx0 as u32, sy0 as u32, sw as u32, sh as u32)
-            .to_image();
-        shrunk = image::imageops::resize(
-            &sub,
-            dw.max(1) as u32,
-            dh.max(1) as u32,
-            image::imageops::FilterType::Triangle,
-        );
-        (&shrunk, 0, 0, dw, dh, dw, dh)
-    } else {
-        (rgba, sx0, sy0, sw, sh, iw, ih)
-    };
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -7728,6 +7707,53 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // pixels. A fully opaque picture keeps the
                                 // exact SRCCOPY path (byte-identical), and a
                                 // failed AlphaBlend falls back to it too.
+                                // Resample once, here, for both blits.
+                                //
+                                // GDI's own samplers are what made this
+                                // necessary: `AlphaBlend` ignores the DC's
+                                // stretch mode entirely, and
+                                // `SetStretchBltMode(HALFTONE)` is a measured
+                                // no-op on a 32-bpp BI_RGB `StretchDIBits`
+                                // (setting it leaves d28 slide 3 byte-identical,
+                                // same sha). Both then drop-sample.
+                                //
+                                // It applies to any scale, not only a shrink:
+                                // the page is drawn at `supersample`x, so d28's
+                                // 2048px-wide engraved portrait is ENLARGED into
+                                // a 3000px box before the final 2x downsample
+                                // takes it to 1500 -- which is why every
+                                // shrink-only gate missed it.
+                                //
+                                // Two other models were measured and are worse.
+                                // Band-limiting to the final size and scaling up
+                                // (Triangle, then Nearest so the closing box
+                                // filter is exact) costs d28 a further -0.0041.
+                                // Filtering only a TRUE enlargement -- source
+                                // narrower than the final box -- gives d28 back
+                                // but loses most of the corpus gain (d22 0.9170
+                                // -> 0.9123, d38 0.9739 -> 0.9728). Straight to
+                                // the supersampled box wins by measurement.
+                                let scaled;
+                                let (rgba, sx0, sy0, sw, shh, iw, ih) = if alphasmooth_on()
+                                    && turned.is_none()
+                                    && (dw != sw || dh != shh)
+                                    && dw > 0
+                                    && dh > 0
+                                {
+                                    let sub = image::imageops::crop_imm(
+                                        &rgba, sx0 as u32, sy0 as u32, sw as u32, shh as u32,
+                                    )
+                                    .to_image();
+                                    scaled = image::imageops::resize(
+                                        &sub,
+                                        dw as u32,
+                                        dh as u32,
+                                        image::imageops::FilterType::Triangle,
+                                    );
+                                    (&scaled, 0, 0, dw, dh, dw, dh)
+                                } else {
+                                    (&rgba, sx0, sy0, sw, shh, iw, ih)
+                                };
                                 let composited = match &turned {
                                     // The resampled buffer always has
                                     // transparent corners, so it must go
