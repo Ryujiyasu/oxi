@@ -48,12 +48,16 @@ SPACINGS = [("a240", 240), ("a276", 276)]
 # gara-word", so the pitch is again exact. The empty arms interleave EMPTY
 # paragraphs (the other half of those spans) between marked lines: the pitch
 # then reads (marked k+1) - (marked k) = empty + marked advance.
-MIXED = [("Garamond", "Arial"), ("Garamond", "Times New Roman"),
-         # same family, bold run only: is the trigger the FAMILY or the RUN?
-         ("Garamond", "Garamond"),
-         # no bold at all, second family regular: pure family mix
-         ("Garamond", "!Arial")]
-NLINES = 8
+# 2026-08-20 second cut: the x1.15 window separated the candidate models by
+# only 0.037pt. x1.5 and x2.0 separate them by 0.25-0.5pt:
+#   model A  1.2em x factor                    -> 18.0 / 24.0      (G+A)
+#   model B  1.2·fs + (factor-1) x hhea_max    -> 17.7495 / 23.499 (G+A)
+#   model C  factor x hhea_max, floor 1.2em    -> 17.2485 / 22.998 (G+A)
+# and Cambria (hhea 11.724) vs Arial (11.499) pins WHICH hhea enters the term.
+MIXED = [("Garamond", "Arial"), ("Garamond", "Cambria"),
+         ("Garamond", "Garamond"), ("Garamond", "!Arial")]
+MIX_SPACINGS = [("a240", 240), ("a276", 276), ("a360", 360), ("a480", 480)]
+NLINES = 20
 # One WRAPPED paragraph per arm too: within-paragraph advance can differ from
 # the paragraph-to-paragraph step (spacing after / contextual gaps ride the
 # latter). The wrap text repeats one word so every wrapped line is identical.
@@ -75,11 +79,18 @@ def para(text, font, line, pbb=False):
 
 def arms():
     base = [("plain", f, None, sk, sv) for f in FONTS for sk, sv in SPACINGS]
-    mixed = [("mixed", fa, fb, sk, sv) for fa, fb in MIXED for sk, sv in SPACINGS]
+    mixed = [("mixed", fa, fb, sk, sv) for fa, fb in MIXED for sk, sv in MIX_SPACINGS]
     empty = [("empty", f, None, "a240", 240) for f in FONTS]
     # size scaling: if the mixed advance is 1.2em it must be 14.4 at 12pt
     big = [("mixed12", "Garamond", "Arial", "a240", 240)]
-    return base + mixed + empty + big
+    # 2026-08-20 third cut: Cambria breaks the flat 1.2em (G+C@10 = 12.120).
+    # Sweep the size at x1.0 for the Cambria pair, add plain Cambria/Calibri
+    # controls and the Calibri pair -- K_font's functional form falls out.
+    sz = ([("mixsz", "Garamond", "Cambria", "s%d" % z, z) for z in (8, 10, 12, 14, 16)]
+          + [("mixsz", "Garamond", "Calibri", "s%d" % z, z) for z in (10, 12)]
+          + [("plainsz", "Cambria", None, "s%d" % z, z) for z in (10, 12)]
+          + [("plainsz", "Calibri", None, "s%d" % z, z) for z in (10, 12)])
+    return base + mixed + empty + big + sz
 
 
 def docx():
@@ -95,6 +106,30 @@ def gen():
             for j in range(NLINES):
                 body.append(para("a%dP%d Hxg pqj kern" % (ai, j), font, sv))
             body.append(para(" ".join("a%dWx" % ai for _ in range(WRAP_WORDS)), font, sv))
+        elif kind in ("mixsz", "plainsz"):
+            z = sv * 2  # half-points
+            if kind == "plainsz":
+                for j in range(NLINES):
+                    body.append(
+                        '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
+                        ' w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                        '<w:sz w:val="%d"/></w:rPr></w:pPr>'
+                        '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                        '<w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">a%dP%d Hxg pqj</w:t></w:r></w:p>'
+                        % (font, font, z, font, font, z, ai, j))
+            else:
+                for j in range(NLINES):
+                    body.append(
+                        '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240"'
+                        ' w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                        '<w:sz w:val="%d"/></w:rPr></w:pPr>'
+                        '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                        '<w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">a%dP%d Hxg </w:t></w:r>'
+                        '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                        '<w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">BOLD</w:t></w:r>'
+                        '<w:r><w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s"/>'
+                        '<w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve"> pqj</w:t></w:r></w:p>'
+                        % (font, font, z, font, font, z, ai, j, fb, fb, z, font, font, z))
         elif kind == "mixed12":
             for j in range(NLINES):
                 body.append(
