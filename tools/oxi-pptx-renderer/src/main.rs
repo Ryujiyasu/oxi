@@ -1519,6 +1519,12 @@ fn wrapwidth_on() -> bool {
     std::env::var("OXI_WRAPWIDTH_DISABLE").is_err()
 }
 
+/// A uniformly bold paragraph is drawn bold unless this is set, which restores
+/// the weight-400 single-style path.
+fn parabold_on() -> bool {
+    std::env::var("OXI_PARABOLD_DISABLE").is_err()
+}
+
 /// A shape's `a:blipFill` is clipped to its outline unless this is set.
 fn blipclip_on() -> bool {
     std::env::var("OXI_BLIPCLIP_DISABLE").is_err()
@@ -2228,6 +2234,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     );
                                 }
                             }
+                            // A paragraph whose runs are all bold is UNIFORM,
+                            // so it never takes the per-run path -- and the
+                            // single-style path called `draw_text_baseline`,
+                            // which hardcodes weight 400. d19 slide 2's
+                            // headings are one run each with `b="1"` and came
+                            // out regular; 1377 paragraphs across all 40 decks
+                            // are all-bold like that.
+                            let para_weight = if p.runs.iter().any(|r| r.bold) && parabold_on() {
+                                700
+                            } else {
+                                400
+                            };
                             let styled = runstyle_on()
                                 && p.runs.len() > 1
                                 && (p.runs.iter().any(|r| r.bold != p.runs[0].bold)
@@ -2277,7 +2295,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 } else {
                                     let line_x = left_x
                                         + (x_off as f64 * scale).round() as i32;
-                                    draw_text_baseline(
+                                    draw_text_baseline_w(
                                         mem_dc,
                                         line_x,
                                         baseline,
@@ -2286,6 +2304,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         &family,
                                         color.as_deref(),
                                         scale,
+                                        para_weight,
                                     );
                                 }
                             }
