@@ -38,7 +38,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         .push(cell(0, CellValue::Empty, Some(formula)));
     let rows: Vec<Row> = rows_map
         .into_iter()
-        .map(|(index, cells)| Row { index, cells, height: None })
+        .map(|(index, cells)| Row { index, cells, height: None, hidden: false })
         .collect();
     let mut sheet = Sheet {
         name: "S".into(),
@@ -48,6 +48,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         default_col_width: 8.43,
         default_row_height: 15.0,
         merge_cells: vec![],
+        hidden_cols: Vec::new(),
         unsupported_elements: vec![],
     };
     evaluate_sheet_formulas(&mut sheet);

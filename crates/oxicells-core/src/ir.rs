@@ -18,6 +18,10 @@ pub struct Sheet {
     pub default_col_width: f32,
     pub default_row_height: f32,
     pub merge_cells: Vec<MergeCell>,
+    /// Zero-based indices of the columns that are hidden. Columns have no
+    /// record of their own, so this sits beside `col_widths`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_cols: Vec<u32>,
     /// Unsupported elements found in this sheet (e.g. "Chart", "PivotTable", "Drawing")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_elements: Vec<String>,
@@ -36,6 +40,9 @@ pub struct Row {
     pub index: u32,
     pub cells: Vec<Cell>,
     pub height: Option<f32>,
+    /// A hidden row keeps everything it holds; only the display is affected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

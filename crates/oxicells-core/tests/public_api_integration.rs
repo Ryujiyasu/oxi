@@ -180,6 +180,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
             index,
             cells,
             height: None,
+            hidden: false,
         })
         .collect();
     Sheet {
@@ -190,6 +191,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         default_col_width: 8.43,
         default_row_height: 15.0,
         merge_cells: vec![],
+        hidden_cols: Vec::new(),
         unsupported_elements: vec![],
     }
 }

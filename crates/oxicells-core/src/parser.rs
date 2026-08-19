@@ -10,6 +10,11 @@ use thiserror::Error;
 
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
+
+/// OOXML writes a boolean attribute as `1`/`0` or `true`/`false`.
+fn is_true(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("true"))
+}
 use oxidocs_common::xml_utils::{get_attr, local_name};
 
 use crate::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
@@ -522,6 +527,7 @@ fn parse_worksheet(
 
     // Column widths: index is 0-based col number
     let mut col_widths: Vec<f32> = Vec::new();
+    let mut hidden_cols: Vec<u32> = Vec::new();
     let mut default_col_width: f32 = 8.43;
     let mut default_row_height: f32 = 15.0;
     let mut merge_cells: Vec<MergeCell> = Vec::new();
@@ -529,6 +535,7 @@ fn parse_worksheet(
     // State tracking
     let mut current_row_index: u32 = 0;
     let mut current_row_height: Option<f32> = None;
+    let mut current_row_hidden = false;
     let mut current_cells: Vec<Cell> = Vec::new();
     let mut in_row = false;
 
@@ -565,6 +572,7 @@ fn parse_worksheet(
                             current_row_height =
                                 get_attr(&e, "ht").and_then(|v| v.parse::<f32>().ok());
                         }
+                        current_row_hidden = is_true(get_attr(&e, "hidden").as_deref());
                     }
                     "c" if in_row => {
                         in_cell = true;
@@ -607,8 +615,10 @@ fn parse_worksheet(
                             index: current_row_index,
                             cells: std::mem::take(&mut current_cells),
                             height: current_row_height,
+                            hidden: current_row_hidden,
                         });
                         current_row_height = None;
+                        current_row_hidden = false;
                     }
                     "c" => {
                         if in_cell {
@@ -714,6 +724,11 @@ fn parse_worksheet(
                         for c in min_col..=max_col_attr {
                             col_widths[(c - 1) as usize] = width;
                         }
+                        if is_true(get_attr(&e, "hidden").as_deref()) {
+                            for c in min_col..=max_col_attr {
+                                hidden_cols.push(c - 1);
+                            }
+                        }
                     }
 
                     // <mergeCell ref="A1:C3"/>
@@ -745,6 +760,7 @@ fn parse_worksheet(
                             index: row_num,
                             cells: Vec::new(),
                             height: rh,
+                            hidden: is_true(get_attr(&e, "hidden").as_deref()),
                         });
                     }
 
@@ -770,6 +786,7 @@ fn parse_worksheet(
         default_col_width,
         default_row_height,
         merge_cells,
+        hidden_cols,
         unsupported_elements: Vec::new(),
     })
 }

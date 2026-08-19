@@ -404,6 +404,7 @@ impl<'a> WorkbookHost<'a> {
             default_col_width: template.default_col_width,
             default_row_height: template.default_row_height,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         };
         self.workbook.sheets.insert(at, sheet);
@@ -1963,6 +1964,7 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
                 sheet
@@ -2004,6 +2006,7 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
                 sheet
@@ -2101,6 +2104,7 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
             }
@@ -2270,6 +2274,7 @@ impl<'a> WorkbookHost<'a> {
                     index: row_index,
                     cells: Vec::new(),
                     height: None,
+                    hidden: false,
                 });
             }
             let row = sheet
@@ -2452,6 +2457,7 @@ impl<'a> WorkbookHost<'a> {
                             index,
                             cells: Vec::new(),
                             height: None,
+                            hidden: false,
                         });
                         worksheet.rows.sort_by_key(|row| row.index);
                         worksheet
@@ -2681,6 +2687,7 @@ impl<'a> WorkbookHost<'a> {
                             index: address.row,
                             cells: Vec::new(),
                             height: None,
+                            hidden: false,
                         });
                         sheet.rows.sort_by_key(|row| row.index);
                         sheet
@@ -2833,6 +2840,7 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
                 sheet
@@ -2891,6 +2899,75 @@ impl<'a> WorkbookHost<'a> {
                     .unwrap_or_else(|_| formula.clone()),
                 );
                 cell.value = CellValue::Empty;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a range covers whole rows or whole columns, which is all that
+    /// `Hidden` can speak about. Excel refuses to hide part of a row.
+    fn hidden_band(range: CellRange) -> Result<ShiftAxis, String> {
+        let whole_row = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
+        let whole_column = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
+        if whole_row && !whole_column {
+            return Ok(ShiftAxis::Rows);
+        }
+        if whole_column && !whole_row {
+            return Ok(ShiftAxis::Columns);
+        }
+        Err("Range.Hidden needs whole rows or whole columns".to_string())
+    }
+
+    /// True only when every row or column the range covers is hidden; a block
+    /// with one visible line among them reads as False.
+    fn range_hidden(&self, range: CellRange) -> Result<Value, String> {
+        let sheet = &self.workbook.sheets[range.sheet];
+        let hidden = match Self::hidden_band(range)? {
+            ShiftAxis::Rows => (range.start_row..=range.end_row).all(|index| {
+                sheet
+                    .rows
+                    .iter()
+                    .find(|row| row.index == index)
+                    .is_some_and(|row| row.hidden)
+            }),
+            ShiftAxis::Columns => (range.start_column..=range.end_column)
+                .all(|column| sheet.hidden_cols.contains(&column)),
+        };
+        Ok(Value::Boolean(hidden))
+    }
+
+    fn set_range_hidden(&mut self, range: CellRange, hidden: bool) -> Result<(), String> {
+        let axis = Self::hidden_band(range)?;
+        let sheet = &mut self.workbook.sheets[range.sheet];
+        match axis {
+            ShiftAxis::Rows => {
+                for index in range.start_row..=range.end_row {
+                    match sheet.rows.iter_mut().find(|row| row.index == index) {
+                        Some(row) => row.hidden = hidden,
+                        // A row with nothing in it still remembers being hidden.
+                        None if hidden => {
+                            sheet.rows.push(Row {
+                                index,
+                                cells: Vec::new(),
+                                height: None,
+                                hidden: true,
+                            });
+                            sheet.rows.sort_by_key(|row| row.index);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            ShiftAxis::Columns => {
+                for column in range.start_column..=range.end_column {
+                    let held = sheet.hidden_cols.contains(&column);
+                    if hidden && !held {
+                        sheet.hidden_cols.push(column);
+                    } else if !hidden && held {
+                        sheet.hidden_cols.retain(|candidate| *candidate != column);
+                    }
+                }
+                sheet.hidden_cols.sort_unstable();
             }
         }
         Ok(())
@@ -3733,6 +3810,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("rowheight") {
             return self.range_row_height(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("hidden") {
+            return self.range_hidden(range).map(Some);
+        }
         if name.eq_ignore_ascii_case("mergecells") {
             return self.range_merge_state(range).map(Some);
         }
@@ -3867,6 +3947,10 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("rowheight") {
             self.set_range_row_height(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("hidden") {
+            self.set_range_hidden(range, style_boolean(&value, "Range.Hidden")?)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("mergecells") {
@@ -5454,6 +5538,7 @@ mod tests {
                 default_col_width: 8.43,
                 default_row_height: 15.0,
                 merge_cells: Vec::new(),
+                hidden_cols: Vec::new(),
                 unsupported_elements: Vec::new(),
             }],
         }
@@ -5663,6 +5748,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -5710,6 +5796,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -5857,6 +5944,7 @@ mod tests {
         workbook.sheets[0].rows.push(Row {
             index: 1,
             height: None,
+            hidden: false,
             cells: vec![
                 Cell {
                     col: 0,
@@ -6890,6 +6978,7 @@ mod tests {
             .map(|row| Row {
                 index: row,
                 height: None,
+                hidden: false,
                 cells: (0..4)
                     .map(|column| Cell {
                         col: column,
@@ -7878,6 +7967,73 @@ mod tests {
         }
     }
 
+    fn hidden_report(body: &str) -> Vec<String> {
+        let mut workbook = workbook();
+        let module = parse_module(&format!(
+            "Public Sub Act()\n\
+             \x20 Range(\"A1\").Value = 10\n\
+             \x20 Range(\"A2\").Value = 20\n\
+             \x20 Range(\"A3\").Value = 30\n\
+             {body}\n\
+             End Sub\n"
+        ))
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        host.take_debug_output()
+    }
+
+    /// Hiding keeps everything the row holds; only the display changes. A block
+    /// reads as hidden only when every line in it is. Measured against Excel.
+    #[test]
+    fn vba_hides_whole_rows_and_columns() {
+        assert_eq!(
+            hidden_report(
+                "  Rows(2).Hidden = True\n\
+                 \x20 Debug.Print Rows(2).Hidden, Rows(3).Hidden, Range(\"A2\").Value\n\
+                 \x20 Debug.Print Range(\"A2\").EntireRow.Hidden, Range(\"A1:A3\").EntireRow.Hidden"
+            ),
+            vec![
+                "True\tFalse\t20".to_string(),
+                // A1:A3 is not wholly hidden, so it reads False.
+                "True\tFalse".to_string(),
+            ]
+        );
+
+        assert_eq!(
+            hidden_report(
+                "  Range(\"A2:A4\").EntireRow.Hidden = True\n\
+                 \x20 Debug.Print Rows(2).Hidden, Rows(3).Hidden, Rows(4).Hidden, Rows(5).Hidden"
+            ),
+            vec!["True\tTrue\tTrue\tFalse".to_string()]
+        );
+
+        assert_eq!(
+            hidden_report(
+                "  Columns(2).Hidden = True\n\
+                 \x20 Debug.Print Columns(2).Hidden, Columns(1).Hidden, Range(\"B1\").EntireColumn.Hidden"
+            ),
+            vec!["True\tFalse\tTrue".to_string()]
+        );
+
+        assert_eq!(
+            hidden_report(
+                "  Rows(2).Hidden = True\n  Rows(2).Hidden = False\n  Debug.Print Rows(2).Hidden"
+            ),
+            vec!["False".to_string()]
+        );
+    }
+
+    #[test]
+    fn vba_refuses_to_hide_part_of_a_row() {
+        let mut workbook = workbook();
+        let module =
+            parse_module("Public Sub Act()\n  Range(\"A2\").Hidden = True\nEnd Sub\n").unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host)
+            .expect_err("Excel hides whole rows, not parts of them");
+    }
+
     #[test]
     fn vba_tracks_excel_application_settings() {
         let mut workbook = workbook();
@@ -8097,6 +8253,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let invalid = parse_module(
@@ -8335,6 +8492,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8374,6 +8532,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8485,6 +8644,7 @@ mod tests {
             default_col_width: 8.43,
             default_row_height: 15.0,
             merge_cells: Vec::new(),
+            hidden_cols: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
