@@ -1923,6 +1923,7 @@ impl<'a> Runtime<'a> {
             Expr::New { type_name, span } => self.new_object(type_name, span.line),
             Expr::Unary { op, operand, span } => {
                 let value = self.eval_expr(operand, frame)?;
+                let value = self.scalar_operand(value, span.line)?;
                 unary(*op, value).map_err(|message| {
                     error(RuntimeErrorKind::TypeMismatch, message, Some(span.line))
                 })
@@ -1930,6 +1931,15 @@ impl<'a> Runtime<'a> {
             Expr::Binary { op, lhs, rhs, span } => {
                 let lhs = self.eval_expr(lhs, frame)?;
                 let rhs = self.eval_expr(rhs, frame)?;
+                // `Is` asks about identity, so it keeps the objects themselves.
+                let (lhs, rhs) = if *op == BinaryOp::Is {
+                    (lhs, rhs)
+                } else {
+                    (
+                        self.scalar_operand(lhs, span.line)?,
+                        self.scalar_operand(rhs, span.line)?,
+                    )
+                };
                 binary(*op, lhs, rhs, self.option_compare_text())
                     .map_err(|(kind, message)| error(kind, message, Some(span.line)))
             }
@@ -2585,6 +2595,16 @@ impl<'a> Runtime<'a> {
             };
         }
         self.let_value(value, line)
+    }
+
+    /// An object used where VBA wants a value stands for its default member, so
+    /// `Range("A1") + 1` reads the cell rather than failing. Object contexts —
+    /// `Is`, `TypeName`, `IsObject`, passing an argument — keep the object.
+    fn scalar_operand(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
+        match value {
+            Value::Object(_) => self.let_value(value, line),
+            value => Ok(value),
+        }
     }
 
     fn let_value(&mut self, value: Value, line: u32) -> Result<Value, RuntimeError> {
@@ -7658,6 +7678,32 @@ mod tests {
         let value = execute_with_host(&module, "WriteThroughObject", vec![], &mut host).unwrap();
         assert_eq!(value, Value::Integer(42));
         assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(42)));
+    }
+
+    /// An object standing in a value context reads as its default member, which
+    /// is how `Range("A1") + 1` and `"x" & Range("A1")` work in VBA. Identity
+    /// and type questions still see the object itself.
+    #[test]
+    fn objects_stand_for_their_default_member_in_value_contexts() {
+        let module = parse_module(
+            "Public Function DefaultMember() As String\n\
+               Dim cell As Object\n\
+               Range(\"A1\").Value = 42\n\
+               Range(\"A2\").Value = \"text\"\n\
+               Set cell = Range(\"A1\")\n\
+               DefaultMember = (\"x\" & cell) & \"|\" & (cell + 1) & \"|\" & (cell = 42)\n\
+               DefaultMember = DefaultMember & \"|\" & (cell > 40) & \"|\" & (-cell) & \"|\" & (\"y\" & Range(\"A2\"))\n\
+               DefaultMember = DefaultMember & \"|\" & TypeName(cell) & \"|\" & IsObject(cell) & \"|\" & (cell Is Range(\"A1\"))\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = SheetHost::default();
+        let value = execute_with_host(&module, "DefaultMember", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            value,
+            Value::String("x42|43|True|True|-42|ytext|Cell|True|True".to_string())
+        );
     }
 
     #[test]

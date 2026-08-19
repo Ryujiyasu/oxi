@@ -287,6 +287,28 @@ impl<'a> WorkbookHost<'a> {
         )
     }
 
+    /// `Debug.Print` wants values, so a cell prints what it holds. A range of
+    /// several cells holds an array, which is a type mismatch rather than
+    /// something to print, and an object with nothing scalar behind it likewise.
+    fn printed_value(&self, value: &Value) -> Result<Value, String> {
+        let Value::Object(object) = value else {
+            return Ok(value.clone());
+        };
+        let Some(range) = self.range(object) else {
+            return Err(format!(
+                "Debug.Print has no value to print for a {} object",
+                object.kind
+            ));
+        };
+        let value = self.range_value(range)?;
+        if matches!(value, Value::Array(_)) {
+            return Err(
+                "Debug.Print cannot print a range of several cells as one value".to_string(),
+            );
+        }
+        Ok(value)
+    }
+
     fn take_debug_output(&mut self) -> Vec<String> {
         std::mem::take(&mut self.debug_output)
     }
@@ -2160,12 +2182,11 @@ impl Host for WorkbookHost<'_> {
                 return self.worksheet_function(name, args).map(Some);
             }
             if self.is_debug_console(receiver) && name.eq_ignore_ascii_case("print") {
-                self.debug_output.push(
-                    args.iter()
-                        .map(format_debug_value)
-                        .collect::<Vec<_>>()
-                        .join("\t"),
-                );
+                let mut printed = Vec::with_capacity(args.len());
+                for value in args {
+                    printed.push(format_debug_value(&self.printed_value(value)?));
+                }
+                self.debug_output.push(printed.join("\t"));
                 return Ok(Some(Value::Empty));
             }
             if let Some(sheet) = self.worksheet(receiver) {
@@ -5659,6 +5680,75 @@ mod tests {
             execute_with_host(&module, "Bad", vec![], &mut host)
                 .expect_err("Excel raises rather than returning an error value");
         }
+    }
+
+    #[test]
+    fn vba_reads_a_cell_wherever_a_value_belongs() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ImplicitValue()\n\
+               Range(\"A1\").Value = 42\n\
+               Range(\"A2\").Value = \"text\"\n\
+               Debug.Print Range(\"A1\") + 1, \"x\" & Range(\"A1\"), Range(\"A1\") = 42\n\
+               Debug.Print Range(\"A1\") > 40, -Range(\"A1\"), \"y\" & Range(\"A2\")\n\
+               Debug.Print Range(\"A1\"), Range(\"A2\")\n\
+               If Range(\"A1\") > 40 Then Debug.Print \"over\"\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ImplicitValue", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "43\tx42\tTrue".to_string(),
+                "True\t-42\tytext".to_string(),
+                "42\ttext".to_string(),
+                "over".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn vba_cannot_print_a_range_of_several_cells() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Bad()\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"A2\").Value = 2\n\
+               Debug.Print Range(\"A1:A2\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Bad", vec![], &mut host)
+            .expect_err("VBA reports a type mismatch");
+    }
+
+    /// A range covering several cells has an array for its value, which VBA
+    /// refuses to treat as a scalar.
+    #[test]
+    fn vba_refuses_a_multi_cell_range_as_a_scalar() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Bad() As Variant\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"A2\").Value = 2\n\
+               Bad = \"x\" & Range(\"A1:A2\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let error = execute_with_host(&module, "Bad", vec![], &mut host)
+            .expect_err("VBA reports a type mismatch");
+        assert!(
+            error.to_string().contains("scalar"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
