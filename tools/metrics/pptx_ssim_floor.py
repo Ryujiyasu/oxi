@@ -199,6 +199,21 @@ def run(args) -> dict:
         sys.exit("no decks matched")
     env_pairs = dict(pair.split("=", 1) for pair in args.env)
     print(f"decks={len(targets)} tag={args.tag} env={env_pairs or '-'}", flush=True)
+    cached_already = sum(
+        1
+        for t in targets
+        if list((PNG_ROOT / args.tag / deck_id(t)).glob("slide_s*.png"))
+    )
+    if cached_already and not args.rerender:
+        # A tag that already has renders is REUSED silently, and a tag name
+        # recycled from an earlier session then reports that session's build.
+        # It cost a false -0.066 on d24 (2026-08-20) before the numbers were
+        # traced back to renders nobody had made today.
+        print(
+            f"  ! {cached_already}/{len(targets)} decks REUSED from an existing "
+            f"'{args.tag}' render -- pass --rerender or pick a fresh tag",
+            flush=True,
+        )
     # An A/B only needs the decks whose pixels moved: byte-identical renders
     # score identically by construction, and SSIM over 886 slides is the whole
     # cost of a run. Rows for the unchanged decks are taken from the reference

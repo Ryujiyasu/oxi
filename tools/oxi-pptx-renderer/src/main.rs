@@ -965,6 +965,80 @@ unsafe extern "system" fn read_embedded_font(
     n as u32
 }
 
+#[cfg(windows)]
+thread_local! {
+    /// The style-suffixed names `install_embedded_fonts` actually registered.
+    static EMBEDDED_FACES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Embedded fonts are given one GDI family PER STYLE unless this is set.
+fn embedstyle_on() -> bool {
+    std::env::var("OXI_EMBEDSTYLE_DISABLE").is_err()
+}
+
+/// The GDI family name one part of an embedded typeface is registered under.
+///
+/// All four parts of a `p:embeddedFont` used to be renamed to the same
+/// `p:font/@typeface`, and GDI then cannot tell them apart. Measured on d24
+/// (2026-08-20), asking for weight 400 upright:
+///
+/// | family            | GDI served |
+/// |-------------------|------------|
+/// | Fira Sans         | tmItalic=255 |
+/// | Fira Sans Light   | upright |
+/// | Fira Sans Medium  | tmItalic=255 |
+/// | Fira Sans SemiBold| tmItalic=255 |
+/// | Montserrat        | upright |
+///
+/// Three of five families answered a plain request with an ITALIC face, which
+/// is why d24's title came out slanted once it finally found its typeface.
+/// Loading only the regular part makes it coherent (tmWeight=500 upright, the
+/// SemiBold's real weight) but throws away the three real faces and leaves GDI
+/// synthesising them, so instead each part gets its own family name and the
+/// draw side asks for the exact one.
+///
+/// LF_FACESIZE caps a family at 31 characters; a name that would not fit keeps
+/// the old shared name, which is no worse than before.
+fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
+    // Only the ITALIC parts move out. Giving the BOLD part its own family too
+    // measured -0.00126 over the corpus (5 improved / 11 regressed, d01 -0.0288):
+    // PowerPoint's bold on those decks is WIDER than the embedded bold part, so
+    // d01's "Add description here" stopped wrapping to the two lines
+    // PowerPoint needs. Whatever GDI was serving for a bold request already
+    // matched it better, and this change has no business moving it. Taking the
+    // italic parts out of the shared family is enough for the observed harm --
+    // a plain request can then only land on the regular or the bold face.
+    if !italic || !embedstyle_on() {
+        return typeface.to_string();
+    }
+    let suffix = if bold { " #BI" } else { " #I" };
+    if typeface.chars().count() + suffix.chars().count() > 31 {
+        return typeface.to_string();
+    }
+    format!("{typeface}{suffix}")
+}
+
+/// The face to actually create for a (family, bold, italic) request, and the
+/// weight and slant to ask GDI for. An embedded part carries its own style, so
+/// it is requested at weight 400 upright; anything else keeps the request.
+#[cfg(windows)]
+fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
+    if embedstyle_on() && italic {
+        let name = embedded_face_name(family, bold, italic);
+        if name != family && EMBEDDED_FACES.with(|f| f.borrow().contains(&name)) {
+            // The part carries its own slant; the weight is still asked for,
+            // since a family may embed only one italic part.
+            return (name, if bold { 700 } else { 400 }, false);
+        }
+    }
+    (
+        family.to_string(),
+        if bold { 700 } else { 400 },
+        italic,
+    )
+}
+
 /// Install the deck's embedded fonts so GDI can resolve them by name.
 ///
 /// The `.fntdata` parts are EOT (all 262 in the dev corpus are EOT 2.2 with
@@ -1016,7 +1090,8 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         let mut handle = HANDLE::default();
         let mut priv_status = EMBEDDED_FONT_PRIV_STATUS::default();
         let mut status = TTLOAD_EMBEDDED_FONT_STATUS::default();
-        let mut win_name: Vec<u16> = font.typeface.encode_utf16().collect();
+        let face = embedded_face_name(&font.typeface, font.bold, font.italic);
+        let mut win_name: Vec<u16> = face.encode_utf16().collect();
         win_name.push(0);
         let rc = unsafe {
             TTLoadEmbeddedFont(
@@ -1034,6 +1109,9 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         };
         if rc == 0 {
             loaded += 1;
+            if face != font.typeface {
+                EMBEDDED_FACES.with(|f| f.borrow_mut().insert(face));
+            }
             std::mem::forget(stream); // t2embed keeps no reference, but the
                                       // font must outlive this scope anyway
         } else {
@@ -1043,7 +1121,64 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             );
         }
     }
+    if std::env::var("OXI_DEBUG_EMBED").is_ok() {
+        use std::collections::BTreeSet;
+        let names: BTreeSet<&str> = pres
+            .embedded_fonts
+            .iter()
+            .map(|f| f.typeface.as_str())
+            .collect();
+        for name in names {
+            for (w, it) in [(400, false), (400, true), (700, false), (700, true)] {
+                debug_face(name, w, it);
+            }
+        }
+    }
     loaded
+}
+
+/// What GDI actually serves for one (family, weight, italic) request.
+#[cfg(windows)]
+fn debug_face(family: &str, weight: i32, italic: bool) {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let dc = probe_dc();
+    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -64,
+            0,
+            0,
+            0,
+            weight,
+            u32::from(italic),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            eprintln!("EMBED {family:24} w={weight} i={italic}: CreateFont failed");
+            return;
+        }
+        let old = SelectObject(dc, font);
+        let mut name = [0u16; 64];
+        let n = GetTextFaceW(dc, Some(&mut name));
+        let mut tm = TEXTMETRICW::default();
+        let _ = GetTextMetricsW(dc, &mut tm);
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        eprintln!(
+            "EMBED {family:24} w={weight} i={italic} -> face={:?} tmWeight={} tmItalic={}",
+            String::from_utf16_lossy(&name[..(n as usize).saturating_sub(1)]),
+            tm.tmWeight,
+            tm.tmItalic
+        );
+    }
 }
 
 /// Resample a picture into the page-aligned pixel box its flipped and rotated
@@ -8116,6 +8251,10 @@ fn create_font_for_wiu(
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
     let height = (font_size as f64 * scale).round() as i32;
+    // An embedded part registered for this exact style IS the bold / italic
+    // face, so it is asked for plain.
+    let (family, weight, italic) =
+        styled_face(family, weight >= 700, italic && paraitalic_on());
     let wide: Vec<u16> = family.encode_utf16().collect();
     let mut family_buf = vec![0u16; wide.len() + 1];
     family_buf[..wide.len()].copy_from_slice(&wide);
@@ -8126,7 +8265,7 @@ fn create_font_for_wiu(
             0,
             0,
             weight,
-            u32::from(italic && paraitalic_on()),
+            u32::from(italic),
             u32::from(underline && underline_on()),
             0,
             1,
@@ -8936,13 +9075,17 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
 
     let weight = if bold { 700 } else { 400 };
     let key = (family.to_string(), weight, italic);
+    // Measure the face that will be DRAWN: an embedded bold or italic part is
+    // its own GDI family, and asking the base name for weight 700 would
+    // measure a synthesised face instead.
+    let (face, weight, italic) = styled_face(family, bold, italic);
     ADVANCE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let per_font = cache.entry(key).or_default();
         if let Some(hit) = per_font.get(&ch) {
             return *hit;
         }
-        let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
         let value = unsafe {
             let font = CreateFontW(
                 -ADVANCE_PROBE_EM,
@@ -8990,7 +9133,8 @@ fn font_has_all_glyphs(family: &str, bold: bool, italic: bool, text: &str) -> bo
         return false;
     }
     let dc = probe_dc();
-    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
     let wtext: Vec<u16> = text.encode_utf16().collect();
     unsafe {
         let font = CreateFontW(
@@ -8998,7 +9142,7 @@ fn font_has_all_glyphs(family: &str, bold: bool, italic: bool, text: &str) -> bo
             0,
             0,
             0,
-            if bold { 700 } else { 400 },
+            weight,
             u32::from(italic),
             0,
             0,
@@ -9144,15 +9288,16 @@ fn measure_text_width(
     use windows::core::PCWSTR;
 
     let height = (font_size as f64 * scale).round() as i32;
-    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let (face, weight, italic) = styled_face(family, bold, false);
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let font = CreateFontW(
             -height,
             0,
             0,
             0,
-            if bold { 700 } else { 400 },
-            0,
+            weight,
+            u32::from(italic),
             0,
             0,
             DEFAULT_CHARSET.0 as u32,
@@ -9632,7 +9777,8 @@ fn family_has_glyph(family: &str, bold: bool, italic: bool, ch: char) -> bool {
             return *hit;
         }
         let dc = probe_dc();
-        let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let (face, weight, italic) = styled_face(family, bold, italic);
+        let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
         let value = unsafe {
             let font = CreateFontW(
                 -ADVANCE_PROBE_EM,
