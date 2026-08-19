@@ -726,6 +726,198 @@ impl<'a> WorkbookHost<'a> {
     /// `Index` over a cell range answers with a *reference*, so `Set` on the
     /// result and `Range.Address` both work and the result feeds back into
     /// other worksheet functions. Over a VBA array it answers with values.
+    fn criteria_range(&self, value: &Value, name: &str) -> Result<CellRange, String> {
+        let Value::Object(object) = value else {
+            return Err(format!(
+                "WorksheetFunction.{name} needs a cell range, not a value"
+            ));
+        };
+        let Some(range) = self.range(object) else {
+            return Err(format!(
+                "WorksheetFunction.{name} cannot test a {} object",
+                object.kind
+            ));
+        };
+        Self::range_cell_count(range)?;
+        Ok(range)
+    }
+
+    /// A criteria argument may itself be a cell, in which case Excel tests
+    /// against that cell's value.
+    fn criteria_value(&self, value: &Value) -> Result<Value, String> {
+        match value {
+            Value::Object(object) => match self.range(object) {
+                Some(range) => self.range_value(range),
+                None => Err(format!(
+                    "WorksheetFunction cannot use a {} object as criteria",
+                    object.kind
+                )),
+            },
+            value => Ok(value.clone()),
+        }
+    }
+
+    /// `SumIf` and `AverageIf` anchor their aggregated range at its top-left
+    /// corner and stretch it to the shape of the range being tested, so
+    /// `SumIf(A1:A4, ">15", C1)` aggregates `C1:C4`.
+    fn stretched_range(
+        &self,
+        value: &Value,
+        shape: CellRange,
+        name: &str,
+    ) -> Result<CellRange, String> {
+        let source = self.criteria_range(value, name)?;
+        let stretched = CellRange {
+            sheet: source.sheet,
+            start_row: source.start_row,
+            start_column: source.start_column,
+            end_row: source
+                .start_row
+                .saturating_add(shape.end_row - shape.start_row)
+                .min(MAX_WORKSHEET_ROW),
+            end_column: source
+                .start_column
+                .saturating_add(shape.end_column - shape.start_column)
+                .min(MAX_WORKSHEET_COLUMN),
+        };
+        Self::range_cell_count(stretched)?;
+        Ok(stretched)
+    }
+
+    fn worksheet_conditional(
+        &self,
+        name: &str,
+        args: &[Value],
+        kind: ConditionalKind,
+    ) -> Result<Value, String> {
+        let aggregates = kind != ConditionalKind::Count;
+        if args.len() < 2 || args.len() > if aggregates { 3 } else { 2 } {
+            return Err(format!(
+                "WorksheetFunction.{name} expects {} arguments",
+                if aggregates { "two or three" } else { "two" }
+            ));
+        }
+        let tested = self.criteria_range(&args[0], name)?;
+        let criteria = parse_criteria(&self.criteria_value(&args[1])?);
+        let aggregated = match args.get(2) {
+            Some(value) => self.stretched_range(value, tested, name)?,
+            None => tested,
+        };
+
+        let mut matches = 0usize;
+        let mut numbers = 0usize;
+        let mut total = 0.0;
+        for (tested, aggregated) in tested.addresses().zip(aggregated.addresses()) {
+            if !criteria.matches(&self.cell_value(tested)) {
+                continue;
+            }
+            matches += 1;
+            if let Some(number) = criteria_number(&self.cell_value(aggregated)) {
+                numbers += 1;
+                total += number;
+            }
+        }
+        conditional_result(name, kind, matches, numbers, total)
+    }
+
+    fn worksheet_conditional_set(
+        &self,
+        name: &str,
+        args: &[Value],
+        kind: ConditionalKind,
+    ) -> Result<Value, String> {
+        let (aggregated, pairs) = if kind == ConditionalKind::Count {
+            (None, args)
+        } else {
+            let Some((aggregated, pairs)) = args.split_first() else {
+                return Err(format!(
+                    "WorksheetFunction.{name} expects a range to aggregate"
+                ));
+            };
+            (Some(aggregated), pairs)
+        };
+        if pairs.len() < 2 {
+            return Err(format!(
+                "WorksheetFunction.{name} expects a range and criteria pair"
+            ));
+        }
+
+        let mut tests = Vec::new();
+        let mut shape = None;
+        // Excel ignores a trailing range that has no criteria of its own.
+        for pair in pairs.chunks(2) {
+            let [tested, criteria] = pair else { continue };
+            let tested = self.criteria_range(tested, name)?;
+            let extent = (
+                tested.end_row - tested.start_row,
+                tested.end_column - tested.start_column,
+            );
+            match shape {
+                None => shape = Some(extent),
+                Some(shape) if shape == extent => {}
+                Some(_) => {
+                    return Err(format!(
+                        "WorksheetFunction.{name} needs every criteria range to have one shape"
+                    ))
+                }
+            }
+            tests.push((tested, parse_criteria(&self.criteria_value(criteria)?)));
+        }
+        let Some((rows, columns)) = shape else {
+            return Err(format!(
+                "WorksheetFunction.{name} expects a range and criteria pair"
+            ));
+        };
+        let aggregated = match aggregated {
+            Some(value) => {
+                let aggregated = self.criteria_range(value, name)?;
+                if (
+                    aggregated.end_row - aggregated.start_row,
+                    aggregated.end_column - aggregated.start_column,
+                ) != (rows, columns)
+                {
+                    return Err(format!(
+                        "WorksheetFunction.{name} needs the aggregated range to match the criteria shape"
+                    ));
+                }
+                Some(aggregated)
+            }
+            None => None,
+        };
+
+        let mut matches = 0usize;
+        let mut numbers = 0usize;
+        let mut total = 0.0;
+        for row in 0..=rows {
+            for column in 0..=columns {
+                let matched = tests.iter().all(|(tested, criteria)| {
+                    criteria.matches(&self.cell_value(CellAddress {
+                        sheet: tested.sheet,
+                        row: tested.start_row + row,
+                        column: tested.start_column + column,
+                    }))
+                });
+                if !matched {
+                    continue;
+                }
+                matches += 1;
+                let Some(aggregated) = aggregated else {
+                    continue;
+                };
+                let value = self.cell_value(CellAddress {
+                    sheet: aggregated.sheet,
+                    row: aggregated.start_row + row,
+                    column: aggregated.start_column + column,
+                });
+                if let Some(number) = criteria_number(&value) {
+                    numbers += 1;
+                    total += number;
+                }
+            }
+        }
+        conditional_result(name, kind, matches, numbers, total)
+    }
+
     fn worksheet_index(&mut self, args: &[Value]) -> Result<Value, String> {
         let (array, row, column) = match args {
             [array, row] => (array, row, None),
@@ -854,6 +1046,21 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("index") {
             return self.worksheet_index(args);
         }
+        for (conditional, kind) in [
+            ("countif", ConditionalKind::Count),
+            ("sumif", ConditionalKind::Sum),
+            ("averageif", ConditionalKind::Average),
+        ] {
+            if name.eq_ignore_ascii_case(conditional) {
+                return self.worksheet_conditional(name, args, kind);
+            }
+            if name.len() == conditional.len() + 1
+                && name[..conditional.len()].eq_ignore_ascii_case(conditional)
+                && name.ends_with(['s', 'S'])
+            {
+                return self.worksheet_conditional_set(name, args, kind);
+            }
+        }
         let mut values = Vec::new();
         for value in args {
             self.append_worksheet_function_values(value, &mut values)?;
@@ -904,11 +1111,7 @@ impl<'a> WorkbookHost<'a> {
                 "WorksheetFunction.{name} is not supported in the browser"
             ));
         };
-        if result.fract() == 0.0 && result >= i64::MIN as f64 && result <= i64::MAX as f64 {
-            Ok(Value::Integer(result as i64))
-        } else {
-            Ok(Value::Double(result))
-        }
+        Ok(numeric_result(result))
     }
 
     fn cell_formula(&self, address: CellAddress) -> Value {
@@ -2983,6 +3186,164 @@ fn lookup_index_argument(value: &Value, name: &str) -> Result<usize, String> {
         ));
     }
     Ok(number as usize)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ConditionalKind {
+    Count,
+    Sum,
+    Average,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CriteriaOperator {
+    Equal,
+    NotEqual,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+}
+
+struct Criteria {
+    operator: CriteriaOperator,
+    /// `Value::Empty` for the bare `"="` and `"<>"` forms, which ask whether
+    /// the cell is blank rather than comparing it to anything.
+    operand: Value,
+}
+
+impl Criteria {
+    fn matches(&self, cell: &Value) -> bool {
+        let blank = matches!(cell, Value::Empty | Value::Missing);
+        if matches!(self.operand, Value::Empty) {
+            return match self.operator {
+                CriteriaOperator::Equal => blank,
+                CriteriaOperator::NotEqual => !blank,
+                _ => false,
+            };
+        }
+        match self.operator {
+            CriteriaOperator::Equal => criteria_equal(cell, &self.operand, true),
+            CriteriaOperator::NotEqual => !criteria_equal(cell, &self.operand, false),
+            operator => match lookup_compare(cell, &self.operand) {
+                Some(Ordering::Less) => matches!(
+                    operator,
+                    CriteriaOperator::Less | CriteriaOperator::LessOrEqual
+                ),
+                Some(Ordering::Equal) => matches!(
+                    operator,
+                    CriteriaOperator::LessOrEqual | CriteriaOperator::GreaterOrEqual
+                ),
+                Some(Ordering::Greater) => matches!(
+                    operator,
+                    CriteriaOperator::Greater | CriteriaOperator::GreaterOrEqual
+                ),
+                None => false,
+            },
+        }
+    }
+}
+
+/// Splits a criteria argument into an operator and the value it compares
+/// against. Only text carries an operator; any other value is compared for
+/// equality as it stands.
+fn parse_criteria(value: &Value) -> Criteria {
+    let Value::String(text) = value else {
+        return Criteria {
+            operator: CriteriaOperator::Equal,
+            operand: value.clone(),
+        };
+    };
+    let text = text.trim();
+    let (operator, rest) = if let Some(rest) = text.strip_prefix("<>") {
+        (CriteriaOperator::NotEqual, rest)
+    } else if let Some(rest) = text.strip_prefix(">=") {
+        (CriteriaOperator::GreaterOrEqual, rest)
+    } else if let Some(rest) = text.strip_prefix("<=") {
+        (CriteriaOperator::LessOrEqual, rest)
+    } else if let Some(rest) = text.strip_prefix('>') {
+        (CriteriaOperator::Greater, rest)
+    } else if let Some(rest) = text.strip_prefix('<') {
+        (CriteriaOperator::Less, rest)
+    } else if let Some(rest) = text.strip_prefix('=') {
+        (CriteriaOperator::Equal, rest)
+    } else {
+        (CriteriaOperator::Equal, text)
+    };
+    Criteria {
+        operator,
+        operand: criteria_operand(rest.trim()),
+    }
+}
+
+fn criteria_operand(text: &str) -> Value {
+    if text.is_empty() {
+        return Value::Empty;
+    }
+    if let Ok(number) = text.parse::<f64>() {
+        if number.is_finite() {
+            return Value::Double(number);
+        }
+    }
+    if text.eq_ignore_ascii_case("true") {
+        return Value::Boolean(true);
+    }
+    if text.eq_ignore_ascii_case("false") {
+        return Value::Boolean(false);
+    }
+    Value::String(text.to_string())
+}
+
+/// Equality reads a cell holding text that spells a number as that number, so
+/// `CountIf` over a column mixing `20` and `"20"` counts both. No other
+/// operator coerces: `"<>20"` and `">=20"` see the text cell as text.
+fn criteria_equal(cell: &Value, operand: &Value, coercing: bool) -> bool {
+    if lookup_exact_matches(cell, operand) {
+        return true;
+    }
+    if !coercing {
+        return false;
+    }
+    match (cell, operand) {
+        (Value::String(cell), Value::Double(operand)) => cell
+            .trim()
+            .parse::<f64>()
+            .is_ok_and(|cell| cell == *operand),
+        _ => false,
+    }
+}
+
+fn criteria_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Integer(value) => Some(*value as f64),
+        Value::Double(value) if value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
+fn conditional_result(
+    name: &str,
+    kind: ConditionalKind,
+    matches: usize,
+    numbers: usize,
+    total: f64,
+) -> Result<Value, String> {
+    match kind {
+        ConditionalKind::Count => Ok(Value::Integer(matches as i64)),
+        ConditionalKind::Sum => Ok(numeric_result(total)),
+        ConditionalKind::Average if numbers == 0 => Err(format!(
+            "WorksheetFunction.{name} has no matching numeric values"
+        )),
+        ConditionalKind::Average => Ok(numeric_result(total / numbers as f64)),
+    }
+}
+
+fn numeric_result(value: f64) -> Value {
+    if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        Value::Integer(value as i64)
+    } else {
+        Value::Double(value)
+    }
 }
 
 fn index_argument(value: &Value, label: &str) -> Result<usize, String> {
@@ -5104,6 +5465,200 @@ mod tests {
                 "7".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn vba_counts_and_sums_cells_that_meet_criteria() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Conditionals()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"A4\").Value = 20\n\
+               Range(\"C1\").Value = 1\n\
+               Range(\"C2\").Value = 2\n\
+               Range(\"C3\").Value = 3\n\
+               Range(\"C4\").Value = 4\n\
+               Debug.Print WorksheetFunction.CountIf(Range(\"A1:A5\"), \">15\"), WorksheetFunction.CountIf(Range(\"A1:A5\"), 20)\n\
+               Debug.Print WorksheetFunction.CountIf(Range(\"A1:A5\"), \"<>20\"), WorksheetFunction.CountIf(Range(\"A1:A5\"), \"<>\")\n\
+               Debug.Print WorksheetFunction.SumIf(Range(\"A1:A4\"), \">15\"), WorksheetFunction.SumIf(Range(\"A1:A4\"), \">15\", Range(\"C1:C4\"))\n\
+               Debug.Print WorksheetFunction.AverageIf(Range(\"A1:A4\"), \">15\"), WorksheetFunction.AverageIf(Range(\"A1:A4\"), \">15\", Range(\"C1:C4\"))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Conditionals", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "3\t2".to_string(),
+                // The blank A5 is not equal to 20, but it is not non-blank.
+                "3\t4".to_string(),
+                "70\t9".to_string(),
+                "23.333333333333332\t3".to_string(),
+            ]
+        );
+    }
+
+    /// `SumIf` anchors its aggregated range at the top-left corner and stretches
+    /// it to the tested range's shape, so a single cell stands for a column.
+    #[test]
+    fn vba_stretches_a_sum_range_to_the_tested_shape() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Stretch()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"A4\").Value = 20\n\
+               Range(\"C1\").Value = 1\n\
+               Range(\"C2\").Value = 2\n\
+               Range(\"C3\").Value = 3\n\
+               Range(\"C4\").Value = 4\n\
+               Range(\"C5\").Value = 5\n\
+               Debug.Print WorksheetFunction.SumIf(Range(\"A1:A4\"), \">15\", Range(\"C1\"))\n\
+               Debug.Print WorksheetFunction.SumIf(Range(\"A1:A4\"), \">15\", Range(\"C2:C3\"))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Stretch", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(debug_output, vec!["9".to_string(), "12".to_string()]);
+    }
+
+    #[test]
+    fn vba_counts_across_several_criteria_ranges() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub ManyCriteria()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"A4\").Value = 20\n\
+               Range(\"B1\").Value = \"Apple\"\n\
+               Range(\"B2\").Value = \"banana\"\n\
+               Range(\"B3\").Value = \"Cherry\"\n\
+               Range(\"B4\").Value = \"apple\"\n\
+               Range(\"C1\").Value = 1\n\
+               Range(\"C2\").Value = 2\n\
+               Range(\"C3\").Value = 3\n\
+               Range(\"C4\").Value = 4\n\
+               Debug.Print WorksheetFunction.CountIfs(Range(\"A1:A4\"), \">15\", Range(\"B1:B4\"), \"a*\")\n\
+               Debug.Print WorksheetFunction.SumIfs(Range(\"C1:C4\"), Range(\"A1:A4\"), \">15\")\n\
+               Debug.Print WorksheetFunction.SumIfs(Range(\"C1:C4\"), Range(\"A1:A4\"), \">15\", Range(\"B1:B4\"), \"a*\")\n\
+               Debug.Print WorksheetFunction.AverageIfs(Range(\"C1:C4\"), Range(\"A1:A4\"), \">15\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ManyCriteria", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "1".to_string(),
+                "9".to_string(),
+                "4".to_string(),
+                "3".to_string(),
+            ]
+        );
+    }
+
+    /// Equality reads a cell spelling a number as that number; no other operator
+    /// does, so the same text cell answers `=20` and `<>20` alike.
+    #[test]
+    fn criteria_only_coerce_numeric_text_for_equality() {
+        let number = Value::Double(20.0);
+        let spelled = Value::String("20".to_string());
+        for criterion in ["20", "=20"] {
+            let criteria = parse_criteria(&Value::String(criterion.to_string()));
+            assert!(criteria.matches(&number), "{criterion} against a number");
+            assert!(criteria.matches(&spelled), "{criterion} against text");
+        }
+        let criteria = parse_criteria(&Value::String("<>20".to_string()));
+        assert!(!criteria.matches(&number));
+        assert!(criteria.matches(&spelled));
+        let criteria = parse_criteria(&Value::String(">=20".to_string()));
+        assert!(criteria.matches(&number));
+        assert!(!criteria.matches(&spelled));
+    }
+
+    #[test]
+    fn criteria_read_operators_wildcards_and_blanks() {
+        let blank = Value::Empty;
+        let apple = Value::String("Apple".to_string());
+        let truth = Value::Boolean(true);
+
+        let criteria = parse_criteria(&Value::String(String::new()));
+        assert!(criteria.matches(&blank));
+        assert!(!criteria.matches(&apple));
+
+        let criteria = parse_criteria(&Value::String("<>".to_string()));
+        assert!(!criteria.matches(&blank));
+        assert!(criteria.matches(&apple));
+
+        // Wildcards survive negation, and stay case-insensitive.
+        assert!(parse_criteria(&Value::String("a*".to_string())).matches(&apple));
+        assert!(!parse_criteria(&Value::String("<>a*".to_string())).matches(&apple));
+        assert!(parse_criteria(&Value::String("A*".to_string())).matches(&apple));
+
+        // Spaces around an operator and its operand are ignored.
+        assert!(parse_criteria(&Value::String("> 15".to_string())).matches(&Value::Integer(20)));
+        assert!(parse_criteria(&Value::String(" 20".to_string())).matches(&Value::Integer(20)));
+
+        // A criterion spelling a Boolean reads as one, and never as text.
+        assert!(parse_criteria(&Value::String("TRUE".to_string())).matches(&truth));
+        assert!(!parse_criteria(&Value::String("TRUE".to_string()))
+            .matches(&Value::String("TRUE".to_string())));
+
+        // Comparisons never reach across value classes.
+        assert!(!parse_criteria(&Value::String(">15".to_string())).matches(&apple));
+        assert!(!parse_criteria(&Value::String(">a".to_string())).matches(&Value::Integer(20)));
+    }
+
+    #[test]
+    fn vba_conditionals_reject_what_excel_rejects() {
+        let mut workbook = workbook();
+        for source in [
+            // An array is not a range Excel will test.
+            "Public Function Bad() As Variant\n\
+               Dim values(1 To 2) As Variant\n\
+               values(1) = 10\n\
+               Bad = WorksheetFunction.CountIf(values, \">5\")\n\
+             End Function\n",
+            // SumIfs demands the aggregated range match the criteria shape.
+            "Public Function Bad() As Variant\n\
+               Range(\"A1\").Value = 20\n\
+               Bad = WorksheetFunction.SumIfs(Range(\"C1\"), Range(\"A1:A3\"), \">15\")\n\
+             End Function\n",
+            // Every criteria range must share one shape.
+            "Public Function Bad() As Variant\n\
+               Range(\"A1\").Value = 20\n\
+               Bad = WorksheetFunction.CountIfs(Range(\"A1:A3\"), \">15\", Range(\"B1:B2\"), \"a*\")\n\
+             End Function\n",
+            // AverageIf has nothing to divide by when nothing matches.
+            "Public Function Bad() As Variant\n\
+               Range(\"A1\").Value = 20\n\
+               Bad = WorksheetFunction.AverageIf(Range(\"A1:A3\"), \">100\")\n\
+             End Function\n",
+        ] {
+            let module = parse_module(source).unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Bad", vec![], &mut host)
+                .expect_err("Excel raises rather than returning an error value");
+        }
     }
 
     #[test]
