@@ -3006,6 +3006,8 @@ fn parse_inherited_shapes(
     // An inherited shape whose FILL is a picture is emitted as that picture,
     // clipped to its own geometry, unless this is set.
     let s_inherit_fillimg = std::env::var("OXI_LMFILLIMG_DISABLE").is_err();
+    // An inherited shape may keep a preset the renderer can actually draw.
+    let s_inherit_prst = std::env::var("OXI_LMPRST_DISABLE").is_err();
     let mut ig_fill_img = false;
     let mut ig_rot: f32 = 0.0;
     let mut ig_flip = (false, false);
@@ -3400,10 +3402,21 @@ fn parse_inherited_shapes(
                     .unwrap_or(0.0);
                 have_ext = true;
             }
-            // Measured: every accepted shape, picture included, is a "rect".
-            // Anything else would be drawn as a rectangle, so it is excluded.
+            // A preset the renderer cannot draw would come out as a
+            // rectangle, so it is still excluded -- but `draw_preset_shape_gdi`
+            // handles four of them, and d16's layouts hold 17 ellipses that
+            // were being dropped for being "not rect".
             "prstGeom" => match get_attr(e, "prst") {
                 Some(p) if p == "rect" => prst = Some(p),
+                Some(p)
+                    if s_inherit_prst
+                        && matches!(
+                            p.as_str(),
+                            "ellipse" | "roundRect" | "homePlate" | "teardrop"
+                        ) =>
+                {
+                    prst = Some(p)
+                }
                 _ => ok = false,
             },
             "custGeom" if s_inherit_geom => {
