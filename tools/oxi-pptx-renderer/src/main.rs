@@ -1519,6 +1519,11 @@ fn wrapwidth_on() -> bool {
     std::env::var("OXI_WRAPWIDTH_DISABLE").is_err()
 }
 
+/// Italic text is drawn slanted unless this is set, which restores upright.
+fn paraitalic_on() -> bool {
+    std::env::var("OXI_PARAITALIC_DISABLE").is_err()
+}
+
 /// A uniformly bold paragraph is drawn bold unless this is set, which restores
 /// the weight-400 single-style path.
 fn parabold_on() -> bool {
@@ -2246,6 +2251,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             } else {
                                 400
                             };
+                            let para_italic = p.runs.iter().any(|r| r.italic);
                             let styled = runstyle_on()
                                 && p.runs.len() > 1
                                 && (p.runs.iter().any(|r| r.bold != p.runs[0].bold)
@@ -2295,7 +2301,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 } else {
                                     let line_x = left_x
                                         + (x_off as f64 * scale).round() as i32;
-                                    draw_text_baseline_w(
+                                    draw_text_baseline_wi(
                                         mem_dc,
                                         line_x,
                                         baseline,
@@ -2305,6 +2311,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         color.as_deref(),
                                         scale,
                                         para_weight,
+                                        para_italic,
                                     );
                                 }
                             }
@@ -8012,6 +8019,22 @@ fn create_font_for_w(
     weight: i32,
     scale: f64,
 ) -> windows::Win32::Graphics::Gdi::HFONT {
+    create_font_for_wi(family, font_size, weight, false, scale)
+}
+
+/// As `create_font_for_w`, with the slant. `CreateFontW`'s italic argument was
+/// hardcoded to 0, so `a:rPr/@i` reached the MEASUREMENT (`runtime_advance_em`
+/// takes it) and never the page -- italic text was drawn upright. Only three
+/// paragraphs in the dev corpus are italic (d16, d17, d35, one each), so this
+/// is closing the family rather than moving the number.
+#[cfg(windows)]
+fn create_font_for_wi(
+    family: &str,
+    font_size: f32,
+    weight: i32,
+    italic: bool,
+    scale: f64,
+) -> windows::Win32::Graphics::Gdi::HFONT {
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
     let height = (font_size as f64 * scale).round() as i32;
@@ -8020,7 +8043,7 @@ fn create_font_for_w(
     family_buf[..wide.len()].copy_from_slice(&wide);
     unsafe {
         CreateFontW(
-            -height, 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0,
+            -height, 0, 0, 0, weight, u32::from(italic && paraitalic_on()), 0, 0, 1, 0, 0, 5, 0,
             PCWSTR(family_buf.as_ptr()),
         )
     }
@@ -8684,7 +8707,9 @@ unsafe fn draw_line_runs(
         let family = &effective_family(dc, run.font_family.as_deref().unwrap_or(default_family));
         let color = run.color.as_deref().or(default_color);
         let weight = if run.bold { 700 } else { 400 };
-        draw_text_baseline_w(dc, cursor_x, baseline, &seg, fs, family, color, scale, weight);
+        draw_text_baseline_wi(
+            dc, cursor_x, baseline, &seg, fs, family, color, scale, weight, run.italic,
+        );
         let w = runtime_width_px(dc, &seg, fs, family, run.bold, run.italic, scale)
             .or_else(|| font_adv::text_hmtx_px(&seg, fs, family, scale))
             .unwrap_or_else(|| {
@@ -9594,10 +9619,27 @@ fn draw_text_baseline_w(
     scale: f64,
     weight: i32,
 ) {
+    draw_text_baseline_wi(dc, x, baseline_pt, text, font_size, family, color, scale, weight, false)
+}
+
+/// As `draw_text_baseline_w`, with the slant.
+#[cfg(windows)]
+fn draw_text_baseline_wi(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    baseline_pt: f32,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    color: Option<&str>,
+    scale: f64,
+    weight: i32,
+    italic: bool,
+) {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
-    let font = create_font_for_w(family, font_size, weight, scale);
+    let font = create_font_for_wi(family, font_size, weight, italic, scale);
     if font.is_invalid() {
         return;
     }
