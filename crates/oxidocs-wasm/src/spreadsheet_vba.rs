@@ -132,6 +132,18 @@ enum HostObject {
     DebugConsole,
 }
 
+/// What `Range.Copy` set aside, as it stood when it was copied. Excel keeps a
+/// live link to the cells instead, so changing them before pasting changes what
+/// arrives; this build pastes what was there at the time.
+struct Clipboard {
+    /// Row-major, one entry per cell of the copied block.
+    cells: Vec<Option<Cell>>,
+    rows: u32,
+    columns: u32,
+    /// Where it came from, so a formula can be moved by the right offset.
+    origin: CellAddress,
+}
+
 #[derive(Clone)]
 struct FindState {
     range: CellRange,
@@ -142,6 +154,7 @@ struct FindState {
 struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
+    clipboard: Option<Clipboard>,
     selection: CellRange,
     screen_updating: bool,
     enable_events: bool,
@@ -163,6 +176,7 @@ impl<'a> WorkbookHost<'a> {
         Ok(Self {
             workbook,
             active_sheet,
+            clipboard: None,
             selection: CellRange::single(CellAddress {
                 sheet: active_sheet,
                 row: 1,
@@ -2614,6 +2628,201 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    fn fill_clipboard(&mut self, source: CellRange) -> Result<(), String> {
+        Self::range_cell_count(source)?;
+        let cells = source
+            .addresses()
+            .map(|address| {
+                self.workbook.sheets[address.sheet]
+                    .rows
+                    .iter()
+                    .find(|row| row.index == address.row)
+                    .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+                    .cloned()
+            })
+            .collect();
+        self.clipboard = Some(Clipboard {
+            cells,
+            rows: source.end_row - source.start_row + 1,
+            columns: source.end_column - source.start_column + 1,
+            origin: CellAddress {
+                sheet: source.sheet,
+                row: source.start_row,
+                column: source.start_column,
+            },
+        });
+        Ok(())
+    }
+
+    /// Pastes what `Copy` set aside. `xlPasteValues` drops formulas and keeps
+    /// the value each cell was holding, `xlPasteFormats` keeps only the styling,
+    /// and the default brings everything, moving a formula's relative
+    /// references by the distance it travelled.
+    fn paste_special(&mut self, target: CellRange, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        let kind = match given(0) {
+            None => -4104,
+            Some(value) => sort_number(value, "PasteSpecial")?,
+        };
+        let (values, formats) = match kind {
+            -4104 => (true, true),
+            -4163 => (true, false),
+            -4122 => (false, true),
+            other => return Err(format!("Range.PasteSpecial cannot paste {other}")),
+        };
+        if given(1).is_some() {
+            return Err("Range.PasteSpecial cannot combine what it pastes".to_string());
+        }
+        if given(2).is_some_and(|value| matches!(value, Value::Boolean(true))) {
+            return Err("Range.PasteSpecial cannot skip blanks in the browser".to_string());
+        }
+        let transpose = given(3).is_some_and(|value| matches!(value, Value::Boolean(true)));
+
+        let Some(clipboard) = self.clipboard.take() else {
+            return Err("Range.PasteSpecial has nothing to paste".to_string());
+        };
+        let (rows, columns) = if transpose {
+            (clipboard.columns, clipboard.rows)
+        } else {
+            (clipboard.rows, clipboard.columns)
+        };
+
+        // A target larger than the block takes whole copies of it, and nothing
+        // else: Excel refuses a target the block does not divide.
+        let target_rows = target.end_row - target.start_row + 1;
+        let target_columns = target.end_column - target.start_column + 1;
+        let (down, across) = if target_rows == 1 && target_columns == 1 {
+            (1, 1)
+        } else if target_rows % rows == 0 && target_columns % columns == 0 {
+            (target_rows / rows, target_columns / columns)
+        } else {
+            return Err(
+                "Range.PasteSpecial needs a target the copied block fits into evenly".to_string(),
+            );
+        };
+
+        for block_row in 0..down {
+            for block_column in 0..across {
+                for row in 0..rows {
+                    for column in 0..columns {
+                        let held = if transpose {
+                            clipboard.cells.get((column * clipboard.columns + row) as usize)
+                        } else {
+                            clipboard.cells.get((row * clipboard.columns + column) as usize)
+                        };
+                        let address = CellAddress {
+                            sheet: target.sheet,
+                            row: target.start_row + block_row * rows + row,
+                            column: target.start_column + block_column * columns + column,
+                        };
+                        // A formula moves by how far its own cell travelled,
+                        // not by where the block's corner landed.
+                        let came_from = CellAddress {
+                            sheet: clipboard.origin.sheet,
+                            row: clipboard.origin.row + if transpose { column } else { row },
+                            column: clipboard.origin.column
+                                + if transpose { row } else { column },
+                        };
+                        self.paste_cell(
+                            address,
+                            held.and_then(|cell| cell.as_ref()),
+                            came_from,
+                            values,
+                            formats,
+                            transpose,
+                        )?;
+                    }
+                }
+            }
+        }
+        self.clipboard = Some(clipboard);
+        Ok(Value::Boolean(true))
+    }
+
+    fn paste_cell(
+        &mut self,
+        address: CellAddress,
+        held: Option<&Cell>,
+        came_from: CellAddress,
+        values: bool,
+        formats: bool,
+        transpose: bool,
+    ) -> Result<(), String> {
+        let sheet = &mut self.workbook.sheets[address.sheet];
+        sheet.col_count = sheet.col_count.max(address.column as usize + 1);
+        let row = match sheet.rows.iter().position(|row| row.index == address.row) {
+            Some(position) => &mut sheet.rows[position],
+            None => {
+                sheet.rows.push(Row {
+                    index: address.row,
+                    cells: Vec::new(),
+                    height: None,
+                });
+                sheet.rows.sort_by_key(|row| row.index);
+                sheet
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.index == address.row)
+                    .unwrap()
+            }
+        };
+        if row.cells.iter().all(|cell| cell.col != address.column) {
+            row.cells.push(Cell {
+                col: address.column,
+                value: CellValue::Empty,
+                style: CellStyle::default(),
+                formula: None,
+            });
+            row.cells.sort_by_key(|cell| cell.col);
+        }
+        let cell = row
+            .cells
+            .iter_mut()
+            .find(|cell| cell.col == address.column)
+            .unwrap();
+
+        if formats {
+            cell.style = held.map(|held| held.style.clone()).unwrap_or_default();
+        }
+        if !values {
+            return Ok(());
+        }
+        let Some(held) = held else {
+            cell.value = CellValue::Empty;
+            cell.formula = None;
+            return Ok(());
+        };
+        cell.value = held.value.clone();
+        cell.formula = None;
+        // Only a whole paste carries the formula, and it moves with the cell.
+        if formats {
+            if let Some(formula) = held.formula.as_ref() {
+                if transpose {
+                    // Which way Excel turns a transposed formula's references
+                    // has not been measured, so it is not guessed at here.
+                    return Err(
+                        "Range.PasteSpecial cannot transpose a formula in the browser".to_string(),
+                    );
+                }
+                let row_offset = i64::from(address.row) - i64::from(came_from.row);
+                let column_offset = i64::from(address.column) - i64::from(came_from.column);
+                cell.formula = Some(
+                    oxicells_core::translate_formula_references(
+                        formula,
+                        row_offset,
+                        column_offset,
+                    )
+                    .unwrap_or_else(|_| formula.clone()),
+                );
+                cell.value = CellValue::Empty;
+            }
+        }
+        Ok(())
+    }
+
     fn merge_range(&mut self, range: CellRange) -> Result<(), String> {
         if range.is_single() {
             return Ok(());
@@ -2696,11 +2905,12 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
+        if args.is_empty() || matches!(args, [Value::Missing]) {
+            self.fill_clipboard(source)?;
+            return Ok(Value::Boolean(true));
+        }
         let [Value::Object(destination)] = args else {
-            return Err(
-                "Range.Copy expects one destination Range; the browser clipboard is unavailable"
-                    .to_string(),
-            );
+            return Err("Range.Copy expects one destination Range".to_string());
         };
         let destination = self
             .range(destination)
@@ -3012,6 +3222,9 @@ impl Host for WorkbookHost<'_> {
                     self.clear_range(range, true, true)?;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("pastespecial") {
+                    return self.paste_special(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("sort") {
                     return self.sort_range(range, args).map(|()| Some(Value::Empty));
                 }
@@ -3201,6 +3414,8 @@ impl Host for WorkbookHost<'_> {
             )
         } else if name.eq_ignore_ascii_case("copy") {
             Some(&["Destination"][..])
+        } else if name.eq_ignore_ascii_case("pastespecial") {
+            Some(&["Paste", "Operation", "SkipBlanks", "Transpose"][..])
         } else if name.eq_ignore_ascii_case("merge") {
             Some(&["Across"][..])
         } else if name.eq_ignore_ascii_case("borders") {
@@ -4634,6 +4849,9 @@ fn host_constant(name: &str) -> Option<Value> {
         "xldown" => -4121,
         "xltoleft" => -4159,
         "xltoright" => -4161,
+        "xlpasteall" => -4104,
+        "xlpastevalues" => -4163,
+        "xlpasteformats" => -4122,
         "xlascending" => 1,
         "xldescending" => 2,
         "xlyes" => 1,
@@ -7388,6 +7606,108 @@ mod tests {
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         execute_with_host(&module, "Act", vec![], &mut host)
             .expect_err("Excel raises for a rank it cannot reach");
+    }
+
+    /// Reads a cell the way the Excel probe did: its value, its formula, and
+    /// whether it came out bold.
+    fn looked_at(workbook: &Workbook, row: u32, column: u32) -> String {
+        let cell = workbook.sheets[0]
+            .rows
+            .iter()
+            .find(|candidate| candidate.index == row)
+            .and_then(|found| found.cells.iter().find(|cell| cell.col == column));
+        match cell {
+            None => "v= f= bold=False".to_string(),
+            Some(cell) => format!(
+                "v={} f={} bold={}",
+                cell.value.display(),
+                cell.formula.clone().unwrap_or_default(),
+                cell.style.bold
+            ),
+        }
+    }
+
+    fn pasted(call: &str) -> Workbook {
+        let mut workbook = workbook();
+        let module = parse_module(&format!(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Formula = \"=A1*2\"\n\
+               Range(\"A1:A2\").Font.Bold = True\n\
+               {call}\n\
+             End Sub\n"
+        ))
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        workbook
+    }
+
+    /// A whole paste brings the formula along, moved by the distance it
+    /// travelled. Measured against Excel.
+    #[test]
+    fn a_whole_paste_carries_the_formula_and_the_formatting() {
+        let workbook = pasted(
+            "Range(\"A1:A2\").Copy\n  Range(\"C1\").PasteSpecial xlPasteAll",
+        );
+        assert_eq!(looked_at(&workbook, 1, 2), "v=10 f= bold=true");
+        assert_eq!(looked_at(&workbook, 2, 2), "v= f=C1*2 bold=true");
+
+        // Leaving the argument out pastes everything too.
+        let workbook = pasted("Range(\"A1:A2\").Copy\n  Range(\"C1\").PasteSpecial");
+        assert_eq!(looked_at(&workbook, 2, 2), "v= f=C1*2 bold=true");
+    }
+
+    #[test]
+    fn a_values_paste_drops_the_formula_and_the_formatting() {
+        let workbook = pasted(
+            "Range(\"A1:A2\").Copy\n  Range(\"C1\").PasteSpecial xlPasteValues",
+        );
+        assert_eq!(looked_at(&workbook, 1, 2), "v=10 f= bold=false");
+        // The formula does not come; what the cell was holding does.
+        assert_eq!(looked_at(&workbook, 2, 2), "v= f= bold=false");
+    }
+
+    #[test]
+    fn a_formats_paste_leaves_the_value_alone() {
+        let workbook = pasted(
+            "Range(\"C1\").Value = 99\n  Range(\"A1:A2\").Copy\n  Range(\"C1\").PasteSpecial xlPasteFormats",
+        );
+        assert_eq!(looked_at(&workbook, 1, 2), "v=99 f= bold=true");
+    }
+
+    #[test]
+    fn a_bigger_target_takes_whole_copies_of_the_block() {
+        let workbook = pasted(
+            "Range(\"A1:A2\").Copy\n  Range(\"C1:C4\").PasteSpecial xlPasteValues",
+        );
+        assert_eq!(looked_at(&workbook, 3, 2), "v=10 f= bold=false");
+
+        let workbook = pasted(
+            "Range(\"A1:A2\").Copy\n  Range(\"E1\").PasteSpecial xlPasteValues, , , True",
+        );
+        assert_eq!(looked_at(&workbook, 1, 4), "v=10 f= bold=false");
+        assert_eq!(looked_at(&workbook, 1, 5), "v= f= bold=false");
+    }
+
+    #[test]
+    fn vba_refuses_a_paste_it_cannot_carry_out() {
+        for call in [
+            // Nothing was copied first.
+            "Range(\"C1\").PasteSpecial xlPasteValues",
+            // The block does not divide the target evenly.
+            "Range(\"A1:A2\").Copy\n  Range(\"C1:C3\").PasteSpecial xlPasteValues",
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Range(\"A1\").Value = 10\n  Range(\"A2\").Value = 20\n  {call}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
+        }
     }
 
     #[test]
