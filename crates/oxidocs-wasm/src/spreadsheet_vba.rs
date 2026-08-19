@@ -4097,11 +4097,8 @@ fn from_cell_value(value: &CellValue) -> Value {
         CellValue::Empty => Value::Empty,
         CellValue::String(value) => Value::String(value.clone()),
         CellValue::Error(value) => Value::Error(spreadsheet_error_number(value)),
-        CellValue::Number(value)
-            if value.fract() == 0.0 && *value >= i64::MIN as f64 && *value <= i64::MAX as f64 =>
-        {
-            Value::Integer(*value as i64)
-        }
+        // Every number in a cell is a Double, whole or not, which is the type
+        // VarType and TypeName report for one.
         CellValue::Number(value) => Value::Double(*value),
         CellValue::Boolean(value) => Value::Boolean(*value),
     }
@@ -5748,6 +5745,42 @@ mod tests {
         assert!(
             error.to_string().contains("scalar"),
             "unexpected error: {error}"
+        );
+    }
+
+    /// Excel keeps every number in a cell as a Double, whole or not, and that is
+    /// the type VBA reports for it. Text, Booleans and blanks keep their own.
+    #[test]
+    fn a_cells_number_carries_the_double_type() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub CellTypes()\n\
+               Range(\"A1\").Value = 42\n\
+               Range(\"A2\").Value = 42.5\n\
+               Range(\"A3\").Value = \"text\"\n\
+               Range(\"A4\").Value = True\n\
+               Debug.Print TypeName(Range(\"A1\").Value), TypeName(Range(\"A2\").Value)\n\
+               Debug.Print TypeName(Range(\"A3\").Value), TypeName(Range(\"A4\").Value), TypeName(Range(\"A5\").Value)\n\
+               Debug.Print VarType(Range(\"A1\")), VarType(Range(\"A3\")), VarType(Range(\"A5\"))\n\
+               Debug.Print Range(\"A1\"), \"x\" & Range(\"A1\"), Range(\"A1\") + 1\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "CellTypes", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "Double\tDouble".to_string(),
+                "String\tBoolean\tEmpty".to_string(),
+                "5\t8\t0".to_string(),
+                // A whole Double still reads back without a trailing zero.
+                "42\tx42\t43".to_string(),
+            ]
         );
     }
 
