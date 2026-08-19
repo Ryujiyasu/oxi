@@ -29077,17 +29077,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // one of them is a PASS: 002a301d 0.6846 -> 0.9692 (pcd +2 -> +1),
             // 00161422 1.0000 -> 0.9824 (4 paragraphs at ONE p12/p13 boundary).
             // n_pass 221 -> 220, so both merge-gate clauses fail.
-            // The residual is a case this rule does not yet cover: at that
-            // boundary Word leaves 230pt of p12 BLANK and moves row 4 whole,
-            // while Oxi keeps 2 lines -- no image crosses the line there (the
-            // images sit wholly below it), so the pull-back never fires. The
-            // missing discriminator is when a fragment may be left behind AT
-            // ALL once the row's image has to move. Next instrument: a
-            // multi-cell variant of _pb_cellimgtail_gen.py that sweeps the free
-            // space above a row whose image cannot fit, and reads where Word
-            // switches from "keep the lines above" (technical__0061c884 keeps
-            // 9 paragraphs) to "move the row whole" (00161422). Needs the Word
-            // PDF for that page; the EN benchmark has COM truth only.
+            // ★The residual is NOT a gap in this rule -- it is a pre-existing
+            // drift the veto used to hide. Measured, not assumed:
+            // `_pb_imgrowfit_gen.py` (k lines above a NON-fitting image, image
+            // last, row walked down a line at a time, k = 1/2/3/6/9 x 4 offsets)
+            // shows Word keeping ALL k lines in ALL 20 arms -- even a single
+            // line with only 136pt free. "Keep everything above that fits" is
+            // unconditional, which is what S1168 already does.
+            // The Word PDF of 00161422 then says its p12 is essentially FULL
+            // (last line y=535.40 against a 559.32 bottom) and p13 opens with
+            // "individually on the front of the sheet" -- Word SPLITS that row
+            // too. The engines differ on the CELL CONTENT, not the break: Word
+            // puts a 27.6pt gap before the numbered paragraph "5. Allow about
+            // ..." (476.70 -> 504.30) where Oxi runs a uniform 14.7pt pitch with
+            // no paragraph gap, so Oxi fits 29 lines where Word fits 26 and the
+            // boundary lands one line late.
+            // (An earlier reading of "Word leaves 230pt blank" was a COM-dump
+            // artefact: `paragraphs` enumerates per CELL, so the last entry for
+            // a page is not the lowest thing on it. Use the PDF for page-bottom
+            // questions -- the same trap as the Info6 caveat.)
+            // So default-ON waits on that spacing bug, not on this rule.
             let image_atomic_push = std::env::var("OXI_S1168").is_err()
                 && row_has_image_block
                 && row_height <= content_height
