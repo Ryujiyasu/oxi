@@ -4153,6 +4153,12 @@ fn lookup_ph_geom(
 /// field and level by level. The layout is the nearer ancestor, so anything it
 /// states wins; anything it leaves out falls through to the master's
 /// placeholder, which in turn beats the master's `p:txStyles`.
+/// The master placeholder's face survives an empty layout level unless this
+/// is set.
+fn phfont_merge_on() -> bool {
+    std::env::var("OXI_PHFONTMERGE_DISABLE").is_err()
+}
+
 fn merge_ph_levels(
     layout: Vec<MasterStyleLevel>,
     master: Vec<MasterStyleLevel>,
@@ -4173,6 +4179,17 @@ fn merge_ph_levels(
                 color: l.color.clone().or(m.color.clone()),
                 algn: l.algn.or(m.algn),
                 line_spacing: l.line_spacing.or(m.line_spacing),
+                // The face has to fall through too, and `..l` alone dropped
+                // it: d24's LAYOUT title placeholder declares an lstStyle with
+                // nothing but an empty `<a:defRPr/>`, and that empty level was
+                // enough to discard the MASTER placeholder's
+                // `<a:latin typeface="Fira Sans SemiBold"/>`, leaving the
+                // title on the theme's Arial.
+                font_family: if phfont_merge_on() {
+                    l.font_family.clone().or(m.font_family.clone())
+                } else {
+                    l.font_family.clone()
+                },
                 ..l
             }
         })
