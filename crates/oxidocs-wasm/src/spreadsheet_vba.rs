@@ -1975,63 +1975,84 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
-    /// A whole band of rows or columns, which is what `Insert` and `Delete`
-    /// move. A range covering only part of one is refused rather than guessed
-    /// at, since the cells around it would have to shift as well.
-    fn band(range: CellRange, name: &str) -> Result<(ShiftAxis, u32, u32), String> {
-        let whole_row = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
-        let whole_column = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
-        if whole_row && !whole_column {
-            return Ok((
-                ShiftAxis::Rows,
-                range.start_row,
-                range.end_row - range.start_row + 1,
-            ));
-        }
-        if whole_column && !whole_row {
-            return Ok((
-                ShiftAxis::Columns,
-                range.start_column + 1,
-                range.end_column - range.start_column + 1,
-            ));
-        }
-        Err(format!(
-            "Range.{name} needs whole rows or whole columns in the browser"
-        ))
+    /// Which way `Insert` and `Delete` move the cells around a range. Excel
+    /// decides from the range's shape when the caller does not say: a range
+    /// taller than it is wide moves sideways, anything else moves vertically.
+    fn shift_direction(range: CellRange, args: &[Value], inserting: bool) -> Result<bool, String> {
+        let sideways = match args {
+            [] | [Value::Missing] => {
+                (range.end_row - range.start_row) > (range.end_column - range.start_column)
+            }
+            [shift] => match shift {
+                Value::Integer(-4121) if inserting => false,
+                Value::Integer(-4161) if inserting => true,
+                Value::Integer(-4162) if !inserting => false,
+                Value::Integer(-4159) if !inserting => true,
+                _ => {
+                    return Err(format!(
+                        "Range.{} does not understand that shift",
+                        if inserting { "Insert" } else { "Delete" }
+                    ))
+                }
+            },
+            _ => {
+                return Err(format!(
+                    "Range.{} takes at most one shift",
+                    if inserting { "Insert" } else { "Delete" }
+                ))
+            }
+        };
+        Ok(sideways)
     }
 
     fn insert_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
-        if !args.is_empty() {
-            return Err("Range.Insert does not take a shift in the browser".to_string());
-        }
-        let (axis, at, count) = Self::band(range, "Insert")?;
-        self.shift_band(range.sheet, axis, at, count as i64)?;
+        let sideways = Self::shift_direction(range, args, true)?;
+        self.shift_cells(range, sideways, true)?;
         Ok(Value::Empty)
     }
 
     fn delete_range(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
-        if !args.is_empty() {
-            return Err("Range.Delete does not take a shift in the browser".to_string());
-        }
-        let (axis, at, count) = Self::band(range, "Delete")?;
-        self.shift_band(range.sheet, axis, at, -(count as i64))
-            .map(|()| Value::Empty)
+        let sideways = Self::shift_direction(range, args, false)?;
+        self.shift_cells(range, sideways, false)?;
+        Ok(Value::Empty)
     }
 
-    /// Moves everything at or past `at` by `count`, dropping what a removal
-    /// covers, then rewrites the sheet's formulas to match.
-    fn shift_band(
+    /// Moves everything the range pushes ahead of it, drops what a removal
+    /// covers, and rewrites the sheet's formulas to match.
+    ///
+    /// Only the rows or columns the range itself spans move, so inserting at
+    /// `B2` leaves column C where it was.
+    fn shift_cells(
         &mut self,
-        sheet: usize,
-        axis: ShiftAxis,
-        at: u32,
-        count: i64,
+        range: CellRange,
+        sideways: bool,
+        inserting: bool,
     ) -> Result<(), String> {
-        let removed = if count < 0 {
-            count.unsigned_abs() as u32
+        let axis = if sideways {
+            ShiftAxis::Columns
         } else {
-            0
+            ShiftAxis::Rows
         };
+        let (at, span, across) = if sideways {
+            (
+                range.start_column + 1,
+                range.end_column - range.start_column + 1,
+                (range.start_row, range.end_row),
+            )
+        } else {
+            (
+                range.start_row,
+                range.end_row - range.start_row + 1,
+                (range.start_column + 1, range.end_column + 1),
+            )
+        };
+        let count = if inserting {
+            i64::from(span)
+        } else {
+            -i64::from(span)
+        };
+
+        let removed = if inserting { 0 } else { span };
         let past = at.saturating_add(removed);
         let moved = |value: u32| -> Option<u32> {
             if value < at {
@@ -2043,62 +2064,100 @@ impl<'a> WorkbookHost<'a> {
                 }
                 return Some(value - removed);
             }
-            Some(value.saturating_add(count as u32))
+            Some(value.saturating_add(span))
         };
+        // Only cells lying across the range's own width or height take part.
+        let taking_part = |crossing: u32| crossing >= across.0 && crossing <= across.1;
 
-        let Some(worksheet) = self.workbook.sheets.get_mut(sheet) else {
+        let Some(worksheet) = self.workbook.sheets.get_mut(range.sheet) else {
             return Err("worksheet is out of range".to_string());
         };
-        match axis {
-            ShiftAxis::Rows => {
-                worksheet.rows.retain_mut(|row| match moved(row.index) {
-                    Some(index) => {
-                        row.index = index;
+        if sideways {
+            for row in &mut worksheet.rows {
+                if !taking_part(row.index) {
+                    continue;
+                }
+                row.cells.retain_mut(|cell| match moved(cell.col + 1) {
+                    Some(column) => {
+                        cell.col = column - 1;
                         true
                     }
                     None => false,
                 });
             }
-            ShiftAxis::Columns => {
-                for row in &mut worksheet.rows {
-                    // A cell's column is counted from zero, the band from one.
-                    row.cells.retain_mut(|cell| match moved(cell.col + 1) {
-                        Some(column) => {
-                            cell.col = column - 1;
-                            true
+        } else {
+            // A row only partly taking part has to be split, so cells move
+            // between rows rather than rows moving whole.
+            let mut carried: Vec<(u32, Cell)> = Vec::new();
+            for row in &mut worksheet.rows {
+                row.cells.retain_mut(|cell| {
+                    if !taking_part(cell.col + 1) {
+                        return true;
+                    }
+                    match moved(row.index) {
+                        Some(index) if index == row.index => true,
+                        Some(index) => {
+                            carried.push((index, cell.clone()));
+                            false
                         }
                         None => false,
-                    });
+                    }
+                });
+            }
+            for (index, cell) in carried {
+                let row = match worksheet.rows.iter().position(|row| row.index == index) {
+                    Some(position) => &mut worksheet.rows[position],
+                    None => {
+                        worksheet.rows.push(Row {
+                            index,
+                            cells: Vec::new(),
+                            height: None,
+                        });
+                        worksheet.rows.sort_by_key(|row| row.index);
+                        worksheet
+                            .rows
+                            .iter_mut()
+                            .find(|row| row.index == index)
+                            .unwrap()
+                    }
+                };
+                match row.cells.iter_mut().find(|held| held.col == cell.col) {
+                    Some(held) => *held = cell,
+                    None => {
+                        row.cells.push(cell);
+                        row.cells.sort_by_key(|cell| cell.col);
+                    }
                 }
             }
+            worksheet.rows.retain(|row| !row.cells.is_empty());
         }
 
         worksheet.merge_cells.retain_mut(|merge| {
-            let (start, end) = match axis {
-                ShiftAxis::Rows => (merge.start_row, merge.end_row),
-                ShiftAxis::Columns => (merge.start_col + 1, merge.end_col + 1),
+            let (near, far) = if sideways {
+                (merge.start_row, merge.end_row)
+            } else {
+                (merge.start_col + 1, merge.end_col + 1)
+            };
+            if !taking_part(near) && !taking_part(far) {
+                return true;
+            }
+            let (start, end) = if sideways {
+                (merge.start_col + 1, merge.end_col + 1)
+            } else {
+                (merge.start_row, merge.end_row)
             };
             // A merge the removal swallows whole goes; one it clips shrinks.
-            let start = match moved(start) {
-                Some(start) => start,
-                None => at,
-            };
-            let end = match moved(end) {
-                Some(end) => end,
-                None => at.saturating_sub(1),
-            };
+            let start = moved(start).unwrap_or(at);
+            let end = moved(end).unwrap_or_else(|| at.saturating_sub(1));
             if start > end {
                 return false;
             }
-            match axis {
-                ShiftAxis::Rows => {
-                    merge.start_row = start;
-                    merge.end_row = end;
-                }
-                ShiftAxis::Columns => {
-                    merge.start_col = start - 1;
-                    merge.end_col = end - 1;
-                }
+            if sideways {
+                merge.start_col = start - 1;
+                merge.end_col = end - 1;
+            } else {
+                merge.start_row = start;
+                merge.end_row = end;
             }
             true
         });
@@ -2108,11 +2167,12 @@ impl<'a> WorkbookHost<'a> {
                 let Some(formula) = cell.formula.as_ref() else {
                     continue;
                 };
-                match oxicells_core::shift_formula_references(formula, axis, at, count) {
-                    Ok(shifted) => cell.formula = Some(shifted),
-                    // A formula this build cannot read is left as the author
-                    // wrote it rather than silently half-moved.
-                    Err(_) => {}
+                // A formula this build cannot read is left as the author wrote
+                // it rather than silently half-moved.
+                if let Ok(shifted) =
+                    oxicells_core::shift_formula_references(formula, axis, at, count, across)
+                {
+                    cell.formula = Some(shifted);
                 }
             }
         }
@@ -4027,6 +4087,11 @@ fn host_constant(name: &str) -> Option<Value> {
         "xldown" => -4121,
         "xltoleft" => -4159,
         "xltoright" => -4161,
+        // The shift an Insert or Delete takes, which share these numbers.
+        "xlshiftdown" => -4121,
+        "xlshifttoright" => -4161,
+        "xlshiftup" => -4162,
+        "xlshifttoleft" => -4159,
         "xlgeneral" => 1,
         "xlleft" => -4131,
         "xlcenter" => -4108,
@@ -6132,19 +6197,115 @@ mod tests {
         assert!(workbook.sheets[0].merge_cells.is_empty());
     }
 
-    /// Part of a row is refused rather than shifted the wrong way.
+    /// Every grid here is what Excel 16 left behind for the same call.
     #[test]
-    fn vba_refuses_to_insert_part_of_a_row() {
-        let mut workbook = filled_grid();
-        let module =
-            parse_module("Public Sub Act()\n  Range(\"B2\").Insert\nEnd Sub\n").unwrap();
-        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
-        let error = execute_with_host(&module, "Act", vec![], &mut host)
-            .expect_err("a partial range needs a shift this build does not model");
-        assert!(
-            error.to_string().contains("whole rows"),
-            "unexpected error: {error}"
+    fn vba_shifts_part_of_a_row_or_column() {
+        // A single cell is as wide as it is tall, so it moves down.
+        let workbook = run_on_grid("Public Sub Act()\n  Range(\"B2\").Insert\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,.,C2,D2 / A3,B2,C3,D3 / A4,B3,C4,D4"
         );
+
+        // Taller than wide, so this one moves sideways instead.
+        let workbook = run_on_grid("Public Sub Act()\n  Range(\"B2:B3\").Insert\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,.,B2,C2 / A3,.,B3,C3 / A4,B4,C4,D4"
+        );
+
+        // Wider than tall, so it moves down, carrying both columns.
+        let workbook = run_on_grid("Public Sub Act()\n  Range(\"B2:C2\").Insert\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,.,.,D2 / A3,B2,C2,D3 / A4,B3,C3,D4"
+        );
+
+        let workbook = run_on_grid("Public Sub Act()\n  Range(\"B2\").Delete\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,B3,C2,D2 / A3,B4,C3,D3 / A4,.,C4,D4"
+        );
+
+        let workbook = run_on_grid("Public Sub Act()\n  Range(\"B2:B3\").Delete\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,C2,D2,. / A3,C3,D3,. / A4,B4,C4,D4"
+        );
+
+        let workbook = run_on_grid("Public Sub Act()\n  Range(\"B2:C3\").Delete\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,B4,C4,D2 / A3,.,.,D3 / A4,.,.,D4"
+        );
+    }
+
+    /// An explicit shift overrides the shape's own leaning.
+    #[test]
+    fn an_explicit_shift_decides_the_direction() {
+        let workbook =
+            run_on_grid("Public Sub Act()\n  Range(\"B2\").Insert xlShiftToRight\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,.,B2,C2 / A3,B3,C3,D3 / A4,B4,C4,D4"
+        );
+
+        let workbook =
+            run_on_grid("Public Sub Act()\n  Range(\"B2\").Delete xlShiftToLeft\nEnd Sub\n");
+        assert_eq!(
+            grid(&workbook, 4, 4),
+            "A1,B1,C1,D1 / A2,C2,D2,. / A3,B3,C3,D3 / A4,B4,C4,D4"
+        );
+    }
+
+    /// A partial shift moves only the formulas sharing its column, and leaves a
+    /// range reaching past the band alone.
+    #[test]
+    fn a_partial_shift_moves_only_what_shares_its_column() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"F1\").Formula = \"=B3*2\"\n\
+               Range(\"F2\").Formula = \"=C3*2\"\n\
+               Range(\"F3\").Formula = \"=SUM(B1:B4)\"\n\
+               Range(\"F4\").Formula = \"=SUM(A1:C3)\"\n\
+               Range(\"B2\").Insert xlShiftDown\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        let formula = |row: u32| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|candidate| candidate.index == row)
+                .and_then(|found| found.cells.iter().find(|cell| cell.col == 5))
+                .and_then(|cell| cell.formula.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(formula(1), "B4*2");
+        assert_eq!(formula(2), "C3*2");
+        assert_eq!(formula(3), "SUM(B1:B5)");
+        assert_eq!(formula(4), "SUM(A1:C3)");
+    }
+
+    #[test]
+    fn vba_refuses_a_shift_that_does_not_belong(
+    ) {
+        let mut workbook = filled_grid();
+        for source in [
+            // xlShiftToLeft is a deletion's shift, not an insertion's.
+            "Public Sub Act()\n  Range(\"B2\").Insert xlShiftToLeft\nEnd Sub\n",
+            "Public Sub Act()\n  Range(\"B2\").Delete xlShiftDown\nEnd Sub\n",
+        ] {
+            let module = parse_module(source).unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host)
+                .expect_err("that shift belongs to the other operation");
+        }
     }
 
     #[test]
