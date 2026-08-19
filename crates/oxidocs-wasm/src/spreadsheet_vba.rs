@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxicells_core::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Workbook};
+use oxicells_core::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
 use oxicells_core::{ReferenceShift, ShiftAxis};
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
@@ -348,6 +348,104 @@ impl<'a> WorkbookHost<'a> {
             title,
         });
         Ok(Value::Integer(1))
+    }
+
+    /// `Worksheets.Add` puts a sheet in front of the active one unless told
+    /// otherwise, makes it active, and hands it back.
+    fn add_worksheet(&mut self, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        if args.len() > 3 {
+            return Err("Worksheets.Add takes Before, After and Count".to_string());
+        }
+        if given(2).is_some() {
+            return Err("Worksheets.Add cannot add several sheets at once".to_string());
+        }
+        // Before and After name a sheet with the object itself, not its name.
+        let placed = |host: &Self, value: &Value| match value {
+            Value::Object(object) => host.worksheet(object).ok_or_else(|| {
+                format!("Worksheets.Add expects a worksheet, not a {} object", object.kind)
+            }),
+            value => host.worksheet_from_value(value),
+        };
+        let before = given(0).map(|value| placed(self, value)).transpose()?;
+        let after = given(1).map(|value| placed(self, value)).transpose()?;
+        if before.is_some() && after.is_some() {
+            return Err("Worksheets.Add takes Before or After, not both".to_string());
+        }
+        let at = match (before, after) {
+            (Some(before), _) => before,
+            (_, Some(after)) => after + 1,
+            _ => self.active_sheet,
+        };
+
+        let template = &self.workbook.sheets[self.active_sheet];
+        let sheet = Sheet {
+            name: self.unused_sheet_name(),
+            rows: Vec::new(),
+            col_count: 0,
+            col_widths: Vec::new(),
+            default_col_width: template.default_col_width,
+            default_row_height: template.default_row_height,
+            merge_cells: Vec::new(),
+            unsupported_elements: Vec::new(),
+        };
+        self.workbook.sheets.insert(at, sheet);
+        self.active_sheet = at;
+        Ok(self.object(HostObject::Worksheet(at)))
+    }
+
+    /// Excel numbers a new sheet from a counter that never goes back, so a
+    /// workbook that has had sheets removed skips those numbers. This build
+    /// takes the lowest number nothing is using, which agrees whenever no sheet
+    /// has been removed.
+    fn unused_sheet_name(&self) -> String {
+        (1..)
+            .map(|number| format!("Sheet{number}"))
+            .find(|candidate| {
+                !self
+                    .workbook
+                    .sheets
+                    .iter()
+                    .any(|sheet| sheet.name.eq_ignore_ascii_case(candidate))
+            })
+            .expect("a workbook cannot hold every possible sheet name")
+    }
+
+    fn delete_worksheet(&mut self, sheet: usize) -> Result<(), String> {
+        if self.workbook.sheets.len() <= 1 {
+            return Err("a workbook must keep at least one worksheet".to_string());
+        }
+        self.workbook.sheets.remove(sheet);
+        // Objects already handed out still name sheets by position, so the ones
+        // past the hole would now point at their neighbour.
+        self.objects.retain(|object| match object {
+            HostObject::Worksheet(index) => *index != sheet,
+            _ => true,
+        });
+        if self.active_sheet >= self.workbook.sheets.len() {
+            self.active_sheet = self.workbook.sheets.len() - 1;
+        }
+        Ok(())
+    }
+
+    fn rename_worksheet(&mut self, sheet: usize, name: &str) -> Result<(), String> {
+        if name.trim().is_empty() {
+            return Err("a worksheet name cannot be empty".to_string());
+        }
+        if self
+            .workbook
+            .sheets
+            .iter()
+            .enumerate()
+            .any(|(index, held)| index != sheet && held.name.eq_ignore_ascii_case(name))
+        {
+            return Err(format!("another worksheet is already called {name}"));
+        }
+        self.workbook.sheets[sheet].name = name.to_string();
+        Ok(())
     }
 
     fn worksheet_object(&mut self, value: &Value) -> Result<Value, String> {
@@ -2410,6 +2508,9 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Empty));
             }
             if let Some(sheet) = self.worksheet(receiver) {
+                if name.eq_ignore_ascii_case("delete") {
+                    return self.delete_worksheet(sheet).map(|()| Some(Value::Empty));
+                }
                 if name.eq_ignore_ascii_case("evaluate") {
                     return self.evaluate_object(sheet, args).map(Some);
                 }
@@ -2484,6 +2585,9 @@ impl Host for WorkbookHost<'_> {
                 return self
                     .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Columns, args)
                     .map(Some);
+            }
+            if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("add") {
+                return self.add_worksheet(args).map(Some);
             }
             if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("item") {
                 let [value] = args else {
@@ -2748,6 +2852,8 @@ impl Host for WorkbookHost<'_> {
                     "RelativeTo",
                 ][..],
             )
+        } else if name.eq_ignore_ascii_case("add") {
+            Some(&["Before", "After", "Count"][..])
         } else if name.eq_ignore_ascii_case("copy") {
             Some(&["Destination"][..])
         } else if name.eq_ignore_ascii_case("merge") {
@@ -2877,6 +2983,9 @@ impl Host for WorkbookHost<'_> {
             return Ok(Some(self.object(HostObject::Worksheets)));
         }
         if self.is_worksheets(receiver) {
+            if name.eq_ignore_ascii_case("add") {
+                return self.add_worksheet(&[]).map(Some);
+            }
             if name.eq_ignore_ascii_case("count") {
                 return Ok(Some(Value::Integer(self.workbook.sheets.len() as i64)));
             }
@@ -3011,6 +3120,15 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(sheet) = self.worksheet(receiver) {
+            if name.eq_ignore_ascii_case("name") {
+                let Value::String(renamed) = &value else {
+                    return Err("a worksheet name must be a String".to_string());
+                };
+                self.rename_worksheet(sheet, renamed)?;
+                return Ok(true);
+            }
+        }
         if self.is_application(receiver) {
             if name.eq_ignore_ascii_case("screenupdating") {
                 self.screen_updating = style_boolean(&value, "Application.ScreenUpdating")?;
@@ -6449,6 +6567,115 @@ mod tests {
 
         let workbook = act_on(merged_grid(2, 1, 3, 2), "Range(\"A1\").EntireRow.Insert");
         assert_eq!(merges(&workbook), "B3:C4");
+    }
+
+    /// A new sheet lands in front of the active one, becomes active, and is
+    /// handed back. Measured against Excel with the first sheet named Base.
+    #[test]
+    fn vba_adds_a_worksheet_in_front_of_the_active_one() {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "Base".to_string();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim added As Object\n\
+               Set added = Worksheets.Add\n\
+               Debug.Print added.Name, TypeName(added), ActiveSheet.Name\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(debug_output, vec!["Sheet1\tWorksheet\tSheet1".to_string()]);
+        assert_eq!(
+            workbook
+                .sheets
+                .iter()
+                .map(|sheet| sheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string(), "Base".to_string()]
+        );
+    }
+
+    #[test]
+    fn vba_places_a_worksheet_before_or_after_another() {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "Base".to_string();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim added As Object\n\
+               Set added = Worksheets.Add(After:=Worksheets(\"Base\"))\n\
+               added.Name = \"Tail\"\n\
+               Set added = Worksheets.Add(Before:=Worksheets(\"Base\"))\n\
+               added.Name = \"Head\"\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        assert_eq!(
+            workbook
+                .sheets
+                .iter()
+                .map(|sheet| sheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Head".to_string(),
+                "Base".to_string(),
+                "Tail".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn vba_deletes_a_worksheet_and_keeps_the_last_one() {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "Base".to_string();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim added As Object\n\
+               Set added = Worksheets.Add\n\
+               added.Name = \"Second\"\n\
+               Worksheets(\"Second\").Delete\n\
+               Debug.Print Worksheets.Count, Worksheets(1).Name\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(debug_output, vec!["1\tBase".to_string()]);
+
+        // Excel refuses to leave a workbook with no sheets at all.
+        let module =
+            parse_module("Public Sub Act()\n  Worksheets(\"Base\").Delete\nEnd Sub\n").unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host)
+            .expect_err("the last worksheet cannot go");
+    }
+
+    #[test]
+    fn vba_refuses_a_worksheet_name_another_sheet_holds() {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "Base".to_string();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Dim added As Object\n\
+               Set added = Worksheets.Add\n\
+               added.Name = \"Base\"\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host)
+            .expect_err("two sheets cannot share a name");
     }
 
     #[test]
