@@ -65,3 +65,64 @@ fn adding_a_row_leaves_the_hidden_ones_hidden() {
     assert_eq!(hidden_rows(&workbook), vec![2, 4]);
     assert_eq!(workbook.sheets[0].hidden_cols, vec![1]);
 }
+
+/// The editor can hide a row that was visible, and reveal one that was not.
+#[test]
+fn the_editor_can_change_which_rows_are_hidden() {
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.set_row_hidden(0, 2, false); // was hidden
+    editor.set_row_hidden(0, 3, true); // was visible
+    let saved = editor.save().expect("the workbook saves");
+
+    let workbook = parse_xlsx(&saved).expect("the saved workbook parses");
+    assert_eq!(hidden_rows(&workbook), vec![3, 4]);
+    // The cells on those rows are untouched by the change.
+    let row3 = workbook.sheets[0]
+        .rows
+        .iter()
+        .find(|row| row.index == 3)
+        .expect("row 3 is still there");
+    assert_eq!(row3.cells[0].value.display(), "30");
+}
+
+#[test]
+fn the_editor_can_change_which_columns_are_hidden() {
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.set_col_hidden(0, 1, false); // column B was hidden
+    editor.set_col_hidden(0, 2, true); // column C was visible
+    let saved = editor.save().expect("the workbook saves");
+
+    let workbook = parse_xlsx(&saved).expect("the saved workbook parses");
+    assert_eq!(workbook.sheets[0].hidden_cols, vec![2]);
+}
+
+/// Hiding a row the sheet has no record of still has to be written down.
+#[test]
+fn hiding_an_empty_row_writes_it_out() {
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.set_row_hidden(0, 12, true);
+    let saved = editor.save().expect("the workbook saves");
+
+    let workbook = parse_xlsx(&saved).expect("the saved workbook parses");
+    assert_eq!(hidden_rows(&workbook), vec![2, 4, 12]);
+}
+
+/// Both kinds of change at once, alongside a cell edit.
+#[test]
+fn cells_rows_and_columns_all_change_together() {
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.set_cell_value(0, 1, 0, CellEditValue::Number(99.0));
+    editor.set_row_hidden(0, 5, true);
+    editor.set_col_hidden(0, 0, true);
+    let saved = editor.save().expect("the workbook saves");
+
+    let workbook = parse_xlsx(&saved).expect("the saved workbook parses");
+    assert_eq!(hidden_rows(&workbook), vec![2, 4, 5]);
+    assert_eq!(workbook.sheets[0].hidden_cols, vec![0, 1]);
+    let first = workbook.sheets[0]
+        .rows
+        .iter()
+        .find(|row| row.index == 1)
+        .expect("row 1 is still there");
+    assert_eq!(first.cells[0].value.display(), "99");
+}

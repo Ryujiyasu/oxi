@@ -786,7 +786,13 @@ fn parse_worksheet(
         default_col_width,
         default_row_height,
         merge_cells,
-        hidden_cols,
+        hidden_cols: {
+            // The order columns appear in says nothing; keep the list tidy.
+            let mut hidden_cols = hidden_cols;
+            hidden_cols.sort_unstable();
+            hidden_cols.dedup();
+            hidden_cols
+        },
         unsupported_elements: Vec::new(),
     })
 }

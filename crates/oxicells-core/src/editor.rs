@@ -52,6 +52,10 @@ pub struct XlsxEditor {
     original_data: Vec<u8>,
     workbook: Workbook,
     edits: HashMap<(usize, u32, u32), CellEditValue>, // (sheet_idx, row, col) -> value
+    /// (sheet_idx, 1-based row) -> hidden
+    row_hidden: HashMap<(usize, u32), bool>,
+    /// (sheet_idx, 0-based column) -> hidden
+    col_hidden: HashMap<(usize, u32), bool>,
 }
 
 /// Convert 0-based column to letter reference (0->A, 25->Z, 26->AA).
@@ -74,6 +78,8 @@ impl XlsxEditor {
             original_data: data.to_vec(),
             workbook,
             edits: HashMap::new(),
+            row_hidden: HashMap::new(),
+            col_hidden: HashMap::new(),
         })
     }
 
@@ -101,13 +107,23 @@ impl XlsxEditor {
         }
     }
 
+    /// Hide or reveal a whole row. `row` is one-based, as OOXML counts them.
+    pub fn set_row_hidden(&mut self, sheet_index: usize, row: u32, hidden: bool) {
+        self.row_hidden.insert((sheet_index, row), hidden);
+    }
+
+    /// Hide or reveal a whole column. `col` is zero-based, as the IR counts it.
+    pub fn set_col_hidden(&mut self, sheet_index: usize, col: u32, hidden: bool) {
+        self.col_hidden.insert((sheet_index, col), hidden);
+    }
+
     pub fn has_edits(&self) -> bool {
-        !self.edits.is_empty()
+        !self.edits.is_empty() || !self.row_hidden.is_empty() || !self.col_hidden.is_empty()
     }
 
     /// Save edited xlsx.
     pub fn save(&self) -> Result<Vec<u8>, XlsxError> {
-        if self.edits.is_empty() {
+        if !self.has_edits() {
             return Ok(self.original_data.clone());
         }
 
@@ -128,12 +144,35 @@ impl XlsxEditor {
                 .insert((*row, *col), val);
         }
 
-        // Map sheet path -> edits for that sheet
-        let mut path_edits: HashMap<String, &HashMap<(u32, u32), &CellEditValue>> =
-            HashMap::new();
-        for (si, edits) in &edits_by_sheet {
-            if let Some(path) = sheet_paths.get(*si) {
-                path_edits.insert(path.clone(), edits);
+        let mut rows_by_sheet: HashMap<usize, BTreeMap<u32, bool>> = HashMap::new();
+        for ((sheet, row), hidden) in &self.row_hidden {
+            rows_by_sheet.entry(*sheet).or_default().insert(*row, *hidden);
+        }
+        let mut cols_by_sheet: HashMap<usize, BTreeMap<u32, bool>> = HashMap::new();
+        for ((sheet, col), hidden) in &self.col_hidden {
+            cols_by_sheet.entry(*sheet).or_default().insert(*col, *hidden);
+        }
+
+        // Map sheet path -> everything to change in that sheet
+        let empty_cells: HashMap<(u32, u32), &CellEditValue> = HashMap::new();
+        let empty_lines: BTreeMap<u32, bool> = BTreeMap::new();
+        let mut path_edits: HashMap<String, SheetEdits<'_>> = HashMap::new();
+        for sheet in edits_by_sheet
+            .keys()
+            .chain(rows_by_sheet.keys())
+            .chain(cols_by_sheet.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            if let Some(path) = sheet_paths.get(sheet) {
+                path_edits.insert(
+                    path.clone(),
+                    SheetEdits {
+                        cells: edits_by_sheet.get(&sheet).unwrap_or(&empty_cells),
+                        rows: rows_by_sheet.get(&sheet).unwrap_or(&empty_lines),
+                        cols: cols_by_sheet.get(&sheet).unwrap_or(&empty_lines),
+                    },
+                );
             }
         }
 
@@ -151,11 +190,11 @@ impl XlsxEditor {
                 writer.start_file(&name, options)
                     .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
 
-                if let Some(cell_edits) = path_edits.get(&name) {
+                if let Some(sheet_edits) = path_edits.get(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                    let patched = patch_worksheet_xml(&xml, cell_edits)?;
+                    let patched = patch_worksheet_xml(&xml, sheet_edits)?;
                     writer.write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                 } else {
@@ -304,14 +343,119 @@ fn write_cell_value(
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
+/// Writes one `<col>` span, splitting it where a change covers only part of it.
+///
+/// A span reads `<col min="1" max="3" .../>` and covers three columns at once,
+/// so hiding the middle one means writing three spans in its place.
+fn write_col_span(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    start: &BytesStart<'_>,
+    pending: &mut BTreeMap<u32, bool>,
+) -> Result<(), XlsxError> {
+    let min = get_attr(start, "min")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1);
+    let max = get_attr(start, "max")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(min);
+    let was_hidden = matches!(get_attr(start, "hidden").as_deref(), Some("1") | Some("true"));
+
+    // Group the columns of this span into runs that share an answer.
+    let mut runs: Vec<(u32, u32, bool)> = Vec::new();
+    for column in min..=max {
+        let hidden = pending
+            .remove(&(column - 1))
+            .unwrap_or(was_hidden);
+        match runs.last_mut() {
+            Some((_, last, held)) if *held == hidden && *last + 1 == column => *last = column,
+            _ => runs.push((column, column, hidden)),
+        }
+    }
+
+    for (first, last, hidden) in runs {
+        let mut span = with_hidden(start, hidden);
+        let mut rebuilt = BytesStart::new("col");
+        for attribute in span.attributes().flatten() {
+            let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+            if key == "min" || key == "max" {
+                continue;
+            }
+            let value = String::from_utf8_lossy(&attribute.value).into_owned();
+            rebuilt.push_attribute((key.as_str(), value.as_str()));
+        }
+        rebuilt.push_attribute(("min", first.to_string().as_str()));
+        rebuilt.push_attribute(("max", last.to_string().as_str()));
+        span = rebuilt;
+        writer
+            .write_event(Event::Empty(span))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Writes `<col>` spans for columns the sheet never described.
+fn write_new_cols(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    pending: &mut BTreeMap<u32, bool>,
+) -> Result<(), XlsxError> {
+    for (column, hidden) in std::mem::take(pending) {
+        if !hidden {
+            continue;
+        }
+        let reference = (column + 1).to_string();
+        let mut span = BytesStart::new("col");
+        span.push_attribute(("min", reference.as_str()));
+        span.push_attribute(("max", reference.as_str()));
+        span.push_attribute(("hidden", "1"));
+        writer
+            .write_event(Event::Empty(span))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn open_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
+    writer
+        .write_event(Event::Start(BytesStart::new("cols")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
+fn close_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
+    writer
+        .write_event(Event::End(BytesEnd::new("cols")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
+/// Copies a start tag, replacing whatever it said about being hidden.
+fn with_hidden(start: &BytesStart<'_>, hidden: bool) -> BytesStart<'static> {
+    let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
+    let mut rewritten = BytesStart::new(name);
+    for attribute in start.attributes().flatten() {
+        let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+        if key == "hidden" {
+            continue;
+        }
+        let value = String::from_utf8_lossy(&attribute.value).into_owned();
+        rewritten.push_attribute((key.as_str(), value.as_str()));
+    }
+    if hidden {
+        rewritten.push_attribute(("hidden", "1"));
+    }
+    rewritten
+}
+
 fn write_inserted_row(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     row: u32,
     cells: BTreeMap<u32, CellEditValue>,
+    hidden: Option<bool>,
 ) -> Result<(), XlsxError> {
     let row_text = row.to_string();
     let mut row_start = BytesStart::new("row");
     row_start.push_attribute(("r", row_text.as_str()));
+    if hidden == Some(true) {
+        row_start.push_attribute(("hidden", "1"));
+    }
     writer
         .write_event(Event::Start(row_start))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
@@ -325,10 +469,17 @@ fn write_inserted_row(
 
 /// Patch worksheet XML, replacing or inserting cells at specified positions.
 /// Each edit is written with its corresponding OOXML scalar type.
-fn patch_worksheet_xml(
-    xml: &str,
-    edits: &HashMap<(u32, u32), &CellEditValue>,
-) -> Result<String, XlsxError> {
+/// Everything one worksheet has to change.
+struct SheetEdits<'a> {
+    cells: &'a HashMap<(u32, u32), &'a CellEditValue>,
+    /// One-based row -> hidden.
+    rows: &'a BTreeMap<u32, bool>,
+    /// Zero-based column -> hidden.
+    cols: &'a BTreeMap<u32, bool>,
+}
+
+fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
+    let edits = sheet_edits.cells;
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut pending: BTreeMap<u32, BTreeMap<u32, CellEditValue>> = BTreeMap::new();
@@ -338,6 +489,11 @@ fn patch_worksheet_xml(
             .or_default()
             .insert(col, (*value).clone());
     }
+
+    let mut pending_rows: std::collections::BTreeSet<u32> =
+        sheet_edits.rows.keys().copied().collect();
+    let mut pending_cols: BTreeMap<u32, bool> = sheet_edits.cols.clone();
+    let mut seen_cols = false;
 
     let mut current_row: u32 = 0;
     let mut in_row = false;
@@ -362,6 +518,15 @@ fn patch_worksheet_xml(
                     skip_replaced_content_depth = 1;
                     continue;
                 }
+                if name == "cols" {
+                    seen_cols = true;
+                }
+                if name == "sheetData" && !seen_cols && !pending_cols.is_empty() {
+                    open_cols(&mut writer)?;
+                    write_new_cols(&mut writer, &mut pending_cols)?;
+                    close_cols(&mut writer)?;
+                    seen_cols = true;
+                }
                 match name.as_str() {
                     "row" => {
                         let next_row = get_attr(e, "r")
@@ -371,11 +536,19 @@ fn patch_worksheet_xml(
                             pending.range(..next_row).map(|(&row, _)| row).collect();
                         for row in missing_rows {
                             if let Some(cells) = pending.remove(&row) {
-                                write_inserted_row(&mut writer, row, cells)?;
+                                let hidden = sheet_edits.rows.get(&row).copied();
+                                write_inserted_row(&mut writer, row, cells, hidden)?;
                             }
                         }
                         in_row = true;
                         current_row = next_row;
+                        pending_rows.remove(&next_row);
+                        if let Some(hidden) = sheet_edits.rows.get(&next_row) {
+                            writer
+                                .write_event(Event::Start(with_hidden(e, *hidden)))
+                                .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            continue;
+                        }
                     }
                     "c" if in_row => {
                         in_cell = true;
@@ -450,6 +623,9 @@ fn patch_worksheet_xml(
                     continue;
                 }
                 let name = local_name(e.name().as_ref());
+                if name == "cols" {
+                    write_new_cols(&mut writer, &mut pending_cols)?;
+                }
                 match name.as_str() {
                     "row" => {
                         if let Some(cells) = pending.remove(&current_row) {
@@ -492,7 +668,21 @@ fn patch_worksheet_xml(
                     "sheetData" => {
                         let remaining = std::mem::take(&mut pending);
                         for (row, cells) in remaining {
-                            write_inserted_row(&mut writer, row, cells)?;
+                            let hidden = sheet_edits.rows.get(&row).copied();
+                            write_inserted_row(&mut writer, row, cells, hidden)?;
+                        }
+                        // A row with nothing in it still has to be written for
+                        // its hidden flag to survive.
+                        let rows_left = std::mem::take(&mut pending_rows);
+                        for row in rows_left {
+                            if let Some(true) = sheet_edits.rows.get(&row) {
+                                write_inserted_row(
+                                    &mut writer,
+                                    row,
+                                    BTreeMap::new(),
+                                    Some(true),
+                                )?;
+                            }
                         }
                     }
                     _ => {}
@@ -511,8 +701,19 @@ fn patch_worksheet_xml(
                     continue;
                 }
                 let name = local_name(e.name().as_ref());
+                if name == "col" {
+                    seen_cols = true;
+                    write_col_span(&mut writer, e, &mut pending_cols)?;
+                    continue;
+                }
                 if in_cell && current_edit.is_some() && (name == "f" || name == "is") {
                     continue;
+                }
+                if name == "sheetData" && !seen_cols && !pending_cols.is_empty() {
+                    open_cols(&mut writer)?;
+                    write_new_cols(&mut writer, &mut pending_cols)?;
+                    close_cols(&mut writer)?;
+                    seen_cols = true;
                 }
                 if name == "sheetData" && !pending.is_empty() {
                     writer
@@ -520,7 +721,13 @@ fn patch_worksheet_xml(
                         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
                     let remaining = std::mem::take(&mut pending);
                     for (row, cells) in remaining {
-                        write_inserted_row(&mut writer, row, cells)?;
+                        let hidden = sheet_edits.rows.get(&row).copied();
+                        write_inserted_row(&mut writer, row, cells, hidden)?;
+                    }
+                    for row in std::mem::take(&mut pending_rows) {
+                        if let Some(true) = sheet_edits.rows.get(&row) {
+                            write_inserted_row(&mut writer, row, BTreeMap::new(), Some(true))?;
+                        }
                     }
                     writer
                         .write_event(Event::End(BytesEnd::new("sheetData")))
@@ -535,9 +742,11 @@ fn patch_worksheet_xml(
                         pending.range(..row_num).map(|(&row, _)| row).collect();
                     for row in missing_rows {
                         if let Some(cells) = pending.remove(&row) {
-                            write_inserted_row(&mut writer, row, cells)?;
+                            let hidden = sheet_edits.rows.get(&row).copied();
+                            write_inserted_row(&mut writer, row, cells, hidden)?;
                         }
                     }
+                    pending_rows.remove(&row_num);
                     if let Some(cells) = pending.remove(&row_num) {
                         writer.write_event(Event::Start(e.clone())).map_err(|error| {
                             XlsxError::InvalidData(error.to_string())
@@ -721,13 +930,26 @@ mod tests {
         assert_eq!(cell.formula.as_deref(), Some("SUM(A2:A3)"));
     }
 
+    /// The patcher takes everything a sheet changes; these tests only change cells.
+    fn cells_only<'a>(
+        cells: &'a HashMap<(u32, u32), &'a CellEditValue>,
+    ) -> SheetEdits<'a> {
+        static NOTHING: std::sync::OnceLock<BTreeMap<u32, bool>> = std::sync::OnceLock::new();
+        let nothing = NOTHING.get_or_init(BTreeMap::new);
+        SheetEdits {
+            cells,
+            rows: nothing,
+            cols: nothing,
+        }
+    }
+
     #[test]
     fn worksheet_patch_replaces_an_existing_formula() {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><f>OLD()</f><v>1</v></c></row></sheetData></worksheet>"#;
         let formula = CellEditValue::Formula("=SUM(B1:B2)".to_string());
         let edits = HashMap::from([((1, 0), &formula)]);
 
-        let patched = patch_worksheet_xml(xml, &edits).expect("should replace formula");
+        let patched = patch_worksheet_xml(xml, &cells_only(&edits)).expect("should replace formula");
         assert!(patched.contains("<f>SUM(B1:B2)</f>"));
         assert!(!patched.contains("OLD()"));
         assert_eq!(patched.matches("<f>").count(), 1);
@@ -747,7 +969,7 @@ mod tests {
             ((2, 1), &new_row_value),
         ]);
 
-        let patched = patch_worksheet_xml(xml, &edits).expect("should patch worksheet");
+        let patched = patch_worksheet_xml(xml, &cells_only(&edits)).expect("should patch worksheet");
         assert!(!patched.contains("<f>"));
         assert!(!patched.contains("<is>"));
         let a1 = patched.find("r=\"A1\"").unwrap();
@@ -770,7 +992,7 @@ mod tests {
         let value = CellEditValue::String("first value".to_string());
         let edits = HashMap::from([((1, 0), &value)]);
 
-        let patched = patch_worksheet_xml(xml, &edits).expect("should patch empty worksheet");
+        let patched = patch_worksheet_xml(xml, &cells_only(&edits)).expect("should patch empty worksheet");
         let expected = "<sheetData><row r=\"1\"><c r=\"A1\" t=\"str\">\
                         <v>first value</v></c></row></sheetData>";
         assert!(patched.contains(expected));
