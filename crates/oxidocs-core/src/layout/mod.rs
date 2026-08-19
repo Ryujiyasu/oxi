@@ -6636,8 +6636,50 @@ impl LayoutEngine {
                             } else {
                                 0.0
                             };
+                            // S1170 (2026-08-19, default ON, opt-out OXI_S1170_DISABLE):
+                            // the second of these two lines IS the group's LAST line at
+                            // the page bottom, and Word measures a last line by its
+                            // UNMULTIPLIED height -- the line-spacing multiplier's
+                            // trailing leading may hang past the bottom margin. That is
+                            // the same rule S779/S827 already apply to a plain line;
+                            // this check was the one place still reserving the whole
+                            // multiplied box, so a keepNext heading needed a full extra
+                            // pitch of room to stay.
+                            // DERIVED (`_pb_keepnext_gen.py`, 24 arms = 6 filler counts x
+                            // 4 sub-pitch phases, double-spaced, heading = keepNext +
+                            // keepLines + before=200 like Heading2/3/4):
+                            //   Word  stays at free 81.43, MOVES at 74.43
+                            //         -> needs 37.6 + 27.6 + 13.8 = 79.0
+                            //   Oxi   stays at free 96.40, MOVES at 89.40
+                            //         -> needed 37.6 + 27.6 + 27.6 = 92.8
+                            // exactly one trailing leading (13.8pt) too much. The
+                            // companion sweep `_pb_lastline_gen.py` (21 arms) shows Word
+                            // keeping plain lines whose BOX overruns the text bottom by
+                            // up to +11.36 while the ink stays inside, and Oxi already
+                            // matching that 21/21 -- so only the group test was wrong.
+                            // educational__00158a7d549f9f51 p42 is this case: 86.04pt
+                            // free, Word puts the heading + 2 body lines (last ink 712.96
+                            // inside 720), Oxi leaves the page blank and moves both,
+                            // losing a line per page for the next 25 pages.
+                            // Scoped to a multiplied rule (>1), so single-spaced
+                            // documents are byte-identical by construction.
+                            let s1170_mult = if matches!(
+                                next_para.style.line_spacing_rule.as_deref(),
+                                None | Some("auto")
+                            ) {
+                                next_para.style.line_spacing.unwrap_or(1.0).max(1.0)
+                            } else {
+                                1.0
+                            };
+                            let last_line_h = if s1170_mult > 1.0
+                                && std::env::var("OXI_S1170_DISABLE").is_err()
+                            {
+                                line_h_next / s1170_mult
+                            } else {
+                                line_h_next
+                            };
                             let follower_orphans = s914
-                                && (one_line_h + line_h_next) > (remaining - this_h - s934_gap);
+                                && (one_line_h + last_line_h) > (remaining - this_h - s934_gap);
                             // S1039 (2026-07-29, opt-out OXI_S1039_DISABLE): a follower
                             // that declares <w:keepLines/> cannot be split at all, so it
                             // ALWAYS moves wholly - the keepNext heading above it must
