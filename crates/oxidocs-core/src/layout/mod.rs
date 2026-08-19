@@ -19631,7 +19631,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let s629 = grid_pitch.is_none()
                         && is_single_lm0
                         && std::env::var("OXI_S629_DISABLE").is_err();
-                    if s805_latin_lm0 {
+                    // S1172 (2026-08-19, default ON, opt-out OXI_S1172_DISABLE):
+                    // the S805 exact-accumulate applies to Latin no-grid MULTIPLE
+                    // spacing too. The 10tw cumulative ROUND is only mean-
+                    // preserving when the raw straddles a 10tw boundary; a raw
+                    // NEAR a multiple rounds the same way every line and the
+                    // error turns systematic. DERIVED (`_pb_garapitch_gen.py`,
+                    // identical-line arms, Word truth read as MEANS because the
+                    // PDF quantizes positions to 600dpi ±0.12):
+                    //   Word = hhea x factor EXACTLY, all six arms
+                    //     (Garamond 11.246~11.25, x1.15 12.943~12.9375;
+                    //      TNR/Arial 11.486~11.499, x1.15 13.234~13.2239)
+                    //   Oxi TNR x1.15: alternates 13.5/13.0, mean 13.214 - bounded
+                    //   Oxi Garamond x1.15: uniform 13.000 vs 12.9375
+                    //     (raw 258.75tw always rounds UP to 260) = +0.0625/line,
+                    //     +1.44pt over a 23-line page = forms__002fbe2c's p2
+                    //     drift, one lost line, one slipped paragraph.
+                    // The bbox-top pitches read off the real document first
+                    // (11.28/11.59/10.85) were a TRAP: the bbox top is the
+                    // tallest glyph, so the pitch varies with line CONTENT --
+                    // identical-line probes are the only clean readout.
+                    let s1172_latin_mult = grid_pitch.is_none()
+                        && is_multiple_spacing
+                        && raw_spaced_tw > 0.0
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1172_DISABLE").is_err();
+                    if s805_latin_lm0 || s1172_latin_mult {
                         // S805: exact accumulate — no 10tw quantization (Word
                         // device-snaps only at render; per-line snap accumulates
                         // error, the S674 lesson).
@@ -26712,11 +26737,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // apparent per-band-shift "drift" is partly best-shift over-fit + the
                 // rasterizer AA floor (body-aligned bands ~0.96, not 0.99). EVERY
                 // non-SSIM vertical measurement (COM/PDF/SSE/band-pitch) has misled here.
-                if grid_pitch.is_none() || s611_no_type_round {
+                let s_dbg_ret = if grid_pitch.is_none() || s611_no_type_round {
                     (tw / 10.0).round() * 10.0 / 20.0
                 } else {
                     (tw / 10.0).ceil() * 10.0 / 20.0
+                };
+                if std::env::var("OXI_DBG_LH").is_ok() {
+                    eprintln!("[LH-TAIL] spaced={:.4} -> {:.4} (none={} s611={})",
+                        spaced, s_dbg_ret, grid_pitch.is_none(), s611_no_type_round);
                 }
+                s_dbg_ret
             }
         }
     }
