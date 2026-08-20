@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxicells_core::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
+use oxicells_core::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
 use oxicells_core::{ReferenceShift, ShiftAxis};
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
@@ -5074,36 +5074,36 @@ fn selected_borders(
 ) -> Vec<bool> {
     match selection {
         BorderSelection::All => vec![
-            style.border_top,
-            style.border_bottom,
-            style.border_left,
-            style.border_right,
+            style.border_top.is_some(),
+            style.border_bottom.is_some(),
+            style.border_left.is_some(),
+            style.border_right.is_some(),
         ],
         BorderSelection::EdgeLeft if address.column == range.start_column => {
-            vec![style.border_left]
+            vec![style.border_left.is_some()]
         }
-        BorderSelection::EdgeTop if address.row == range.start_row => vec![style.border_top],
-        BorderSelection::EdgeBottom if address.row == range.end_row => vec![style.border_bottom],
+        BorderSelection::EdgeTop if address.row == range.start_row => vec![style.border_top.is_some()],
+        BorderSelection::EdgeBottom if address.row == range.end_row => vec![style.border_bottom.is_some()],
         BorderSelection::EdgeRight if address.column == range.end_column => {
-            vec![style.border_right]
+            vec![style.border_right.is_some()]
         }
         BorderSelection::InsideVertical => {
             let mut values = Vec::with_capacity(2);
             if address.column > range.start_column {
-                values.push(style.border_left);
+                values.push(style.border_left.is_some());
             }
             if address.column < range.end_column {
-                values.push(style.border_right);
+                values.push(style.border_right.is_some());
             }
             values
         }
         BorderSelection::InsideHorizontal => {
             let mut values = Vec::with_capacity(2);
             if address.row > range.start_row {
-                values.push(style.border_top);
+                values.push(style.border_top.is_some());
             }
             if address.row < range.end_row {
-                values.push(style.border_bottom);
+                values.push(style.border_bottom.is_some());
             }
             values
         }
@@ -5118,39 +5118,44 @@ fn set_selected_borders(
     selection: BorderSelection,
     enabled: bool,
 ) {
+    // VBA turns an edge on or off; the kind it draws is Excel's own default.
+    let drawn = enabled.then(|| BorderLine {
+        style: "thin".to_string(),
+        color: None,
+    });
     match selection {
         BorderSelection::All => {
-            style.border_top = enabled;
-            style.border_bottom = enabled;
-            style.border_left = enabled;
-            style.border_right = enabled;
+            style.border_top = drawn.clone();
+            style.border_bottom = drawn.clone();
+            style.border_left = drawn.clone();
+            style.border_right = drawn.clone();
         }
         BorderSelection::EdgeLeft if address.column == range.start_column => {
-            style.border_left = enabled;
+            style.border_left = drawn.clone();
         }
         BorderSelection::EdgeTop if address.row == range.start_row => {
-            style.border_top = enabled;
+            style.border_top = drawn.clone();
         }
         BorderSelection::EdgeBottom if address.row == range.end_row => {
-            style.border_bottom = enabled;
+            style.border_bottom = drawn.clone();
         }
         BorderSelection::EdgeRight if address.column == range.end_column => {
-            style.border_right = enabled;
+            style.border_right = drawn.clone();
         }
         BorderSelection::InsideVertical => {
             if address.column > range.start_column {
-                style.border_left = enabled;
+                style.border_left = drawn.clone();
             }
             if address.column < range.end_column {
-                style.border_right = enabled;
+                style.border_right = drawn.clone();
             }
         }
         BorderSelection::InsideHorizontal => {
             if address.row > range.start_row {
-                style.border_top = enabled;
+                style.border_top = drawn.clone();
             }
             if address.row < range.end_row {
-                style.border_bottom = enabled;
+                style.border_bottom = drawn.clone();
             }
         }
         _ => {}
@@ -6400,10 +6405,10 @@ mod tests {
         );
         for (row_index, row) in workbook.sheets[0].rows.iter().enumerate() {
             for cell in &row.cells {
-                assert!(cell.style.border_top);
-                assert_eq!(cell.style.border_bottom, row_index == 0);
-                assert!(cell.style.border_left);
-                assert!(cell.style.border_right);
+                assert!(cell.style.border_top.is_some());
+                assert_eq!(cell.style.border_bottom.is_some(), row_index == 0);
+                assert!(cell.style.border_left.is_some());
+                assert!(cell.style.border_right.is_some());
             }
         }
         assert_eq!(debug_output, vec!["Null\t-4142\t1".to_string()]);

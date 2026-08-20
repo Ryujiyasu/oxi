@@ -9497,7 +9497,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // figures (0.9957 → 0.9941), so Word does round most of them.
                     // The p45 residual (~5.4pt) needs a real inline-image line-box
                     // probe, not a blanket scope change.
-                    let img_line = self.s971_image_line_h(img, content_width, page.grid_line_pitch);
+                    let img_line =
+                        self.s971_image_line_h(img, content_width, page.grid_line_pitch, true);
                     // S1101 (2026-08-08, default ON, opt-out OXI_S1101_DISABLE):
                     // a NO-TYPE docGrid does NOT round the image-only paragraph
                     // to whole cells — the extent is used EXACTLY, which is what
@@ -28919,7 +28920,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // border at 596.11 ≈ image_top + 17 cells; Oxi resumed
                             // the body at image_top + 289.5 exactly, 1 grid line
                             // early → the 変形 p35/36 −1s).
-                            let img_line = self.s971_image_line_h(img, 1.0e6, row_line_pitch);
+                            let img_line = self.s971_image_line_h(img, 1.0e6, row_line_pitch, false);
                             let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
                                 match row_line_pitch {
                                     Some(p) if p > 0.0 => (img_line / p).ceil() * p,
@@ -34889,7 +34890,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 ));
                                 // S715: typed-grid cell image line snaps to whole grid cells
                                 // (mirrors the pre-pass arm; see comment there).
-                                let img_line = self.s971_image_line_h(img, 1.0e6, row_line_pitch);
+                                let img_line =
+                                    self.s971_image_line_h(img, 1.0e6, row_line_pitch, false);
                                 let img_h_eff = if std::env::var("OXI_S715_DISABLE").is_err() {
                                     match row_line_pitch {
                                         Some(p) if p > 0.0 => (img_line / p).ceil() * p,
@@ -38595,6 +38597,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         img: &crate::ir::Image,
         width: f32,
         grid_pitch: Option<f32>,
+        s1179_body: bool,
     ) -> f32 {
         let ext = img.height;
         if std::env::var("OXI_S971_DISABLE").is_ok() {
@@ -38605,7 +38608,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let full =
                     self.estimate_para_height(host, width, grid_pitch, None, false, None, None);
                 let sp = img.paragraph_space_before + img.paragraph_space_after;
-                ext.max((full - sp).max(0.0))
+                let host_line = (full - sp).max(0.0);
+                // S1179 (2026-08-20, opt-out OXI_S1179_DISABLE): under an AUTO
+                // MULTIPLE spacing the image line is NOT max(host, ext) — the
+                // multiple's leading rides ON TOP of the image:
+                //     line = max(natural, ext) + (factor−1) × natural
+                // DERIVED (_pb_brimg_gen.py @276 arms, Calibri 11 natural
+                // 13.428): img {6,18,36,60} → Word 15.469/19.969/37.969/61.969
+                // = max(nat, ext) + 2.0 (= 0.15×13.428); identical for the
+                // [space+img] and unknown-font-space hosts. The @240 arms keep
+                // max(nat, ext) exactly (term = 0). creative__0158c02a
+                // (line=276, mark font "inherit" → natural 18): Word's caption
+                // sits img_h + 2.67 under the image top = 0.15×17.8 — the
+                // distributed under-reservation that held S997 opt-in since
+                // 2026-07-24. `host_line` here is the empty-host estimate =
+                // natural × factor, so natural = host_line / factor. BODY
+                // scope only (the probe measured body paragraphs; the S715
+                // cell callers keep the old fold).
+                if s1179_body && std::env::var("OXI_S1179_DISABLE").is_err() {
+                    if matches!(host.style.line_spacing_rule.as_deref(), None | Some("auto")) {
+                        if let Some(f) = host.style.line_spacing {
+                            if f > 1.001 && host_line > 0.0 {
+                                let natural = host_line / f;
+                                return (ext + (host_line - natural)).max(host_line);
+                            }
+                        }
+                    }
+                }
+                ext.max(host_line)
             }
             None => ext,
         }

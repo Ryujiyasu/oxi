@@ -18,7 +18,7 @@ use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::ir::{AutoFilter, CellStyle, MergeCell, Workbook};
+use crate::ir::{AutoFilter, BorderLine, CellStyle, MergeCell, Workbook};
 use crate::parser::{parse_xlsx, XlsxError};
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
@@ -1014,19 +1014,25 @@ fn fill_xml(style: &CellStyle) -> String {
 }
 
 fn border_xml(style: &CellStyle) -> String {
-    let edge = |name: &str, on: bool| {
-        if on {
-            format!("<{name} style=\"thin\"><color indexed=\"64\"/></{name}>")
-        } else {
-            format!("<{name}/>")
+    let edge = |name: &str, line: &Option<BorderLine>| match line {
+        Some(line) => {
+            let colour = match line.color.as_deref() {
+                Some(colour) => format!("<color rgb=\"FF{}\"/>", escape(colour)),
+                None => "<color indexed=\"64\"/>".to_string(),
+            };
+            format!(
+                "<{name} style=\"{}\">{colour}</{name}>",
+                escape(&line.style)
+            )
         }
+        None => format!("<{name}/>"),
     };
     format!(
         "<border>{}{}{}{}<diagonal/></border>",
-        edge("left", style.border_left),
-        edge("right", style.border_right),
-        edge("top", style.border_top),
-        edge("bottom", style.border_bottom)
+        edge("left", &style.border_left),
+        edge("right", &style.border_right),
+        edge("top", &style.border_top),
+        edge("bottom", &style.border_bottom)
     )
 }
 
@@ -2114,7 +2120,7 @@ mod tests {
             horizontal_align: Some("center".to_string()),
             bg_color: Some("FFFF00".to_string()),
             font_color: Some("FF0000".to_string()),
-            border_top: true,
+            border_top: Some(BorderLine { style: "thin".to_string(), color: None }),
             ..CellStyle::default()
         };
         let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");

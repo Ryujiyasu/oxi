@@ -119,6 +119,18 @@ impl CellValue {
     }
 }
 
+/// One edge of a cell, and how it is drawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BorderLine {
+    /// The kind OOXML names: "thin", "medium", "thick", "hair", "dotted",
+    /// "dashed", "double", and the rest. Each is drawn differently — a thick
+    /// rule is three pixels where a thin one is a single pixel.
+    pub style: String,
+    /// The colour as six hex digits, when the edge names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CellStyle {
     pub bold: bool,
@@ -139,8 +151,8 @@ pub struct CellStyle {
     /// the cell's right edge.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wrap_text: bool,
-    pub border_top: bool,
-    pub border_bottom: bool,
-    pub border_left: bool,
-    pub border_right: bool,
+    pub border_top: Option<BorderLine>,
+    pub border_bottom: Option<BorderLine>,
+    pub border_left: Option<BorderLine>,
+    pub border_right: Option<BorderLine>,
 }

@@ -50,7 +50,7 @@ fn is_true(value: Option<&str>) -> bool {
 }
 use oxidocs_common::xml_utils::{get_attr, local_name};
 
-use crate::ir::{Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
+use crate::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
 
 #[derive(Error, Debug)]
 pub enum XlsxError {
@@ -233,10 +233,10 @@ struct FillInfo {
 
 #[derive(Debug, Clone, Default)]
 struct BorderInfo {
-    left: bool,
-    right: bool,
-    top: bool,
-    bottom: bool,
+    left: Option<BorderLine>,
+    right: Option<BorderLine>,
+    top: Option<BorderLine>,
+    bottom: Option<BorderLine>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -363,24 +363,16 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
 
                     // Inside a border element, parse child elements with style attr
                     "left" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.left = true;
-                        }
+                        current_border.left = border_line(&e);
                     }
                     "right" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.right = true;
-                        }
+                        current_border.right = border_line(&e);
                     }
                     "top" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.top = true;
-                        }
+                        current_border.top = border_line(&e);
                     }
                     "bottom" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.bottom = true;
-                        }
+                        current_border.bottom = border_line(&e);
                     }
 
                     // Font color
@@ -441,24 +433,16 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                     }
                     // Self-closing border sides: <left style="thin"/>
                     "left" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.left = true;
-                        }
+                        current_border.left = border_line(&e);
                     }
                     "right" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.right = true;
-                        }
+                        current_border.right = border_line(&e);
                     }
                     "top" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.top = true;
-                        }
+                        current_border.top = border_line(&e);
                     }
                     "bottom" if in_border => {
-                        if get_attr(&e, "style").is_some() {
-                            current_border.bottom = true;
-                        }
+                        current_border.bottom = border_line(&e);
                     }
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
@@ -524,6 +508,15 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
     Ok(ss)
 }
 
+/// An edge that names no style is not drawn; one that does carries how.
+fn border_line(e: &quick_xml::events::BytesStart) -> Option<BorderLine> {
+    let style = get_attr(e, "style")?;
+    if style == "none" {
+        return None;
+    }
+    Some(BorderLine { style, color: None })
+}
+
 /// Build a CellStyle from a style index referencing the StyleSheet.
 fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle {
     let xf = match stylesheet.cell_xfs.get(style_index) {
@@ -559,10 +552,10 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         horizontal_align: xf.horizontal_align.clone(),
         vertical_align: xf.vertical_align.clone(),
         wrap_text: xf.wrap_text,
-        border_top: border.top,
-        border_bottom: border.bottom,
-        border_left: border.left,
-        border_right: border.right,
+        border_top: border.top.clone(),
+        border_bottom: border.bottom.clone(),
+        border_left: border.left.clone(),
+        border_right: border.right.clone(),
     }
 }
 
@@ -1250,11 +1243,11 @@ mod tests {
         assert_eq!(ss.fills.len(), 2);
         assert_eq!(ss.fills[1].bg_color.as_deref(), Some("FFFF00"));
         assert_eq!(ss.borders.len(), 2);
-        assert!(!ss.borders[0].left);
-        assert!(ss.borders[1].left);
-        assert!(ss.borders[1].right);
-        assert!(ss.borders[1].top);
-        assert!(ss.borders[1].bottom);
+        assert!(ss.borders[0].left.is_none());
+        assert!(ss.borders[1].left.is_some());
+        assert!(ss.borders[1].right.is_some());
+        assert!(ss.borders[1].top.is_some());
+        assert!(ss.borders[1].bottom.is_some());
         assert_eq!(ss.cell_xfs.len(), 2);
         assert_eq!(ss.cell_xfs[1].num_fmt_id, 164);
         assert_eq!(
@@ -1269,10 +1262,10 @@ mod tests {
         assert_eq!(style.bg_color.as_deref(), Some("FFFF00"));
         assert_eq!(style.number_format.as_deref(), Some("#,##0.00_ "));
         assert_eq!(style.horizontal_align.as_deref(), Some("center"));
-        assert!(style.border_top);
-        assert!(style.border_bottom);
-        assert!(style.border_left);
-        assert!(style.border_right);
+        assert!(style.border_top.is_some());
+        assert!(style.border_bottom.is_some());
+        assert!(style.border_left.is_some());
+        assert!(style.border_right.is_some());
     }
 
     #[test]

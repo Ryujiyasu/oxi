@@ -5,7 +5,7 @@
 //! What survives a round trip through the editor, for the styling a cell wears.
 
 use oxicells_core::editor::XlsxEditor;
-use oxicells_core::ir::CellStyle;
+use oxicells_core::ir::{BorderLine, CellStyle};
 use oxicells_core::parser::parse_xlsx;
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/hidden_rows_cols.xlsx");
@@ -58,8 +58,8 @@ fn colours_borders_and_alignment_are_saved() {
             font_color: Some("FF0000".to_string()),
             bg_color: Some("FFFF00".to_string()),
             horizontal_align: Some("center".to_string()),
-            border_top: true,
-            border_bottom: true,
+            border_top: Some(BorderLine { style: "thin".to_string(), color: None }),
+            border_bottom: Some(BorderLine { style: "medium".to_string(), color: None }),
             ..CellStyle::default()
         },
     );
@@ -70,9 +70,9 @@ fn colours_borders_and_alignment_are_saved() {
     assert_eq!(style.font_color.as_deref(), Some("FF0000"));
     assert_eq!(style.bg_color.as_deref(), Some("FFFF00"));
     assert_eq!(style.horizontal_align.as_deref(), Some("center"));
-    assert!(style.border_top);
-    assert!(style.border_bottom);
-    assert!(!style.border_left);
+    assert!(style.border_top.is_some());
+    assert!(style.border_bottom.is_some());
+    assert!(style.border_left.is_none());
 }
 
 #[test]
