@@ -1484,7 +1484,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
 import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
 
 let wasmReady = false;
@@ -3760,6 +3760,8 @@ function colName(idx) {
 
 // Number formatting helper
 function formatCellValue(val, style) {
+    // Numbers are rendered by the engine, so a cell reads the same here as it
+    // does anywhere else that asks what a sheet shows.
     let raw = '';
     let isNumber = false;
     if (typeof val === 'object' && val !== null) {
@@ -3772,62 +3774,7 @@ function formatCellValue(val, style) {
         return val;
     }
     if (!isNumber) return String(raw);
-
-    const fmt = style && style.number_format;
-    if (!fmt || fmt === 'General') {
-        if (raw === Math.floor(raw)) return String(Math.floor(raw));
-        return String(raw);
-    }
-
-    // Date formats (Excel serial number to date)
-    if (fmt.includes('yy') || (fmt.includes('mm') && fmt.includes('dd'))) {
-        const base = new Date(1899, 11, 30);
-        const d = new Date(base.getTime() + raw * 86400000);
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const yy = String(d.getFullYear()).slice(-2);
-        const yyyy = String(d.getFullYear());
-        if (fmt.includes('h:mm') || fmt.includes('H:mm')) {
-            const hh = String(d.getHours());
-            const mi = String(d.getMinutes()).padStart(2, '0');
-            return `${d.getMonth()+1}/${d.getDate()}/${yy} ${hh}:${mi}`;
-        }
-        if (fmt.includes('yyyy')) return `${yyyy}-${mm}-${dd}`;
-        return `${mm}-${dd}-${yy}`;
-    }
-
-    // Percentage
-    if (fmt.includes('%')) {
-        const pct = raw * 100;
-        if (fmt.includes('.00')) return pct.toFixed(2) + '%';
-        return Math.round(pct) + '%';
-    }
-
-    // Scientific
-    if (fmt.includes('E+')) {
-        return raw.toExponential(2).toUpperCase();
-    }
-
-    // Decimal fixed (0.00 or #,##0.00)
-    if (fmt === '0.00' || fmt.includes('#,##0.00')) {
-        const fixed = raw.toFixed(2);
-        if (fmt.includes(',')) {
-            return Number(fixed).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        }
-        return fixed;
-    }
-
-    // Comma thousands (#,##0)
-    if (fmt === '#,##0' || fmt.includes(',')) {
-        return Math.round(raw).toLocaleString('en-US');
-    }
-
-    // Fixed integer (0)
-    if (fmt === '0') return String(Math.round(raw));
-
-    // Fallback
-    if (raw === Math.floor(raw)) return String(Math.floor(raw));
-    return String(raw);
+    return format_cell_number(raw, (style && style.number_format) || 'General');
 }
 
 // Build merge coverage info

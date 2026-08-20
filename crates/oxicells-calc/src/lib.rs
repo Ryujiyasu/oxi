@@ -47,11 +47,13 @@ pub mod engine;
 pub mod functions;
 pub mod lexer;
 pub mod parser;
+pub mod numfmt;
 pub mod reference;
 pub mod value;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};
 pub use engine::{CalcError, RecalcReport, Workbook};
+pub use numfmt::format_number;
 pub use lexer::{
     shift_formula_references, translate_formula_references, ReferenceShift, ShiftAxis,
 };

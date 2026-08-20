@@ -627,6 +627,17 @@ pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Renders a number the way a sheet shows it under `format`.
+///
+/// The browser used to carry its own reading of number formats; this is the
+/// one the rest of the engine uses, so a cell reads the same wherever it is
+/// shown.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn format_cell_number(value: f64, format: &str) -> String {
+    oxicells_core::format_number(value, format)
+}
+
 /// A single slide text edit operation from JavaScript.
 #[cfg(feature = "suite")]
 #[derive(Deserialize)]
