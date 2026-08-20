@@ -157,6 +157,7 @@ fn make_cell(col: u32, value: CellValue, formula: Option<&str>) -> Cell {
         value,
         style: CellStyle::default(),
         formula: formula.map(|s| s.to_string()),
+        runs: Vec::new(),
     }
 }
 

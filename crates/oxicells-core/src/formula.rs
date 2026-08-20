@@ -158,6 +158,7 @@ mod tests {
                 value: val,
                 style: CellStyle::default(),
                 formula,
+                runs: Vec::new(),
             });
         }
         let rows: Vec<Row> = rows_map
