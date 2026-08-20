@@ -341,7 +341,9 @@ fn parse_theme_xml(xml: &str) -> Theme {
     theme
 }
 
-/// Moves a colour toward white or black, the way a theme tint does.
+/// Moves a colour toward white or black, the way a theme tint does. Only how
+/// light it is changes; its hue and how saturated it is do not, which is why
+/// this goes through HSL rather than nudging each channel.
 fn tinted(hex: &str, tint: f32) -> String {
     let Ok(value) = u32::from_str_radix(hex, 16) else {
         return hex.to_string();
@@ -351,15 +353,43 @@ fn tinted(hex: &str, tint: f32) -> String {
     let high = red.max(green).max(blue);
     let low = red.min(green).min(blue);
     let lum = (high + low) / 2.0;
+    let span = high - low;
+    let sat = if span == 0.0 {
+        0.0
+    } else if lum < 0.5 {
+        span / (high + low)
+    } else {
+        span / (2.0 - high - low)
+    };
+    let hue = if span == 0.0 {
+        0.0
+    } else if high == red {
+        (((green - blue) / span) % 6.0 + 6.0) % 6.0
+    } else if high == green {
+        (blue - red) / span + 2.0
+    } else {
+        (red - green) / span + 4.0
+    };
+
     let moved = if tint < 0.0 {
         lum * (1.0 + tint)
     } else {
         lum * (1.0 - tint) + tint
     };
-    // Keep the hue and saturation, move only how light it is.
-    let shift = moved - lum;
-    let clamp = |part: f32| (((part + shift).clamp(0.0, 1.0) * 255.0).round() as u32).min(255);
-    format!("{:02X}{:02X}{:02X}", clamp(red), clamp(green), clamp(blue))
+
+    let chroma = (1.0 - (2.0 * moved - 1.0).abs()) * sat;
+    let second = chroma * (1.0 - ((hue % 2.0) - 1.0).abs());
+    let (red, green, blue) = match hue as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = moved - chroma / 2.0;
+    let byte = |part: f32| (((part + base).clamp(0.0, 1.0) * 255.0).round() as u32).min(255);
+    format!("{:02X}{:02X}{:02X}", byte(red), byte(green), byte(blue))
 }
 
 fn parse_color_attr(e: &quick_xml::events::BytesStart, theme: &Theme) -> Option<String> {
@@ -1453,5 +1483,35 @@ mod tests {
         assert_eq!(builtin_number_format(3), Some("#,##0"));
         assert_eq!(builtin_number_format(14), Some("mm-dd-yy"));
         assert_eq!(builtin_number_format(99), None);
+    }
+}
+
+#[cfg(test)]
+mod theme_tints {
+    use super::tinted;
+
+    fn close_to(got: &str, want: &str) {
+        let byte = |hex: &str, at: usize| {
+            u8::from_str_radix(&hex[at..at + 2], 16).expect("two hex digits") as i32
+        };
+        for at in [0, 2, 4] {
+            let apart = (byte(got, at) - byte(want, at)).abs();
+            assert!(apart <= 1, "{got} is not within a shade of {want}");
+        }
+    }
+
+    /// Both colours were read off a worksheet Excel drew: a table's banded row
+    /// is its header colour under a tint of 0.8. Rounding puts us within one
+    /// step of Excel on each channel.
+    #[test]
+    fn a_tint_lightens_without_changing_the_hue() {
+        close_to(&tinted("156082", 0.8), "C0E6F5");
+        close_to(&tinted("4EA72E", 0.8), "DAF2D0");
+    }
+
+    #[test]
+    fn a_negative_tint_darkens() {
+        close_to(&tinted("FFFFFF", -0.5), "808080");
+        assert_eq!(tinted("156082", 0.0), "156082");
     }
 }
