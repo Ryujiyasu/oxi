@@ -426,6 +426,7 @@ impl<'a> WorkbookHost<'a> {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         };
         self.workbook.sheets.insert(at, sheet);
@@ -5811,6 +5812,7 @@ mod tests {
                 hidden_cols: Vec::new(),
                 auto_filter: None,
                 declared_range: None,
+                tables: Vec::new(),
                 unsupported_elements: Vec::new(),
             }],
             ..Default::default()
@@ -6024,6 +6026,7 @@ mod tests {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -6074,6 +6077,7 @@ mod tests {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8911,6 +8915,7 @@ mod tests {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let invalid = parse_module(
@@ -9152,6 +9157,7 @@ mod tests {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -9194,6 +9200,7 @@ mod tests {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -9308,6 +9315,7 @@ mod tests {
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(

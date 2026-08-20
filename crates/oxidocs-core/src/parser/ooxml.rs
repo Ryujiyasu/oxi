@@ -1379,6 +1379,17 @@ fn parse_body(
                         };
                         let s965_sp: Option<(f32, f32)> =
                             if image_only && std::env::var("OXI_S965_DISABLE").is_err() {
+                                if std::env::var("OXI_DBG_S1180").is_ok() {
+                                    eprintln!(
+                                        "[S1180DBG] s965 capture: sb={:?} sa={:?} sa_dd={} direct_a={} line={:?} rule={:?}",
+                                        pr.paragraph.style.space_before,
+                                        pr.paragraph.style.space_after,
+                                        pr.paragraph.style.space_after_from_doc_defaults,
+                                        pr.paragraph.style.has_direct_after,
+                                        pr.paragraph.style.line_spacing,
+                                        pr.paragraph.style.line_spacing_rule,
+                                    );
+                                }
                                 Some((
                                     pr.paragraph.style.space_before.unwrap_or(0.0),
                                     pr.paragraph.style.space_after.unwrap_or(0.0),

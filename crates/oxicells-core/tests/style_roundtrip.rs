@@ -267,3 +267,23 @@ fn a_sheet_says_how_far_it_reaches() {
     let workbook = parse_xlsx(FORM).expect("the workbook parses");
     assert_eq!(workbook.sheets[0].declared_range, Some((2, 1, 149, 5)));
 }
+
+#[test]
+fn a_table_is_read_with_the_colour_its_style_dresses_it_in() {
+    // TableStyleMedium7 is the seventh of the Medium family, which walk the
+    // theme's accents from accent1; the seventh lands on accent6, which this
+    // workbook's theme states as 4EA72E. Its banded rows are that under a tint.
+    const TABLED: &[u8] =
+        include_bytes!("../../../tools/golden-test/documents/xlsx/2b051dcf28c4_doi-list.xlsx");
+    let workbook = parse_xlsx(TABLED).expect("the workbook parses");
+
+    let table = workbook.sheets[0]
+        .tables
+        .first()
+        .expect("the sheet holds a table");
+    assert_eq!(table.style.as_deref(), Some("TableStyleMedium7"));
+    assert_eq!(table.accent.as_deref(), Some("4EA72E"));
+    assert_eq!(table.header_rows, 1);
+    assert!(table.banded_rows);
+    assert_eq!((table.start_row, table.start_col), (2, 0));
+}

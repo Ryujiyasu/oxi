@@ -194,6 +194,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         hidden_cols: Vec::new(),
         auto_filter: None,
         declared_range: None,
+        tables: Vec::new(),
         unsupported_elements: vec![],
     }
 }

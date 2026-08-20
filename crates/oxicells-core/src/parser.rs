@@ -745,6 +745,89 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
 }
 
 /// Parse a single worksheet XML into a Sheet.
+/// Where a relationship target lands, given the part that names it. Targets
+/// are written relative to the naming part's own folder, so `../tables/t.xml`
+/// beside `xl/worksheets/sheet1.xml` is `xl/tables/t.xml`.
+fn part_beside(from: &str, target: &str) -> String {
+    if target.starts_with('/') {
+        return target.trim_start_matches('/').to_string();
+    }
+    let mut parts: Vec<&str> = from.rsplit_once('/').map_or("", |(dir, _)| dir).split('/').collect();
+    parts.retain(|part| !part.is_empty());
+    for step in target.split('/') {
+        match step {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            step => parts.push(step),
+        }
+    }
+    parts.join("/")
+}
+
+/// Reads one `xl/tables/*.xml` part into the range and dress it describes.
+fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
+    let mut reader = Reader::from_str(xml);
+    let mut range = None;
+    let mut header_rows = 1;
+    let mut style = None;
+    let mut banded_rows = false;
+    let mut buf = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                match local_name(e.name().as_ref()).as_str() {
+                    "table" => {
+                        range = get_attr(e, "ref").as_deref().and_then(parse_range_ref);
+                        if let Some(count) = get_attr(e, "headerRowCount") {
+                            header_rows = count.parse().unwrap_or(1);
+                        }
+                    }
+                    "tableStyleInfo" => {
+                        style = get_attr(e, "name");
+                        banded_rows = is_true(get_attr(e, "showRowStripes").as_deref());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    let (start_col, start_row, end_col, end_row) = range?;
+    // A built-in style is named for the theme colour it uses: TableStyleMedium2
+    // dresses the table in accent1, Medium7 in accent6. Measured on a worksheet
+    // holding one table per style, header and band both exact.
+    let accent = style.as_deref().and_then(|name| {
+        let number: u32 = name
+            .strip_prefix("TableStyleMedium")
+            .or_else(|| name.strip_prefix("TableStyleLight"))
+            .or_else(|| name.strip_prefix("TableStyleDark"))?
+            .parse()
+            .ok()?;
+        // 1 is the greyscale one; 2 onward walk accent1..accent6 and repeat.
+        if number < 2 {
+            return None;
+        }
+        theme.colour(4 + ((number - 2) % 6) as usize).map(str::to_string)
+    });
+    let band = accent.as_deref().map(|colour| tinted(colour, 0.8));
+    Some(crate::ir::Table {
+        start_row,
+        start_col,
+        end_row,
+        end_col,
+        style,
+        header_rows,
+        banded_rows,
+        accent,
+        band,
+    })
+}
+
 fn parse_worksheet(
     xml: &str,
     sheet_name: &str,
@@ -1112,6 +1195,7 @@ fn parse_worksheet(
     }
 
     Ok(Sheet {
+        tables: Vec::new(),
         name: sheet_name.to_string(),
         rows,
         col_count,
@@ -1255,8 +1339,28 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 
         match archive.try_read_part(&sheet_path)? {
             Some(sheet_xml) => {
-                let sheet =
+                let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet)?;
+                // A table lives in its own part, named by the sheet's own
+                // relationships. Excel dresses the range from there, so no cell
+                // inside carries the header fill or the banding.
+                let rels_path = sheet_path
+                    .rsplit_once('/')
+                    .map(|(dir, file)| format!("{dir}/_rels/{file}.rels"))
+                    .unwrap_or_default();
+                if let Some(rels_xml) = archive.try_read_part(&rels_path)? {
+                    for rel in parse_relationships(&rels_xml)?.values() {
+                        if !rel.rel_type.ends_with("/table") {
+                            continue;
+                        }
+                        let part = part_beside(&sheet_path, &rel.target);
+                        if let Some(table_xml) = archive.try_read_part(&part)? {
+                            if let Some(table) = parse_table_xml(&table_xml, &theme) {
+                                sheet.tables.push(table);
+                            }
+                        }
+                    }
+                }
                 sheets.push(sheet);
             }
             None => {

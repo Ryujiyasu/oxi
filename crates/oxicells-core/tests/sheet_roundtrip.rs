@@ -26,6 +26,7 @@ fn blank_sheet(name: &str) -> Sheet {
         hidden_cols: Vec::new(),
         auto_filter: None,
         declared_range: None,
+        tables: Vec::new(),
         unsupported_elements: Vec::new(),
     }
 }

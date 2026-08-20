@@ -33,6 +33,9 @@ pub struct Sheet {
     /// past the last cell that holds anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_range: Option<(u32, u32, u32, u32)>,
+    /// The tables on the sheet, each dressed by a named style.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<Table>,
     /// The filter a sheet is under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_filter: Option<AutoFilter>,
@@ -123,6 +126,30 @@ impl CellValue {
             CellValue::Error(e) => e.clone(),
         }
     }
+}
+
+/// A range a sheet treats as a table, and the style it wears. Excel dresses
+/// these itself: no cell inside carries the header's fill or the banding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Table {
+    pub start_row: u32, // 1-based
+    pub start_col: u32, // 0-based
+    pub end_row: u32,   // 1-based
+    pub end_col: u32,   // 0-based
+    /// The built-in style's name, e.g. "TableStyleMedium7".
+    pub style: Option<String>,
+    /// How many rows at the top are the header. Excel writes 1 unless told.
+    pub header_rows: u32,
+    /// Whether every other row is shaded.
+    pub banded_rows: bool,
+    /// The colour the style dresses the table in, as six hex digits. A built-in
+    /// style takes it from the workbook's theme, so it is resolved on the way
+    /// in rather than left as a name to look up later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    /// The banded rows' fill, which is the accent under a tint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band: Option<String>,
 }
 
 /// One edge of a cell, and how it is drawn.

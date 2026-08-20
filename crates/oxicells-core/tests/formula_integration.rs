@@ -51,6 +51,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         hidden_cols: Vec::new(),
         auto_filter: None,
         declared_range: None,
+        tables: Vec::new(),
         unsupported_elements: vec![],
     };
     evaluate_sheet_formulas(&mut sheet);

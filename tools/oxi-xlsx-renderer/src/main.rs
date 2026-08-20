@@ -232,6 +232,38 @@ fn cell_text(value: &CellValue, style: &CellStyle) -> String {
 
 /// Where the text sits across a cell. Excel puts numbers to the right and text
 /// to the left unless the cell says otherwise.
+/// How a table dresses one of its cells: Excel paints this, and no cell inside
+/// the range carries any of it in its own style.
+struct Dressed {
+    fill: Option<String>,
+    /// A header row is written in white on the accent colour.
+    white_text: bool,
+}
+
+fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
+    let table = sheet.tables.iter().find(|table| {
+        row >= table.start_row
+            && row <= table.end_row
+            && column >= table.start_col
+            && column <= table.end_col
+    })?;
+    if row < table.start_row + table.header_rows {
+        return Some(Dressed {
+            fill: table.accent.clone(),
+            white_text: true,
+        });
+    }
+    if !table.banded_rows {
+        return None;
+    }
+    // The first row below the header is banded, then every other one.
+    let below = row - (table.start_row + table.header_rows);
+    Some(Dressed {
+        fill: if below % 2 == 0 { table.band.clone() } else { None },
+        white_text: false,
+    })
+}
+
 /// What a merge does to a cell: the top-left one is drawn across the whole
 /// block, and the rest are not drawn at all.
 enum Merged {
@@ -523,7 +555,15 @@ mod windows_draw {
                         bottom: *bottom as i32,
                     };
 
-                    if let Some(fill) = cell.style.bg_color.as_deref() {
+                    // A table's own dress goes down first; a cell that names a
+                    // fill of its own paints over it.
+                    let dress = super::dressed_by_table(sheet, row.index, cell.col);
+                    let fill = cell
+                        .style
+                        .bg_color
+                        .as_deref()
+                        .or_else(|| dress.as_ref().and_then(|d| d.fill.as_deref()));
+                    if let Some(fill) = fill {
                         let brush = CreateSolidBrush(colour(Some(fill), 0xFFFFFF));
                         FillRect(dc, &box_, brush);
                         let _ = DeleteObject(brush);
@@ -615,7 +655,17 @@ mod windows_draw {
                         PCWSTR(face.as_ptr()),
                     );
                     let previous_font = SelectObject(dc, font);
-                    SetTextColor(dc, colour(cell.style.font_color.as_deref(), 0x000000));
+                    // A table header is written in white on the accent, and
+                    // that beats whatever the cell's own format inherited.
+                    let header = matches!(&dress, Some(dress) if dress.white_text);
+                    SetTextColor(
+                        dc,
+                        if header {
+                            colour(None, 0x00FF_FFFF)
+                        } else {
+                            colour(cell.style.font_color.as_deref(), 0x0000_0000)
+                        },
+                    );
 
                     // Excel keeps a small gutter either side of a cell's text.
                     let gutter = (2.0 * scale).round() as i32;

@@ -180,6 +180,7 @@ mod tests {
             hidden_cols: vec![],
             auto_filter: None,
             declared_range: None,
+            tables: Vec::new(),
             unsupported_elements: vec![],
         }
     }
