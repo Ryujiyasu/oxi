@@ -148,7 +148,26 @@ def build():
     add(marker("GG"), "M", "GG")
     for i in range(50):
         add(txt(276, "fill line %d" % i), "txt276", "g%d" % i)
+    # H/I/J: does the quantizer skip exact/atLeast line rules?  (the
+    # technical__002c1ffa crater: its body is line=260 non-auto paragraphs.)
+    add(marker("GH"), "M", "GH")
+    for i in range(8):
+        add(txt_rule(260, "exact", "exact line %d" % i), "ex260", str(i))
+    add(marker("GI"), "M", "GI")
+    for i in range(8):
+        add(txt_rule(260, "atLeast", "atleast line %d" % i), "al260", str(i))
+    add(marker("GJ"), "M", "GJ")
+    for i in range(4):
+        add(txt(276, "auto between %d" % i), "txt276", "j%d" % i)
+        add(txt_rule(260, "exact", "exact between %d" % i), "ex260", "j%d" % i)
     return body, manifest
+
+
+def txt_rule(line, rule, text):
+    sp = '<w:spacing w:line="%d" w:lineRule="%s"/>' % (line, rule)
+    p = ("<w:pPr><w:widowControl w:val=\"0\"/>%s%s</w:pPr>" % (sp, rpr()))
+    return ('<w:p>%s<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>'
+            % (p, rpr(), text))
 
 
 def gen():
