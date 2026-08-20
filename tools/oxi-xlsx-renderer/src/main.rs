@@ -632,8 +632,15 @@ mod windows_draw {
                             };
                             area.left -=
                                 super::room_before(layout, row, cell.col, leftward, &merged);
-                            area.right +=
-                                super::room_after(layout, row, cell.col, rightward, &merged);
+                            // A merged block's own columns are already inside
+                            // the box, so the search for room starts past them.
+                            area.right += super::room_after(
+                                layout,
+                                row,
+                                cell.col + spans_columns,
+                                rightward,
+                                &merged,
+                            );
                         }
                     }
 
