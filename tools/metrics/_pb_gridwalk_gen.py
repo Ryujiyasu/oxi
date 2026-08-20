@@ -132,6 +132,22 @@ def build():
     for i in range(4):
         add(txt(276, "after160 text %d" % i, after=160), "txt276a160", str(i))
     add(txt(276, "walk end"), "txt276", "final")
+    # F: the blk-vs-C image-term contradiction (synthetic 283px image, with and
+    # without a preceding empty; a 134px mid size) — which context yields the
+    # 10px term the creative blk showed where C measured 0.5*hhea exact?
+    add(marker("GF"), "M", "GF")
+    add(empty(276), "empty276", "pre")
+    idx = 300
+    for h, tag in ((212.25, "F1-283px-after-empty"), (212.25, "F2-283px-after-txt"),
+                   (100.5, "F3-134px"), (36.0, "F4-48px")):
+        idx += 1
+        add(img_p(360, h, idx), "img360", tag)
+        add(txt(276, "after %s" % tag), "txt276", "follow")
+    # G: page-bottom fit — 50 identical lines; where Word breaks discriminates
+    # whether capacity is judged on the exact or the rounded cumulative.
+    add(marker("GG"), "M", "GG")
+    for i in range(50):
+        add(txt(276, "fill line %d" % i), "txt276", "g%d" % i)
     return body, manifest
 
 
