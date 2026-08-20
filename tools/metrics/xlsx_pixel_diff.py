@@ -24,6 +24,7 @@ on the right.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import subprocess
 import sys
@@ -121,15 +122,33 @@ def compare(truth: Image.Image, ours: Image.Image, panel: Path) -> float:
     # The same SSIM the docx gate reports, so the two numbers mean the same
     # thing. Unlike that gate this one pads rather than resizes, because a
     # sheet drawn at the wrong size differs for a reason worth seeing.
-    score = float(structural_similarity(left, right, data_range=255))
+    # Handed uint8, skimage works in float64 and keeps several copies, which on
+    # a sheet of forty million pixels asks for more memory than is free. float32
+    # halves that and changes the score in the fourth decimal at most.
+    score = float(
+        structural_similarity(
+            left.astype(np.float32), right.astype(np.float32), data_range=255
+        )
+    )
 
     difference = Image.fromarray(
         255 - np.abs(left.astype(int) - right.astype(int)).astype(np.uint8)
-    )
+    ).convert("RGB")
+
+    # The panel is for looking at, so a very wide sheet is shrunk before the
+    # three copies are laid side by side; at full size that is three times the
+    # pixels of a picture that is already the largest thing here.
+    shrink = min(1.0, 4000 / max(width, 1))
+    if shrink < 1.0:
+        small = (max(int(width * shrink), 1), max(int(height * shrink), 1))
+        truth = truth.resize(small, Image.LANCZOS)
+        ours = ours.resize(small, Image.LANCZOS)
+        difference = difference.resize(small, Image.LANCZOS)
+        width, height = small
     strip = Image.new("RGB", (width * 3 + 20, height), (240, 240, 240))
     strip.paste(truth, (0, 0))
     strip.paste(ours, (width + 10, 0))
-    strip.paste(difference.convert("RGB"), (width * 2 + 20, 0))
+    strip.paste(difference, (width * 2 + 20, 0))
     panel.parent.mkdir(parents=True, exist_ok=True)
     strip.save(panel)
     return score
@@ -222,11 +241,20 @@ def main() -> int:
         if not ours_png.exists():
             print(f"  Oxi could not draw {source.name}: {drawn.stderr.strip()[:120]}")
             continue
-        score = compare(
-            Image.open(truth_png).convert("RGB"),
-            Image.open(ours_png),
-            args.out / f"{stem}.compare.png",
-        )
+        try:
+            score = compare(
+                Image.open(truth_png).convert("RGB"),
+                Image.open(ours_png),
+                args.out / f"{stem}.compare.png",
+            )
+        except MemoryError:
+            # SSIM wants several float64 copies of the picture, and a very
+            # large sheet can ask for more than is free. Say so rather than
+            # dropping the workbook silently.
+            print(f"  {stem:40s} too large to score in the memory free")
+            continue
+        finally:
+            gc.collect()
         scores[stem] = score
         print(f"  {stem:40s} SSIM {score:.4f}")
 
