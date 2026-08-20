@@ -957,7 +957,10 @@ input[type="file"] { display: none; }
 }
 .slide-shape {
     position: absolute;
-    overflow: hidden;
+    /* PowerPoint lets a text frame overflow its box rather than clip it, and
+       the browser has no access to the deck's embedded faces -- a wider
+       substitute would otherwise lose the end of every title. */
+    overflow: visible;
 }
 .slide-shape p {
     margin: 0;
@@ -4112,7 +4115,7 @@ function renderEditablePptx(presentation) {
         wrapper.dataset.slideIdx = slideIdx;
         wrapper.style.width = (presentation.slide_width * scale) + 'px';
         wrapper.style.height = (presentation.slide_height * scale) + 'px';
-        wrapper.style.background = slide.background_color ? '#' + slide.background_color : 'white';
+        applyStyles(wrapper, slideBackgroundCss(slide));
         wrapper.style.display = slideIdx === 0 ? '' : 'none';
 
         buildSlideContent(wrapper, slide, slideIdx, scale, true);
@@ -4131,7 +4134,7 @@ function renderEditablePptx(presentation) {
         preview.style.height = (presentation.slide_height * thumbScale) + 'px';
         preview.style.position = 'relative';
         preview.style.overflow = 'hidden';
-        preview.style.background = slide.background_color ? '#' + slide.background_color : 'white';
+        applyStyles(preview, slideBackgroundCss(slide));
 
         buildSlideContent(preview, slide, slideIdx, thumbScale, false);
 
@@ -4156,7 +4159,68 @@ function renderEditablePptx(presentation) {
     container.appendChild(layout);
 }
 
+// A slide's background is a colour, a gradient ramp or a picture -- the three
+// are mutually exclusive in the IR, because a ramp has no single colour and a
+// picture has neither.
+function slideBackgroundCss(slide) {
+    if (slide.background_image && slide.background_image.data && slide.background_image.data.length) {
+        return { backgroundImage: 'url(' + bytesToDataUrl(slide.background_image.data,
+                 slide.background_image.content_type) + ')',
+                 backgroundSize: '100% 100%' };
+    }
+    if (slide.background_gradient) {
+        return { backgroundImage: gradientCss(slide.background_gradient) };
+    }
+    return { background: slide.background_color ? '#' + slide.background_color : 'white' };
+}
+
+function applyStyles(el, styles) {
+    for (const k in styles) el.style[k] = styles[k];
+}
+
+function bytesToDataUrl(bytes, contentType) {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray
+            ? bytes.subarray(i, i + chunk) : bytes.slice(i, i + chunk));
+    }
+    return 'data:' + (contentType || 'image/png') + ';base64,' + btoa(binary);
+}
+
+// `a:lin/@ang` is degrees clockwise from +x: 0 = left to right, 90 = top to
+// bottom. CSS `linear-gradient` measures from the +y axis anticlockwise, so the
+// two differ by 90 degrees. `a:path path="circle"` becomes a radial gradient
+// about its focus.
+function gradientCss(g) {
+    if (!g || !g.stops || !g.stops.length) return '';
+    const stops = g.stops.map(s => {
+        const c = s.color || '000000';
+        const r = parseInt(c.slice(0, 2), 16), gg = parseInt(c.slice(2, 4), 16),
+              b = parseInt(c.slice(4, 6), 16);
+        const a = (s.alpha === undefined || s.alpha === null) ? 1 : s.alpha;
+        return `rgba(${r},${gg},${b},${a}) ${(s.pos * 100).toFixed(2)}%`;
+    }).join(', ');
+    if (g.focus) {
+        return `radial-gradient(circle at ${(g.focus[0] * 100).toFixed(1)}% ` +
+               `${(g.focus[1] * 100).toFixed(1)}%, ${stops})`;
+    }
+    const ang = (g.angle_deg === undefined || g.angle_deg === null) ? 0 : g.angle_deg;
+    return `linear-gradient(${(ang + 90).toFixed(2)}deg, ${stops})`;
+}
+
+// The placeholder level a paragraph inherits from: the layout's own lstStyle
+// merged over the master's, already resolved by the parser. A run that states
+// nothing takes its size, face, colour and highlight from here -- without it a
+// title inheriting 96pt from its master draws at the 18pt engine default.
+function levelFor(shape, para) {
+    const lv = shape.ph_levels;
+    if (!lv || !lv.length) return null;
+    return lv[Math.min(para.lvl || 0, lv.length - 1)] || null;
+}
+
 function buildSlideContent(container, slide, slideIdx, scale, editable) {
+
     slide.shapes.forEach((shape, shapeIdx) => {
         const div = document.createElement('div');
         div.className = 'slide-shape';
@@ -4164,31 +4228,80 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
         div.style.top = (shape.y * scale) + 'px';
         div.style.width = (shape.width * scale) + 'px';
         div.style.height = (shape.height * scale) + 'px';
-        if (shape.fill_color) div.style.backgroundColor = '#' + shape.fill_color;
+        // A shape's own ramp wins over its flat fill, the same way the slide's
+        // background does; `fill_alpha` is the `<a:alpha>` on a solid fill.
+        if (shape.gradient) {
+            div.style.backgroundImage = gradientCss(shape.gradient);
+        } else if (shape.fill_color) {
+            const a = (shape.fill_alpha === undefined || shape.fill_alpha === null)
+                ? 1 : shape.fill_alpha;
+            const c = shape.fill_color;
+            div.style.backgroundColor = a >= 1 ? '#' + c
+                : `rgba(${parseInt(c.slice(0,2),16)},${parseInt(c.slice(2,4),16)},` +
+                  `${parseInt(c.slice(4,6),16)},${a})`;
+        }
         if (shape.border_color) {
             const bw = shape.border_width || 1;
             div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
             div.style.boxSizing = 'border-box';
         }
+        // `a:xfrm/@rot` turns the shape about its own centre, and the flips
+        // mirror it there too -- both are what the group work derived.
+        const xf = [];
+        if (shape.flip_h) xf.push('scaleX(-1)');
+        if (shape.flip_v) xf.push('scaleY(-1)');
+        if (shape.rotation) xf.push('rotate(' + shape.rotation + 'deg)');
+        if (xf.length) {
+            div.style.transform = xf.join(' ');
+            div.style.transformOrigin = 'center center';
+        }
+        // An ellipse or a rounded rectangle is a border-radius away, and a
+        // pie / custGeom shape is at least not drawn as a slab of its fill.
+        if (shape.shape_type === 'ellipse') div.style.borderRadius = '50%';
+        else if (shape.shape_type === 'roundRect') {
+            const adj = (shape.adjustments && shape.adjustments.adj) || 16667;
+            div.style.borderRadius =
+                (Math.min(shape.width, shape.height) * (adj / 100000) * scale) + 'px';
+        }
+        // The body anchors vertically like any text frame.
+        if (shape.anchor === 'ctr' || shape.anchor === 'b') {
+            div.style.display = 'flex';
+            div.style.flexDirection = 'column';
+            div.style.justifyContent = shape.anchor === 'ctr' ? 'center' : 'flex-end';
+        }
 
         const content = shape.content;
-        if (content && content.TextBox) {
-            content.TextBox.paragraphs.forEach((para, paraIdx) => {
+        // AutoShape carries the same paragraphs a TextBox does, and MOST pptx
+        // text lives in one -- leaving it out drew the box and dropped the body.
+        const paragraphs = content && (content.TextBox ? content.TextBox.paragraphs
+                                     : (content.AutoShape ? content.AutoShape.paragraphs : null));
+        if (paragraphs) {
+            paragraphs.forEach((para, paraIdx) => {
                 const p = document.createElement('p');
+                const lvl = levelFor(shape, para);
                 const align = para.alignment;
-                if (align === 'Center') p.style.textAlign = 'center';
-                else if (align === 'Right') p.style.textAlign = 'right';
-                else if (align === 'Justify') p.style.textAlign = 'justify';
+                const eff = align || (lvl && lvl.algn);
+                if (eff === 'Center') p.style.textAlign = 'center';
+                else if (eff === 'Right') p.style.textAlign = 'right';
+                else if (eff === 'Justify') p.style.textAlign = 'justify';
+                if (lvl && lvl.line_spacing) p.style.lineHeight = lvl.line_spacing * 1.2;
 
                 para.runs.forEach((run, runIdx) => {
                     const span = document.createElement('span');
                     span.textContent = run.text;
-                    const fontSize = run.font_size || 18;
+                    const fontSize = run.font_size || (lvl && lvl.font_size) || 18;
                     span.style.fontSize = (fontSize * scale) + 'px';
                     if (run.bold) span.style.fontWeight = 'bold';
                     if (run.italic) span.style.fontStyle = 'italic';
-                    if (run.color) span.style.color = '#' + run.color;
-                    if (run.font_family) span.style.fontFamily = run.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                    const color = run.color || (lvl && lvl.color);
+                    if (color) span.style.color = '#' + color;
+                    const face = run.font_family || (lvl && lvl.font_family);
+                    if (face) span.style.fontFamily = face + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                    if (run.underline) span.style.textDecoration = 'underline';
+                    // `a:highlight` is a box behind the glyphs, not a colour,
+                    // and a LEVEL can declare it as well as a run.
+                    const hl = run.highlight || (lvl && lvl.highlight);
+                    if (hl) span.style.backgroundColor = '#' + hl;
 
                     if (editable) {
                         span.className = 'edit-slide-run';
@@ -4210,11 +4323,7 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
             });
         } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {
             const img = document.createElement('img');
-            const bytes = content.Image.data;
-            const ct = content.Image.content_type || 'image/png';
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-            img.src = `data:${ct};base64,${btoa(binary)}`;
+            img.src = bytesToDataUrl(content.Image.data, content.Image.content_type);
             img.style.width = '100%';
             img.style.height = '100%';
             img.style.objectFit = 'contain';
