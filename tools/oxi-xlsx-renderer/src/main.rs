@@ -312,7 +312,11 @@ mod windows_draw {
                     }
                     let points = cell.style.font_size.unwrap_or(11.0);
                     let pixels = -((points * scale * 96.0 / 72.0).round() as i32);
-                    let face = wide("Calibri");
+                    // A cell names its own typeface; Calibri is only the
+                    // fallback for one that does not.
+                    let face = wide(
+                        cell.style.font_name.as_deref().unwrap_or("Calibri"),
+                    );
                     let font = CreateFontW(
                         pixels,
                         0,
@@ -325,7 +329,10 @@ mod windows_draw {
                         DEFAULT_CHARSET.0 as u32,
                         OUT_DEFAULT_PRECIS.0 as u32,
                         CLIP_DEFAULT_PRECIS.0 as u32,
-                        CLEARTYPE_QUALITY.0 as u32,
+                        // Excel prints greyscale-antialiased glyphs. ClearType
+                        // would colour their edges, which reads as a horizontal
+                        // shift once the comparison turns both to grey.
+                        ANTIALIASED_QUALITY.0 as u32,
                         (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
                         PCWSTR(face.as_ptr()),
                     );
