@@ -240,6 +240,24 @@ struct Dressed {
     white_text: bool,
 }
 
+/// A table's header carries a filter button in every column. Measured off a
+/// worksheet Excel drew: 17 by 17 pixels against the right edge of the cell,
+/// eight below its top, a pale face inside a grey outline, and a seven-wide
+/// triangle narrowing to a point four rows down.
+const FILTER_BUTTON: i32 = 17;
+const FILTER_BUTTON_TOP: i32 = 8;
+
+/// Whether the cell at this spot carries a filter button.
+fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
+    sheet.tables.iter().any(|table| {
+        table.header_rows > 0
+            && row >= table.start_row
+            && row < table.start_row + table.header_rows
+            && column >= table.start_col
+            && column <= table.end_col
+    })
+}
+
 fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
     let table = sheet.tables.iter().find(|table| {
         row >= table.start_row
@@ -623,6 +641,45 @@ mod windows_draw {
                     }
 
                     // A carriage return would otherwise be drawn as a glyph.
+                    let filtered = super::has_filter_button(sheet, row.index, cell.col);
+                    if filtered {
+                        let left = box_.right - super::FILTER_BUTTON;
+                        let top = box_.top + super::FILTER_BUTTON_TOP;
+                        let face = RECT {
+                            left,
+                            top,
+                            right: box_.right,
+                            bottom: top + super::FILTER_BUTTON,
+                        };
+                        let outline = CreateSolidBrush(colour(Some("A6ACB3"), 0xA6ACB3));
+                        FillRect(dc, &face, outline);
+                        let _ = DeleteObject(outline);
+                        let pale = CreateSolidBrush(colour(Some("FEFEFE"), 0xFEFEFE));
+                        let inside = RECT {
+                            left: face.left + 1,
+                            top: face.top + 1,
+                            right: face.right - 1,
+                            bottom: face.bottom - 1,
+                        };
+                        FillRect(dc, &inside, pale);
+                        let _ = DeleteObject(pale);
+                        // Seven pixels wide at the top, losing one either side
+                        // each row until it is a single point.
+                        let arrow = CreateSolidBrush(colour(Some("58595B"), 0x58595B));
+                        let middle = (face.left + face.right) / 2;
+                        for step in 0..4 {
+                            let half = 3 - step;
+                            let bar = RECT {
+                                left: middle - half,
+                                top: face.top + 7 + step,
+                                right: middle + half + 1,
+                                bottom: face.top + 8 + step,
+                            };
+                            FillRect(dc, &bar, arrow);
+                        }
+                        let _ = DeleteObject(arrow);
+                    }
+
                     let text = cell_text(&cell.value, &cell.style)
                         .replace("\r\n", "\n");
                     if text.is_empty() {
@@ -672,6 +729,9 @@ mod windows_draw {
                     let mut area = box_;
                     area.left += gutter;
                     area.right -= gutter;
+                    if filtered {
+                        area.right -= super::FILTER_BUTTON;
+                    }
                     let placed = alignment(&cell.style, &cell.value);
                     let mut body = wide(&text);
                     body.pop();
