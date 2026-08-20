@@ -18,7 +18,7 @@ use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::ir::Workbook;
+use crate::ir::{MergeCell, Workbook};
 use crate::parser::{parse_xlsx, XlsxError};
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
@@ -56,6 +56,9 @@ pub struct XlsxEditor {
     row_hidden: HashMap<(usize, u32), bool>,
     /// (sheet_idx, 0-based column) -> hidden
     col_hidden: HashMap<(usize, u32), bool>,
+    /// Sheets whose merged cells are being replaced wholesale. A merge is not
+    /// edited in place, so the whole list travels together.
+    merges: HashMap<usize, Vec<MergeCell>>,
 }
 
 /// Convert 0-based column to letter reference (0->A, 25->Z, 26->AA).
@@ -80,6 +83,7 @@ impl XlsxEditor {
             edits: HashMap::new(),
             row_hidden: HashMap::new(),
             col_hidden: HashMap::new(),
+            merges: HashMap::new(),
         })
     }
 
@@ -115,8 +119,8 @@ impl XlsxEditor {
     /// written back.
     ///
     /// Only what the editor can write is compared — cell values, cell formulas,
-    /// and which rows and columns are hidden. Styling and merged cells travel
-    /// with the original XML untouched, so a change to those is not saved.
+    /// which rows and columns are hidden, and which cells are merged. Styling
+    /// travels with the original XML untouched, so a change to it is not saved.
     pub fn apply_workbook(&mut self, edited: &Workbook) -> Result<(), XlsxError> {
         if edited.sheets.len() != self.workbook.sheets.len() {
             return Err(XlsxError::InvalidData(
@@ -190,6 +194,10 @@ impl XlsxEditor {
             for (col, hidden) in cols {
                 self.col_hidden.insert((index, col), hidden);
             }
+
+            if !same_merges(&before.merge_cells, &after.merge_cells) {
+                self.merges.insert(index, after.merge_cells.clone());
+            }
         }
         Ok(())
     }
@@ -204,8 +212,16 @@ impl XlsxEditor {
         self.col_hidden.insert((sheet_index, col), hidden);
     }
 
+    /// Replaces every merged cell on a sheet.
+    pub fn set_merges(&mut self, sheet_index: usize, merges: Vec<MergeCell>) {
+        self.merges.insert(sheet_index, merges);
+    }
+
     pub fn has_edits(&self) -> bool {
-        !self.edits.is_empty() || !self.row_hidden.is_empty() || !self.col_hidden.is_empty()
+        !self.edits.is_empty()
+            || !self.row_hidden.is_empty()
+            || !self.col_hidden.is_empty()
+            || !self.merges.is_empty()
     }
 
     /// Save edited xlsx.
@@ -240,6 +256,7 @@ impl XlsxEditor {
             cols_by_sheet.entry(*sheet).or_default().insert(*col, *hidden);
         }
 
+
         // Map sheet path -> everything to change in that sheet
         let empty_cells: HashMap<(u32, u32), &CellEditValue> = HashMap::new();
         let empty_lines: BTreeMap<u32, bool> = BTreeMap::new();
@@ -248,6 +265,7 @@ impl XlsxEditor {
             .keys()
             .chain(rows_by_sheet.keys())
             .chain(cols_by_sheet.keys())
+            .chain(self.merges.keys())
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
         {
@@ -258,6 +276,7 @@ impl XlsxEditor {
                         cells: edits_by_sheet.get(&sheet).unwrap_or(&empty_cells),
                         rows: rows_by_sheet.get(&sheet).unwrap_or(&empty_lines),
                         cols: cols_by_sheet.get(&sheet).unwrap_or(&empty_lines),
+                        merges: self.merges.get(&sheet).map(Vec::as_slice),
                     },
                 );
             }
@@ -441,6 +460,21 @@ fn cells_of(sheet: &crate::ir::Sheet) -> BTreeMap<(u32, u32), &crate::ir::Cell> 
     cells
 }
 
+/// Merges compare as a set: the order a sheet lists them in means nothing.
+fn same_merges(before: &[MergeCell], after: &[MergeCell]) -> bool {
+    if before.len() != after.len() {
+        return false;
+    }
+    let key = |merge: &MergeCell| {
+        (merge.start_row, merge.start_col, merge.end_row, merge.end_col)
+    };
+    let mut before: Vec<_> = before.iter().map(key).collect();
+    let mut after: Vec<_> = after.iter().map(key).collect();
+    before.sort_unstable();
+    after.sort_unstable();
+    before == after
+}
+
 fn same_content(before: &crate::ir::Cell, after: &crate::ir::Cell) -> bool {
     before.formula == after.formula && same_value(&before.value, &after.value)
 }
@@ -470,6 +504,38 @@ fn edit_for(cell: &crate::ir::Cell) -> Option<CellEditValue> {
         crate::ir::CellValue::Boolean(value) => Some(CellEditValue::Boolean(*value)),
         crate::ir::CellValue::Error(_) => None,
     }
+}
+
+/// Writes a `<mergeCells>` block, or nothing at all when there is none left.
+fn write_merges(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    merges: &[MergeCell],
+) -> Result<(), XlsxError> {
+    if merges.is_empty() {
+        return Ok(());
+    }
+    let mut block = BytesStart::new("mergeCells");
+    block.push_attribute(("count", merges.len().to_string().as_str()));
+    writer
+        .write_event(Event::Start(block))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    for merge in merges {
+        let reference = format!(
+            "{}{}:{}{}",
+            col_to_letter(merge.start_col),
+            merge.start_row,
+            col_to_letter(merge.end_col),
+            merge.end_row
+        );
+        let mut span = BytesStart::new("mergeCell");
+        span.push_attribute(("ref", reference.as_str()));
+        writer
+            .write_event(Event::Empty(span))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new("mergeCells")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
 /// Writes one `<col>` span, splitting it where a change covers only part of it.
@@ -605,6 +671,8 @@ struct SheetEdits<'a> {
     rows: &'a BTreeMap<u32, bool>,
     /// Zero-based column -> hidden.
     cols: &'a BTreeMap<u32, bool>,
+    /// Every merge the sheet should end up with, when they are being replaced.
+    merges: Option<&'a [MergeCell]>,
 }
 
 fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
@@ -623,6 +691,11 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
         sheet_edits.rows.keys().copied().collect();
     let mut pending_cols: BTreeMap<u32, bool> = sheet_edits.cols.clone();
     let mut seen_cols = false;
+    let mut skip_merges_depth = 0_u32;
+    // Whether the sheet already describes its merges decides where the new
+    // block goes: in place of the old one, or straight after the data.
+    let has_merge_block = xml.contains("<mergeCells");
+    let mut wrote_merges = false;
 
     let mut current_row: u32 = 0;
     let mut in_row = false;
@@ -638,6 +711,10 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
         match reader.read_event().map_err(XlsxError::Xml)? {
             Event::Eof => break,
             Event::Start(ref e) => {
+                if skip_merges_depth > 0 {
+                    skip_merges_depth += 1;
+                    continue;
+                }
                 if skip_replaced_content_depth > 0 {
                     skip_replaced_content_depth += 1;
                     continue;
@@ -649,6 +726,10 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 }
                 if name == "cols" {
                     seen_cols = true;
+                }
+                if name == "mergeCells" && sheet_edits.merges.is_some() {
+                    skip_merges_depth = 1;
+                    continue;
                 }
                 if name == "sheetData" && !seen_cols && !pending_cols.is_empty() {
                     open_cols(&mut writer)?;
@@ -747,6 +828,16 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
             }
             Event::End(ref e) => {
+                if skip_merges_depth > 0 {
+                    skip_merges_depth -= 1;
+                    if skip_merges_depth == 0 {
+                        if let Some(merges) = sheet_edits.merges {
+                            write_merges(&mut writer, merges)?;
+                            wrote_merges = true;
+                        }
+                    }
+                    continue;
+                }
                 if skip_replaced_content_depth > 0 {
                     skip_replaced_content_depth -= 1;
                     continue;
@@ -817,6 +908,14 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     _ => {}
                 }
                 writer.write_event(Event::End(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                // A sheet that never had a mergeCells element needs one, and it
+                // belongs directly after the data.
+                if name == "sheetData" && !wrote_merges && !has_merge_block {
+                    if let Some(merges) = sheet_edits.merges {
+                        write_merges(&mut writer, merges)?;
+                        wrote_merges = true;
+                    }
+                }
             }
             Event::Text(ref e) => {
                 if skip_replaced_content_depth > 0 || (skip_value_text && in_value) {
@@ -833,6 +932,13 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 if name == "col" {
                     seen_cols = true;
                     write_col_span(&mut writer, e, &mut pending_cols)?;
+                    continue;
+                }
+                if name == "mergeCells" && sheet_edits.merges.is_some() {
+                    if let Some(merges) = sheet_edits.merges {
+                        write_merges(&mut writer, merges)?;
+                        wrote_merges = true;
+                    }
                     continue;
                 }
                 if in_cell && current_edit.is_some() && (name == "f" || name == "is") {
@@ -1069,6 +1175,7 @@ mod tests {
             cells,
             rows: nothing,
             cols: nothing,
+            merges: None,
         }
     }
 
