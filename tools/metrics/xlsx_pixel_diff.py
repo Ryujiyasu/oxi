@@ -151,6 +151,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("target", type=Path)
     parser.add_argument("--dpi", type=float, default=96.0)
+    parser.add_argument(
+        "--reuse",
+        action="store_true",
+        help="compare against the PDFs already on disk, without opening Excel",
+    )
+    parser.add_argument("--limit", type=int, help="stop after this many workbooks")
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=REPO / "pipeline_data" / "xlsx_ssim_baseline.json",
+        help="scores to compare this run against",
+    )
+    parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="write this run's scores as the new baseline",
+    )
     parser.add_argument("--out", type=Path, default=REPO / "pipeline_data" / "xlsx_diff")
     args = parser.parse_args()
 
@@ -162,14 +179,19 @@ def main() -> int:
         sorted(args.target.glob("*.xlsx")) if args.target.is_dir() else [args.target]
     )
     sources = [path for path in sources if not path.name.startswith("~$")]
+    if args.limit:
+        sources = sources[: args.limit]
     if not sources:
         print("no workbooks to compare")
         return 1
 
-    printed = excel_pdfs(
-        [(source, args.out / f"{source.stem}.pdf") for source in sources], args.out
-    )
-    print(f"Excel printed {len(printed)} of {len(sources)} workbook(s)")
+    pairs = [(source, args.out / f"{source.stem}.pdf") for source in sources]
+    if args.reuse:
+        printed = {destination for _, destination in pairs if destination.exists()}
+        print(f"reusing {len(printed)} of {len(sources)} printed workbook(s)")
+    else:
+        printed = excel_pdfs(pairs, args.out)
+        print(f"Excel printed {len(printed)} of {len(sources)} workbook(s)")
 
     scores: dict[str, float] = {}
     for source in sources:
@@ -201,6 +223,33 @@ def main() -> int:
     summary = {"mean": mean, "scores": scores, "dpi": args.dpi}
     (args.out / "_summary.json").write_text(json.dumps(summary, indent=2))
     print(f"\nmean SSIM {mean:.4f} over {len(scores)} workbook(s)")
+    if args.baseline.exists():
+        held = json.loads(args.baseline.read_text())["scores"]
+        shared = [stem for stem in scores if stem in held]
+        moved = [
+            (stem, scores[stem] - held[stem])
+            for stem in shared
+            if abs(scores[stem] - held[stem]) > 1e-4
+        ]
+        better = [pair for pair in moved if pair[1] > 0]
+        worse = [pair for pair in moved if pair[1] < 0]
+        was = sum(held[stem] for stem in shared) / len(shared) if shared else 0.0
+        now = sum(scores[stem] for stem in shared) / len(shared) if shared else 0.0
+        print(
+            f"against the baseline: {len(better)} improved, {len(worse)} regressed,"
+            f" mean {was:.4f} -> {now:.4f} ({now - was:+.4f}) over {len(shared)}"
+        )
+        for stem, delta in sorted(moved, key=lambda pair: pair[1])[:5]:
+            print(f"   {delta:+.4f}  {stem}")
+        for stem, delta in sorted(moved, key=lambda pair: -pair[1])[:5]:
+            print(f"   {delta:+.4f}  {stem}")
+    else:
+        print(f"no baseline at {args.baseline}")
+
+    if args.update_baseline:
+        args.baseline.parent.mkdir(parents=True, exist_ok=True)
+        args.baseline.write_text(json.dumps(summary, indent=2))
+        print(f"baseline written to {args.baseline}")
     print(f"panels and summary in {args.out}")
     return 0
 
