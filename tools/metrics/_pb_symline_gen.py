@@ -92,6 +92,14 @@ SYM_SZ, TXT_SZ = 36, 20                 # half-points: 18pt symbol, 10pt text
 CHARS = [
     (0x0041, "A LATIN control"),
     (0x00A7, "SECTION SIGN"),
+    # S1178 (2026-08-20): Latin-1's two EAW-Ambiguous math signs.  kinsoku::
+    # is_cjk claims them unconditionally ("Word renders with East Asian font"),
+    # so creative__0158c02a's ÷ lines rode the eastAsia chain to MS Mincho
+    # (h=18.00 vs the ArialMT 15.87 Word draws — cre0158.pdf p9+, 44 slips).
+    # U+00BD is the negative control: not claimed by is_cjk, never inflated.
+    (0x00D7, "MULTIPLY SIGN"),
+    (0x00F7, "DIVISION SIGN"),
+    (0x00BD, "VULGAR HALF ctl"),
     (0x2022, "BULLET"),
     (0x2190, "LEFTWARDS ARROW"),
     (0x221A, "SQUARE ROOT"),

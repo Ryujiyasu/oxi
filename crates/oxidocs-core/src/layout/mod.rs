@@ -3014,6 +3014,20 @@ impl LayoutEngine {
         // 2026-08-13 {S1112,S1091,S1074,S1113,S1114} bundle.
         let s1115 = !self.doc_body_has_real_cjk
             && std::env::var("OXI_S1115_DISABLE").is_err();
+        // S1178 (2026-08-20, opt-out OXI_S1178_DISABLE): U+00D7 ×  / U+00F7 ÷ —
+        // Latin-1's two EAW-Ambiguous math signs join the class. is_cjk claims
+        // them unconditionally, so creative__0158c02a's ÷ lines rode the
+        // eastAsia chain (docDefaults eastAsiaTheme → S634 MS Mincho) to
+        // h=18.00 where Word draws the whole line in ArialMT at the plain
+        // 15.87 pitch — 44 pagination slips from 17 ÷. Word truth: the
+        // _pb_symline probe (plain + theme variants, Arial/Calibri/Cambria)
+        // measures both signs = the Latin control in every arm, and all four
+        // ×/÷-bearing EN corpus docs (creative__0158c02a, technical__0056b52f
+        // /00501ca3/008ae1fa) draw them in the run's own Latin face at the
+        // uniform pitch. Doc-level Latin gate → JP (tokyoshugyo ×44, 3a4f,
+        // parttime… all eastAsia-rendered) byte-identical by construction.
+        let s1178 = !self.doc_body_has_real_cjk
+            && std::env::var("OXI_S1178_DISABLE").is_err();
         let is_q = move |c: char| {
             matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                 || (s801 && matches!(c, '\u{2013}' | '\u{2014}'))
@@ -3026,6 +3040,7 @@ impl LayoutEngine {
                     && matches!(c as u32,
                         0x2010..=0x2044 | 0x2190..=0x22FF | 0x2460..=0x24FF
                             | 0x2500..=0x27BF))
+                || (s1178 && matches!(c, '\u{00D7}' | '\u{00F7}'))
         };
         let has_real_cjk = text.chars().any(|c| kinsoku::is_cjk(c) && !is_q(c));
         let has_quote = text.chars().any(|c| kinsoku::is_cjk(c) && is_q(c));
@@ -3308,7 +3323,13 @@ impl LayoutEngine {
             // is unchanged either way (is_fullwidth lists U+2015 → 1.0em).
             || (!self.doc_body_has_real_cjk
                 && std::env::var("OXI_S1103_DISABLE").is_err()
-                && ch == '\u{2015}');
+                && ch == '\u{2015}')
+            // S1178: U+00D7 × / U+00F7 ÷, same ambiguous class — see
+            // resolve_font_family_for_text_g. Here the WIDTH follows the Latin
+            // face too (Word prices creative__0158c02a's ÷ in ArialMT).
+            || (!self.doc_body_has_real_cjk
+                && std::env::var("OXI_S1178_DISABLE").is_err()
+                && matches!(ch, '\u{00D7}' | '\u{00F7}'));
         let cjk_class = kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk);
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk(run_style, para_style) {
@@ -22597,11 +22618,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 let s1103_latin_hbar = ch == '\u{2015}'
                     && !self.doc_body_has_real_cjk
                     && std::env::var("OXI_S1103_DISABLE").is_err();
+                // S1178 (2026-08-20): U+00D7 × / U+00F7 ÷ join the ambiguous
+                // class — Latin-1's two EAW-Ambiguous math signs. is_cjk claims
+                // them unconditionally, splitting the fragment and pricing the
+                // sign down the eastAsia chain; Word draws creative__0158c02a's
+                // ÷ lines whole in ArialMT at the plain pitch (44 slips) and
+                // the _pb_symline probe measures both = the Latin control in
+                // every font/variant arm. Doc-level Latin gate like the
+                // siblings → JP byte-identical by construction.
+                let s1178_latin_muldiv = matches!(ch, '\u{00D7}' | '\u{00F7}')
+                    && !self.doc_body_has_real_cjk
+                    && std::env::var("OXI_S1178_DISABLE").is_err();
                 let latin_ctx_quote = s801_latin_dash
                     || s888_latin_hyphen
                     || s951_latin_mathop
                     || s966_latin_bullet
                     || s1103_latin_hbar
+                    || s1178_latin_muldiv
                     || matches!(ch, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
                         && std::env::var("OXI_LATINQUOTE_DISABLE").is_err()
                         && {
