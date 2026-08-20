@@ -2525,6 +2525,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             {
                                 let this_off = line_off;
                                 line_off += line_text.chars().count();
+                                // The trailing newline of a soft-broken line is
+                                // accounting, not ink: it is counted above so
+                                // the run mapping stays aligned, and dropped
+                                // here so nothing tries to draw it.
+                                let line_text = line_text.trim_end_matches('\n').to_string();
                                 if line_text.trim().is_empty() {
                                     continue;
                                 }
@@ -9747,6 +9752,11 @@ fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
 }
 
+/// `<a:br/>` ends the line it stands on unless this is set.
+fn softbreak_on() -> bool {
+    std::env::var("OXI_SOFTBREAK_DISABLE").is_err()
+}
+
 /// A table row grows to fit its cells unless this is set.
 fn tblgrow_on() -> bool {
     std::env::var("OXI_TBLGROW_DISABLE").is_err()
@@ -10412,20 +10422,34 @@ fn layout_paragraph_baselines(
     // `wrap="none"` means the text does not break at all: PowerPoint draws it
     // past the box edge. Every arm of the COM-built `embedsplit` probes is
     // such a box, auto-sized to 14.5pt around 20pt of text.
-    let lines = if wrap_text || !wrapnone_on() {
-        gdi_wrap_lines(
-            dc,
-            &text,
-            (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0),
-            (effective_width - if wrapwidth_on() { para_left_rel } else { 0.0 }).max(1.0),
-            scale,
-            fs,
-            &family,
-            bold,
-            italic,
-        )
-    } else {
+    let first_w = (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0);
+    let rest_w = (effective_width - if wrapwidth_on() { para_left_rel } else { 0.0 }).max(1.0);
+    // `<a:br/>` arrives as a newline in the run stream and ends the line where
+    // it stands. Each segment wraps on its own, and the newline is kept on the
+    // END of the line it closed so the caller's character accounting -- which
+    // maps lines back to runs -- still lines up.
+    let lines = if !wrap_text && wrapnone_on() {
         vec![text.clone()]
+    } else if softbreak_on() && text.contains('\n') {
+        let mut out: Vec<String> = Vec::new();
+        for (si, seg) in text.split('\n').enumerate() {
+            if si > 0 {
+                match out.last_mut() {
+                    Some(last) => last.push('\n'),
+                    None => out.push("\n".to_string()),
+                }
+            }
+            let w = if out.is_empty() { first_w } else { rest_w };
+            let mut part =
+                gdi_wrap_lines(dc, seg, w, rest_w, scale, fs, &family, bold, italic);
+            if part.is_empty() {
+                part.push(String::new());
+            }
+            out.extend(part);
+        }
+        out
+    } else {
+        gdi_wrap_lines(dc, &text, first_w, rest_w, scale, fs, &family, bold, italic)
     };
     let n_lines = lines.len();
 
@@ -10439,9 +10463,12 @@ fn layout_paragraph_baselines(
         // GDI's measured width (hinted / pixel-snapped) over-measures a line by
         // ~1.5-3.75pt vs PowerPoint, so we prefer the hmtx table and fall back
         // to the GDI measurement only for unsupported fonts/characters.
-        let line_w = font_adv::line_hmtx_width_pt(line, fs, &family)
+        // A line that ends on a soft break carries the newline for the
+        // caller's accounting; it is not ink and must not be measured.
+        let ink = line.trim_end_matches('\n');
+        let line_w = font_adv::line_hmtx_width_pt(ink, fs, &family)
             .or_else(|| {
-                runtime_width_px(dc, line.trim_end(), fs, &family, bold, italic, scale)
+                runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale)
                     .map(|px| px as f32 / scale as f32)
             })
             .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32);

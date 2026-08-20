@@ -56,6 +56,13 @@ def main() -> None:
     add("plain ", "112233", None, False)
     add("empty ", "FFFFFF", "FF0000", False)
     add("start", "000000", "00FF00", True)
+    # `<a:br>` is a soft line break INSIDE the paragraph. Every one of the 70 in
+    # the dev corpus carries an a:rPr, so it arrives as Event::Start.
+    br = etree.SubElement(p, q("br"))
+    rpr = etree.SubElement(br, q("rPr"))
+    rpr.set("lang", "en-US")
+    rpr.set("sz", "1800")
+    add("after the break", "445566", None, False)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     prs.save(OUT)
