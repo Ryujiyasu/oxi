@@ -651,13 +651,13 @@ fn parse_worksheet(
                             .unwrap_or(current_row_index + 1);
                         current_row_index = row_num;
 
-                        // Parse custom row height
-                        current_row_height = None;
-                        let custom_height = get_attr(&e, "customHeight");
-                        if custom_height.as_deref() == Some("1") || custom_height.as_deref() == Some("true") {
-                            current_row_height =
-                                get_attr(&e, "ht").and_then(|v| v.parse::<f32>().ok());
-                        }
+                        // A row states its height whenever it is not the
+                        // default one, whether a person set it or Excel worked
+                        // it out from what the row holds. customHeight only
+                        // says which of the two it was, so it does not decide
+                        // whether the height counts.
+                        current_row_height =
+                            get_attr(&e, "ht").and_then(|v| v.parse::<f32>().ok());
                         current_row_hidden = is_true(get_attr(&e, "hidden").as_deref());
                     }
                     "c" if in_row => {
