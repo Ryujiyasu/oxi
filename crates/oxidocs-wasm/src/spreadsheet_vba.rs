@@ -1293,6 +1293,18 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(numeric_result(rounded / scale)));
         }
 
+        if name.eq_ignore_ascii_case("text") {
+            let [value, format] = args else {
+                return Err("WorksheetFunction.Text expects a value and a format".to_string());
+            };
+            let Value::String(format) = format else {
+                return Err("WorksheetFunction.Text expects a format as text".to_string());
+            };
+            return Ok(Some(Value::String(shown_text(
+                &self.criteria_value(value)?,
+                Some(format),
+            ))));
+        }
         if name.eq_ignore_ascii_case("power") {
             let [base, exponent] = args else {
                 return Err("WorksheetFunction.Power expects a number and a power".to_string());
@@ -1496,6 +1508,29 @@ impl<'a> WorkbookHost<'a> {
             ));
         };
         Ok(numeric_result(result))
+    }
+
+    /// What a cell shows, with its number format applied.
+    ///
+    /// Excel answers Null for a range covering more than one cell, since there
+    /// is no single text to give. Text cannot be written to; it only reports.
+    fn range_text(&self, range: CellRange) -> Value {
+        if !range.is_single() {
+            return Value::Null;
+        }
+        let address = range.addresses().next().unwrap();
+        let Some(cell) = self.workbook.sheets[address.sheet]
+            .rows
+            .iter()
+            .find(|row| row.index == address.row)
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+        else {
+            return Value::String(String::new());
+        };
+        Value::String(shown_text(
+            &from_cell_value(&cell.value),
+            cell.style.number_format.as_deref(),
+        ))
     }
 
     fn cell_formula(&self, address: CellAddress) -> Value {
@@ -3999,6 +4034,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("rowheight") {
             return self.range_row_height(range).map(Some);
         }
+        if name.eq_ignore_ascii_case("text") {
+            return Ok(Some(self.range_text(range)));
+        }
         if name.eq_ignore_ascii_case("hidden") {
             return self.range_hidden(range).map(Some);
         }
@@ -4645,6 +4683,23 @@ fn numeric_result(value: f64) -> Value {
         Value::Integer(value as i64)
     } else {
         Value::Double(value)
+    }
+}
+
+/// The text a value shows under a number format. Only numbers are formatted;
+/// text comes back as it is, and a Boolean reads TRUE or FALSE whatever the
+/// format says.
+fn shown_text(value: &Value, format: Option<&str>) -> String {
+    match value {
+        Value::Integer(number) => oxicells_core::format_number(
+            *number as f64,
+            format.unwrap_or("General"),
+        ),
+        Value::Double(number) if number.is_finite() => {
+            oxicells_core::format_number(*number, format.unwrap_or("General"))
+        }
+        Value::Empty | Value::Missing => String::new(),
+        value => find_value_text(value),
     }
 }
 
@@ -8538,6 +8593,90 @@ mod tests {
         // A bare value keeps no operator.
         let criteria = parse_criteria(&Value::Integer(42));
         assert_eq!(criteria_text(&criteria), "42");
+    }
+
+    /// Every expectation is what Excel 16 answered for the same cell.
+    #[test]
+    fn a_cell_says_what_it_shows() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 1234.5\n\
+               Range(\"A1\").NumberFormat = \"#,##0.00\"\n\
+               Range(\"A2\").Value = \"plain text\"\n\
+               Range(\"A3\").Value = True\n\
+               Range(\"A5\").Value = 45000\n\
+               Range(\"A5\").NumberFormat = \"yyyy-mm-dd\"\n\
+               Range(\"A6\").Value = 0.25\n\
+               Range(\"A6\").NumberFormat = \"0%\"\n\
+               Debug.Print \"[\" & Range(\"A1\").Text & \"]\", \"[\" & Range(\"A2\").Text & \"]\"\n\
+               Debug.Print \"[\" & Range(\"A3\").Text & \"]\", \"[\" & Range(\"A4\").Text & \"]\"\n\
+               Debug.Print \"[\" & Range(\"A5\").Text & \"]\", \"[\" & Range(\"A6\").Text & \"]\"\n\
+               Debug.Print TypeName(Range(\"A1:A2\").Text)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "[1,234.50]\t[plain text]".to_string(),
+                "[TRUE]\t[]".to_string(),
+                "[2023-03-15]\t[25%]".to_string(),
+                // More than one cell has no single text to give.
+                "Null".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn worksheet_function_text_renders_a_value_under_a_format() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 1234.5\n\
+               Debug.Print WorksheetFunction.Text(1234.5, \"0.00\"), WorksheetFunction.Text(1234.5, \"#,##0\")\n\
+               Debug.Print WorksheetFunction.Text(45000, \"yyyy-mm-dd\"), WorksheetFunction.Text(\"already text\", \"0.00\")\n\
+               Debug.Print WorksheetFunction.Text(1234.5, \"General\"), WorksheetFunction.Text(True, \"0\")\n\
+               Debug.Print WorksheetFunction.Text(Range(\"A1\"), \"0\"), TypeName(WorksheetFunction.Text(1, \"0\"))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "1234.50\t1,235".to_string(),
+                // Text that is already text comes back untouched.
+                "2023-03-15\talready text".to_string(),
+                // A Boolean reads TRUE whatever the format says.
+                "1234.5\tTRUE".to_string(),
+                // A range stands for its value, and the answer is always text.
+                "1235\tString".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cells_text_cannot_be_written_to() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n  Range(\"A1\").Value = 1\n  Range(\"A1\").Text = \"x\"\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host)
+            .expect_err("Text only reports what a cell shows");
     }
 
     #[test]
