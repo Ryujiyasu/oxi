@@ -236,3 +236,23 @@ fn a_cell_wears_the_font_of_the_style_it_is_built_on() {
         .count();
     assert!(underlined > 0, "no cell inherited the underlined link font");
 }
+
+#[test]
+fn a_colour_the_theme_names_is_resolved() {
+    // The hyperlinks in this workbook state no colour of their own: their font
+    // names theme colour 10, which the Office theme calls hlink and states as
+    // 0563C1. Excel paints them that blue.
+    const LINKED: &[u8] =
+        include_bytes!("../../../tools/golden-test/documents/xlsx/24d76e2a8663_h2daa202505_jikei.xlsx");
+    let workbook = parse_xlsx(LINKED).expect("the workbook parses");
+
+    let blue = workbook.sheets[0]
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .filter(|cell| {
+            cell.style.underline && cell.style.font_color.as_deref() == Some("0563C1")
+        })
+        .count();
+    assert!(blue > 0, "no link came out the theme's link blue");
+}

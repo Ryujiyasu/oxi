@@ -286,18 +286,101 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
     }
 }
 
-fn parse_color_attr(e: &quick_xml::events::BytesStart) -> Option<String> {
-    // Try "rgb" first (e.g., "FFFF0000"), then "theme" (ignored for simplicity),
-    // then "indexed" (ignored).
+/// The colours a workbook's theme names, in the order the theme states them:
+/// dk1, lt1, dk2, lt2, accent1-6, hlink, folHlink.
+#[derive(Debug, Clone, Default)]
+struct Theme {
+    colours: Vec<String>,
+}
+
+impl Theme {
+    /// A `theme="N"` is not an index into that order. Excel counts the first
+    /// two the other way round, and the second two as well, so 0 is lt1 and 1
+    /// is dk1.
+    fn colour(&self, index: usize) -> Option<&str> {
+        const ORDER: [usize; 12] = [1, 0, 3, 2, 4, 5, 6, 7, 8, 9, 10, 11];
+        let slot = *ORDER.get(index)?;
+        self.colours.get(slot).map(String::as_str)
+    }
+}
+
+fn parse_theme_xml(xml: &str) -> Theme {
+    let mut reader = Reader::from_str(xml);
+    let mut theme = Theme::default();
+    let mut in_scheme = false;
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                if local_name(e.name().as_ref()) == "clrScheme" {
+                    in_scheme = true;
+                }
+            }
+            Ok(Event::End(e)) => {
+                if local_name(e.name().as_ref()) == "clrScheme" {
+                    break;
+                }
+            }
+            Ok(Event::Empty(e)) if in_scheme => {
+                // A scheme colour is either stated outright or taken from the
+                // system, which records what it last resolved to.
+                let colour = match local_name(e.name().as_ref()).as_str() {
+                    "srgbClr" => get_attr(&e, "val"),
+                    "sysClr" => get_attr(&e, "lastClr"),
+                    _ => None,
+                };
+                if let Some(colour) = colour {
+                    theme.colours.push(colour);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    theme
+}
+
+/// Moves a colour toward white or black, the way a theme tint does.
+fn tinted(hex: &str, tint: f32) -> String {
+    let Ok(value) = u32::from_str_radix(hex, 16) else {
+        return hex.to_string();
+    };
+    let channel = |shift: u32| ((value >> shift) & 0xFF) as f32 / 255.0;
+    let (red, green, blue) = (channel(16), channel(8), channel(0));
+    let high = red.max(green).max(blue);
+    let low = red.min(green).min(blue);
+    let lum = (high + low) / 2.0;
+    let moved = if tint < 0.0 {
+        lum * (1.0 + tint)
+    } else {
+        lum * (1.0 - tint) + tint
+    };
+    // Keep the hue and saturation, move only how light it is.
+    let shift = moved - lum;
+    let clamp = |part: f32| (((part + shift).clamp(0.0, 1.0) * 255.0).round() as u32).min(255);
+    format!("{:02X}{:02X}{:02X}", clamp(red), clamp(green), clamp(blue))
+}
+
+fn parse_color_attr(e: &quick_xml::events::BytesStart, theme: &Theme) -> Option<String> {
     if let Some(rgb) = get_attr(e, "rgb") {
         // Strip leading alpha if 8-char hex
         let hex = if rgb.len() == 8 { &rgb[2..] } else { &rgb };
         return Some(hex.to_string());
     }
-    None
+    let index = get_attr(e, "theme")?.parse::<usize>().ok()?;
+    let named = theme.colour(index)?;
+    let tint = get_attr(e, "tint")
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    Some(if tint == 0.0 {
+        named.to_string()
+    } else {
+        tinted(named, tint)
+    })
 }
 
-fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
+fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut ss = StyleSheet::default();
 
@@ -398,14 +481,14 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
 
                     // Font color
                     "color" if in_font => {
-                        if let Some(c) = parse_color_attr(&e) {
+                        if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
                         }
                     }
 
                     // Fill color — look for fgColor inside patternFill
                     "fgColor" if in_fill => {
-                        if let Some(c) = parse_color_attr(&e) {
+                        if let Some(c) = parse_color_attr(&e, theme) {
                             current_fill.bg_color = Some(c);
                         }
                     }
@@ -451,12 +534,12 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                         current_font.name = get_attr(&e, "val");
                     }
                     "color" if in_font => {
-                        if let Some(c) = parse_color_attr(&e) {
+                        if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
                         }
                     }
                     "fgColor" if in_fill => {
-                        if let Some(c) = parse_color_attr(&e) {
+                        if let Some(c) = parse_color_attr(&e, theme) {
                             current_fill.bg_color = Some(c);
                         }
                     }
@@ -1074,8 +1157,14 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     };
 
     // 2. Parse styles.xml (optional — some simple xlsx have none)
+    // The theme has to be read first: a style may name one of its colours
+    // rather than state one of its own.
+    let theme = match archive.try_read_part("xl/theme/theme1.xml")? {
+        Some(xml) => parse_theme_xml(&xml),
+        None => Theme::default(),
+    };
     let stylesheet = match archive.try_read_part("xl/styles.xml")? {
-        Some(xml) => parse_styles_xml(&xml)?,
+        Some(xml) => parse_styles_xml(&xml, &theme)?,
         None => StyleSheet::default(),
     };
 
@@ -1305,7 +1394,7 @@ mod tests {
     <xf numFmtId="164" fontId="1" fillId="1" borderId="1"><alignment horizontal="center"/></xf>
   </cellXfs>
 </styleSheet>"##;
-        let ss = parse_styles_xml(xml).unwrap();
+        let ss = parse_styles_xml(xml, &Theme::default()).unwrap();
         assert_eq!(ss.num_fmts.len(), 1);
         assert_eq!(ss.num_fmts.get(&164).unwrap(), "#,##0.00_ ");
         assert_eq!(ss.fonts.len(), 2);

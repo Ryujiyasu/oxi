@@ -336,7 +336,7 @@ fn highlight_runs() -> Vec<oxislides_core::ir::SlideRun> {
 #[test]
 fn highlight_is_read_from_both_quick_xml_arms() {
     let runs = highlight_runs();
-    assert_eq!(runs.len(), 3, "three runs");
+    assert_eq!(runs.len(), 5, "three text runs, a break, and the run after it");
     assert_eq!(runs[0].highlight, None, "the first run asks for no highlight");
     assert_eq!(
         runs[1].highlight.as_deref(),
@@ -348,6 +348,20 @@ fn highlight_is_read_from_both_quick_xml_arms() {
         Some("00FF00"),
         "an a:srgbClr wrapping a:lumMod arrives as Event::Start"
     );
+}
+
+#[test]
+fn a_soft_break_becomes_a_newline_run() {
+    // `<a:br>` breaks the line without starting a paragraph, so it cannot be
+    // modelled as one -- a paragraph would bring spcBef/spcAft with it. It
+    // rides in the run stream as a lone newline. d19 slide 39's instructions
+    // are ONE paragraph with three of them, and dropping them ran "quality."
+    // into "How?" with no space between. 76 across 11 dev decks.
+    let runs = highlight_runs();
+    assert_eq!(runs.len(), 5, "three text runs, a break, and the run after it");
+    assert_eq!(runs[3].text, "
+", "the break is its own run");
+    assert_eq!(runs[4].text, "after the break");
 }
 
 #[test]
