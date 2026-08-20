@@ -592,8 +592,17 @@ fn colorref(r: u8, g: u8, b: u8) -> u32 {
 /// geometry. Coordinates are built in the shape's local box, then flipped and
 /// rotated about its centre before conversion to device pixels.
 #[cfg(windows)]
-unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, scale: f64) -> bool {
-    use windows::Win32::Foundation::{COLORREF, POINT};
+/// Emit the shape's outline as the DC's current path, between BeginPath and
+/// EndPath. Returns false when the preset has no geometry here, and then no
+/// path has been started.
+///
+/// Split out of `draw_preset_shape_gdi` so a picture can be CLIPPED to the same
+/// outline: 91 `p:pic` across 16 dev decks state a non-rectangular geometry --
+/// 53 ellipse, 19 roundRect, 13 custGeom, 6 round2SameRect -- and d11 slide 33's
+/// four portraits are circles in PowerPoint and squares in Oxi.
+#[cfg(windows)]
+unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, scale: f64) -> bool {
+    use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::*;
 
     let prst = match sh.shape_type.as_deref() {
@@ -604,23 +613,11 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
         }
         _ => return false,
     };
-    // A translucent fill is composited by the caller's AlphaBlend path, which
-    // this solid-brush path cannot reproduce along a bezier. Decline the shape
-    // so it keeps the (rectangular) alpha-correct rendering: an opaque ellipse
-    // where a 0%-alpha one belongs is the "incorrect ink is worse than none"
-    // slab bug, and correct geometry does not buy back a wrong opacity.
-    if sh.fill_color.is_some()
-        && sh
-            .fill_alpha
-            .filter(|_| fill_alpha_on())
-            .is_some_and(|a| a < 1.0)
-    {
-        return false;
-    }
     let w = sh.width.max(0.0);
     let h = sh.height.max(0.0);
-    if w == 0.0 || h == 0.0 { return true; }
-
+    if w == 0.0 || h == 0.0 {
+        return false;
+    }
     let map = |mut lx: f32, mut ly: f32| -> POINT {
         if sh.flip_h { lx = w - lx; }
         if sh.flip_v { ly = h - ly; }
@@ -633,20 +630,6 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     };
     let line = |p: POINT| { let _ = LineTo(dc, p.x, p.y); };
     let bezier = |c1: POINT, c2: POINT, end: POINT| { let _ = PolyBezierTo(dc, &[c1, c2, end]); };
-
-    let fill_brush = sh.fill_color.as_deref().and_then(parse_hex_rgb)
-        .map(|c| CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2))));
-    let old_brush = if let Some(brush) = fill_brush { SelectObject(dc, brush) }
-        else { SelectObject(dc, GetStockObject(NULL_BRUSH)) };
-    let border_w = sh.border_width.unwrap_or(0.0);
-    let border_pen = if border_w > 0.0 {
-        let c = sh.border_color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
-        Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
-            COLORREF(colorref(c.0, c.1, c.2))))
-    } else { None };
-    let old_pen = if let Some(pen) = border_pen { SelectObject(dc, pen) }
-        else { SelectObject(dc, GetStockObject(NULL_PEN)) };
-
     let _ = BeginPath(dc);
     const K: f32 = 0.552_284_8;
     match prst {
@@ -721,7 +704,59 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
         }
         _ => unreachable!(),
     }
-    let _ = CloseFigure(dc); let _ = EndPath(dc); let _ = StrokeAndFillPath(dc);
+    let _ = CloseFigure(dc);
+    let _ = EndPath(dc);
+    true
+}
+
+/// A picture is clipped to its shape's outline unless this is set.
+fn picclip_on() -> bool {
+    std::env::var("OXI_PICCLIP_DISABLE").is_err()
+}
+
+unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, scale: f64) -> bool {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+
+    // A translucent fill is composited by the caller's AlphaBlend path, which
+    // this solid-brush path cannot reproduce along a bezier. Decline the shape
+    // so it keeps the (rectangular) alpha-correct rendering: an opaque ellipse
+    // where a 0%-alpha one belongs is the "incorrect ink is worse than none"
+    // slab bug, and correct geometry does not buy back a wrong opacity.
+    if sh.fill_color.is_some()
+        && sh
+            .fill_alpha
+            .filter(|_| fill_alpha_on())
+            .is_some_and(|a| a < 1.0)
+    {
+        return false;
+    }
+    let w = sh.width.max(0.0);
+    let h = sh.height.max(0.0);
+    if w == 0.0 || h == 0.0 { return true; }
+
+    let fill_brush = sh.fill_color.as_deref().and_then(parse_hex_rgb)
+        .map(|c| CreateSolidBrush(COLORREF(colorref(c.0, c.1, c.2))));
+    let old_brush = if let Some(brush) = fill_brush { SelectObject(dc, brush) }
+        else { SelectObject(dc, GetStockObject(NULL_BRUSH)) };
+    let border_w = sh.border_width.unwrap_or(0.0);
+    let border_pen = if border_w > 0.0 {
+        let c = sh.border_color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
+        Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
+            COLORREF(colorref(c.0, c.1, c.2))))
+    } else { None };
+    let old_pen = if let Some(pen) = border_pen { SelectObject(dc, pen) }
+        else { SelectObject(dc, GetStockObject(NULL_PEN)) };
+
+    if !emit_shape_path(dc, sh, scale) {
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+        if let Some(pen) = border_pen { let _ = DeleteObject(pen); }
+        if let Some(brush) = fill_brush { let _ = DeleteObject(brush); }
+        return false;
+    }
+    let _ = StrokeAndFillPath(dc);
+
     SelectObject(dc, old_pen); SelectObject(dc, old_brush);
     if let Some(pen) = border_pen { let _ = DeleteObject(pen); }
     if let Some(brush) = fill_brush { let _ = DeleteObject(brush); }
@@ -955,6 +990,18 @@ unsafe fn clip_to_geometry_gdi(
 
     let geom = match drawable_geometry(sh) {
         Some(g) if blipclip_on() => g,
+        // No custGeom, but a PRESET outline clips the raster just the same.
+        // d11 slide 33's four portraits are `p:pic` carrying
+        // `<a:prstGeom prst="ellipse"/>`: circles in PowerPoint, squares here.
+        // 91 pictures across 16 dev decks state a non-rectangular geometry, and
+        // 78 of them are a preset rather than a custGeom.
+        _ if picclip_on() && emit_shape_path(dc, sh, scale) => {
+            let ok = SelectClipPath(dc, RGN_COPY).as_bool();
+            if !ok {
+                let _ = SelectClipRgn(dc, None);
+            }
+            return ok;
+        }
         _ => return false,
     };
     let _ = BeginPath(dc);
