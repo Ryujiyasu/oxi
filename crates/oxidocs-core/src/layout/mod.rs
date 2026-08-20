@@ -15993,8 +15993,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     if is_multiple_spacing
                         && (first_line.fragments.is_empty() || s902_all_ws)
                         && s805_hhea_max > 0.0
-                        && std::env::var("OXI_S910").is_ok()
+                        && std::env::var("OXI_S910_DISABLE").is_err()
                     {
+                        // S910 default-ON (2026-08-20, second audit): the
+                        // 2026-07-17 hold was ukframework PASS→FAIL {-1:13};
+                        // that coupling has dissolved (frozen real_en 6/6
+                        // PASS 1.0 A/B-identical, EN 248 changed=0, JP golden
+                        // changed=0, ssim_ab 238 = 0 changed bytes). Word truth
+                        // re-derived across Arial/Calibri/TNR × 10-14pt ×
+                        // f 1.15/1.5 (_pb_crfig empty-vs-text sweep): the empty
+                        // line ALWAYS equals the text line, hhea × factor.
                         // (arm ordered BEFORE the raw-max arm: the EMPTY branch
                         // above also sets no_grid_raw_max from the mark's win
                         // metrics, which would shadow this fix at 13.5.)

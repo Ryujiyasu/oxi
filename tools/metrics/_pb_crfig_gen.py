@@ -27,7 +27,12 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "pipeline_data", "_pb_crfig")
-DOCX = os.path.join(OUT, "crfig.docx")
+# "grid" as a trailing CLI arg switches every mode to the no-type
+# `<w:docGrid w:linePitch="360"/>` variant (creative's sectPr): Word then
+# quantizes the cumulative paragraph cursor to whole 96dpi pixels (0.75pt),
+# a DIFFERENT engine from the exact-hhea no-grid path the base arms measure.
+GRID = "grid" in sys.argv[2:] or (len(sys.argv) > 1 and sys.argv[1] == "grid")
+DOCX = os.path.join(OUT, "crfig_grid.docx" if GRID else "crfig.docx")
 GDI = os.path.join(REPO, "tools", "oxi-gdi-renderer", "target", "release",
                    "oxi-gdi-renderer.exe")
 
@@ -71,7 +76,8 @@ CAP = ("Figure 2 – WICK ROTATION|: “The complex plane reveals a special "
        "quarter turn about the origin, and repeating the multiplication walks "
        "the point around the circle.”")  # | = bold/plain split, ~3 lines
 
-# (label, kind, opts) — kind builders below; opts: line, img_h, repeat, after
+# (label, kind, opts) — kind builders below; opts: line, img_h, repeat, after,
+#   font, sz (half-points).
 #   ("after": explicit w:after twips in pPr, None = inherit docDefaults 160)
 ARMS = [
     ("txt@276",       "txt",   {"line": 276}),
@@ -85,17 +91,30 @@ ARMS = [
     ("cap@276",       "cap",   {"line": 276}),
     ("blk60",         "blk",   {"img_h": 60.0, "repeat": 3}),
     ("blk212",        "blk",   {"img_h": 212.25, "repeat": 1}),
+    # ---- empty-vs-text natural sweep (the 13.5-vs-13.83 wall) ----
+    ("txtC11@276",    "txt",   {"line": 276, "font": "Calibri", "sz": 22}),
+    ("emptyC11@276",  "empty", {"line": 276, "font": "Calibri", "sz": 22}),
+    ("txtT12@276",    "txt",   {"line": 276, "font": "Times New Roman", "sz": 24}),
+    ("emptyT12@276",  "empty", {"line": 276, "font": "Times New Roman", "sz": 24}),
+    ("txtA10@276",    "txt",   {"line": 276, "font": "Arial", "sz": 20}),
+    ("emptyA10@276",  "empty", {"line": 276, "font": "Arial", "sz": 20}),
+    ("txtA14@360",    "txt",   {"line": 360, "font": "Arial", "sz": 28}),
+    ("emptyA14@360",  "empty", {"line": 360, "font": "Arial", "sz": 28}),
+    ("txtA12@240",    "txt",   {"line": 240}),
+    ("emptyA12@240",  "empty", {"line": 240}),
 ]
 REPEAT_DEFAULT = 8
 
 
-def rpr(bold=False):
+def rpr(bold=False, font=None, sz=None):
+    font = font or FONT
+    sz = sz or SZ
     return ('<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:cs="%s"/>%s'
             '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>'
-            % (FONT, FONT, FONT, "<w:b/><w:bCs/>" if bold else "", SZ, SZ))
+            % (font, font, font, "<w:b/><w:bCs/>" if bold else "", sz, sz))
 
 
-def ppr(line, pbb=False, after=None, marker=False):
+def ppr(line, pbb=False, after=None, marker=False, font=None, sz=None):
     # like the specimen: pPr sets only w:line (+ mark rPr); markers pin all.
     if marker:
         sp = '<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'
@@ -105,16 +124,16 @@ def ppr(line, pbb=False, after=None, marker=False):
     else:
         sp = '<w:spacing w:line="%d" w:lineRule="auto"/>' % line
     return ("<w:pPr>%s<w:widowControl w:val=\"0\"/>%s%s</w:pPr>"
-            % ("<w:pageBreakBefore/>" if pbb else "", sp, rpr()))
+            % ("<w:pageBreakBefore/>" if pbb else "", sp, rpr(font=font, sz=sz)))
 
 
-def para(line, inner, after=None):
-    return "<w:p>%s%s</w:p>" % (ppr(line, after=after), inner)
+def para(line, inner, after=None, font=None, sz=None):
+    return "<w:p>%s%s</w:p>" % (ppr(line, after=after, font=font, sz=sz), inner)
 
 
-def txt_p(line, text, after=None):
+def txt_p(line, text, after=None, font=None, sz=None):
     return para(line, "<w:r>%s<w:t xml:space=\"preserve\">%s</w:t></w:r>"
-                % (rpr(), text), after=after)
+                % (rpr(font=font, sz=sz), text), after=after, font=font, sz=sz)
 
 
 def img_p(line, h, idx, after=None):
@@ -134,10 +153,12 @@ def cap_p(line):
 def subject(kind, idx, opts):
     line = opts.get("line", 276)
     after = opts.get("after")
+    font = opts.get("font")
+    sz = opts.get("sz")
     if kind == "txt":
-        return txt_p(line, "body text line", after=after)
+        return txt_p(line, "body text line", after=after, font=font, sz=sz)
     if kind == "empty":
-        return para(line, "", after=after)
+        return para(line, "", after=after, font=font, sz=sz)
     if kind == "img":
         return img_p(line, opts["img_h"], idx, after=after)
     if kind == "cap":
@@ -167,7 +188,9 @@ def gen():
            "><w:body>" + "".join(body) +
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
            '<w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440" '
-           'w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>')
+           'w:header="708" w:footer="708" w:gutter="0"/>'
+           + ('<w:docGrid w:linePitch="360"/>' if GRID else '')
+           + '</w:sectPr></w:body></w:document>')
     with zipfile.ZipFile(DOCX, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CT)
         z.writestr("_rels/.rels", RELS)
