@@ -38607,7 +38607,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             Some(host) => {
                 let full =
                     self.estimate_para_height(host, width, grid_pitch, None, false, None, None);
-                let sp = img.paragraph_space_before + img.paragraph_space_after;
+                // S1180: the parser strips all spacing from the S971 host, so the
+                // estimate IS the line height. (The old `full − resolved sp` was a
+                // double subtraction whenever the spacing was not direct — the
+                // S855/S865 reset had already kept it out of the estimate.)
+                let sp = if std::env::var("OXI_S1180_DISABLE").is_ok() {
+                    img.paragraph_space_before + img.paragraph_space_after
+                } else {
+                    0.0
+                };
                 let host_line = (full - sp).max(0.0);
                 // S1179 (2026-08-20, opt-out OXI_S1179_DISABLE): under an AUTO
                 // MULTIPLE spacing the image line is NOT max(host, ext) — the

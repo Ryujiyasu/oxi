@@ -256,3 +256,14 @@ fn a_colour_the_theme_names_is_resolved() {
         .count();
     assert!(blue > 0, "no link came out the theme's link blue");
 }
+
+#[test]
+fn a_sheet_says_how_far_it_reaches() {
+    // This sheet declares B2:F149 while its last filled cell stops short of
+    // column F. Excel hands the declared range over when asked for a picture,
+    // and text running on past the last cell needs that room to land in.
+    const FORM: &[u8] =
+        include_bytes!("../../../tools/golden-test/documents/xlsx/14eaa2188aca_001904853.xlsx");
+    let workbook = parse_xlsx(FORM).expect("the workbook parses");
+    assert_eq!(workbook.sheets[0].declared_range, Some((2, 1, 149, 5)));
+}

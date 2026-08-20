@@ -425,6 +425,7 @@ impl<'a> WorkbookHost<'a> {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         };
         self.workbook.sheets.insert(at, sheet);
@@ -5809,6 +5810,7 @@ mod tests {
                 merge_cells: Vec::new(),
                 hidden_cols: Vec::new(),
                 auto_filter: None,
+                declared_range: None,
                 unsupported_elements: Vec::new(),
             }],
             ..Default::default()
@@ -6021,6 +6023,7 @@ mod tests {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -6070,6 +6073,7 @@ mod tests {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8906,6 +8910,7 @@ mod tests {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         });
         let invalid = parse_module(
@@ -9146,6 +9151,7 @@ mod tests {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -9187,6 +9193,7 @@ mod tests {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -9300,6 +9307,7 @@ mod tests {
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(

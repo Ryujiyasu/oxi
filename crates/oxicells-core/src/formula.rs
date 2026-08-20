@@ -179,6 +179,7 @@ mod tests {
             merge_cells: vec![],
             hidden_cols: vec![],
             auto_filter: None,
+            declared_range: None,
             unsupported_elements: vec![],
         }
     }

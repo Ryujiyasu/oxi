@@ -1351,9 +1351,28 @@ fn parse_body(
                         // pr.paragraph may move (same reason as S898a below).
                         // S971: the host paragraph itself (runs dropped — only the
                         // style drives an empty line's height).
+                        // S1180 (2026-08-20, opt-out OXI_S1180_DISABLE): the host is
+                        // a LINE-HEIGHT query object, so it carries no paragraph
+                        // spacing at all. estimate_para_height only includes DIRECT
+                        // spacing (S855/S865 reset the rest), yet s971_image_line_h
+                        // subtracted the RESOLVED before+after — a docDefaults- or
+                        // style-sourced after was removed twice, shrinking host_line
+                        // by `after` and the S1179 natural by after/f: the image
+                        // paragraph advanced short by after×(1−1/f) (_pb_crfig arms
+                        // @276/360/480 = −1.04/−2.67/−4.00, = creative__0158c02a's
+                        // per-figure deficit). Stripping here and subtracting nothing
+                        // there makes the pair exact for both spacing provenances.
                         let s971_host: Option<crate::ir::Paragraph> = if image_only {
                             let mut h = pr.paragraph.clone();
                             h.runs.clear();
+                            if std::env::var("OXI_S1180_DISABLE").is_err() {
+                                h.style.space_before = None;
+                                h.style.space_after = None;
+                                h.style.before_lines = None;
+                                h.style.after_lines = None;
+                                h.style.has_direct_before = false;
+                                h.style.has_direct_after = false;
+                            }
                             Some(h)
                         } else {
                             None

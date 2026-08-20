@@ -729,6 +729,7 @@ fn parse_worksheet(
     let mut col_widths: Vec<f32> = Vec::new();
     let mut hidden_cols: Vec<u32> = Vec::new();
     let mut auto_filter: Option<crate::ir::AutoFilter> = None;
+    let mut declared_range: Option<(u32, u32, u32, u32)> = None;
     let mut unsupported: Vec<String> = Vec::new();
     let mut filter_field: Option<u32> = None;
     let mut filter_criteria: Vec<String> = Vec::new();
@@ -763,6 +764,14 @@ fn parse_worksheet(
                 let name = local_name(e.name().as_ref());
                 note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
+                    "dimension" => {
+                        declared_range = get_attr(&e, "ref")
+                            .as_deref()
+                            .and_then(parse_range_ref)
+                            .map(|(start_col, start_row, end_col, end_row)| {
+                                (start_row, start_col, end_row, end_col)
+                            });
+                    }
                     "autoFilter" => {
                         if let Some(reference) = get_attr(&e, "ref") {
                             if let Some((start_col, start_row, end_col, end_row)) =
@@ -950,6 +959,14 @@ fn parse_worksheet(
                     }
 
                     // <col min="1" max="3" width="12.5" ... />
+                    "dimension" => {
+                        declared_range = get_attr(&e, "ref")
+                            .as_deref()
+                            .and_then(parse_range_ref)
+                            .map(|(start_col, start_row, end_col, end_row)| {
+                                (start_row, start_col, end_row, end_col)
+                            });
+                    }
                     "autoFilter" => {
                         if let Some(reference) = get_attr(&e, "ref") {
                             if let Some((start_col, start_row, end_col, end_row)) =
@@ -1073,6 +1090,7 @@ fn parse_worksheet(
         default_row_height,
         merge_cells,
         auto_filter,
+        declared_range,
         hidden_cols: {
             // The order columns appear in says nothing; keep the list tidy.
             let mut hidden_cols = hidden_cols;

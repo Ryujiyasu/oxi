@@ -62,6 +62,20 @@ fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
             last_column = last_column.max(cell.col);
         }
     }
+    // A sheet says how far it reaches, and that can be further than its last
+    // filled cell. Excel hands over the declared range when asked for a
+    // picture, so text running on past the last cell has somewhere to go.
+    if let Some((start_row, start_column, end_row, end_column)) = sheet.declared_range {
+        if first_row == u32::MAX {
+            return (start_row, start_column, end_row, end_column);
+        }
+        return (
+            first_row.min(start_row),
+            first_column.min(start_column),
+            last_row.max(end_row),
+            last_column.max(end_column),
+        );
+    }
     if first_row == u32::MAX {
         return (1, 1, 0, 0);
     }
@@ -634,13 +648,16 @@ mod windows_draw {
                                 super::room_before(layout, row, cell.col, leftward, &merged);
                             // A merged block's own columns are already inside
                             // the box, so the search for room starts past them.
-                            area.right += super::room_after(
+                            // A merged block's own columns are already inside
+                            // the box, so the search for room starts past them.
+                            let after = super::room_after(
                                 layout,
                                 row,
                                 cell.col + spans_columns,
                                 rightward,
                                 &merged,
                             );
+                            area.right += after;
                         }
                     }
 

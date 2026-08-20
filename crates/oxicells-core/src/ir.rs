@@ -27,6 +27,12 @@ pub struct Sheet {
     /// record of their own, so this sits beside `col_widths`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_cols: Vec<u32>,
+    /// The range the sheet declares it occupies, as `(start_row, start_col,
+    /// end_row, end_col)` — rows one-based, columns zero-based. Excel hands
+    /// this range over when asked for a picture of the sheet, and it can reach
+    /// past the last cell that holds anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_range: Option<(u32, u32, u32, u32)>,
     /// The filter a sheet is under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_filter: Option<AutoFilter>,
