@@ -19,11 +19,14 @@
 use oxicells_core::ir::{CellStyle, CellValue, Sheet, Workbook};
 use oxicells_core::parser::parse_xlsx;
 
-/// A column's width is a count of digits in the workbook's standard font, and
-/// Excel turns that into pixels as `width * digit + padding`, truncated. The
-/// padding is the gutter either side of a cell's text. Measured across 17
-/// columns of five workbooks, every one of them exact.
-const COLUMN_PADDING: f32 = 5.0;
+/// A stored column width already carries the gutter either side of a cell's
+/// text, so it is not the width a person types into Excel: typing 10 stores
+/// 10.625. Pixels come back out of it by OOXML's own rule, which a ruled
+/// worksheet confirmed to the pixel.
+fn column_pixels(width: f32, digit: f32) -> f32 {
+    let padding = (128.0 / digit).trunc();
+    (((256.0 * width + padding) / 256.0) * digit).trunc()
+}
 /// What a digit measures when the standard font could not be asked: Calibri 11,
 /// which is what a workbook that names no font gets.
 const FALLBACK_DIGIT_WIDTH: f32 = 7.0;
@@ -75,7 +78,7 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
         let width = if hidden {
             0.0
         } else {
-            (characters * digit_width + COLUMN_PADDING).trunc() * scale
+            column_pixels(characters, digit_width) * scale
         };
         columns.push(columns.last().unwrap() + width);
     }
@@ -94,7 +97,9 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
         let height = if hidden {
             0.0
         } else {
-            (points * scale * 96.0 / 72.0).round()
+            // A height in points becomes whole pixels by truncation: 20.1pt
+            // is 26.8px and Excel draws 26.
+            (points * scale * 96.0 / 72.0).trunc()
         };
         rows.push(rows.last().unwrap() + height);
     }
@@ -139,8 +144,10 @@ fn main() {
     // sheet cannot be laid out until that digit has been measured.
     let digit_width = digit_width(&workbook.default_style).unwrap_or(FALLBACK_DIGIT_WIDTH);
     let layout = geometry(sheet, scale, digit_width);
-    let width = *layout.columns.last().unwrap_or(&0.0) as u32;
-    let height = *layout.rows.last().unwrap_or(&0.0) as u32;
+    // One pixel past the last edge, because a rule on that edge is drawn there
+    // and Excel's own picture is that pixel wider and taller.
+    let width = *layout.columns.last().unwrap_or(&0.0) as u32 + 1;
+    let height = *layout.rows.last().unwrap_or(&0.0) as u32 + 1;
     if width == 0 || height == 0 {
         eprintln!("the sheet has nothing in it to draw");
         std::process::exit(1);
@@ -438,5 +445,28 @@ mod windows_draw {
             let _ = CellValue::Empty;
             canvas
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::column_pixels;
+
+    /// Every pair here was read off a worksheet Excel drew: the stored width on
+    /// the left, the pixels its column occupied on the right, with a digit of
+    /// the standard font measuring 8.
+    #[test]
+    fn a_stored_width_becomes_the_pixels_excel_drew() {
+        assert_eq!(column_pixels(10.625, 8.0), 85.0);
+        assert_eq!(column_pixels(14.625, 8.0), 117.0);
+        assert_eq!(column_pixels(12.625, 8.0), 101.0);
+        assert_eq!(column_pixels(9.625, 8.0), 77.0);
+    }
+
+    /// The same rule under Calibri, whose digit measures 7: Excel's own default
+    /// column comes to 64 pixels.
+    #[test]
+    fn the_rule_holds_for_a_narrower_digit() {
+        assert_eq!(column_pixels(9.140625, 7.0), 64.0);
     }
 }
