@@ -319,6 +319,7 @@ mod tests {
         ]);
         let mut workbook = Workbook {
             sheets: vec![sheet],
+            ..Default::default()
         };
         fill_missing_formula_values(&mut workbook);
         let cells = &workbook.sheets[0].rows[0].cells;
@@ -335,6 +336,7 @@ mod tests {
         let main = make_sheet(vec![(0, 0, CellValue::Empty, Some("Data!A1*2".to_string()))]);
         let mut workbook = Workbook {
             sheets: vec![data, main],
+            ..Default::default()
         };
         evaluate_workbook_formulas(&mut workbook);
         assert!(

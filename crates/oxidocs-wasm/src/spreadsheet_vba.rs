@@ -5806,6 +5806,7 @@ mod tests {
                 auto_filter: None,
                 unsupported_elements: Vec::new(),
             }],
+            ..Default::default()
         }
     }
 

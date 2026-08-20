@@ -4,9 +4,14 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
+    /// The format a cell wears when it names none of its own: the first entry
+    /// of the workbook's cell formats. A column width is stated in characters
+    /// of this font, so drawing a sheet needs it.
+    #[serde(default)]
+    pub default_style: CellStyle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

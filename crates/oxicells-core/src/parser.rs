@@ -1049,7 +1049,10 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         }
     }
 
-    Ok(Workbook { sheets })
+    Ok(Workbook {
+        sheets,
+        default_style: resolve_cell_style(0, &stylesheet),
+    })
 }
 
 #[cfg(test)]
