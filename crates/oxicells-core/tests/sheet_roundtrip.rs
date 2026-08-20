@@ -54,6 +54,7 @@ fn a_sheet_a_run_added_is_saved() {
                 value: CellValue::Number(42.0),
                 style: CellStyle::default(),
                 formula: None,
+                runs: Vec::new(),
             }],
         });
         workbook.sheets.push(added);

@@ -320,14 +320,69 @@ pub fn draw(
                 } else {
                     shade(cell.style.font_color.as_deref(), 0)
                 });
-                target.DrawText(
-                    body.as_wide(),
-                    &format,
-                    &area,
-                    &brush,
-                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                    measuring_mode(),
-                );
+
+                if cell.runs.is_empty() {
+                    target.DrawText(
+                        body.as_wide(),
+                        &format,
+                        &area,
+                        &brush,
+                        D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                        measuring_mode(),
+                    );
+                } else {
+                    // Parts of the text are dressed differently — an 8pt aside
+                    // inside an 11pt cell, a raised footnote marker. A layout
+                    // takes the dressing over character ranges; drawing the
+                    // whole cell in one format makes the text wider than
+                    // Excel's and wraps where Excel does not.
+                    let laid = writer.CreateTextLayout(
+                        body.as_wide(),
+                        &format,
+                        area.right - area.left,
+                        area.bottom - area.top,
+                    )?;
+                    let mut at = 0u32;
+                    for run in &cell.runs {
+                        let length = run.text.encode_utf16().count() as u32;
+                        let span = DWRITE_TEXT_RANGE {
+                            startPosition: at,
+                            length,
+                        };
+                        at += length;
+                        // A raised or lowered run is drawn at 65% of the size
+                        // it would otherwise be — measured against Excel, where
+                        // 20pt capitals stand 20px tall and their superscript
+                        // stands 13.
+                        let raised = run.vert_align.is_some();
+                        let points = run.size.unwrap_or(points);
+                        if run.size.is_some() || raised {
+                            let shrunk = if raised { points * 0.65 } else { points };
+                            laid.SetFontSize(shrunk * scale * 96.0 / 72.0, span)?;
+                        }
+                        if let Some(font) = run.font.as_deref() {
+                            laid.SetFontFamilyName(&HSTRING::from(font), span)?;
+                        }
+                        if run.bold {
+                            laid.SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, span)?;
+                        }
+                        if run.italic {
+                            laid.SetFontStyle(DWRITE_FONT_STYLE_ITALIC, span)?;
+                        }
+                        if run.underline {
+                            laid.SetUnderline(true, span)?;
+                        }
+                    }
+                    target.DrawTextLayout(
+                        D2D_POINT_2F {
+                            x: area.left,
+                            y: area.top,
+                        },
+                        &laid,
+                        &brush,
+                        D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    );
+                }
             }
         }
 

@@ -2042,6 +2042,7 @@ impl<'a> WorkbookHost<'a> {
                     value,
                     style: CellStyle::default(),
                     formula: None,
+                    runs: Vec::new(),
                 });
                 row.cells.sort_by_key(|cell| cell.col);
             }
@@ -2086,6 +2087,7 @@ impl<'a> WorkbookHost<'a> {
                     value: CellValue::Empty,
                     style: CellStyle::default(),
                     formula,
+                    runs: Vec::new(),
                 });
                 row.cells.sort_by_key(|cell| cell.col);
             }
@@ -2176,6 +2178,7 @@ impl<'a> WorkbookHost<'a> {
                     value: CellValue::Empty,
                     style: CellStyle::default(),
                     formula: None,
+                    runs: Vec::new(),
                 });
                 row.cells.sort_by_key(|cell| cell.col);
             }
@@ -2913,6 +2916,7 @@ impl<'a> WorkbookHost<'a> {
                 value: CellValue::Empty,
                 style: CellStyle::default(),
                 formula: None,
+                runs: Vec::new(),
             });
             row.cells.sort_by_key(|cell| cell.col);
         }
@@ -6235,6 +6239,7 @@ mod tests {
                         ..CellStyle::default()
                     },
                     formula: None,
+                    runs: Vec::new(),
                 },
                 Cell {
                     col: 1,
@@ -6244,6 +6249,7 @@ mod tests {
                         ..CellStyle::default()
                     },
                     formula: None,
+                    runs: Vec::new(),
                 },
             ],
         });
@@ -7269,6 +7275,7 @@ mod tests {
                         )),
                         style: CellStyle::default(),
                         formula: None,
+                        runs: Vec::new(),
                     })
                     .collect(),
             })

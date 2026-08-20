@@ -16,6 +16,22 @@ use super::theme::{parse_theme, ThemeColors};
 use super::ParseError;
 use crate::ir::{VerticalAlign, *};
 
+/// S1182: sentinel alt_text tagging a data-less flow placeholder for a
+/// VISUAL-only inline wps shape. Kept only when the host paragraph turns out
+/// to be a body image-only paragraph; stripped everywhere else (text hosts,
+/// cells, framePr floats) so those paths keep their calibrated behavior.
+const S1182_SENTINEL: &str = "__s1182_visual_inline__";
+
+/// S1182: drop tagged visual-inline placeholders — every consumer except the
+/// body image-only lowering calls this so non-body paths keep their calibrated
+/// behavior byte-for-byte.
+fn s1182_strip(v: &mut Vec<Block>) {
+    v.retain(|b| {
+        !matches!(b, Block::Image(img)
+            if img.alt_text.as_deref() == Some(S1182_SENTINEL))
+    });
+}
+
 pub struct OoxmlParser {
     archive: ZipArchive<Cursor<Vec<u8>>>,
 }
@@ -1330,18 +1346,44 @@ fn parse_body(
                         // missing +2.7/figure, not the empty spacers (S1004
                         // falsified those). Ships as the co-gated {S997, S1179}
                         // pair per the S559 discipline.
-                        let s997_single_ascii_space_host = pr.inline_images.len() == 1
+                        // S1182: classification (s997/image_only) runs on the
+                        // UNTAGGED images only, so a tagged visual placeholder
+                        // can never flip a paragraph's historical class.
+                        let s1182_is_tagged = |b: &Block| matches!(b, Block::Image(img)
+                            if img.alt_text.as_deref() == Some(S1182_SENTINEL));
+                        let n_untagged =
+                            pr.inline_images.iter().filter(|b| !s1182_is_tagged(b)).count();
+                        let s997_single_ascii_space_host = n_untagged == 1
                             && std::env::var("OXI_S997_DISABLE").is_err()
                             && {
                                 let mut chars =
                                     pr.paragraph.runs.iter().flat_map(|r| r.text.chars());
                                 matches!(chars.next(), Some(' ')) && chars.next().is_none()
                             };
-                        let image_only = !pr.inline_images.is_empty()
+                        let image_only = n_untagged > 0
                             && (pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                                 || s997_single_ascii_space_host)
                             && pr.math_blocks.is_empty()
                             && std::env::var("OXI_S537_DISABLE").is_err();
+                        // S1182: a visual-inline placeholder reserves flow ONLY
+                        // inside a body image-only paragraph (Word: object-only
+                        // line = cy exactly, S773's pinned spec — creative
+                        // p1028 [wps 24×24][pic 451×273] wraps to two lines,
+                        // +26.6pt, the w103-108 cascade). A TEXT host keeps
+                        // today's overlay-only behavior (the S535b double-count
+                        // revert), so strip the tagged ones there; the kept
+                        // ones shed the sentinel so nothing downstream sees it.
+                        if !image_only {
+                            pr.inline_images.retain(|b| !s1182_is_tagged(b));
+                        } else {
+                            for b in pr.inline_images.iter_mut() {
+                                if let Block::Image(img) = b {
+                                    if img.alt_text.as_deref() == Some(S1182_SENTINEL) {
+                                        img.alt_text = None;
+                                    }
+                                }
+                            }
+                        }
                         // S1056: capture the leading-page-break flag before
                         // `pr.paragraph` moves (same reason as S965/S898a below).
                         let s1056_page_break = image_only
@@ -1674,7 +1716,9 @@ fn parse_body(
                                             for mb in pr.math_blocks {
                                                 current_blocks.push(Block::Math(mb));
                                             }
-                                            current_blocks.extend(pr.inline_images);
+                                            let mut s1182_imgs = pr.inline_images;
+                                            s1182_strip(&mut s1182_imgs);
+                                            current_blocks.extend(s1182_imgs);
                                             let anchor_idx2 =
                                                 current_blocks.len().saturating_sub(1);
                                             for mut img in pr.floating_images {
@@ -1755,7 +1799,9 @@ fn parse_body(
                                                 for mb in pr.math_blocks {
                                                     current_blocks.push(Block::Math(mb));
                                                 }
-                                                current_blocks.extend(pr.inline_images);
+                                                let mut s1182_imgs = pr.inline_images;
+                                                s1182_strip(&mut s1182_imgs);
+                                                current_blocks.extend(s1182_imgs);
                                                 let anchor_idx2 =
                                                     current_blocks.len().saturating_sub(1);
                                                 for mut img in pr.floating_images {
@@ -6798,7 +6844,44 @@ fn parse_drawing(
     // shapes) is excluded by requiring shape_text_blocks non-empty.
     let s741_reserve =
         s741_has_txbx_text && !is_canvas && std::env::var("OXI_S741_DISABLE").is_err();
-    let image = if image.is_none()
+    // S1182 (2026-08-21, opt-out OXI_S1182_DISABLE): a VISUAL-only inline wps
+    // (no txbx text, not a canvas — e.g. creative__0158c02a's 24×24 shape
+    // sharing an image-only paragraph with a 451pt picture) ALSO reserves its
+    // wp:extent in the flow — but ONLY when its host paragraph is image-only
+    // (Word: object-only line = cy exactly, the S773-pinned spec; S535b showed
+    // reserving under TEXT paragraphs double-counts and regressed 3a4f).
+    // parse_drawing cannot see the host, so the placeholder is TAGGED via a
+    // sentinel alt_text and the paragraph-level code strips it wherever the
+    // host is not a body image-only paragraph.
+    // No text_box requirement: creative's specimen is a noFill/noStroke rect
+    // (an INVISIBLE inline object, descr="Inline image") — Word reserves the
+    // wp:extent regardless of visibility.
+    let s1182_visual = image.is_none()
+        && inline_tb
+        && !is_canvas
+        && !s741_has_txbx_text
+        && width > 0.0
+        && height > 0.0
+        && std::env::var("OXI_S1182_DISABLE").is_err();
+    let image = if s1182_visual {
+        Some(Image {
+            paragraph_space_before: 0.0,
+            paragraph_space_after: 0.0,
+            host_paragraph: None,
+            page_break_before: false,
+            data: Vec::new(),
+            width,
+            height,
+            alt_text: Some(S1182_SENTINEL.to_string()),
+            content_type: None,
+            position: None,
+            wrap_type: None,
+            crop: None,
+            anchor_block_index: 0,
+            relative_height,
+            behind_doc,
+        })
+    } else if image.is_none()
         && inline_tb
         && (is_canvas || s741_reserve)
         && text_box.is_some()
@@ -9357,6 +9440,7 @@ fn parse_table_cell(
                         // (spacing line=350 atLeast). Mirrors the S525 math_only
                         // empty-paragraph suppression (ooxml.rs ~823) for the
                         // image-in-cell case.
+                        s1182_strip(&mut pr.inline_images); // S1182: cell path keeps today's behavior
                         let image_only = std::env::var("OXI_S331_DISABLE").is_err()
                             && !pr.inline_images.is_empty()
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
@@ -10618,7 +10702,7 @@ fn parse_header_footer_xml(
                         depth = 0;
                     }
                     "p" if in_root && depth == 0 => {
-                        let pr = parse_paragraph(&mut reader, ctx, styles, false, false, None)?;
+                        let mut pr = parse_paragraph(&mut reader, ctx, styles, false, false, None)?;
                         // S742 (2026-07-04): keep header/footer inline images —
                         // they were silently DROPPED (only pr.paragraph was
                         // pushed), so a header logo contributed no height and
@@ -10627,6 +10711,9 @@ fn parse_header_footer_xml(
                         // high -> {-1:12}). Mirrors the body path: image-only
                         // host paragraphs are suppressed (S537 twin) and the
                         // images become sibling blocks.
+                        let mut s1182_hdr_imgs = pr.inline_images;
+                        s1182_strip(&mut s1182_hdr_imgs); // S1182: header path keeps today's behavior
+                        pr.inline_images = s1182_hdr_imgs;
                         let image_only = !pr.inline_images.is_empty()
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && std::env::var("OXI_S742_DISABLE").is_err();

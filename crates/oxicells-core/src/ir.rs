@@ -93,6 +93,11 @@ pub struct Cell {
     /// Original formula string (e.g. "=SUM(A1:A3)"), if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+    /// The stretches the text is dressed in, when it is not all dressed alike.
+    /// `value` still holds the whole of the text, so a reader that does not
+    /// care about the dressing needs no change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<TextRun>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +155,30 @@ pub struct Table {
     /// The banded rows' fill, which is the accent under a tint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub band: Option<String>,
+}
+
+/// A stretch of a cell's text that is dressed differently from the rest of it.
+/// A cell holds none of these when all of its text is dressed the same; when it
+/// does hold them they cover the whole of the text, in order, and each field
+/// left empty means "as the cell itself says".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TextRun {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// "superscript" or "subscript" when the run is raised or lowered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vert_align: Option<String>,
 }
 
 /// One edge of a cell, and how it is drawn.

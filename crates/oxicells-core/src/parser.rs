@@ -104,10 +104,18 @@ fn parse_range_ref(s: &str) -> Option<(u32, u32, u32, u32)> {
 
 /// Parse the shared strings table (xl/sharedStrings.xml).
 /// Returns a Vec of strings indexed by position.
-fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
+/// A shared string, and how its parts are dressed when they are not all dressed
+/// alike. `text` always holds the whole of it.
+#[derive(Debug, Clone, Default)]
+struct SharedString {
+    text: String,
+    runs: Vec<crate::ir::TextRun>,
+}
+
+fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
     let mut reader = Reader::from_str(xml);
-    let mut strings = Vec::new();
-    let mut current_string = String::new();
+    let mut strings: Vec<SharedString> = Vec::new();
+    let mut current = SharedString::default();
     let mut in_si = false;
     let mut in_t = false;
     // A phonetic guide (furigana) is stored as an <rPh> element containing its
@@ -115,23 +123,53 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
     // "区分クブン". Japanese workbooks carry these on names and addresses
     // constantly, so failing to skip them corrupts a large share of real files.
     let mut in_phonetic = false;
+    // A string can be built from <r> runs, each optionally carrying its own
+    // <rPr>: an 8pt aside inside an 11pt cell, a raised footnote marker. The
+    // run's text goes into the whole string as well, so a reader that ignores
+    // the dressing still sees everything.
+    let mut in_run = false;
+    let mut in_run_props = false;
+    let mut current_run = crate::ir::TextRun::default();
 
     loop {
         match reader.read_event()? {
-            Event::Start(e) => {
+            Event::Start(e) | Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "si" => {
                         in_si = true;
                         in_phonetic = false;
-                        current_string.clear();
+                        in_run = false;
+                        current = SharedString::default();
                     }
-                    "rPh" => {
-                        in_phonetic = true;
+                    "rPh" => in_phonetic = true,
+                    "r" if in_si && !in_phonetic => {
+                        in_run = true;
+                        current_run = crate::ir::TextRun::default();
                     }
-                    "t" if in_si => {
-                        in_t = true;
+                    "rPr" if in_run => in_run_props = true,
+                    "sz" if in_run_props => {
+                        current_run.size = get_attr(&e, "val").and_then(|v| v.parse().ok());
                     }
+                    "rFont" | "font" if in_run_props => {
+                        current_run.font = get_attr(&e, "val");
+                    }
+                    "b" if in_run_props => {
+                        current_run.bold = get_attr(&e, "val").as_deref() != Some("0");
+                    }
+                    "i" if in_run_props => {
+                        current_run.italic = get_attr(&e, "val").as_deref() != Some("0");
+                    }
+                    "u" if in_run_props => {
+                        current_run.underline = !matches!(
+                            get_attr(&e, "val").as_deref(),
+                            Some("0") | Some("none")
+                        );
+                    }
+                    "vertAlign" if in_run_props => {
+                        current_run.vert_align = get_attr(&e, "val");
+                    }
+                    "t" if in_si => in_t = true,
                     _ => {}
                 }
             }
@@ -140,21 +178,40 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
                 match name.as_str() {
                     "si" => {
                         in_si = false;
-                        strings.push(std::mem::take(&mut current_string));
+                        // A string whose runs are all dressed the same as the
+                        // cell is no richer than a plain one.
+                        if current.runs.iter().all(|run| {
+                            run.size.is_none()
+                                && run.font.is_none()
+                                && run.vert_align.is_none()
+                                && !run.bold
+                                && !run.italic
+                                && !run.underline
+                                && run.color.is_none()
+                        }) {
+                            current.runs.clear();
+                        }
+                        strings.push(std::mem::take(&mut current));
                     }
-                    "rPh" => {
-                        in_phonetic = false;
+                    "rPh" => in_phonetic = false,
+                    "rPr" => in_run_props = false,
+                    "r" if in_run => {
+                        in_run = false;
+                        if !current_run.text.is_empty() {
+                            current.runs.push(std::mem::take(&mut current_run));
+                        }
                     }
-                    "t" => {
-                        in_t = false;
-                    }
+                    "t" => in_t = false,
                     _ => {}
                 }
             }
             Event::Text(e) => {
                 if in_t && in_si && !in_phonetic {
                     let text = e.unescape()?.to_string();
-                    current_string.push_str(&text);
+                    current.text.push_str(&text);
+                    if in_run {
+                        current_run.text.push_str(&text);
+                    }
                 }
             }
             Event::Eof => break,
@@ -831,7 +888,7 @@ fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
 fn parse_worksheet(
     xml: &str,
     sheet_name: &str,
-    shared_strings: &[String],
+    shared_strings: &[SharedString],
     stylesheet: &StyleSheet,
 ) -> Result<Sheet, XlsxError> {
     let mut reader = Reader::from_str(xml);
@@ -1007,6 +1064,7 @@ fn parse_worksheet(
                                 value: cell_value,
                                 style,
                                 formula,
+                                runs: runs_of(&value_text, &cell_type, shared_strings),
                             });
                             in_cell = false;
                             in_formula = false;
@@ -1054,6 +1112,7 @@ fn parse_worksheet(
                             value: CellValue::Empty,
                             style,
                             formula: None,
+                            runs: Vec::new(),
                         });
                     }
 
@@ -1217,10 +1276,28 @@ fn parse_worksheet(
 }
 
 /// Resolve a cell's raw value text + type attribute into a CellValue.
+/// The dressing of the shared string a cell holds, if it holds one that is not
+/// all dressed alike.
+fn runs_of(
+    value_text: &str,
+    cell_type: &Option<String>,
+    shared_strings: &[SharedString],
+) -> Vec<crate::ir::TextRun> {
+    if cell_type.as_deref() != Some("s") {
+        return Vec::new();
+    }
+    value_text
+        .parse::<usize>()
+        .ok()
+        .and_then(|at| shared_strings.get(at))
+        .map(|held| held.runs.clone())
+        .unwrap_or_default()
+}
+
 fn resolve_cell_value(
     value_text: &str,
     cell_type: &Option<String>,
-    shared_strings: &[String],
+    shared_strings: &[SharedString],
 ) -> CellValue {
     if value_text.is_empty() && cell_type.is_none() {
         return CellValue::Empty;
@@ -1231,7 +1308,7 @@ fn resolve_cell_value(
             // Shared string index
             if let Ok(idx) = value_text.parse::<usize>() {
                 if idx < shared_strings.len() {
-                    CellValue::String(shared_strings[idx].clone())
+                    CellValue::String(shared_strings[idx].text.clone())
                 } else {
                     CellValue::Error(format!("Invalid SST index: {}", idx))
                 }
@@ -1399,7 +1476,19 @@ mod tests {
   <si><t>plain</t></si>
 </sst>"#;
         let strings = parse_shared_strings(xml).expect("should parse");
-        assert_eq!(strings, vec!["区分", "山田太郎", "plain"]);
+        let held: Vec<&str> = strings.iter().map(|one| one.text.as_str()).collect();
+        assert_eq!(held, vec!["区分", "山田太郎", "plain"]);
+    }
+
+    /// Shared strings that are all dressed alike, which is what most tests want.
+    fn shared(texts: &[&str]) -> Vec<SharedString> {
+        texts
+            .iter()
+            .map(|text| SharedString {
+                text: (*text).to_string(),
+                runs: Vec::new(),
+            })
+            .collect()
     }
 
     #[test]
@@ -1417,7 +1506,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cell_value_number() {
-        let sst: Vec<String> = vec![];
+        let sst: Vec<SharedString> = vec![];
         assert!(matches!(
             resolve_cell_value("42", &None, &sst),
             CellValue::Number(n) if (n - 42.0).abs() < f64::EPSILON
@@ -1426,7 +1515,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cell_value_shared_string() {
-        let sst = vec!["Hello".to_string(), "World".to_string()];
+        let sst = shared(&["Hello", "World"]);
         let t = Some("s".to_string());
         assert!(matches!(
             resolve_cell_value("0", &t, &sst),
@@ -1440,7 +1529,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cell_value_boolean() {
-        let sst: Vec<String> = vec![];
+        let sst: Vec<SharedString> = vec![];
         let t = Some("b".to_string());
         assert!(matches!(
             resolve_cell_value("1", &t, &sst),
@@ -1454,7 +1543,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cell_value_error() {
-        let sst: Vec<String> = vec![];
+        let sst: Vec<SharedString> = vec![];
         let t = Some("e".to_string());
         assert!(matches!(
             resolve_cell_value("#REF!", &t, &sst),
@@ -1464,7 +1553,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cell_value_empty() {
-        let sst: Vec<String> = vec![];
+        let sst: Vec<SharedString> = vec![];
         assert!(matches!(
             resolve_cell_value("", &None, &sst),
             CellValue::Empty
@@ -1492,9 +1581,9 @@ mod tests {
 </sst>"#;
         let result = parse_shared_strings(xml).unwrap();
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "Hello");
-        assert_eq!(result[1], "World");
-        assert_eq!(result[2], "Rich Text");
+        assert_eq!(result[0].text, "Hello");
+        assert_eq!(result[1].text, "World");
+        assert_eq!(result[2].text, "Rich Text");
     }
 
     #[test]
