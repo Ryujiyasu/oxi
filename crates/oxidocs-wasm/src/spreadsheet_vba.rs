@@ -8407,6 +8407,136 @@ mod tests {
         }
     }
 
+    fn span(start_row: u32, start_column: u32, end_row: u32, end_column: u32) -> CellRange {
+        CellRange {
+            sheet: 0,
+            start_row,
+            start_column,
+            end_row,
+            end_column,
+        }
+    }
+
+    /// Index resolves its arguments before it touches a range, so the rules are
+    /// worth checking on their own — particularly the shorthand, which an array
+    /// accepts on a two-dimensional table and a reference does not.
+    #[test]
+    fn index_selection_resolves_rows_and_columns() {
+        // Both given: taken as they are.
+        assert_eq!(index_selection(3, 2, 2, Some(2), true).unwrap(), (2, 2));
+        // Zero means the whole row or column.
+        assert_eq!(index_selection(3, 2, 0, Some(2), true).unwrap(), (0, 2));
+        assert_eq!(index_selection(3, 2, 2, Some(0), true).unwrap(), (2, 0));
+
+        // One argument walks the length of a table that has one row...
+        assert_eq!(index_selection(1, 3, 2, None, true).unwrap(), (1, 2));
+        // ...or one column.
+        assert_eq!(index_selection(3, 1, 2, None, true).unwrap(), (2, 1));
+        // A single cell is both, and the row branch wins.
+        assert_eq!(index_selection(1, 1, 1, None, true).unwrap(), (1, 1));
+
+        // On anything wider, a reference refuses the shorthand and an array
+        // takes a whole row.
+        assert!(index_selection(3, 2, 1, None, true).is_err());
+        assert_eq!(index_selection(3, 2, 2, None, false).unwrap(), (2, 0));
+
+        // Out of range either way.
+        assert!(index_selection(3, 2, 4, Some(1), true).is_err());
+        assert!(index_selection(3, 2, 1, Some(3), true).is_err());
+    }
+
+    /// The direction an Insert or Delete shifts, which Excel takes from the
+    /// range's shape unless it is told.
+    #[test]
+    fn shift_direction_follows_the_shape_or_the_argument() {
+        // Taller than wide moves sideways; anything else moves vertically.
+        assert!(WorkbookHost::shift_direction(span(2, 1, 3, 1), &[], true).unwrap());
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 2, 2), &[], true).unwrap());
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 2, 1), &[], true).unwrap());
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 3, 2), &[], true).unwrap());
+
+        // An explicit shift overrides the shape.
+        let down = [Value::Integer(-4121)];
+        let right = [Value::Integer(-4161)];
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 3, 1), &down, true).unwrap());
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 2), &right, true).unwrap());
+
+        // A deletion's shift is not an insertion's, and the other way round.
+        let up = [Value::Integer(-4162)];
+        let left = [Value::Integer(-4159)];
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 2, 1), &up, false).unwrap());
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &left, false).unwrap());
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &up, true).is_err());
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &down, false).is_err());
+
+        // A missing argument is the same as none at all.
+        assert!(!WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Missing], true).unwrap());
+        // More than one shift is not a thing.
+        assert!(WorkbookHost::shift_direction(span(2, 1, 2, 1), &[Value::Integer(-4121), Value::Integer(-4121)], true).is_err());
+    }
+
+    /// Hidden speaks about whole rows or whole columns and nothing else.
+    #[test]
+    fn hidden_band_needs_a_whole_row_or_column() {
+        let whole_row = span(2, 0, 2, MAX_WORKSHEET_COLUMN);
+        let whole_column = span(1, 1, MAX_WORKSHEET_ROW, 1);
+        assert!(matches!(
+            WorkbookHost::hidden_band(whole_row).unwrap(),
+            ShiftAxis::Rows
+        ));
+        assert!(matches!(
+            WorkbookHost::hidden_band(whole_column).unwrap(),
+            ShiftAxis::Columns
+        ));
+        assert!(WorkbookHost::hidden_band(span(2, 1, 2, 2)).is_err());
+
+        // A range covering the whole sheet is both at once, which this build
+        // refuses rather than guessing at. Not measured against Excel.
+        let everything = span(1, 0, MAX_WORKSHEET_ROW, MAX_WORKSHEET_COLUMN);
+        assert!(WorkbookHost::hidden_band(everything).is_err());
+    }
+
+    /// Sorting orders by kind before value, and leaves blanks at the bottom
+    /// whichever way it runs.
+    #[test]
+    fn sort_compare_orders_by_kind_then_value() {
+        let number = Value::Integer(10);
+        let bigger = Value::Integer(20);
+        let text = Value::String("apple".to_string());
+        let truth = Value::Boolean(true);
+        let blank = Value::Empty;
+
+        assert_eq!(sort_compare(&number, &bigger, false), Ordering::Less);
+        assert_eq!(sort_compare(&number, &bigger, true), Ordering::Greater);
+        // Numbers before text before Booleans.
+        assert_eq!(sort_compare(&number, &text, false), Ordering::Less);
+        assert_eq!(sort_compare(&text, &truth, false), Ordering::Less);
+        // Descending turns those round.
+        assert_eq!(sort_compare(&number, &text, true), Ordering::Greater);
+
+        // A blank sinks either way.
+        assert_eq!(sort_compare(&blank, &number, false), Ordering::Greater);
+        assert_eq!(sort_compare(&blank, &number, true), Ordering::Greater);
+        assert_eq!(sort_compare(&number, &blank, true), Ordering::Less);
+
+        // Text ignores case.
+        let upper = Value::String("APPLE".to_string());
+        assert_eq!(sort_compare(&text, &upper, false), Ordering::Equal);
+    }
+
+    /// A criterion is written back out the way VBA stated it, so a saved filter
+    /// reads as the macro wrote it.
+    #[test]
+    fn criteria_survive_being_written_back_out() {
+        for stated in ["apple", ">15", ">=10", "<5", "<=20", "<>banana"] {
+            let criteria = parse_criteria(&Value::String(stated.to_string()));
+            assert_eq!(criteria_text(&criteria), stated, "{stated}");
+        }
+        // A bare value keeps no operator.
+        let criteria = parse_criteria(&Value::Integer(42));
+        assert_eq!(criteria_text(&criteria), "42");
+    }
+
     #[test]
     fn vba_tracks_excel_application_settings() {
         let mut workbook = workbook();
