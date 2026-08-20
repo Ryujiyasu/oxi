@@ -803,11 +803,18 @@ mod windows_draw {
                         }
                         DrawTextW(dc, &mut body, &mut area, format);
                     } else {
+                        // One line sits where the cell says; Excel leaves it
+                        // at the bottom when the cell says nothing.
+                        let upright = match cell.style.vertical_align.as_deref() {
+                            Some("top") => DT_TOP,
+                            Some("center") | Some("centre") => DT_VCENTER,
+                            _ => DT_BOTTOM,
+                        };
                         DrawTextW(
                             dc,
                             &mut body,
                             &mut area,
-                            placed_flag | DT_VCENTER | DT_SINGLELINE,
+                            placed_flag | upright | DT_SINGLELINE,
                         );
                     }
 
