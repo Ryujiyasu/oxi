@@ -16,7 +16,7 @@
 //!     8.38 characters as 54 pixels at 96 DPI.
 //!   - A row's height is stated in points, 18.75 by default.
 
-use oxicells_core::ir::{CellStyle, CellValue, Sheet, Workbook};
+use oxicells_core::ir::{CellStyle, CellValue, Row, Sheet, Workbook};
 use oxicells_core::parser::parse_xlsx;
 
 /// A stored column width already carries the gutter either side of a cell's
@@ -213,6 +213,86 @@ fn cell_text(value: &CellValue, style: &CellStyle) -> String {
 
 /// Where the text sits across a cell. Excel puts numbers to the right and text
 /// to the left unless the cell says otherwise.
+/// Whether a cell holds nothing, so a neighbour's text may run over it.
+fn is_free(row: &Row, column: u32) -> bool {
+    !row.cells.iter().any(|cell| {
+        cell.col == column && !cell_text(&cell.value, &cell.style).is_empty()
+    })
+}
+
+/// How far left of its own cell a run-on may reach, in pixels, stopping at the
+/// first neighbour that holds something.
+fn room_before(layout: &Geometry, row: &Row, column: u32, wanted: i32) -> i32 {
+    let mut room = 0;
+    let mut at = column;
+    while room < wanted && at > layout.first_column {
+        at -= 1;
+        if !is_free(row, at) {
+            break;
+        }
+        let index = (at - layout.first_column) as usize;
+        let (Some(left), Some(right)) =
+            (layout.columns.get(index), layout.columns.get(index + 1))
+        else {
+            break;
+        };
+        room += (right - left) as i32;
+    }
+    room.min(wanted)
+}
+
+/// The same, rightward.
+fn room_after(layout: &Geometry, row: &Row, column: u32, wanted: i32) -> i32 {
+    let mut room = 0;
+    let mut at = column;
+    loop {
+        if room >= wanted {
+            break;
+        }
+        at += 1;
+        let index = (at - layout.first_column) as usize;
+        let (Some(left), Some(right)) =
+            (layout.columns.get(index), layout.columns.get(index + 1))
+        else {
+            break;
+        };
+        if !is_free(row, at) {
+            break;
+        }
+        room += (right - left) as i32;
+    }
+    room.min(wanted)
+}
+
+/// How Excel draws one kind of rule, measured off a worksheet holding one of
+/// each: how far the ink reaches either side of the boundary, and which pixels
+/// along it are inked.
+struct Rule {
+    /// Pixels before the boundary the ink starts at, and after it ends.
+    before: i32,
+    after: i32,
+    /// The pixel at the boundary itself is skipped by a double rule.
+    hollow: bool,
+    /// A run length and a period: `Some((3, 4))` inks three of every four.
+    dashes: Option<(i32, i32)>,
+}
+
+fn rule_for(kind: &str) -> Rule {
+    let solid = |before, after| Rule { before, after, hollow: false, dashes: None };
+    match kind {
+        "medium" | "mediumDashed" | "mediumDashDot" | "mediumDashDotDot" => solid(1, 0),
+        "thick" => solid(1, 1),
+        "double" => Rule { before: 1, after: 1, hollow: true, dashes: None },
+        "hair" => Rule { before: 0, after: 0, hollow: false, dashes: Some((1, 2)) },
+        "dotted" => Rule { before: 0, after: 0, hollow: false, dashes: Some((2, 4)) },
+        "dashed" | "dashDot" | "dashDotDot" | "slantDashDot" => {
+            Rule { before: 0, after: 0, hollow: false, dashes: Some((3, 4)) }
+        }
+        // "thin" and anything unfamiliar: a single pixel on the boundary.
+        _ => solid(0, 0),
+    }
+}
+
 fn alignment(style: &CellStyle, value: &CellValue) -> Align {
     match style.horizontal_align.as_deref() {
         Some("center") => Align::Centre,
@@ -236,7 +316,7 @@ enum Align {
 #[cfg(windows)]
 mod windows_draw {
     use super::{alignment, cell_text, Align, Geometry};
-    use oxicells_core::ir::{CellStyle, CellValue, Sheet};
+    use oxicells_core::ir::{CellStyle, CellValue, Row, Sheet};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
     use windows::Win32::Graphics::Gdi::*;
@@ -407,15 +487,40 @@ mod windows_draw {
                     let mut area = box_;
                     area.left += gutter;
                     area.right -= gutter;
-                    let format = match alignment(&cell.style, &cell.value) {
+                    let placed = alignment(&cell.style, &cell.value);
+                    let mut body = wide(&text);
+                    body.pop();
+
+                    // Text too long for its cell runs on over the neighbours,
+                    // as long as they are empty — that is what Excel shows, and
+                    // a wrapping cell keeps to itself instead.
+                    // Only text runs on. A number that will not fit stays in
+                    // its cell — Excel shows ##### rather than let it spill.
+                    let runs_on = !cell.style.wrap_text
+                        && matches!(cell.value, CellValue::String(_));
+                    if runs_on {
+                        let mut measured = SIZE::default();
+                        if GetTextExtentPoint32W(dc, &body, &mut measured).as_bool()
+                            && measured.cx > area.right - area.left
+                        {
+                            let spare = measured.cx - (area.right - area.left);
+                            let (leftward, rightward) = match placed {
+                                Align::Left => (0, spare),
+                                Align::Right => (spare, 0),
+                                Align::Centre => (spare / 2, spare - spare / 2),
+                            };
+                            area.left -= super::room_before(layout, row, cell.col, leftward);
+                            area.right += super::room_after(layout, row, cell.col, rightward);
+                        }
+                    }
+
+                    let format = match placed {
                         Align::Left => DT_LEFT,
                         Align::Centre => DT_CENTER,
                         Align::Right => DT_RIGHT,
                     } | DT_VCENTER
                         | DT_SINGLELINE
                         | DT_NOPREFIX;
-                    let mut body = wide(&text);
-                    body.pop();
                     DrawTextW(dc, &mut body, &mut area, format);
 
                     SelectObject(dc, previous_font);
