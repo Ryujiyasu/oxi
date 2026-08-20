@@ -6,8 +6,10 @@ areas, page breaks and shrink-to-fit, none of which Oxi models, so a workbook
 whose print area covered one row was compared against a whole sheet, and any
 sheet Excel broke across pages could not be compared at all.
 
-Oxi's side comes from oxi-xlsx-renderer. Both are cropped to the ink they hold
-before being compared, since the two disagree about the margin around a sheet.
+Oxi's side comes from oxi-xlsx-renderer. Both start at the top-left of the same
+used range, so they are compared where they stand rather than trimmed to their
+ink — trimming lets anything Excel draws and Oxi does not drag the whole sheet
+out of line.
 
 Usage:
     python tools/metrics/xlsx_pixel_diff.py <dir-or-file.xlsx>
@@ -99,26 +101,12 @@ def excel_shots(pairs: list[tuple[Path, Path]], out: Path, chunk: int = 25) -> s
     return already | {dest for _, dest in pending if dest.exists()}
 
 
-def crop_to_ink(image: Image.Image, pad: int = 2) -> Image.Image:
-    """Trims the blank margin, so two pictures of a sheet line up."""
-    grey = np.asarray(image.convert("L"))
-    dark = np.argwhere(grey < 200)
-    if dark.size == 0:
-        return image
-    top, left = dark.min(axis=0)
-    bottom, right = dark.max(axis=0)
-    return image.crop(
-        (
-            max(int(left) - pad, 0),
-            max(int(top) - pad, 0),
-            min(int(right) + pad + 1, image.width),
-            min(int(bottom) + pad + 1, image.height),
-        )
-    )
-
-
 def compare(truth: Image.Image, ours: Image.Image, panel: Path) -> float:
-    truth, ours = crop_to_ink(truth), crop_to_ink(ours)
+    # Both pictures start at the top-left of the same used range, so they are
+    # compared where they stand. Trimming to ink was tried and abandoned: an
+    # element Excel draws and Oxi does not — a rule above the first row, say —
+    # moves Excel's ink upward and shifts the whole sheet against itself, which
+    # showed as a 3px drift where the true one was 1px.
     width = max(truth.width, ours.width)
     height = max(truth.height, ours.height)
 

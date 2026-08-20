@@ -41,14 +41,19 @@ struct Geometry {
     first_row: u32,
 }
 
-fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
+fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
     let mut first_row = u32::MAX;
     let mut last_row = 0;
     let mut first_column = u32::MAX;
     let mut last_column = 0;
     for row in &sheet.rows {
         for cell in &row.cells {
-            if matches!(cell.value, CellValue::Empty) && cell.formula.is_none() {
+            // A cell counts as used when it holds something OR when it is
+            // dressed differently from the workbook's default — a ruled but
+            // empty cell is part of the range Excel hands over, and leaving it
+            // out shifts the whole sheet against Excel's own picture.
+            let empty = matches!(cell.value, CellValue::Empty) && cell.formula.is_none();
+            if empty && &cell.style == plain {
                 continue;
             }
             first_row = first_row.min(row.index);
@@ -63,8 +68,8 @@ fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
     (first_row, first_column, last_row, last_column)
 }
 
-fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
-    let (first_row, first_column, last_row, last_column) = used_extent(sheet);
+fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> Geometry {
+    let (first_row, first_column, last_row, last_column) = used_extent(sheet, plain);
 
     let mut columns = vec![0.0];
     for column in first_column..=last_column {
@@ -143,7 +148,7 @@ fn main() {
     // A column is measured in digits of the workbook's standard font, so the
     // sheet cannot be laid out until that digit has been measured.
     let digit_width = digit_width(&workbook.default_style).unwrap_or(FALLBACK_DIGIT_WIDTH);
-    let layout = geometry(sheet, scale, digit_width);
+    let layout = geometry(sheet, scale, digit_width, &workbook.default_style);
     // One pixel past the last edge, because a rule on that edge is drawn there
     // and Excel's own picture is that pixel wider and taller.
     let width = *layout.columns.last().unwrap_or(&0.0) as u32 + 1;
@@ -213,8 +218,43 @@ fn cell_text(value: &CellValue, style: &CellStyle) -> String {
 
 /// Where the text sits across a cell. Excel puts numbers to the right and text
 /// to the left unless the cell says otherwise.
+/// What a merge does to a cell: the top-left one is drawn across the whole
+/// block, and the rest are not drawn at all.
+enum Merged {
+    /// Drawn across this many further columns and rows.
+    Anchor { columns: u32, rows: u32 },
+    Covered,
+}
+
+fn merges(sheet: &Sheet) -> std::collections::HashMap<(u32, u32), Merged> {
+    let mut held = std::collections::HashMap::new();
+    for merge in &sheet.merge_cells {
+        for row in merge.start_row..=merge.end_row {
+            for column in merge.start_col..=merge.end_col {
+                let entry = if row == merge.start_row && column == merge.start_col {
+                    Merged::Anchor {
+                        columns: merge.end_col - merge.start_col,
+                        rows: merge.end_row - merge.start_row,
+                    }
+                } else {
+                    Merged::Covered
+                };
+                held.insert((row, column), entry);
+            }
+        }
+    }
+    held
+}
+
 /// Whether a cell holds nothing, so a neighbour's text may run over it.
-fn is_free(row: &Row, column: u32) -> bool {
+fn is_free(
+    row: &Row,
+    column: u32,
+    merged: &std::collections::HashMap<(u32, u32), Merged>,
+) -> bool {
+    if merged.contains_key(&(row.index, column)) {
+        return false;
+    }
     !row.cells.iter().any(|cell| {
         cell.col == column && !cell_text(&cell.value, &cell.style).is_empty()
     })
@@ -222,12 +262,18 @@ fn is_free(row: &Row, column: u32) -> bool {
 
 /// How far left of its own cell a run-on may reach, in pixels, stopping at the
 /// first neighbour that holds something.
-fn room_before(layout: &Geometry, row: &Row, column: u32, wanted: i32) -> i32 {
+fn room_before(
+    layout: &Geometry,
+    row: &Row,
+    column: u32,
+    wanted: i32,
+    merged: &std::collections::HashMap<(u32, u32), Merged>,
+) -> i32 {
     let mut room = 0;
     let mut at = column;
     while room < wanted && at > layout.first_column {
         at -= 1;
-        if !is_free(row, at) {
+        if !is_free(row, at, merged) {
             break;
         }
         let index = (at - layout.first_column) as usize;
@@ -242,7 +288,13 @@ fn room_before(layout: &Geometry, row: &Row, column: u32, wanted: i32) -> i32 {
 }
 
 /// The same, rightward.
-fn room_after(layout: &Geometry, row: &Row, column: u32, wanted: i32) -> i32 {
+fn room_after(
+    layout: &Geometry,
+    row: &Row,
+    column: u32,
+    wanted: i32,
+    merged: &std::collections::HashMap<(u32, u32), Merged>,
+) -> i32 {
     let mut room = 0;
     let mut at = column;
     loop {
@@ -256,7 +308,7 @@ fn room_after(layout: &Geometry, row: &Row, column: u32, wanted: i32) -> i32 {
         else {
             break;
         };
-        if !is_free(row, at) {
+        if !is_free(row, at, merged) {
             break;
         }
         room += (right - left) as i32;
@@ -315,8 +367,8 @@ enum Align {
 
 #[cfg(windows)]
 mod windows_draw {
-    use super::{alignment, cell_text, Align, Geometry};
-    use oxicells_core::ir::{CellStyle, CellValue, Row, Sheet};
+    use super::{alignment, cell_text, Align, Geometry, Merged};
+    use oxicells_core::ir::{BorderLine, CellStyle, CellValue, Row, Sheet};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
     use windows::Win32::Graphics::Gdi::*;
@@ -410,6 +462,7 @@ mod windows_draw {
 
             SetBkMode(dc, TRANSPARENT);
 
+            let merged = super::merges(sheet);
             for row in &sheet.rows {
                 if row.index < layout.first_row {
                     continue;
@@ -427,15 +480,28 @@ mod windows_draw {
                     if cell.col < layout.first_column {
                         continue;
                     }
+                    // A merged block belongs to its top-left cell; the cells
+                    // it covers are not drawn at all.
+                    let (spans_columns, spans_rows) =
+                        match merged.get(&(row.index, cell.col)) {
+                            Some(Merged::Covered) => continue,
+                            Some(Merged::Anchor { columns, rows }) => (*columns, *rows),
+                            None => (0, 0),
+                        };
                     let left_at = (cell.col - layout.first_column) as usize;
-                    let (Some(left), Some(right)) =
-                        (layout.columns.get(left_at), layout.columns.get(left_at + 1))
-                    else {
+                    let (Some(left), Some(right)) = (
+                        layout.columns.get(left_at),
+                        layout.columns.get(left_at + 1 + spans_columns as usize),
+                    ) else {
                         continue;
                     };
                     if right <= left {
                         continue;
                     }
+                    let bottom = layout
+                        .rows
+                        .get(top_at + 1 + spans_rows as usize)
+                        .unwrap_or(bottom);
                     let box_ = RECT {
                         left: *left as i32,
                         top: *top as i32,
@@ -449,7 +515,62 @@ mod windows_draw {
                         let _ = DeleteObject(brush);
                     }
 
-                    let text = cell_text(&cell.value, &cell.style);
+                    // A rule sits ON the boundary, not inside the cell: the
+                    // bottom of one row and the top of the next are the same
+                    // pixel. Measured against Excel on a box ruled all the way
+                    // round, whose edges landed exactly on the column and row
+                    // starts.
+                    let edges: [(&Option<BorderLine>, bool, i32); 4] = [
+                        (&cell.style.border_top, true, box_.top),
+                        (&cell.style.border_bottom, true, box_.bottom),
+                        (&cell.style.border_left, false, box_.left),
+                        (&cell.style.border_right, false, box_.right),
+                    ];
+                    for (line, horizontal, at) in edges {
+                        let Some(line) = line else { continue };
+                        let rule = super::rule_for(&line.style);
+                        let ink = CreateSolidBrush(colour(line.color.as_deref(), 0x000000));
+                        for step in -rule.before..=rule.after {
+                            if rule.hollow && step == 0 {
+                                continue;
+                            }
+                            let edge = if horizontal {
+                                RECT { top: at + step, bottom: at + step + 1, ..box_ }
+                            } else {
+                                RECT { left: at + step, right: at + step + 1, ..box_ }
+                            };
+                            match rule.dashes {
+                                None => {
+                                    FillRect(dc, &edge, ink);
+                                }
+                                Some((on, period)) => {
+                                    // A broken rule is inked run by run, so the
+                                    // gaps fall where Excel puts them.
+                                    let (start, stop) = if horizontal {
+                                        (edge.left, edge.right)
+                                    } else {
+                                        (edge.top, edge.bottom)
+                                    };
+                                    let mut at_run = start;
+                                    while at_run < stop {
+                                        let run_end = (at_run + on).min(stop);
+                                        let piece = if horizontal {
+                                            RECT { left: at_run, right: run_end, ..edge }
+                                        } else {
+                                            RECT { top: at_run, bottom: run_end, ..edge }
+                                        };
+                                        FillRect(dc, &piece, ink);
+                                        at_run += period;
+                                    }
+                                }
+                            }
+                        }
+                        let _ = DeleteObject(ink);
+                    }
+
+                    // A carriage return would otherwise be drawn as a glyph.
+                    let text = cell_text(&cell.value, &cell.style)
+                        .replace("\r\n", "\n");
                     if text.is_empty() {
                         continue;
                     }
@@ -509,19 +630,52 @@ mod windows_draw {
                                 Align::Right => (spare, 0),
                                 Align::Centre => (spare / 2, spare - spare / 2),
                             };
-                            area.left -= super::room_before(layout, row, cell.col, leftward);
-                            area.right += super::room_after(layout, row, cell.col, rightward);
+                            area.left -=
+                                super::room_before(layout, row, cell.col, leftward, &merged);
+                            area.right +=
+                                super::room_after(layout, row, cell.col, rightward, &merged);
                         }
                     }
 
-                    let format = match placed {
+                    let placed_flag = match placed {
                         Align::Left => DT_LEFT,
                         Align::Centre => DT_CENTER,
                         Align::Right => DT_RIGHT,
-                    } | DT_VCENTER
-                        | DT_SINGLELINE
-                        | DT_NOPREFIX;
-                    DrawTextW(dc, &mut body, &mut area, format);
+                    } | DT_NOPREFIX;
+                    // A cell can hold its own breaks, put there with alt+enter,
+                    // whatever it says about wrapping.
+                    if cell.style.wrap_text || text.contains('\n') {
+                        let format = if cell.style.wrap_text {
+                            placed_flag | DT_WORDBREAK
+                        } else {
+                            placed_flag
+                        };
+                        // Several lines need their own height measured before
+                        // they can be placed; DT_VCENTER only centres one.
+                        let mut measured = area;
+                        let mut probe = body.clone();
+                        DrawTextW(dc, &mut probe, &mut measured, format | DT_CALCRECT);
+                        let slack =
+                            (area.bottom - area.top) - (measured.bottom - measured.top);
+                        if slack > 0 {
+                            // Where the block of lines sits is the cell's own
+                            // rule; Excel leaves a cell at the bottom when it
+                            // says nothing.
+                            area.top += match cell.style.vertical_align.as_deref() {
+                                Some("top") => 0,
+                                Some("center") | Some("centre") => slack / 2,
+                                _ => slack,
+                            };
+                        }
+                        DrawTextW(dc, &mut body, &mut area, format);
+                    } else {
+                        DrawTextW(
+                            dc,
+                            &mut body,
+                            &mut area,
+                            placed_flag | DT_VCENTER | DT_SINGLELINE,
+                        );
+                    }
 
                     SelectObject(dc, previous_font);
                     let _ = DeleteObject(font);
