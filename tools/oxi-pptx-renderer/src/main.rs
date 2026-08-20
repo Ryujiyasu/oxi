@@ -9,7 +9,7 @@
 //!   oxi-pptx-renderer <input.pptx> <output_prefix> [dpi] [--dump-layout=PATH]
 //!                     [--supersample=N]
 //!
-//! Default dpi=150, supersample=2. Produces `<prefix>_s1.png`, `<prefix>_s2.png`
+//! Default dpi=150, supersample=3. Produces `<prefix>_s1.png`, `<prefix>_s2.png`
 //! ... (one per slide). With `--dump-layout=PATH` it writes the slide-level
 //! layout JSON (points) and exits without rendering — this is the Oxi-side
 //! measurement target for the pptx Ra loop (each shape's bbox/type/text is
@@ -45,7 +45,22 @@ fn main() {
     let dpi: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(150);
 
     let mut dump_layout: Option<String> = None;
-    let mut supersample: u32 = 2;
+    // The oversampling factor the page is drawn at before it is filtered down.
+    // Found on d32 slide 6, whose map is fine line art: 1 / 2 / 3 score
+    // 0.8606 / 0.8769 / 0.8804 against PowerPoint. Over the whole dev corpus
+    // 3 is worth **+0.002518, 39 decks improved and none regressed** -- the
+    // gain is not confined to pictures (d01, all vector, gains 0.0086) because
+    // every edge on the page is sampled better.
+    //
+    // It costs 2.4x the render time (74.7s -> 178.5s for d13's 20 slides), and
+    // that trade was made deliberately in favour of fidelity (2026-08-21).
+    // `OXI_SUPERSAMPLE` overrides it, and 2 reproduces the pre-change output
+    // byte for byte.
+    let mut supersample: u32 = std::env::var("OXI_SUPERSAMPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n| (1..=4).contains(n))
+        .unwrap_or(3);
     for arg in &args[3..] {
         if let Some(path) = arg.strip_prefix("--dump-layout=") {
             dump_layout = Some(path.to_string());
