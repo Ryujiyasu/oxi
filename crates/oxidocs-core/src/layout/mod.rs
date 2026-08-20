@@ -8263,7 +8263,19 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // is what the S635/S709/S914/S925/S934/S948 pair rules
                             // already predict; only the TRANSITIVE case (the chain
                             // that no pairwise check can see) is new here.
+                            // S1176 (2026-08-20, opt-out OXI_S1176_DISABLE): a
+                            // SINGLE head is admitted too — the pair rules predict
+                            // from ESTIMATES, and when the real layout then
+                            // whole-moves the follower (`!on_old && on_new`), the
+                            // predicted-fit head is stranded at the page bottom in
+                            // exactly the way the _pb_kchain derivation forbids
+                            // (the keepNext unit moves as one, at every N — N=1 is
+                            // the degenerate case). legal__000ad039's «Authors
+                            // Cited» (direct keepNext, after=720) stays at the
+                            // p13 bottom while Word starts p14 with it.
                             let chain_len = block_idx - pull_from;
+                            let s1176_single =
+                                chain_len == 1 && std::env::var("OXI_S1176_DISABLE").is_err();
                             let pulled_here: Vec<usize> = (pull_from..block_idx).collect();
                             let chain_min_y = pages[old_idx]
                                 .elements
@@ -8281,7 +8293,7 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             // box rect inside it may be positioned by machinery
                             // that keys off the block's page (float bands,
                             // anchors), which a bare element move would desync.
-                            let region_clean = chain_len >= 2
+                            let region_clean = (chain_len >= 2 || s1176_single)
                                 && chain_min_y.is_finite()
                                 && !pages[old_idx].elements.iter().any(|e| {
                                     let mine = e
