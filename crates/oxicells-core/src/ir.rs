@@ -135,6 +135,8 @@ pub struct BorderLine {
 pub struct CellStyle {
     pub bold: bool,
     pub italic: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
     pub font_size: Option<f32>,
     /// The typeface a cell asks for, when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

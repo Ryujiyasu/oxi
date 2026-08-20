@@ -990,6 +990,9 @@ fn font_xml(style: &CellStyle) -> String {
     if style.italic {
         font.push_str("<i/>");
     }
+    if style.underline {
+        font.push_str("<u/>");
+    }
     if let Some(size) = style.font_size {
         font.push_str(&format!("<sz val=\"{size}\"/>"));
     }

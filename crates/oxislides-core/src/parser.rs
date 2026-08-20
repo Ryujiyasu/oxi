@@ -1073,6 +1073,7 @@ fn parse_slide(
     // the colour dispatch below reads it as the run's own text colour: d11
     // slide 38's "and many more..." is white on dk1 and Oxi drew it dk1 on
     // nothing.
+    let s_softbreak = std::env::var("OXI_SOFTBREAK_DISABLE").is_err();
     let mut in_highlight = false;
     let mut run_highlight: Option<String> = None;
     let mut run_font_family: Option<String> = None;
@@ -1766,6 +1767,27 @@ fn parse_slide(
                                 run_font_family = Some(typeface);
                             }
                         }
+                    }
+                    // `<a:br/>` is a soft line break INSIDE a paragraph, not a
+                    // new paragraph: it breaks the line without the paragraph's
+                    // spcBef / spcAft. It is carried as a run holding a single
+                    // newline so the wrap can honour it and the run's own
+                    // properties still describe the line it ends. d19 slide 39's
+                    // instructions are one paragraph with three of them, and
+                    // ignoring them ran "quality." into "How?" with no space.
+                    // 76 across 11 dev decks.
+                    "br" if in_paragraph && s_softbreak => {
+                        para_runs.push(SlideRun {
+                            text: "
+".to_string(),
+                            font_size: run_font_size,
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            color: None,
+                            highlight: None,
+                            font_family: run_font_family.clone(),
+                        });
                     }
                     "t" if in_run => {
                         in_text = true;

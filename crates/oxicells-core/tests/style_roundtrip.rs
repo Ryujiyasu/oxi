@@ -218,3 +218,21 @@ fn how_a_cell_places_and_breaks_its_text_is_read() {
         .count();
     assert!(wrapped > 0, "no cell said it breaks its text");
 }
+
+#[test]
+fn a_cell_wears_the_font_of_the_style_it_is_built_on() {
+    // The hyperlinks in this workbook name no font of their own: their format
+    // points at the built-in Hyperlink style, whose font is underlined. Reading
+    // only the cell's own format loses that.
+    const LINKED: &[u8] =
+        include_bytes!("../../../tools/golden-test/documents/xlsx/24d76e2a8663_h2daa202505_jikei.xlsx");
+    let workbook = parse_xlsx(LINKED).expect("the workbook parses");
+
+    let underlined = workbook.sheets[0]
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .filter(|cell| cell.style.underline)
+        .count();
+    assert!(underlined > 0, "no cell inherited the underlined link font");
+}

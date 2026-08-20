@@ -221,6 +221,7 @@ fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetInfo>, XlsxError> {
 struct FontInfo {
     bold: bool,
     italic: bool,
+    underline: bool,
     size: Option<f32>,
     color: Option<String>,
     name: Option<String>,
@@ -245,6 +246,14 @@ struct XfRecord {
     font_id: usize,
     fill_id: usize,
     border_id: usize,
+    /// The named style this format is built on, and whether it overrides each
+    /// part of it. A cell format that does not apply its own font wears the
+    /// font of the style it names — that is how Excel dresses a hyperlink.
+    style_id: Option<usize>,
+    applies_font: bool,
+    applies_fill: bool,
+    applies_border: bool,
+    applies_number_format: bool,
     horizontal_align: Option<String>,
     vertical_align: Option<String>,
     wrap_text: bool,
@@ -257,6 +266,7 @@ struct StyleSheet {
     fills: Vec<FillInfo>,
     borders: Vec<BorderInfo>,
     cell_xfs: Vec<XfRecord>,
+    cell_style_xfs: Vec<XfRecord>,
 }
 
 /// Built-in number format strings for well-known IDs.
@@ -300,6 +310,7 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
         Fills,
         Borders,
         CellXfs,
+        CellStyleXfs,
     }
     let mut section = Section::None;
     let mut in_font = false;
@@ -321,6 +332,7 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                     "fills" => section = Section::Fills,
                     "borders" => section = Section::Borders,
                     "cellXfs" => section = Section::CellXfs,
+                    "cellStyleXfs" => section = Section::CellStyleXfs,
 
                     "font" if section == Section::Fonts => {
                         in_font = true;
@@ -334,7 +346,9 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                         in_border = true;
                         current_border = BorderInfo::default();
                     }
-                    "xf" if section == Section::CellXfs => {
+                    "xf" if section == Section::CellXfs
+                        || section == Section::CellStyleXfs =>
+                    {
                         in_xf = true;
                         current_xf = XfRecord {
                             num_fmt_id: get_attr(&e, "numFmtId")
@@ -352,6 +366,13 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                             horizontal_align: None,
                             vertical_align: None,
                             wrap_text: false,
+                            style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
+                            applies_font: is_true(get_attr(&e, "applyFont").as_deref()),
+                            applies_fill: is_true(get_attr(&e, "applyFill").as_deref()),
+                            applies_border: is_true(get_attr(&e, "applyBorder").as_deref()),
+                            applies_number_format: is_true(
+                                get_attr(&e, "applyNumberFormat").as_deref(),
+                            ),
                         };
                     }
                     "alignment" if in_xf => {
@@ -414,6 +435,14 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                         let val = get_attr(&e, "val");
                         current_font.italic = val.as_deref() != Some("0");
                     }
+                    "u" if in_font => {
+                        // <u/> underlines; <u val="none"/> does not.
+                        let val = get_attr(&e, "val");
+                        current_font.underline = !matches!(
+                            val.as_deref(),
+                            Some("0") | Some("none")
+                        );
+                    }
                     "sz" if in_font => {
                         current_font.size =
                             get_attr(&e, "val").and_then(|v| v.parse().ok());
@@ -450,7 +479,9 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                         current_xf.wrap_text =
                             matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
                     }
-                    "xf" if section == Section::CellXfs => {
+                    "xf" if section == Section::CellXfs
+                        || section == Section::CellStyleXfs =>
+                    {
                         // Self-closing <xf ... />
                         let xf = XfRecord {
                             num_fmt_id: get_attr(&e, "numFmtId")
@@ -468,8 +499,19 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                             horizontal_align: None,
                             vertical_align: None,
                             wrap_text: false,
+                            style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
+                            applies_font: is_true(get_attr(&e, "applyFont").as_deref()),
+                            applies_fill: is_true(get_attr(&e, "applyFill").as_deref()),
+                            applies_border: is_true(get_attr(&e, "applyBorder").as_deref()),
+                            applies_number_format: is_true(
+                                get_attr(&e, "applyNumberFormat").as_deref(),
+                            ),
                         };
-                        ss.cell_xfs.push(xf);
+                        if section == Section::CellStyleXfs {
+                            ss.cell_style_xfs.push(xf);
+                        } else {
+                            ss.cell_xfs.push(xf);
+                        }
                     }
 
                     _ => {}
@@ -478,7 +520,8 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
-                    "numFmts" | "fonts" | "fills" | "borders" | "cellXfs" => {
+                    "numFmts" | "fonts" | "fills" | "borders" | "cellXfs"
+                    | "cellStyleXfs" => {
                         section = Section::None;
                     }
                     "font" if in_font => {
@@ -493,8 +536,16 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                         ss.borders.push(std::mem::take(&mut current_border));
                         in_border = false;
                     }
-                    "xf" if in_xf && section == Section::CellXfs => {
-                        ss.cell_xfs.push(std::mem::take(&mut current_xf));
+                    "xf" if in_xf
+                        && (section == Section::CellXfs
+                            || section == Section::CellStyleXfs) =>
+                    {
+                        let xf = std::mem::take(&mut current_xf);
+                        if section == Section::CellStyleXfs {
+                            ss.cell_style_xfs.push(xf);
+                        } else {
+                            ss.cell_xfs.push(xf);
+                        }
                         in_xf = false;
                     }
                     _ => {}
@@ -524,26 +575,47 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         None => return CellStyle::default(),
     };
 
-    let font = stylesheet.fonts.get(xf.font_id).cloned().unwrap_or_default();
-    let fill = stylesheet.fills.get(xf.fill_id).cloned().unwrap_or_default();
+    // A cell format that does not apply a part of itself wears that part from
+    // the named style it is built on. This is how a hyperlink gets its blue
+    // underline: the cell's own format names no font at all.
+    let parent = xf
+        .style_id
+        .and_then(|id| stylesheet.cell_style_xfs.get(id));
+    let inherited = |applies: bool, own: usize, from: fn(&XfRecord) -> usize| {
+        match (applies, parent) {
+            (false, Some(parent)) => from(parent),
+            _ => own,
+        }
+    };
+    let font_id = inherited(xf.applies_font, xf.font_id, |xf| xf.font_id);
+    let fill_id = inherited(xf.applies_fill, xf.fill_id, |xf| xf.fill_id);
+    let border_id = inherited(xf.applies_border, xf.border_id, |xf| xf.border_id);
+
+    let font = stylesheet.fonts.get(font_id).cloned().unwrap_or_default();
+    let fill = stylesheet.fills.get(fill_id).cloned().unwrap_or_default();
     let border = stylesheet
         .borders
-        .get(xf.border_id)
+        .get(border_id)
         .cloned()
         .unwrap_or_default();
 
     // Resolve number format
-    let number_format = if xf.num_fmt_id == 0 {
+    let num_fmt_id = match (xf.applies_number_format, parent) {
+        (false, Some(parent)) => parent.num_fmt_id,
+        _ => xf.num_fmt_id,
+    };
+    let number_format = if num_fmt_id == 0 {
         None // General — no explicit format needed
-    } else if let Some(custom) = stylesheet.num_fmts.get(&xf.num_fmt_id) {
+    } else if let Some(custom) = stylesheet.num_fmts.get(&num_fmt_id) {
         Some(custom.clone())
     } else {
-        builtin_number_format(xf.num_fmt_id).map(|s| s.to_string())
+        builtin_number_format(num_fmt_id).map(|s| s.to_string())
     };
 
     CellStyle {
         bold: font.bold,
         italic: font.italic,
+        underline: font.underline,
         font_size: font.size,
         font_name: font.name.clone(),
         font_color: font.color,

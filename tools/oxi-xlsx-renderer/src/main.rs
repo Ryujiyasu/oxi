@@ -588,7 +588,7 @@ mod windows_draw {
                         0,
                         if cell.style.bold { 700 } else { 400 },
                         u32::from(cell.style.italic),
-                        0,
+                        u32::from(cell.style.underline),
                         0,
                         DEFAULT_CHARSET.0 as u32,
                         OUT_DEFAULT_PRECIS.0 as u32,
