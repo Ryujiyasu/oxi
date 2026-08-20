@@ -1850,20 +1850,36 @@ fn parse_body(
     // Held opt-in (the value is environment/locale-dependent = S600 class; the
     // 72pt default stays byte-identical). Scoped to the sectionless branch only
     // (1/669 corpus docs). Layout column-width redistribute (Stage 2) is separate.
-    let sectionless_margin = if std::env::var("OXI_S1002").is_ok() {
-        Margin {
-            top: 99.25,
-            bottom: 85.05,
-            left: 85.05,
-            right: 85.05,
-        }
+    // S1177 (2026-08-20, default ON, opt-out OXI_S1177_DISABLE): the S1002
+    // fallback promoted to default and completed with the grid. A sectionless
+    // doc renders under the environment's Normal template; the reference
+    // Word (Japanese Microsoft 365) applies the JP A4 defaults — margins
+    // top 35mm / others 30mm (Probe M, COM 2026-07-25) AND the JP default
+    // document grid (`<w:docGrid w:type="lines" w:linePitch="360"/>`, the
+    // 行送り 18pt line snap: reports__001f1397's empty 12pt paragraphs
+    // render at exactly 18.0pt pitch where the Tahoma natural line is
+    // 14.5). Locale-dependent by nature (S600 class) — the JP default is
+    // the product's reference environment, and the scope is docs with NO
+    // sectPr at all: 1 of 727 corpus docs (golden 369 / ja 100 / real_en 8
+    // all carry sectPr → byte-identical by construction).
+    let s1177 = std::env::var("OXI_S1177_DISABLE").is_err() || std::env::var("OXI_S1002").is_ok();
+    let (sectionless_margin, sectionless_grid) = if s1177 {
+        (
+            Margin {
+                top: 99.25,
+                bottom: 85.05,
+                left: 85.05,
+                right: 85.05,
+            },
+            Some(18.0),
+        )
     } else {
-        Margin::default()
+        (Margin::default(), None)
     };
     let last_sp = final_sect_pr.unwrap_or(SectionProperties {
         page_size: PageSize::default(),
         margin: sectionless_margin,
-        grid_line_pitch: None,
+        grid_line_pitch: sectionless_grid,
         grid_char_pitch: None,
         grid_char_space_raw: None,
         doc_grid_no_type: false,
