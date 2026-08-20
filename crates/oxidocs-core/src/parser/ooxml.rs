@@ -1976,6 +1976,10 @@ fn parse_paragraph(
     // that should be suppressed when the field is evaluated (e.g. PAGE).
     let mut field_result_depth: i32 = 0; // >0 = inside field result region
     let mut current_field_type: Option<FieldType> = None; // tracks the active field across its result runs
+    // S1174: STYLEREF style name from the instr run, waiting to be moved onto
+    // the field's first NON-EMPTY cached-result run (the separate/end marker
+    // runs are empty and carry the wrong rPr).
+    let mut pending_styleref: Option<String> = None;
 
     loop {
         match reader.read_event()? {
@@ -2078,6 +2082,16 @@ fn parse_paragraph(
                         // Remember a CrossRef field so its cached result run is KEPT.
                         if run.field_type.is_some() {
                             current_field_type = run.field_type.clone();
+                            // S1174: the INSTR run itself is the substitution
+                            // anchor (it always exists — a field whose cached
+                            // result is EMPTY has no result run to anchor on:
+                            // reference__0061531a's header Part line caches "" ).
+                            // The cached-result runs that follow are marked as
+                            // continuations so a successful resolution clears
+                            // them.
+                            if run.style.styleref.is_some() {
+                                pending_styleref = run.style.styleref.clone();
+                            }
                         }
                         if run.text.contains('\u{FFFE}') {
                             // Marker for fldChar separate (set in parse_run)
@@ -2090,7 +2104,18 @@ fn parse_paragraph(
                             field_result_depth -= 1;
                             if field_result_depth <= 0 {
                                 current_field_type = None;
+                                pending_styleref = None;
                             }
+                        }
+                        // S1174: mark every cached-result run of the STYLEREF
+                        // field as a continuation — the INSTR run is the
+                        // substitution anchor, so a successful per-page
+                        // resolution places the text there and clears these.
+                        if field_result_depth > 0
+                            && run.field_type.is_none()
+                            && pending_styleref.is_some()
+                        {
+                            run.style.styleref_cont = true;
                         }
                         // Suppress cached field result text (between separate and end)
                         // when the field was already evaluated (e.g. PAGE → "#"). KEEP the
@@ -4796,6 +4821,33 @@ fn parse_run(
             // any nested PAGEREF sets current_field_type (later entries survived only
             // because current_field_type stayed stuck at CrossRef).
             field_type = Some(FieldType::Cached);
+        } else if field.contains("STYLEREF") {
+            // S1174: must be tested BEFORE the generic REF arm — "STYLEREF"
+            // contains "REF", so the CrossRef arm intercepted it and the
+            // STYLEREF entry in the cached-field list below was dead code
+            // (rendering was identical: both keep the cache). Classified
+            // Cached like S708, plus the referenced style name is extracted
+            // and carried on the INSTR run's style; parse_paragraph moves it
+            // onto the first cached-result run so layout can re-resolve the
+            // text per page (headers/footers re-evaluate STYLEREF per page).
+            if std::env::var("OXI_FIELDCACHE_DISABLE").is_err() {
+                field_type = Some(FieldType::Cached);
+                if let Some(rest) = field
+                    .find("STYLEREF")
+                    .map(|i| field[i + "STYLEREF".len()..].trim_start())
+                {
+                    let name = if let Some(stripped) = rest.strip_prefix('"') {
+                        stripped.split('"').next().unwrap_or("")
+                    } else {
+                        rest.split_whitespace().next().unwrap_or("")
+                    };
+                    if !name.is_empty() && !name.starts_with('\\') {
+                        style.styleref = Some(name.to_string());
+                    }
+                }
+            } else if text.is_empty() {
+                text = format!("[{}]", field.split_whitespace().next().unwrap_or(field));
+            }
         } else if field.contains("REF") || field.contains("NOTEREF") || field.contains("PAGEREF") {
             // S685 (2026-06-28, default ON, opt-out OXI_CROSSREF_DISABLE): cross-reference
             // fields render the CACHED RESULT (the run between fldChar separate and end),
@@ -8285,6 +8337,10 @@ fn parse_run_properties(
                 super::styles::merge_run_style(&mut style, rs);
             }
         }
+        // S1174: keep the raw char style ID so a header STYLEREF that
+        // references a CHARACTER style (CharPartText …) can find its
+        // source runs during layout.
+        style.char_style_id = rstyle_id.clone();
     }
 
     Ok((style, rpr_change))

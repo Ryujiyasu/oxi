@@ -2298,6 +2298,22 @@ thread_local! {
     /// `prev_space_after` resets to 0 and the excess model would see nothing to
     /// collapse against.
     static S1073_PREV_SECTION_AFTER: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+    /// S1174 (2026-08-20, opt-out OXI_S1174_DISABLE): header/footer STYLEREF
+    /// re-evaluation. FIRST = each style ID's first text anywhere in the
+    /// document (the forward fallback measured by _pb_hdrpush_gen.py's refN
+    /// arm); LAST = the latest text laid out so far (causal last-before-page).
+    /// Cross-section by design (a Chapter set in section k resolves in
+    /// section k+1's header); reset per layout run at the section loop.
+    static S1174_FIRST: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static S1174_LAST: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// S1174: true when any section's headers/footers carry a STYLEREF tag
+    /// (and the opt-out is unset) — the ingest/substitution work is skipped
+    /// entirely otherwise, so non-STYLEREF documents are byte-identical by
+    /// construction (corpus scan: golden 369 = 0, ja 100 = 0, real_en 8 = 0,
+    /// docx_corpus/en = 14).
+    static S1174_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// RAII guard for IN_FOOTNOTE_LAYOUT (SG0RAW footnote scope-out).
@@ -2597,6 +2613,22 @@ impl LayoutEngine {
         // S816: reset the past-first-section flag for this layout run.
         S816_PAST_FIRST_SECTION.with(|c| c.set(false));
         S1073_PREV_SECTION_AFTER.with(|c| c.set(0.0));
+        // S1174: reset the STYLEREF registries, decide whether any section's
+        // headers/footers reference a style, and prescan the document's first
+        // occurrence per style (the forward fallback). One pass over the body
+        // paragraphs; skipped work everywhere when no STYLEREF header exists.
+        S1174_FIRST.with(|m| m.borrow_mut().clear());
+        S1174_LAST.with(|m| m.borrow_mut().clear());
+        let s1174_doc_active = std::env::var("OXI_S1174_DISABLE").is_err()
+            && doc_resolved.pages.iter().any(|p| {
+                Self::s1174_has_ref(&p.header)
+                    || Self::s1174_has_ref(&p.footer)
+                    || Self::s1174_has_ref(&p.header_first)
+                    || Self::s1174_has_ref(&p.footer_first)
+                    || Self::s1174_has_ref(&p.header_even)
+                    || Self::s1174_has_ref(&p.footer_even)
+            });
+        S1174_ACTIVE.with(|c| c.set(s1174_doc_active));
         for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
             // S816: sections after the first count as "page 2+" for the
             // page-top space-before suppression.
@@ -3947,6 +3979,35 @@ impl LayoutEngine {
         } else {
             &page.header
         };
+        // S1174: this section's headers/footers re-resolve STYLEREF per page.
+        // The search is SECTION-SCOPED both ways (reference__0061531a's
+        // Schedule pages: Word leaves the Part/Division STYLEREF lines BLANK
+        // although Part 4 precedes them and 'Part 1—Costs' follows — neither
+        // the backward nor the forward search crosses the section boundary),
+        // so the registries reset here and the forward-fallback prescan walks
+        // THIS section's blocks only.
+        let s1174_have_ref = S1174_ACTIVE.with(|c| c.get())
+            && (Self::s1174_has_ref(&page.header)
+                || Self::s1174_has_ref(&page.footer)
+                || Self::s1174_has_ref(&page.header_first)
+                || Self::s1174_has_ref(&page.footer_first)
+                || Self::s1174_has_ref(&page.header_even)
+                || Self::s1174_has_ref(&page.footer_even));
+        if S1174_ACTIVE.with(|c| c.get()) {
+            S1174_LAST.with(|m| m.borrow_mut().clear());
+            S1174_FIRST.with(|m| m.borrow_mut().clear());
+            for b in &page.blocks {
+                Self::s1174_ingest_block(b, true);
+            }
+        }
+        let s1174_map0 = if s1174_have_ref { Some(Self::s1174_map()) } else { None };
+        let s1174_first_hdr_sub: Vec<Block>;
+        let s755_first_hdr: &[Block] = if let Some(m) = s1174_map0.as_ref() {
+            s1174_first_hdr_sub = Self::s1174_substitute(s755_first_hdr, m);
+            &s1174_first_hdr_sub
+        } else {
+            s755_first_hdr
+        };
         let header_bottom = self.s755_header_bottom(s755_first_hdr, page);
         let mut start_y = page.margin.top.max(header_bottom);
 
@@ -4041,6 +4102,14 @@ impl LayoutEngine {
             &page.footer_first
         } else {
             &page.footer
+        };
+        // S1174: footer STYLEREF fields resolve the same way.
+        let s1174_first_ftr_sub: Vec<Block>;
+        let s755_first_ftr: &[Block] = if let Some(m) = s1174_map0.as_ref() {
+            s1174_first_ftr_sub = Self::s1174_substitute(s755_first_ftr, m);
+            &s1174_first_ftr_sub
+        } else {
+            s755_first_ftr
         };
         let (footer_reserved, footer_has_text) = self.s755_footer_geom(s755_first_ftr, page);
 
@@ -5084,6 +5153,16 @@ impl LayoutEngine {
         // page-transition state comes from the follower's own normal layout.
         // (table_block_idx, page_idx, elem_start, elem_end, table_top)
         let mut s970_pending: Option<(usize, usize, usize, usize, f32)> = None;
+        // S1174: per-page STYLEREF resolution state. `ingested` is a cursor
+        // over this section's blocks (paragraphs strictly BEFORE the current
+        // block have completed layout = they sit on earlier pages when a new
+        // page starts, which is exactly the causal last-before-page set).
+        // `snapshots` records each page's resolved map for the emit loop.
+        let mut s1174_ingested = 0usize;
+        let mut s1174_snapshots: std::collections::HashMap<
+            usize,
+            std::collections::HashMap<String, String>,
+        > = std::collections::HashMap::new();
         for (block_idx, block) in page.blocks.iter().enumerate() {
             if let Ok(rng) = std::env::var("OXI_DBG_BLKTRACE") {
                 let mut it = rng.split('-');
@@ -5115,6 +5194,75 @@ impl LayoutEngine {
                 {
                     s863_vertical_run_idx += 1;
                     s755_geom = Some(s863_vertical_geoms[s863_vertical_run_idx]);
+                }
+            }
+            // S1174: ingest the paragraphs completed so far and, when a new
+            // page has begun, re-resolve the header/footer STYLEREF text and
+            // recompute this page's geometry (the resolved Part/Chapter name
+            // can wrap to a different line count, moving header_bottom across
+            // the top margin — reference__0061531a p52's +7pt pushdown).
+            // Vertical multi-run sections keep their S863 geometry untouched.
+            if S1174_ACTIVE.with(|c| c.get()) {
+                // Ingest through the CURRENT block (v1.5): Word's rule is
+                // first-on-page, and the page-starting block is most often the
+                // very heading the header should show (ActHead pbb pages) — a
+                // page break triggered INSIDE this block must already see its
+                // style text, or a Schedule page's header renders the PREVIOUS
+                // Part's 2-line name where Word shows the current 1-line one
+                // (the +1x2 overshoot this replaced).
+                while s1174_ingested <= block_idx {
+                    Self::s1174_ingest_block(&page.blocks[s1174_ingested], false);
+                    s1174_ingested += 1;
+                }
+                if s1174_have_ref && s863_vertical_geoms.is_empty() {
+                    let pno = pages.len() + 1;
+                    // Geometry is recomputed EVERY block (a break inside THIS
+                    // block must see its just-ingested style text); the emit
+                    // snapshot keeps the page-START state (first write wins).
+                    {
+                        let map = Self::s1174_map();
+                        let hb_odd = self
+                            .s755_header_bottom(&Self::s1174_substitute(&page.header, &map), page);
+                        let sy_odd = page.margin.top.max(hb_odd);
+                        let (fr_odd, _) = self
+                            .s755_footer_geom(&Self::s1174_substitute(&page.footer, &map), page);
+                        let ch_odd = page.size.height - sy_odd - fr_odd;
+                        let (sy_even, ch_even) = if page.even_odd_hf {
+                            let hb = self.s755_header_bottom(
+                                &Self::s1174_substitute(&page.header_even, &map),
+                                page,
+                            );
+                            let sy = page.margin.top.max(hb);
+                            let (fr, _) = self.s755_footer_geom(
+                                &Self::s1174_substitute(&page.footer_even, &map),
+                                page,
+                            );
+                            (sy, page.size.height - sy - fr)
+                        } else {
+                            (sy_odd, ch_odd)
+                        };
+                        let first = s755_geom
+                            .as_ref()
+                            .map(|g| g.first)
+                            .unwrap_or((start_y, content_height));
+                        if std::env::var("OXI_DBG1174").is_ok() {
+                            eprintln!(
+                                "[S1174] hook pno={} blk={} sy_odd={:.2} sy_even={:.2} map={} part={}",
+                                pno,
+                                block_idx,
+                                sy_odd,
+                                sy_even,
+                                map.len(),
+                                map.get("CharPartText").map(|s| s.len()).unwrap_or(0)
+                            );
+                        }
+                        s755_geom = Some(S755Geom {
+                            first,
+                            odd: (sy_odd, ch_odd),
+                            even: (sy_even, ch_even),
+                        });
+                        s1174_snapshots.entry(pno).or_insert(map);
+                    }
                 }
             }
             // S755: refresh the current page's header/footer geometry (a
@@ -9997,6 +10145,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // Layout header/footer on each layout page
         // Header y = headerDistance (from page top edge), default 36pt (0.5in)
         // Footer y = pageHeight - footerDistance - footerContentHeight
+        // S1174: ingest this section's trailing paragraphs so the end-state
+        // registry is complete (the next section's page 1 and any trailing
+        // page's emit fallback resolve against it).
+        if S1174_ACTIVE.with(|c| c.get()) {
+            while s1174_ingested < page.blocks.len() {
+                Self::s1174_ingest_block(&page.blocks[s1174_ingested], false);
+                s1174_ingested += 1;
+            }
+        }
         let header_y = page.header_distance.unwrap_or(36.0);
         let footer_dist = page.footer_distance.unwrap_or(36.0);
         let hdr_x = page.margin.left;
@@ -10060,6 +10217,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 &page.footer_even
             } else {
                 &page.footer
+            };
+            // S1174: draw the page's re-resolved STYLEREF text. Pages that
+            // began mid-paragraph carry no snapshot — use the nearest earlier
+            // page's map, else the section's end state.
+            let s1174_hdr_sub: Vec<Block>;
+            let s1174_ftr_sub: Vec<Block>;
+            let (hdr_blocks, ftr_blocks): (&[Block], &[Block]) = if s1174_have_ref {
+                let map = (1..=s755_pno)
+                    .rev()
+                    .find_map(|k| s1174_snapshots.get(&k))
+                    .cloned()
+                    .unwrap_or_else(Self::s1174_map);
+                s1174_hdr_sub = Self::s1174_substitute(hdr_blocks, &map);
+                s1174_ftr_sub = Self::s1174_substitute(ftr_blocks, &map);
+                (&s1174_hdr_sub, &s1174_ftr_sub)
+            } else {
+                (hdr_blocks, ftr_blocks)
             };
             if !hdr_blocks.is_empty() {
                 let mut cy = LayoutCursor::new(header_y);
@@ -11830,6 +12004,124 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     /// S755: header-bottom (header_y + content height) for one header
     /// variant's blocks — the extracted start_y computation (S731/S742
     /// arms included) so first/even/odd variants share one code path.
+    /// S1174: does any run in these header/footer blocks carry a STYLEREF tag?
+    fn s1174_has_ref(blocks: &[Block]) -> bool {
+        blocks.iter().any(|b| match b {
+            Block::Paragraph(p) => p.runs.iter().any(|r| r.style.styleref.is_some()),
+            _ => false,
+        })
+    }
+
+    /// S1174: clone header/footer blocks with each STYLEREF field's cached
+    /// text replaced by its resolution (map: style ID -> text). A field whose
+    /// style has no entry in the section is BLANKED, cache included —
+    /// reference__0061531a's Schedule-section headers cache the previous
+    /// section's Part name, but Word re-evaluates, finds no Part in the
+    /// section, and renders the line empty.
+    fn s1174_substitute(blocks: &[Block], map: &std::collections::HashMap<String, String>) -> Vec<Block> {
+        let mut out = blocks.to_vec();
+        for b in &mut out {
+            if let Block::Paragraph(p) = b {
+                let mut clearing = false;
+                for run in &mut p.runs {
+                    if let Some(name) = run.style.styleref.as_ref() {
+                        run.text = map.get(name).cloned().unwrap_or_default();
+                        clearing = true;
+                    } else if run.style.styleref_cont {
+                        if clearing {
+                            run.text.clear();
+                        }
+                    } else {
+                        clearing = false;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// S1174: walk a block's paragraphs (table cells included) into the
+    /// registry.
+    fn s1174_ingest_block(b: &Block, into_first: bool) {
+        match b {
+            Block::Paragraph(p) => Self::s1174_ingest(p, into_first),
+            Block::Table(t) => {
+                for row in &t.rows {
+                    for cell in &row.cells {
+                        for cb in &cell.blocks {
+                            Self::s1174_ingest_block(cb, into_first);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// S1174: record a laid-out body paragraph's style texts. Paragraph style
+    /// -> whole text; each contiguous same-rStyle run group -> its concatenated
+    /// text (the nearest-before-the-page occurrence wins by overwrite order).
+    fn s1174_ingest(para: &Paragraph, into_first: bool) {
+        let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+        let mut put = |key: &str, val: String| {
+            if into_first {
+                S1174_FIRST.with(|m| {
+                    m.borrow_mut().entry(key.to_string()).or_insert(val);
+                });
+            } else {
+                S1174_LAST.with(|m| {
+                    m.borrow_mut().insert(key.to_string(), val);
+                });
+            }
+        };
+        if let Some(sid) = para.style.style_id.as_ref() {
+            if !text.trim().is_empty() {
+                put(sid, text.clone());
+            }
+        }
+        let mut cur: Option<(String, String)> = None;
+        for r in &para.runs {
+            match (r.style.char_style_id.as_ref(), &mut cur) {
+                (Some(cid), Some((c, buf))) if cid == c => buf.push_str(&r.text),
+                (Some(cid), _) => {
+                    if let Some((c, buf)) = cur.take() {
+                        if !buf.trim().is_empty() {
+                            put(&c, buf);
+                        }
+                    }
+                    cur = Some((cid.clone(), r.text.clone()));
+                }
+                (None, _) => {
+                    if let Some((c, buf)) = cur.take() {
+                        if !buf.trim().is_empty() {
+                            put(&c, buf);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((c, buf)) = cur.take() {
+            if !buf.trim().is_empty() {
+                put(&c, buf);
+            }
+        }
+    }
+
+    /// S1174: the causal resolution map at the current layout position — the
+    /// latest occurrence laid out so far, falling forward to the document's
+    /// first occurrence for styles not seen yet (probe _pb_hdrpush_gen.py:
+    /// Word's header STYLEREF = first-on-page, else last-before, else
+    /// first-after; v1 approximates first-on-page with last-before).
+    fn s1174_map() -> std::collections::HashMap<String, String> {
+        let mut m = S1174_FIRST.with(|f| f.borrow().clone());
+        S1174_LAST.with(|l| {
+            for (k, v) in l.borrow().iter() {
+                m.insert(k.clone(), v.clone());
+            }
+        });
+        m
+    }
+
     fn s755_header_bottom(&self, blocks: &[Block], page: &Page) -> f32 {
         if !blocks.is_empty() {
             // S843 (2026-07-14, opt-out OXI_S843_DISABLE): an INK-FREE header
@@ -12068,7 +12360,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // header ALSO wants hhea (its "line 12.65" IS Arial-11 hhea
                     // 12.649, not the 12.75 GDI value). CJK headers keep the
                     // word_line_height (83/64) calibration.
-                    let lh = if !self.doc_body_has_real_cjk
+                    let mut lh = if !self.doc_body_has_real_cjk
                         && !metrics.is_cjk_83_64_font()
                         && std::env::var("OXI_S979_DISABLE").is_err()
                     {
@@ -12076,6 +12368,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         metrics.word_line_height(fs, 96.0)
                     };
+                    // S1175 (2026-08-20, opt-out OXI_S1175_DISABLE): an `atLeast`
+                    // line rule floors the header line like anywhere else.
+                    // reference__0061531a's header paragraphs inherit line=260
+                    // atLeast (13.0pt) over a 10pt TNR line (hhea 11.499) — Word
+                    // renders the header at 13.0 pitch (PDF: 12.96-13.08), so the
+                    // S979 hhea base alone left the stack ~6pt short and the
+                    // STYLEREF pushdown (S1174) never crossed the top margin.
+                    // Golden corpus scan: 0 headers with atLeast (direct or
+                    // Header-style) → JP byte-identical by construction.
+                    if matches!(para.style.line_spacing_rule.as_deref(), Some("atLeast"))
+                        && std::env::var("OXI_S1175_DISABLE").is_err()
+                    {
+                        if let Some(fl) = para.style.line_spacing {
+                            if fl > lh {
+                                lh = fl;
+                            }
+                        }
+                    }
                     if std::env::var("OXI_DBG_HDR").is_ok() {
                         let txt: String = para
                             .runs

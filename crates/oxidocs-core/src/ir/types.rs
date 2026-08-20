@@ -541,6 +541,23 @@ pub struct RunStyle {
     /// by corpus scan; JP has 0 → byte-identical).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hr_rule: Option<(f32, String)>,
+    /// S1174: this run is the FIRST cached-result run of a STYLEREF field —
+    /// the value is the referenced style's ID. Word re-evaluates STYLEREF in
+    /// headers/footers per page (first occurrence ON the page, else the last
+    /// BEFORE it, else the first in the document — probe _pb_hdrpush_gen.py);
+    /// Oxi's layout substitutes the causal resolution (last-before / first-in-
+    /// doc) into header/footer copies per page. None everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styleref: Option<String>,
+    /// S1174: a LATER cached-result run of the same STYLEREF field (its text
+    /// is cleared when the field is re-resolved so the whole resolution lives
+    /// on the first run).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub styleref_cont: bool,
+    /// S1174: the run's character style ID (w:rStyle), kept so a char-style
+    /// STYLEREF (e.g. CharPartText) can find its source runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_style_id: Option<String>,
 }
 
 impl Default for RunStyle {
@@ -593,6 +610,9 @@ impl Default for RunStyle {
             inline_object_extent: None,
             inline_object_image: None,
             hr_rule: None,
+            styleref: None,
+            styleref_cont: false,
+            char_style_id: None,
         }
     }
 }
