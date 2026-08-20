@@ -18,7 +18,7 @@ use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::ir::{MergeCell, Workbook};
+use crate::ir::{CellStyle, MergeCell, Workbook};
 use crate::parser::{parse_xlsx, XlsxError};
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
@@ -59,6 +59,8 @@ pub struct XlsxEditor {
     /// Sheets whose merged cells are being replaced wholesale. A merge is not
     /// edited in place, so the whole list travels together.
     merges: HashMap<usize, Vec<MergeCell>>,
+    /// (sheet_idx, 1-based row, 0-based column) -> the style it should carry.
+    styles: HashMap<(usize, u32, u32), CellStyle>,
 }
 
 /// Convert 0-based column to letter reference (0->A, 25->Z, 26->AA).
@@ -84,6 +86,7 @@ impl XlsxEditor {
             row_hidden: HashMap::new(),
             col_hidden: HashMap::new(),
             merges: HashMap::new(),
+            styles: HashMap::new(),
         })
     }
 
@@ -198,6 +201,14 @@ impl XlsxEditor {
             if !same_merges(&before.merge_cells, &after.merge_cells) {
                 self.merges.insert(index, after.merge_cells.clone());
             }
+
+            for (&(row, col), cell) in &now {
+                let was = held.get(&(row, col)).map(|before| &before.style);
+                if was != Some(&cell.style) {
+                    self.styles
+                        .insert((index, row, col), cell.style.clone());
+                }
+            }
         }
         Ok(())
     }
@@ -217,11 +228,23 @@ impl XlsxEditor {
         self.merges.insert(sheet_index, merges);
     }
 
+    /// Gives a cell a style of its own.
+    pub fn set_cell_style(
+        &mut self,
+        sheet_index: usize,
+        row: u32,
+        col: u32,
+        style: CellStyle,
+    ) {
+        self.styles.insert((sheet_index, row, col), style);
+    }
+
     pub fn has_edits(&self) -> bool {
         !self.edits.is_empty()
             || !self.row_hidden.is_empty()
             || !self.col_hidden.is_empty()
             || !self.merges.is_empty()
+            || !self.styles.is_empty()
     }
 
     /// Save edited xlsx.
@@ -247,6 +270,52 @@ impl XlsxEditor {
                 .insert((*row, *col), val);
         }
 
+        // One xf per distinct style, so a run that bolds a hundred cells adds
+        // one entry rather than a hundred.
+        let mut distinct: Vec<CellStyle> = Vec::new();
+        let mut style_slot: HashMap<(usize, u32, u32), usize> = HashMap::new();
+        for (key, style) in &self.styles {
+            let slot = match distinct.iter().position(|held| held == style) {
+                Some(slot) => slot,
+                None => {
+                    distinct.push(style.clone());
+                    distinct.len() - 1
+                }
+            };
+            style_slot.insert(*key, slot);
+        }
+
+        // The style sheet is read ahead of the walk below, since a worksheet
+        // needs the indices and may come before it in the archive.
+        let mut patched_styles: Option<String> = None;
+        let mut style_indices: Vec<u32> = Vec::new();
+        if !distinct.is_empty() {
+            let mut xml = String::new();
+            archive
+                .by_name("xl/styles.xml")
+                .map_err(|_| {
+                    XlsxError::InvalidData(
+                        "the workbook has no style sheet to add styles to".to_string(),
+                    )
+                })?
+                .read_to_string(&mut xml)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let (patched, indices) = patch_styles_xml(&xml, &distinct)?;
+            patched_styles = Some(patched);
+            style_indices = indices;
+        }
+
+        // Where each cell's style ended up, ready for the sheet writer.
+        let mut cell_styles: HashMap<usize, BTreeMap<(u32, u32), u32>> = HashMap::new();
+        for ((sheet, row, col), slot) in &style_slot {
+            if let Some(index) = style_indices.get(*slot) {
+                cell_styles
+                    .entry(*sheet)
+                    .or_default()
+                    .insert((*row, *col), *index);
+            }
+        }
+
         let mut rows_by_sheet: HashMap<usize, BTreeMap<u32, bool>> = HashMap::new();
         for ((sheet, row), hidden) in &self.row_hidden {
             rows_by_sheet.entry(*sheet).or_default().insert(*row, *hidden);
@@ -260,12 +329,14 @@ impl XlsxEditor {
         // Map sheet path -> everything to change in that sheet
         let empty_cells: HashMap<(u32, u32), &CellEditValue> = HashMap::new();
         let empty_lines: BTreeMap<u32, bool> = BTreeMap::new();
+        let empty_styles: BTreeMap<(u32, u32), u32> = BTreeMap::new();
         let mut path_edits: HashMap<String, SheetEdits<'_>> = HashMap::new();
         for sheet in edits_by_sheet
             .keys()
             .chain(rows_by_sheet.keys())
             .chain(cols_by_sheet.keys())
             .chain(self.merges.keys())
+            .chain(cell_styles.keys())
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
         {
@@ -277,6 +348,7 @@ impl XlsxEditor {
                         rows: rows_by_sheet.get(&sheet).unwrap_or(&empty_lines),
                         cols: cols_by_sheet.get(&sheet).unwrap_or(&empty_lines),
                         merges: self.merges.get(&sheet).map(Vec::as_slice),
+                        styles: cell_styles.get(&sheet).unwrap_or(&empty_styles),
                     },
                 );
             }
@@ -296,6 +368,14 @@ impl XlsxEditor {
                 writer.start_file(&name, options)
                     .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
 
+                if name == "xl/styles.xml" {
+                    if let Some(patched) = patched_styles.as_deref() {
+                        writer
+                            .write_all(patched.as_bytes())
+                            .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        continue;
+                    }
+                }
                 if let Some(sheet_edits) = path_edits.get(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
@@ -506,6 +586,298 @@ fn edit_for(cell: &crate::ir::Cell) -> Option<CellEditValue> {
     }
 }
 
+/// Adds the styles a save needs to `styles.xml`, and says which `cellXfs`
+/// index each one ended up at.
+///
+/// Styles are appended rather than matched against what is already there. A
+/// style read back out of a file is only as complete as the parser that read
+/// it, so reusing an existing entry risks carrying over something the parser
+/// never saw. Appending costs a few bytes and keeps every original entry as it
+/// was for the cells still using it.
+fn patch_styles_xml(
+    xml: &str,
+    wanted: &[CellStyle],
+) -> Result<(String, Vec<u32>), XlsxError> {
+    if wanted.is_empty() {
+        return Ok((xml.to_string(), Vec::new()));
+    }
+
+    let fonts_at = count_of(xml, "fonts");
+    let fills_at = count_of(xml, "fills");
+    let borders_at = count_of(xml, "borders");
+    let xfs_at = count_of(xml, "cellXfs");
+    let mut next_number_format = 164_u32.max(
+        // Custom formats are numbered from 164; step past any the file already has.
+        highest_custom_number_format(xml).map_or(164, |highest| highest + 1),
+    );
+
+    let mut fonts = String::new();
+    let mut fills = String::new();
+    let mut borders = String::new();
+    let mut xfs = String::new();
+    let mut number_formats = String::new();
+    let mut indices = Vec::with_capacity(wanted.len());
+
+    for (offset, style) in wanted.iter().enumerate() {
+        let offset = offset as u32;
+        fonts.push_str(&font_xml(style));
+        fills.push_str(&fill_xml(style));
+        borders.push_str(&border_xml(style));
+
+        let number_format_id = match style.number_format.as_deref() {
+            None => 0,
+            Some(format) => match builtin_number_format_id(format) {
+                Some(id) => id,
+                None => {
+                    number_formats.push_str(&format!(
+                        "<numFmt numFmtId=\"{next_number_format}\" formatCode=\"{}\"/>",
+                        escape(format)
+                    ));
+                    let id = next_number_format;
+                    next_number_format += 1;
+                    id
+                }
+            },
+        };
+
+        xfs.push_str(&xf_xml(
+            style,
+            number_format_id,
+            fonts_at + offset,
+            fills_at + offset,
+            borders_at + offset,
+        ));
+        indices.push(xfs_at + offset);
+    }
+
+    let added = wanted.len() as u32;
+    let mut patched = xml.to_string();
+    patched = append_section(&patched, "numFmts", &number_formats, true)?;
+    patched = append_section(&patched, "fonts", &fonts, false)?;
+    patched = append_section(&patched, "fills", &fills, false)?;
+    patched = append_section(&patched, "borders", &borders, false)?;
+    patched = append_section(&patched, "cellXfs", &xfs, false)?;
+    let _ = added;
+    Ok((patched, indices))
+}
+
+/// How many entries a section already holds, read from its `count` attribute.
+fn count_of(xml: &str, section: &str) -> u32 {
+    let open = format!("<{section} ");
+    let Some(start) = xml.find(&open).or_else(|| xml.find(&format!("<{section}>"))) else {
+        return 0;
+    };
+    let Some(end) = xml[start..].find('>') else {
+        return 0;
+    };
+    let tag = &xml[start..start + end];
+    tag.find("count=\"")
+        .and_then(|at| {
+            let rest = &tag[at + 7..];
+            rest.find('"').and_then(|close| rest[..close].parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+fn highest_custom_number_format(xml: &str) -> Option<u32> {
+    let mut highest = None;
+    let mut rest = xml;
+    while let Some(at) = rest.find("numFmtId=\"") {
+        rest = &rest[at + 10..];
+        let Some(close) = rest.find('"') else { break };
+        if let Ok(id) = rest[..close].parse::<u32>() {
+            if id >= 164 {
+                highest = Some(highest.map_or(id, |held: u32| held.max(id)));
+            }
+        }
+    }
+    highest
+}
+
+/// Puts new entries at the end of a section, growing its `count`. A section
+/// that is not there is created when `create` is set, which only numFmts needs.
+fn append_section(
+    xml: &str,
+    section: &str,
+    entries: &str,
+    create: bool,
+) -> Result<String, XlsxError> {
+    if entries.is_empty() {
+        return Ok(xml.to_string());
+    }
+    let added = entries.matches("<numFmt ").count().max(
+        entries
+            .matches(&format!("<{}", singular(section)))
+            .count(),
+    ) as u32;
+
+    let closing = format!("</{section}>");
+    if let Some(at) = xml.find(&closing) {
+        let mut patched = String::with_capacity(xml.len() + entries.len());
+        patched.push_str(&xml[..at]);
+        patched.push_str(entries);
+        patched.push_str(&xml[at..]);
+        return Ok(bump_count(&patched, section, added));
+    }
+
+    // A self-closing section, such as <numFmts count="0"/>.
+    let empty = format!("<{section} ");
+    if let Some(at) = xml.find(&empty) {
+        if let Some(end) = xml[at..].find("/>") {
+            let head = &xml[..at + end];
+            let mut patched = String::with_capacity(xml.len() + entries.len());
+            patched.push_str(head);
+            patched.push('>');
+            patched.push_str(entries);
+            patched.push_str(&closing);
+            patched.push_str(&xml[at + end + 2..]);
+            return Ok(bump_count(&patched, section, added));
+        }
+    }
+
+    if !create {
+        return Err(XlsxError::InvalidData(format!(
+            "the workbook's styles have no {section} to add to"
+        )));
+    }
+    // numFmts belongs at the head of the style sheet, ahead of the fonts.
+    let at = xml.find("<fonts").ok_or_else(|| {
+        XlsxError::InvalidData("the workbook's styles have no fonts".to_string())
+    })?;
+    let mut patched = String::with_capacity(xml.len() + entries.len() + 40);
+    patched.push_str(&xml[..at]);
+    patched.push_str(&format!("<{section} count=\"{added}\">"));
+    patched.push_str(entries);
+    patched.push_str(&closing);
+    patched.push_str(&xml[at..]);
+    Ok(patched)
+}
+
+fn singular(section: &str) -> &str {
+    match section {
+        "fonts" => "font",
+        "fills" => "fill",
+        "borders" => "border",
+        "cellXfs" => "xf",
+        other => other,
+    }
+}
+
+fn bump_count(xml: &str, section: &str, added: u32) -> String {
+    let open = format!("<{section} ");
+    let Some(start) = xml.find(&open) else {
+        return xml.to_string();
+    };
+    let Some(end) = xml[start..].find('>') else {
+        return xml.to_string();
+    };
+    let tag = &xml[start..start + end];
+    let Some(at) = tag.find("count=\"") else {
+        return xml.to_string();
+    };
+    let rest = &tag[at + 7..];
+    let Some(close) = rest.find('"') else {
+        return xml.to_string();
+    };
+    let held: u32 = rest[..close].parse().unwrap_or(0);
+    let replaced = format!("{}count=\"{}\"{}", &tag[..at], held + added, &rest[close + 1..]);
+    format!("{}{}{}", &xml[..start], replaced, &xml[start + end..])
+}
+
+fn escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn font_xml(style: &CellStyle) -> String {
+    let mut font = String::from("<font>");
+    if style.bold {
+        font.push_str("<b/>");
+    }
+    if style.italic {
+        font.push_str("<i/>");
+    }
+    if let Some(size) = style.font_size {
+        font.push_str(&format!("<sz val=\"{size}\"/>"));
+    }
+    if let Some(color) = style.font_color.as_deref() {
+        font.push_str(&format!("<color rgb=\"FF{}\"/>", escape(color)));
+    }
+    font.push_str("</font>");
+    font
+}
+
+fn fill_xml(style: &CellStyle) -> String {
+    match style.bg_color.as_deref() {
+        Some(color) => format!(
+            "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF{}\"/><bgColor indexed=\"64\"/></patternFill></fill>",
+            escape(color)
+        ),
+        None => "<fill><patternFill patternType=\"none\"/></fill>".to_string(),
+    }
+}
+
+fn border_xml(style: &CellStyle) -> String {
+    let edge = |name: &str, on: bool| {
+        if on {
+            format!("<{name} style=\"thin\"><color indexed=\"64\"/></{name}>")
+        } else {
+            format!("<{name}/>")
+        }
+    };
+    format!(
+        "<border>{}{}{}{}<diagonal/></border>",
+        edge("left", style.border_left),
+        edge("right", style.border_right),
+        edge("top", style.border_top),
+        edge("bottom", style.border_bottom)
+    )
+}
+
+fn xf_xml(
+    style: &CellStyle,
+    number_format_id: u32,
+    font_id: u32,
+    fill_id: u32,
+    border_id: u32,
+) -> String {
+    let mut xf = format!(
+        "<xf numFmtId=\"{number_format_id}\" fontId=\"{font_id}\" fillId=\"{fill_id}\" borderId=\"{border_id}\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\""
+    );
+    if number_format_id != 0 {
+        xf.push_str(" applyNumberFormat=\"1\"");
+    }
+    match style.horizontal_align.as_deref() {
+        Some(alignment) => {
+            xf.push_str(" applyAlignment=\"1\">");
+            xf.push_str(&format!("<alignment horizontal=\"{}\"/>", escape(alignment)));
+            xf.push_str("</xf>");
+        }
+        None => xf.push_str("/>"),
+    }
+    xf
+}
+
+/// The well-known number formats, so a common one does not need a new entry.
+fn builtin_number_format_id(format: &str) -> Option<u32> {
+    match format {
+        "General" => Some(0),
+        "0" => Some(1),
+        "0.00" => Some(2),
+        "#,##0" => Some(3),
+        "#,##0.00" => Some(4),
+        "0%" => Some(9),
+        "0.00%" => Some(10),
+        "0.00E+00" => Some(11),
+        "mm-dd-yy" => Some(14),
+        "m/d/yy h:mm" => Some(22),
+        _ => None,
+    }
+}
+
 /// Writes a `<mergeCells>` block, or nothing at all when there is none left.
 fn write_merges(
     writer: &mut Writer<Cursor<Vec<u8>>>,
@@ -621,6 +993,22 @@ fn close_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
+/// Copies a start tag, pointing it at a different entry in the style sheet.
+fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
+    let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
+    let mut rewritten = BytesStart::new(name);
+    for attribute in start.attributes().flatten() {
+        let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+        if key == "s" {
+            continue;
+        }
+        let value = String::from_utf8_lossy(&attribute.value).into_owned();
+        rewritten.push_attribute((key.as_str(), value.as_str()));
+    }
+    rewritten.push_attribute(("s", style.to_string().as_str()));
+    rewritten
+}
+
 /// Copies a start tag, replacing whatever it said about being hidden.
 fn with_hidden(start: &BytesStart<'_>, hidden: bool) -> BytesStart<'static> {
     let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
@@ -673,6 +1061,8 @@ struct SheetEdits<'a> {
     cols: &'a BTreeMap<u32, bool>,
     /// Every merge the sheet should end up with, when they are being replaced.
     merges: Option<&'a [MergeCell]>,
+    /// (one-based row, zero-based column) -> the cellXfs index it should carry.
+    styles: &'a BTreeMap<(u32, u32), u32>,
 }
 
 fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
@@ -785,15 +1175,27 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                             current_edit = None;
                         }
 
+                        let restyle = sheet_edits.styles.get(&(cell_row, cell_col)).copied();
+                        if current_edit.is_none() {
+                            if let Some(style) = restyle {
+                                writer
+                                    .write_event(Event::Start(with_style(e, style)))
+                                    .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                                continue;
+                            }
+                        }
                         if let Some(value) = &current_edit {
                             // Rewrite the cell type while preserving its reference and style.
                             let mut new_start = BytesStart::new("c");
                             for attr in e.attributes().flatten() {
                                 let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
-                                if key == "t" {
+                                if key == "t" || (key == "s" && restyle.is_some()) {
                                     continue;
                                 }
                                 new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
+                            }
+                            if let Some(style) = restyle {
+                                new_start.push_attribute(("s", style.to_string().as_str()));
                             }
                             if let Some(cell_type) = value.cell_type() {
                                 new_start.push_attribute(("t", cell_type));
@@ -1165,17 +1567,91 @@ mod tests {
         assert_eq!(cell.formula.as_deref(), Some("SUM(A2:A3)"));
     }
 
+    const STYLES: &str = concat!(
+        r#"<styleSheet><numFmts count="0"/><fonts count="1"><font><sz val="11"/></font></fonts>"#,
+        r#"<fills count="1"><fill><patternFill patternType="none"/></fill></fills>"#,
+        r#"<borders count="1"><border/></borders>"#,
+        r#"<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>"#,
+        r#"</styleSheet>"#
+    );
+
+    #[test]
+    fn styles_are_appended_and_their_indices_reported() {
+        let bold = CellStyle {
+            bold: true,
+            ..CellStyle::default()
+        };
+        let (patched, indices) = patch_styles_xml(STYLES, &[bold]).expect("appends");
+
+        assert_eq!(indices, vec![1]);
+        assert!(patched.contains("<font><b/></font>"));
+        assert!(patched.contains(r#"<fonts count="2">"#));
+        assert!(patched.contains(r#"<cellXfs count="2">"#));
+        assert!(patched.contains(r#"fontId="1" fillId="1" borderId="1""#));
+        // The entry that was already there is left alone.
+        assert!(patched.contains(r#"<font><sz val="11"/></font>"#));
+    }
+
+    #[test]
+    fn a_custom_number_format_gets_an_id_of_its_own() {
+        let styled = CellStyle {
+            number_format: Some("0.000".to_string()),
+            ..CellStyle::default()
+        };
+        let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");
+        assert!(patched.contains(r#"<numFmt numFmtId="164" formatCode="0.000"/>"#));
+        assert!(patched.contains(r#"numFmtId="164""#));
+        assert!(patched.contains(r#"<numFmts count="1">"#));
+    }
+
+    #[test]
+    fn a_well_known_number_format_reuses_its_id() {
+        let styled = CellStyle {
+            number_format: Some("0.00".to_string()),
+            ..CellStyle::default()
+        };
+        let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");
+        assert!(!patched.contains("<numFmt "));
+        assert!(patched.contains(r#"numFmtId="2""#));
+    }
+
+    #[test]
+    fn alignment_and_colour_reach_the_style_sheet() {
+        let styled = CellStyle {
+            horizontal_align: Some("center".to_string()),
+            bg_color: Some("FFFF00".to_string()),
+            font_color: Some("FF0000".to_string()),
+            border_top: true,
+            ..CellStyle::default()
+        };
+        let (patched, _) = patch_styles_xml(STYLES, &[styled]).expect("appends");
+        assert!(patched.contains(r#"<alignment horizontal="center"/>"#));
+        assert!(patched.contains(r#"<fgColor rgb="FFFFFF00"/>"#));
+        assert!(patched.contains(r#"<color rgb="FFFF0000"/>"#));
+        assert!(patched.contains(r#"<top style="thin">"#));
+    }
+
+    #[test]
+    fn asking_for_no_styles_changes_nothing() {
+        let (patched, indices) = patch_styles_xml(STYLES, &[]).expect("does nothing");
+        assert_eq!(patched, STYLES);
+        assert!(indices.is_empty());
+    }
+
     /// The patcher takes everything a sheet changes; these tests only change cells.
     fn cells_only<'a>(
         cells: &'a HashMap<(u32, u32), &'a CellEditValue>,
     ) -> SheetEdits<'a> {
         static NOTHING: std::sync::OnceLock<BTreeMap<u32, bool>> = std::sync::OnceLock::new();
         let nothing = NOTHING.get_or_init(BTreeMap::new);
+        static NO_STYLES: std::sync::OnceLock<BTreeMap<(u32, u32), u32>> =
+            std::sync::OnceLock::new();
         SheetEdits {
             cells,
             rows: nothing,
             cols: nothing,
             merges: None,
+            styles: NO_STYLES.get_or_init(BTreeMap::new),
         }
     }
 

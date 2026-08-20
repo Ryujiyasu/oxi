@@ -88,7 +88,7 @@ impl CellValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CellStyle {
     pub bold: bool,
     pub italic: bool,
