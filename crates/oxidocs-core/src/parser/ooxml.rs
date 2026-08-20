@@ -1322,8 +1322,17 @@ fn parse_body(
                         // previously-correct paras) — an S559 pair. Ships default-ON with
                         // its p71 counterpart (a separate empty-para page-bottom
                         // under-reservation), co-gated per the merge gate.
-                        let s997_single_ascii_space_host =
-                            pr.inline_images.len() == 1 && std::env::var("OXI_S997").is_ok() && {
+                        // ★S997 default-ON (2026-08-20, opt-out OXI_S997_DISABLE):
+                        // the missing counterpart is FOUND — S1179's image-line
+                        // (factor−1)×natural term (the auto-multiple leading rides
+                        // on top of the image; _pb_brimg @276 arms). The 07-24
+                        // "distributed sub-pt empty-para precision wall" was the
+                        // missing +2.7/figure, not the empty spacers (S1004
+                        // falsified those). Ships as the co-gated {S997, S1179}
+                        // pair per the S559 discipline.
+                        let s997_single_ascii_space_host = pr.inline_images.len() == 1
+                            && std::env::var("OXI_S997_DISABLE").is_err()
+                            && {
                                 let mut chars =
                                     pr.paragraph.runs.iter().flat_map(|r| r.text.chars());
                                 matches!(chars.next(), Some(' ')) && chars.next().is_none()

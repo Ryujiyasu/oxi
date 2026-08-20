@@ -90,9 +90,29 @@ SHAPES = [
 ]
 HEIGHTS = [6.0, 12.0, 18.0, 24.2, 36.0, 60.0]     # picture cy, pt
 
+# S1179 arms (2026-08-20): creative__0158c02a's 29 figure paragraphs are all
+# [image] or [single SPACE + image] hosts (sz=24, run font "inherit" = an
+# unknown HTML-paste name).  Oxi stacks a phantom 20.7pt text line above the
+# image for the space (12 x 1.5 unknown-font fallback x 1.15) where Word's PDF
+# shows the image line ONLY, and Oxi misses the ~2.6pt descent term below
+# (Word caption box sits img_h + descent under the image top; Oxi puts it at
+# img_h exactly).  "sp" = a single space in the mark font; "spX" = a single
+# space in an UNKNOWN font (the specimen's "inherit"); "@276" = the
+# specimen's line=276 auto spacing.
+XSHAPES = [
+    ("sp_img", [["sp", "img"]], 240),
+    ("R:sp|img", [["sp"], ["img"]], 240),
+    ("R:spX|img", [["spX"], ["img"]], 240),
+    ("img@276", [["img"]], 276),
+    ("sp_img@276", [["sp", "img"]], 276),
+    ("R:spX|img@276", [["spX"], ["img"]], 276),
+]
+XHEIGHTS = [6.0, 18.0, 36.0, 60.0]
+
 
 def arms():
-    return [(s, h) for s in SHAPES for h in HEIGHTS]
+    return ([(s, h, 240) for s in SHAPES for h in HEIGHTS]
+            + [((lbl, runs), h, line) for lbl, runs, line in XSHAPES for h in XHEIGHTS])
 
 
 def rpr():
@@ -100,10 +120,10 @@ def rpr():
             '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (FONT, FONT, FONT, SZ, SZ))
 
 
-def ppr(pbb=False):
+def ppr(pbb=False, line=240):
     return ("<w:pPr>%s<w:widowControl w:val=\"0\"/>"
-            "<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>%s</w:pPr>"
-            % ("<w:pageBreakBefore/>" if pbb else "", rpr()))
+            "<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"%d\" w:lineRule=\"auto\"/>%s</w:pPr>"
+            % ("<w:pageBreakBefore/>" if pbb else "", line, rpr()))
 
 
 def pic(idx, h_pt):
@@ -121,14 +141,26 @@ def pic(idx, h_pt):
             % (cx, cy, idx, idx, a, idx, cx, cy))
 
 
-def subject(runs, h_pt, idx):
+XFONT = "NoSuchFontQzj"          # an unknown family, like the specimen's "inherit"
+
+
+def xrpr():
+    return ('<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:cs="%s"/>'
+            '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>'
+            % (XFONT, XFONT, XFONT, SZ, SZ))
+
+
+def subject(runs, h_pt, idx, line=240):
     item = {"txt": lambda: '<w:t xml:space="preserve">x</w:t>',
+            "sp": lambda: '<w:t xml:space="preserve"> </w:t>',
+            "spX": lambda: '<w:t xml:space="preserve"> </w:t>',
             "br": lambda: "<w:br/>",
             "img": lambda: pic(idx, h_pt)}
     out = []
     for run in runs:
-        out.append("<w:r>%s%s</w:r>" % (rpr(), "".join(item[k]() for k in run)))
-    return "<w:p>%s%s</w:p>" % (ppr(), "".join(out))
+        rp = xrpr() if "spX" in run else rpr()
+        out.append("<w:r>%s%s</w:r>" % (rp, "".join(item[k]() for k in run)))
+    return "<w:p>%s%s</w:p>" % (ppr(line=line), "".join(out))
 
 
 def marker(tag, pbb=False):
@@ -141,11 +173,11 @@ def gen():
     # arm 0 is the control: markers with nothing between them
     body.append(marker("M00S", pbb=True))
     body.append(marker("M00E"))
-    for ai, (shape, h) in enumerate(arms(), start=1):
+    for ai, (shape, h, line) in enumerate(arms(), start=1):
         body.append(marker("M%02dS" % ai, pbb=True))
         for _ in range(REPEAT):
             idx += 1
-            body.append(subject(shape[1], h, idx))
+            body.append(subject(shape[1], h, idx, line=line))
         body.append(marker("M%02dE" % ai))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
@@ -169,18 +201,18 @@ def report(spans, who):
         raise SystemExit("control arm missing")
     print("%s   natural line = %.4f   control span (one marker) = %.2f"
           % (who, nat, base))
-    print("%-12s %6s %9s %9s %9s  %s"
+    print("%-14s %6s %9s %9s %9s  %s"
           % ("shape", "img_h", "per copy", "1line+img", "2 lines", "verdict"))
-    for ai, (shape, h) in enumerate(arms(), start=1):
+    for ai, (shape, h, _line) in enumerate(arms(), start=1):
         span = spans.get(ai)
         if span is None:
-            print("%-12s %6.1f   MISSING" % (shape[0], h))
+            print("%-14s %6.1f   MISSING" % (shape[0], h))
             continue
         per = (span - base) / REPEAT
         one = max(nat, h)                     # picture sits on one line
         two = nat + max(nat, h)               # a text line, then the picture
         pick = "1line+img" if abs(per - one) < abs(per - two) else "2 lines"
-        print("%-12s %6.1f %9.3f %9.3f %9.3f  %s (%+.2f)"
+        print("%-14s %6.1f %9.3f %9.3f %9.3f  %s (%+.2f)"
               % (shape[0], h, per, one, two, pick,
                  per - (one if pick == "1line+img" else two)))
 
