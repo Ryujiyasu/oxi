@@ -144,6 +144,20 @@ struct Clipboard {
     origin: CellAddress,
 }
 
+struct AutoFilter {
+    range: CellRange,
+    fields: Vec<FieldTest>,
+}
+
+struct FieldTest {
+    /// One-based column within the filtered range.
+    field: u32,
+    first: Criteria,
+    second: Option<Criteria>,
+    /// True when the two criteria are joined by xlOr rather than xlAnd.
+    either: bool,
+}
+
 #[derive(Clone)]
 struct FindState {
     range: CellRange,
@@ -155,6 +169,10 @@ struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
     clipboard: Option<Clipboard>,
+    /// The range a sheet is filtering, and the tests each field is under.
+    /// Filtering a second field narrows what the first left showing, so the
+    /// tests accumulate and every row is judged against all of them.
+    auto_filter: Option<AutoFilter>,
     selection: CellRange,
     screen_updating: bool,
     enable_events: bool,
@@ -177,6 +195,7 @@ impl<'a> WorkbookHost<'a> {
             workbook,
             active_sheet,
             clipboard: None,
+            auto_filter: None,
             selection: CellRange::single(CellAddress {
                 sheet: active_sheet,
                 row: 1,
@@ -2973,6 +2992,130 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// Filters a range, hiding the rows that fail the test.
+    ///
+    /// With no arguments it turns filtering off and shows everything again.
+    /// The header row is never hidden, and rows outside the range are left
+    /// alone.
+    fn auto_filter(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let given = |index: usize| match args.get(index) {
+            Some(Value::Missing) | None => None,
+            Some(value) => Some(value),
+        };
+        if args.iter().all(|value| matches!(value, Value::Missing)) {
+            // Excel treats a bare call as a switch: on becomes off.
+            if self.auto_filter.is_some() {
+                self.auto_filter = None;
+                self.show_all_rows(range.sheet)?;
+            } else {
+                self.auto_filter = Some(AutoFilter {
+                    range,
+                    fields: Vec::new(),
+                });
+            }
+            return Ok(Value::Boolean(true));
+        }
+
+        let Some(field) = given(0) else {
+            return Err("Range.AutoFilter needs a field to filter on".to_string());
+        };
+        let field = positive_index(field, "AutoFilter field")?;
+        let width = range.end_column - range.start_column + 1;
+        if field > width {
+            return Err(format!(
+                "Range.AutoFilter field {field} is outside the {width}-column range"
+            ));
+        }
+        let first = match given(1) {
+            Some(value) => parse_criteria(&self.criteria_value(value)?),
+            None => {
+                return Err("Range.AutoFilter needs criteria to test against".to_string());
+            }
+        };
+        let either = match given(2) {
+            None => false,
+            Some(value) => match sort_number(value, "AutoFilter operator")? {
+                1 => false,
+                2 => true,
+                other => {
+                    return Err(format!("Range.AutoFilter cannot join criteria with {other}"))
+                }
+            },
+        };
+        let second = match given(3) {
+            Some(value) => Some(parse_criteria(&self.criteria_value(value)?)),
+            None => None,
+        };
+
+        let mut filter = match self.auto_filter.take() {
+            Some(filter) if ranges_equal(filter.range, range) => filter,
+            _ => AutoFilter {
+                range,
+                fields: Vec::new(),
+            },
+        };
+        filter.fields.retain(|held| held.field != field);
+        filter.fields.push(FieldTest {
+            field,
+            first,
+            second,
+            either,
+        });
+        self.apply_auto_filter(&filter)?;
+        self.auto_filter = Some(filter);
+        Ok(Value::Boolean(true))
+    }
+
+    fn apply_auto_filter(&mut self, filter: &AutoFilter) -> Result<(), String> {
+        // The first row of the range holds the headings, and stays put.
+        for row in (filter.range.start_row + 1)..=filter.range.end_row {
+            let showing = filter.fields.iter().all(|test| {
+                let value = self.cell_value(CellAddress {
+                    sheet: filter.range.sheet,
+                    row,
+                    column: filter.range.start_column + test.field - 1,
+                });
+                let first = test.first.matches(&value);
+                match (&test.second, test.either) {
+                    (Some(second), true) => first || second.matches(&value),
+                    (Some(second), false) => first && second.matches(&value),
+                    (None, _) => first,
+                }
+            });
+            self.set_row_visible(filter.range.sheet, row, showing);
+        }
+        Ok(())
+    }
+
+    fn set_row_visible(&mut self, sheet: usize, row: u32, showing: bool) {
+        let Some(worksheet) = self.workbook.sheets.get_mut(sheet) else {
+            return;
+        };
+        match worksheet.rows.iter_mut().find(|held| held.index == row) {
+            Some(held) => held.hidden = !showing,
+            None if !showing => {
+                worksheet.rows.push(Row {
+                    index: row,
+                    cells: Vec::new(),
+                    height: None,
+                    hidden: true,
+                });
+                worksheet.rows.sort_by_key(|row| row.index);
+            }
+            None => {}
+        }
+    }
+
+    fn show_all_rows(&mut self, sheet: usize) -> Result<(), String> {
+        let Some(worksheet) = self.workbook.sheets.get_mut(sheet) else {
+            return Err("worksheet is out of range".to_string());
+        };
+        for row in &mut worksheet.rows {
+            row.hidden = false;
+        }
+        Ok(())
+    }
+
     fn merge_range(&mut self, range: CellRange) -> Result<(), String> {
         if range.is_single() {
             return Ok(());
@@ -3190,6 +3333,10 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Empty));
             }
             if let Some(sheet) = self.worksheet(receiver) {
+                if name.eq_ignore_ascii_case("showalldata") {
+                    self.show_all_rows(sheet)?;
+                    return Ok(Some(Value::Empty));
+                }
                 if name.eq_ignore_ascii_case("delete") {
                     return self.delete_worksheet(sheet).map(|()| Some(Value::Empty));
                 }
@@ -3378,6 +3525,9 @@ impl Host for WorkbookHost<'_> {
                     self.clear_range(range, true, true)?;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("autofilter") {
+                    return self.auto_filter(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("pastespecial") {
                     return self.paste_special(range, args).map(Some);
                 }
@@ -3548,6 +3698,8 @@ impl Host for WorkbookHost<'_> {
             )
         } else if name.eq_ignore_ascii_case("add") {
             Some(&["Before", "After", "Count"][..])
+        } else if name.eq_ignore_ascii_case("autofilter") {
+            Some(&["Field", "Criteria1", "Operator", "Criteria2", "VisibleDropDown"][..])
         } else if name.eq_ignore_ascii_case("sort") {
             Some(
                 &[
@@ -3729,6 +3881,13 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::String(
                     self.workbook.sheets[sheet].name.clone(),
                 )));
+            }
+            if name.eq_ignore_ascii_case("autofiltermode") {
+                let filtering = self
+                    .auto_filter
+                    .as_ref()
+                    .is_some_and(|filter| filter.range.sheet == sheet);
+                return Ok(Some(Value::Boolean(filtering)));
             }
             if name.eq_ignore_ascii_case("index") {
                 return Ok(Some(Value::Integer(sheet as i64 + 1)));
@@ -5022,6 +5181,8 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpasteall" => -4104,
         "xlpastevalues" => -4163,
         "xlpasteformats" => -4122,
+        "xland" => 1,
+        "xlor" => 2,
         "xlascending" => 1,
         "xldescending" => 2,
         "xlyes" => 1,
@@ -8032,6 +8193,169 @@ mod tests {
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         execute_with_host(&module, "Act", vec![], &mut host)
             .expect_err("Excel hides whole rows, not parts of them");
+    }
+
+    /// Which of rows 1..6 are still showing, in the shape the Excel probe
+    /// printed: the row's number when visible, a dot when hidden.
+    fn showing(workbook: &Workbook) -> String {
+        (1..=6)
+            .map(|row| {
+                let hidden = workbook.sheets[0]
+                    .rows
+                    .iter()
+                    .find(|held| held.index == row)
+                    .is_some_and(|held| held.hidden);
+                if hidden {
+                    ".".to_string()
+                } else {
+                    row.to_string()
+                }
+            })
+            .collect()
+    }
+
+    fn filtered(body: &str) -> Workbook {
+        let mut workbook = workbook();
+        let module = parse_module(&format!(
+            "Public Sub Act()\n\
+             \x20 Range(\"A1\").Value = \"Name\"\n  Range(\"B1\").Value = \"Qty\"\n\
+             \x20 Range(\"A2\").Value = \"apple\"\n  Range(\"B2\").Value = 10\n\
+             \x20 Range(\"A3\").Value = \"banana\"\n  Range(\"B3\").Value = 20\n\
+             \x20 Range(\"A4\").Value = \"apple\"\n  Range(\"B4\").Value = 30\n\
+             \x20 Range(\"A5\").Value = \"cherry\"\n  Range(\"B5\").Value = 5\n\
+             {body}\n\
+             End Sub\n"
+        ))
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        }
+        workbook
+    }
+
+    /// Each pattern is what Excel 16 left showing after the same call. The
+    /// heading row stays put, and row 6 is outside the range so it never moves.
+    #[test]
+    fn vba_filters_rows_out_of_sight() {
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"apple\""
+            )),
+            "12.4.6"
+        );
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=2, Criteria1:=\">15\""
+            )),
+            "1.34.6"
+        );
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"<>apple\""
+            )),
+            "1.3.56"
+        );
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"a*\""
+            )),
+            "12.4.6"
+        );
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"durian\""
+            )),
+            "1....6"
+        );
+    }
+
+    #[test]
+    fn two_criteria_join_with_and_or_or() {
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=2, Criteria1:=\">=10\", Operator:=xlAnd, Criteria2:=\"<=20\""
+            )),
+            "123..6"
+        );
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"apple\", Operator:=xlOr, Criteria2:=\"cherry\""
+            )),
+            "12.456"
+        );
+    }
+
+    /// Filtering a second field narrows what the first left showing.
+    #[test]
+    fn a_second_field_narrows_the_first() {
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"apple\"\n\
+                 \x20 Range(\"A1:B5\").AutoFilter Field:=2, Criteria1:=\">15\""
+            )),
+            "1..4.6"
+        );
+    }
+
+    #[test]
+    fn a_filter_can_be_cleared_or_switched_off() {
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"apple\"\n  ActiveSheet.ShowAllData"
+            )),
+            "123456"
+        );
+        // A bare call is a switch: filtering was on, so it goes off.
+        assert_eq!(
+            showing(&filtered(
+                "  Range(\"A1:B5\").AutoFilter Field:=1, Criteria1:=\"apple\"\n  Range(\"A1:B5\").AutoFilter"
+            )),
+            "123456"
+        );
+    }
+
+    #[test]
+    fn a_worksheet_says_whether_it_is_filtering() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = \"Name\"\n\
+               Range(\"A2\").Value = \"apple\"\n\
+               Debug.Print ActiveSheet.AutoFilterMode\n\
+               Range(\"A1:A2\").AutoFilter Field:=1, Criteria1:=\"apple\"\n\
+               Debug.Print ActiveSheet.AutoFilterMode\n\
+               Range(\"A1:A2\").AutoFilter\n\
+               Debug.Print ActiveSheet.AutoFilterMode\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+        assert_eq!(
+            debug_output,
+            vec!["False".to_string(), "True".to_string(), "False".to_string()]
+        );
+    }
+
+    #[test]
+    fn vba_refuses_a_filter_it_cannot_carry_out() {
+        for body in [
+            // There is no third column to filter on.
+            "  Range(\"A1:B5\").AutoFilter Field:=3, Criteria1:=\"apple\"",
+            "  Range(\"A1:B5\").AutoFilter Field:=1",
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Range(\"A1\").Value = \"Name\"\n{body}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
+        }
     }
 
     #[test]
