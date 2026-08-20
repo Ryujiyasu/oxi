@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oxi — Spreadsheet Demo</title>
+<style>
+:root {
+  --accent: #217346;
+  --accent-d: #1B5E3A;
+  --accent-l: #E4F0E9;
+  --rule: #D0D7DE;
+  --head: #F3F5F7;
+  --txt: #24292F;
+  --dim: #656D76;
+  --bg: #FFFFFF;
+  --code: #F6F8FA;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Hiragino Sans',
+    'Noto Sans JP', sans-serif;
+  color: var(--txt);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+header {
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+header .name { font-weight: 700; letter-spacing: .3px; }
+header .what { opacity: .9; font-size: 13px; }
+header .spacer { flex: 1; }
+header button, header label.file {
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, .3);
+  border-radius: 4px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+header button:hover, header label.file:hover { background: rgba(255, 255, 255, .28); }
+header input[type=file] { display: none; }
+
+main { flex: 1; display: flex; min-height: 0; }
+
+#sheet {
+  flex: 1;
+  overflow: auto;
+  background: #fff;
+  position: relative;
+}
+table { border-collapse: collapse; table-layout: fixed; }
+th, td {
+  border: 1px solid var(--rule);
+  font-size: 13px;
+  padding: 0 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  height: 20px;
+}
+th {
+  background: var(--head);
+  color: var(--dim);
+  font-weight: 400;
+  font-size: 11px;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+th.row { position: sticky; left: 0; z-index: 1; width: 40px; }
+td.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
+td.right { text-align: right; }
+td.centre { text-align: center; }
+td.bold { font-weight: 700; }
+
+aside {
+  width: 340px;
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: #FBFCFD;
+  flex-shrink: 0;
+}
+aside h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--dim);
+  margin: 18px 0 8px;
+  font-weight: 600;
+}
+aside h2:first-child { margin-top: 0; }
+aside dl { display: grid; grid-template-columns: 108px 1fr; gap: 5px 10px; font-size: 13px; }
+aside dt { color: var(--dim); }
+aside dd { word-break: break-all; }
+aside code {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  background: var(--code);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+aside .sum { font-size: 13px; line-height: 1.6; color: var(--dim); }
+aside .none { color: var(--dim); font-style: italic; font-size: 13px; }
+aside ul { list-style: none; font-size: 13px; }
+aside ul li { padding: 3px 0 3px 14px; position: relative; }
+aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(--dim); }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--rule);
+  background: var(--head);
+  flex-shrink: 0;
+}
+.tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  cursor: pointer;
+  color: var(--dim);
+}
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+#drop {
+  position: absolute;
+  inset: 0;
+  background: rgba(33, 115, 70, .08);
+  border: 2px dashed var(--accent);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-d);
+  font-size: 15px;
+  z-index: 5;
+}
+#drop.over { display: flex; }
+#state { padding: 40px; color: var(--dim); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="name">Oxi</span>
+  <span class="what">Spreadsheet rendering, in the browser, with no server</span>
+  <span class="spacer"></span>
+  <button id="reset">Sample workbook</button>
+  <label class="file">Open a .xlsx<input type="file" id="pick" accept=".xlsx"></label>
+</header>
+
+<main>
+  <div id="sheet">
+    <div id="state">Loading the engine…</div>
+    <div id="drop">Drop a .xlsx here</div>
+  </div>
+  <aside>
+    <h2>What Oxi read</h2>
+    <dl id="facts"></dl>
+    <h2>Column width</h2>
+    <p class="sum" id="widthRule"></p>
+    <h2>Selected cell</h2>
+    <dl id="cellFacts"><dd class="none">Click a cell</dd></dl>
+    <h2>Not yet drawn</h2>
+    <ul id="missing"><li class="none">—</li></ul>
+  </aside>
+</main>
+
+<div class="tabs" id="tabs"></div>
+
+<script type="module">
+import init, { parse_spreadsheet, format_cell_number } from './oxidocs_wasm.js';
+
+const SAMPLE = './samples/quarterly-sales.xlsx';
+/// Excel states a column width as a count of digits and turns it into pixels
+/// as trunc(width * digit + 5). Measured against Excel on 17 columns of five
+/// workbooks, exact on every one.
+const COLUMN_PADDING = 5;
+
+const sheetBox = document.getElementById('sheet');
+const stateBox = document.getElementById('state');
+const dropBox = document.getElementById('drop');
+const factsBox = document.getElementById('facts');
+const cellBox = document.getElementById('cellFacts');
+const missingBox = document.getElementById('missing');
+const widthBox = document.getElementById('widthRule');
+const tabsBox = document.getElementById('tabs');
+
+let book = null;
+let shown = 0;
+let digitWidth = 7;
+
+/// The width of a digit in the workbook's standard font, which is the unit a
+/// column width is stated in.
+function measureDigit(name, points) {
+  const canvas = measureDigit.canvas ||= document.createElement('canvas');
+  const pen = canvas.getContext('2d');
+  const family = name ? `"${name}"` : 'Calibri';
+  pen.font = `${(points || 11) * 96 / 72}px ${family}, Calibri, sans-serif`;
+  return Math.round(pen.measureText('0').width);
+}
+
+/// Excel's own default when a sheet names no width of its own.
+const DEFAULT_CHARACTERS = 8.43;
+
+function widthOf(sheet, column) {
+  const named = sheet.col_widths[column];
+  if (named > 0) return named;
+  return sheet.default_col_width > 0 ? sheet.default_col_width : DEFAULT_CHARACTERS;
+}
+
+function columnPixels(characters) {
+  return Math.trunc(characters * digitWidth + COLUMN_PADDING);
+}
+
+function columnName(index) {
+  let name = '';
+  for (let n = index; n >= 0; n = Math.floor(n / 26) - 1) {
+    name = String.fromCharCode(65 + (n % 26)) + name;
+  }
+  return name;
+}
+
+/// What a cell shows, which is its value put through its number format.
+function shownText(cell) {
+  const value = cell.value;
+  if (value === null || value === undefined) return '';
+  // A variant that carries nothing arrives as its own name, not as an object.
+  if (typeof value === 'string') return value === 'Empty' ? '' : value;
+  if (typeof value === 'object') {
+    if ('Number' in value) {
+      return cell.style.number_format
+        ? format_cell_number(value.Number, cell.style.number_format)
+        : String(value.Number);
+    }
+    if ('String' in value) return value.String;
+    if ('Boolean' in value) return value.Boolean ? 'TRUE' : 'FALSE';
+    if ('Error' in value) return value.Error;
+  }
+  return '';
+}
+
+function isNumber(cell) {
+  return typeof cell.value === 'object' && cell.value !== null && 'Number' in cell.value;
+}
+
+function draw() {
+  const sheet = book.sheets[shown];
+  const merged = new Map();
+  for (const merge of sheet.merge_cells || []) {
+    for (let row = merge.start_row; row <= merge.end_row; row++) {
+      for (let col = merge.start_col; col <= merge.end_col; col++) {
+        const anchor = row === merge.start_row && col === merge.start_col;
+        merged.set(`${row},${col}`, anchor ? merge : null);
+      }
+    }
+  }
+
+  let lastRow = 0;
+  let lastColumn = 0;
+  for (const row of sheet.rows) {
+    for (const cell of row.cells) {
+      const text = shownText(cell);
+      if (text === '') continue;
+      lastRow = Math.max(lastRow, row.index);
+      lastColumn = Math.max(lastColumn, cell.col);
+    }
+  }
+  lastColumn = Math.max(lastColumn, 3);
+  lastRow = Math.max(lastRow, 8);
+
+  const held = new Map();
+  for (const row of sheet.rows) held.set(row.index, row);
+
+  const table = document.createElement('table');
+  const head = table.insertRow();
+  head.appendChild(document.createElement('th')).className = 'row';
+  for (let col = 0; col <= lastColumn; col++) {
+    const cell = document.createElement('th');
+    cell.textContent = columnName(col);
+    cell.style.width = `${columnPixels(widthOf(sheet, col))}px`;
+    head.appendChild(cell);
+  }
+
+  for (let index = 1; index <= lastRow; index++) {
+    const row = table.insertRow();
+    const label = document.createElement('th');
+    label.className = 'row';
+    label.textContent = index;
+    row.appendChild(label);
+
+    const source = held.get(index);
+    const height = source && source.height ? source.height : sheet.default_row_height;
+    if (height) row.style.height = `${Math.round(height * 96 / 72)}px`;
+
+    for (let col = 0; col <= lastColumn; col++) {
+      const box = merged.get(`${index},${col}`);
+      if (box === null) continue;   // covered by a merge that is drawn already
+      const cell = row.insertCell();
+      if (box) {
+        cell.colSpan = box.end_col - box.start_col + 1;
+        cell.rowSpan = box.end_row - box.start_row + 1;
+      }
+      const held = source && source.cells.find((one) => one.col === col);
+      if (!held) continue;
+      cell.textContent = shownText(held);
+      const align = held.style.horizontal_align;
+      if (align === 'center') cell.classList.add('centre');
+      else if (align === 'right') cell.classList.add('right');
+      else if (!align && isNumber(held)) cell.classList.add('right');
+      if (held.style.bold) cell.classList.add('bold');
+      if (held.style.italic) cell.style.fontStyle = 'italic';
+      if (held.style.font_size) cell.style.fontSize = `${held.style.font_size}px`;
+      if (held.style.font_name) cell.style.fontFamily = `"${held.style.font_name}", sans-serif`;
+      if (held.style.font_color) cell.style.color = `#${held.style.font_color}`;
+      if (held.style.bg_color) cell.style.background = `#${held.style.bg_color}`;
+      cell.onclick = () => {
+        for (const lit of table.querySelectorAll('td.picked')) lit.classList.remove('picked');
+        cell.classList.add('picked');
+        describeCell(columnName(col) + index, held);
+      };
+    }
+  }
+
+  stateBox.style.display = 'none';
+  const previous = sheetBox.querySelector('table');
+  if (previous) previous.remove();
+  sheetBox.appendChild(table);
+}
+
+function describe() {
+  const sheet = book.sheets[shown];
+  const style = book.default_style || {};
+  const cells = sheet.rows.reduce((count, row) => count + row.cells.length, 0);
+  factsBox.innerHTML = '';
+  const facts = [
+    ['Sheets', book.sheets.length],
+    ['Rows', sheet.rows.length],
+    ['Cells', cells],
+    ['Standard font', style.font_name ? `${style.font_name} ${style.font_size || 11}` : 'not named'],
+    ['Merged', (sheet.merge_cells || []).length],
+    ['Filter', sheet.auto_filter ? 'yes' : 'no'],
+  ];
+  for (const [term, value] of facts) {
+    factsBox.insertAdjacentHTML('beforeend', `<dt>${term}</dt><dd>${value}</dd>`);
+  }
+
+  const characters = widthOf(sheet, 0);
+  widthBox.innerHTML =
+    `A width is a count of digits in the standard font. A digit here measures ` +
+    `<code>${digitWidth}px</code>, so column A at <code>${characters}</code> ` +
+    `characters is <code>trunc(${characters} × ${digitWidth} + ${COLUMN_PADDING}) = ` +
+    `${columnPixels(characters)}px</code>.`;
+
+  const gaps = sheet.unsupported_elements || [];
+  missingBox.innerHTML = gaps.length
+    ? gaps.map((one) => `<li>${one}</li>`).join('')
+    : '<li class="none">Nothing this sheet uses is unread</li>';
+
+  tabsBox.innerHTML = '';
+  book.sheets.forEach((one, index) => {
+    const tab = document.createElement('button');
+    tab.textContent = one.name;
+    if (index === shown) tab.className = 'on';
+    tab.onclick = () => { shown = index; draw(); describe(); };
+    tabsBox.appendChild(tab);
+  });
+}
+
+function describeCell(address, cell) {
+  const raw = typeof cell.value === 'object' && cell.value !== null
+    ? Object.values(cell.value)[0]
+    : (cell.value === 'Empty' ? undefined : cell.value);
+  const rows = [
+    ['Address', address],
+    ['Stored', raw === undefined ? 'empty' : `<code>${raw}</code>`],
+    ['Shows', `<code>${shownText(cell) || '(blank)'}</code>`],
+    ['Format', cell.style.number_format ? `<code>${cell.style.number_format}</code>` : 'General'],
+    ['Font', cell.style.font_name || 'the standard one'],
+    ['Formula', cell.formula ? `<code>=${cell.formula}</code>` : 'none'],
+  ];
+  cellBox.innerHTML = rows
+    .map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`)
+    .join('');
+}
+
+async function open(data, name) {
+  try {
+    book = parse_spreadsheet(new Uint8Array(data));
+  } catch (error) {
+    stateBox.style.display = 'block';
+    stateBox.textContent = `Oxi could not read ${name}: ${error}`;
+    const table = sheetBox.querySelector('table');
+    if (table) table.remove();
+    return;
+  }
+  shown = 0;
+  const style = book.default_style || {};
+  digitWidth = measureDigit(style.font_name, style.font_size);
+  draw();
+  describe();
+  cellBox.innerHTML = '<dd class="none">Click a cell</dd>';
+}
+
+async function openSample() {
+  stateBox.style.display = 'block';
+  stateBox.textContent = 'Reading the sample…';
+  const reply = await fetch(SAMPLE);
+  if (!reply.ok) {
+    stateBox.textContent =
+      'The sample could not be fetched. Serve this folder over http rather than opening the file directly.';
+    return;
+  }
+  await open(await reply.arrayBuffer(), 'the sample');
+}
+
+document.getElementById('reset').onclick = openSample;
+document.getElementById('pick').onchange = async (event) => {
+  const file = event.target.files[0];
+  if (file) await open(await file.arrayBuffer(), file.name);
+};
+
+for (const kind of ['dragenter', 'dragover']) {
+  sheetBox.addEventListener(kind, (event) => {
+    event.preventDefault();
+    dropBox.classList.add('over');
+  });
+}
+for (const kind of ['dragleave', 'drop']) {
+  sheetBox.addEventListener(kind, (event) => {
+    event.preventDefault();
+    dropBox.classList.remove('over');
+  });
+}
+sheetBox.addEventListener('drop', async (event) => {
+  const file = event.dataTransfer.files[0];
+  if (file) await open(await file.arrayBuffer(), file.name);
+});
+
+await init();
+await openSample();
+</script>
+</body>
+</html>
