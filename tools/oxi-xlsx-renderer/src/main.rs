@@ -32,7 +32,7 @@ fn column_pixels(width: f32, digit: f32) -> f32 {
 const FALLBACK_DIGIT_WIDTH: f32 = 7.0;
 const DEFAULT_ROW_POINTS: f32 = 18.75;
 
-struct Geometry {
+pub(crate) struct Geometry {
     /// Left edge of each column, and the sheet's full width.
     columns: Vec<f32>,
     /// Top edge of each row, and the sheet's full height.
@@ -199,6 +199,14 @@ fn draw(
     height: u32,
     scale: f32,
 ) -> image::RgbImage {
+    // Excel draws its own text through DirectWrite, so that is the path that
+    // can match it. GDI stays reachable while the two are being compared.
+    if std::env::var("OXI_XLSX_GDI").is_err() {
+        match dwrite_draw::draw(sheet, layout, width, height, scale) {
+            Ok(canvas) => return canvas,
+            Err(error) => eprintln!("DirectWrite could not draw the sheet: {error}"),
+        }
+    }
     windows_draw::draw(sheet, layout, width, height, scale)
 }
 
@@ -216,7 +224,7 @@ fn draw(
 }
 
 /// The text a cell shows, under whatever number format it wears.
-fn cell_text(value: &CellValue, style: &CellStyle) -> String {
+pub(crate) fn cell_text(value: &CellValue, style: &CellStyle) -> String {
     match value {
         CellValue::Empty => String::new(),
         CellValue::String(text) => text.clone(),
@@ -234,7 +242,7 @@ fn cell_text(value: &CellValue, style: &CellStyle) -> String {
 /// to the left unless the cell says otherwise.
 /// How a table dresses one of its cells: Excel paints this, and no cell inside
 /// the range carries any of it in its own style.
-struct Dressed {
+pub(crate) struct Dressed {
     fill: Option<String>,
     /// A header row is written in white on the accent colour.
     white_text: bool,
@@ -244,11 +252,11 @@ struct Dressed {
 /// worksheet Excel drew: 17 by 17 pixels against the right edge of the cell,
 /// eight below its top, a pale face inside a grey outline, and a seven-wide
 /// triangle narrowing to a point four rows down.
-const FILTER_BUTTON: i32 = 17;
-const FILTER_BUTTON_TOP: i32 = 8;
+pub(crate) const FILTER_BUTTON: i32 = 17;
+pub(crate) const FILTER_BUTTON_TOP: i32 = 8;
 
 /// Whether the cell at this spot carries a filter button.
-fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
+pub(crate) fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
     sheet.tables.iter().any(|table| {
         table.header_rows > 0
             && row >= table.start_row
@@ -258,7 +266,7 @@ fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
     })
 }
 
-fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
+pub(crate) fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
     let table = sheet.tables.iter().find(|table| {
         row >= table.start_row
             && row <= table.end_row
@@ -284,13 +292,13 @@ fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
 
 /// What a merge does to a cell: the top-left one is drawn across the whole
 /// block, and the rest are not drawn at all.
-enum Merged {
+pub(crate) enum Merged {
     /// Drawn across this many further columns and rows.
     Anchor { columns: u32, rows: u32 },
     Covered,
 }
 
-fn merges(sheet: &Sheet) -> std::collections::HashMap<(u32, u32), Merged> {
+pub(crate) fn merges(sheet: &Sheet) -> std::collections::HashMap<(u32, u32), Merged> {
     let mut held = std::collections::HashMap::new();
     for merge in &sheet.merge_cells {
         for row in merge.start_row..=merge.end_row {
@@ -326,7 +334,7 @@ fn is_free(
 
 /// How far left of its own cell a run-on may reach, in pixels, stopping at the
 /// first neighbour that holds something.
-fn room_before(
+pub(crate) fn room_before(
     layout: &Geometry,
     row: &Row,
     column: u32,
@@ -352,7 +360,7 @@ fn room_before(
 }
 
 /// The same, rightward.
-fn room_after(
+pub(crate) fn room_after(
     layout: &Geometry,
     row: &Row,
     column: u32,
@@ -383,7 +391,7 @@ fn room_after(
 /// How Excel draws one kind of rule, measured off a worksheet holding one of
 /// each: how far the ink reaches either side of the boundary, and which pixels
 /// along it are inked.
-struct Rule {
+pub(crate) struct Rule {
     /// Pixels before the boundary the ink starts at, and after it ends.
     before: i32,
     after: i32,
@@ -393,7 +401,7 @@ struct Rule {
     dashes: Option<(i32, i32)>,
 }
 
-fn rule_for(kind: &str) -> Rule {
+pub(crate) fn rule_for(kind: &str) -> Rule {
     let solid = |before, after| Rule { before, after, hollow: false, dashes: None };
     match kind {
         "medium" | "mediumDashed" | "mediumDashDot" | "mediumDashDotDot" => solid(1, 0),
@@ -409,7 +417,7 @@ fn rule_for(kind: &str) -> Rule {
     }
 }
 
-fn alignment(style: &CellStyle, value: &CellValue) -> Align {
+pub(crate) fn alignment(style: &CellStyle, value: &CellValue) -> Align {
     match style.horizontal_align.as_deref() {
         Some("center") => Align::Centre,
         Some("right") => Align::Right,
@@ -423,11 +431,14 @@ fn alignment(style: &CellStyle, value: &CellValue) -> Align {
 }
 
 #[derive(Clone, Copy)]
-enum Align {
+pub(crate) enum Align {
     Left,
     Centre,
     Right,
 }
+
+#[cfg(windows)]
+mod dwrite_draw;
 
 #[cfg(windows)]
 mod windows_draw {

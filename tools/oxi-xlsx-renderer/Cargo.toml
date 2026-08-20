@@ -13,4 +13,15 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    # Excel draws its text through DirectWrite, so matching it means drawing
+    # through the same engine rather than GDI.
+    "Foundation_Numerics",
+    "Win32_System_Com",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Imaging_D2D",
 ] }
