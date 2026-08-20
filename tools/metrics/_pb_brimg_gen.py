@@ -106,8 +106,15 @@ XSHAPES = [
     ("img@276", [["img"]], 276),
     ("sp_img@276", [["sp", "img"]], 276),
     ("R:spX|img@276", [["spX"], ["img"]], 276),
+    # S1180 arms: the HOST paragraph's own font is the UNKNOWN name "inherit"
+    # (creative__0158c02a writes it on every figure host — an HTML-paste
+    # artifact).  h=6 pins natural("inherit") directly (per-copy =
+    # max(natural, 6) = natural); @276 pins the (factor−1)×natural term.
+    ("imgH", [["img"]], 240),
+    ("imgH@276", [["img"]], 276),
 ]
 XHEIGHTS = [6.0, 18.0, 36.0, 60.0]
+HOSTFONT = "inherit"
 
 
 def arms():
@@ -120,10 +127,13 @@ def rpr():
             '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (FONT, FONT, FONT, SZ, SZ))
 
 
-def ppr(pbb=False, line=240):
+def ppr(pbb=False, line=240, font=None):
+    rp = rpr() if font is None else (
+        '<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:cs="%s"/>'
+        '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (font, font, font, SZ, SZ))
     return ("<w:pPr>%s<w:widowControl w:val=\"0\"/>"
             "<w:spacing w:before=\"0\" w:after=\"0\" w:line=\"%d\" w:lineRule=\"auto\"/>%s</w:pPr>"
-            % ("<w:pageBreakBefore/>" if pbb else "", line, rpr()))
+            % ("<w:pageBreakBefore/>" if pbb else "", line, rp))
 
 
 def pic(idx, h_pt):
@@ -150,7 +160,7 @@ def xrpr():
             % (XFONT, XFONT, XFONT, SZ, SZ))
 
 
-def subject(runs, h_pt, idx, line=240):
+def subject(runs, h_pt, idx, line=240, host_font=None):
     item = {"txt": lambda: '<w:t xml:space="preserve">x</w:t>',
             "sp": lambda: '<w:t xml:space="preserve"> </w:t>',
             "spX": lambda: '<w:t xml:space="preserve"> </w:t>',
@@ -160,7 +170,7 @@ def subject(runs, h_pt, idx, line=240):
     for run in runs:
         rp = xrpr() if "spX" in run else rpr()
         out.append("<w:r>%s%s</w:r>" % (rp, "".join(item[k]() for k in run)))
-    return "<w:p>%s%s</w:p>" % (ppr(line=line), "".join(out))
+    return "<w:p>%s%s</w:p>" % (ppr(line=line, font=host_font), "".join(out))
 
 
 def marker(tag, pbb=False):
@@ -175,9 +185,10 @@ def gen():
     body.append(marker("M00E"))
     for ai, (shape, h, line) in enumerate(arms(), start=1):
         body.append(marker("M%02dS" % ai, pbb=True))
+        hf = HOSTFONT if shape[0].startswith("imgH") else None
         for _ in range(REPEAT):
             idx += 1
-            body.append(subject(shape[1], h, idx, line=line))
+            body.append(subject(shape[1], h, idx, line=line, host_font=hf))
         body.append(marker("M%02dE" % ai))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
