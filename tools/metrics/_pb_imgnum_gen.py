@@ -62,7 +62,9 @@ STYLES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ' + 
           '</w:pPrDefault></w:docDefaults>'
           '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
           '<w:name w:val="Normal"/></w:style></w:styles>')
-# the specimen's lvl-0: Symbol bullet U+F0B7, ind left=786 hanging=360
+# the specimen's lvl-0: Symbol bullet U+F0B7, ind left=786 hanging=360.
+# numId 6 = a SECOND list with the same bullet (creative's captions are numId 6
+# while its figures are numId 7 — the cross-list adjacency is part of the spec).
 NUMBERING = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering ' + NS + '>'
              '<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>'
              '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/>'
@@ -70,32 +72,52 @@ NUMBERING = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numberin
              '<w:pPr><w:ind w:left="786" w:hanging="360"/></w:pPr>'
              '<w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/></w:rPr>'
              '</w:lvl></w:abstractNum>'
-             '<w:num w:numId="7"><w:abstractNumId w:val="0"/></w:num></w:numbering>')
+             '<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>'
+             '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/>'
+             '<w:lvlText w:val=""/><w:lvlJc w:val="left"/>'
+             '<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>'
+             '<w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/></w:rPr>'
+             '</w:lvl></w:abstractNum>'
+             '<w:num w:numId="7"><w:abstractNumId w:val="0"/></w:num>'
+             '<w:num w:numId="6"><w:abstractNumId w:val="1"/></w:num></w:numbering>')
 
-# (label, kind, numpr, auto_b, auto_a, img_h)
+# (label, kind, numpr, auto_b, auto_a, img_h, opts)
 #   kind: "txt" = one text line; "img" = [space + inline img]; "blk" =
 #   [caption txt para][sp+img para] per copy (the real creative block).
+#   opts: sz (half-points), line, cap_num (blk caption's numId; fig is 7),
+#   both default to the module constants.
 ARMS = [
-    ("txt@276",        "txt", False, False, False, 0),
-    ("aut_txt@276",    "txt", False, True,  True,  0),
-    ("num_txt@276",    "txt", True,  False, False, 0),
-    ("numaut_txt@276", "txt", True,  True,  True,  0),
-    ("img36@276",      "img", False, False, False, 36.0),
-    ("num_img36@276",  "img", True,  False, False, 36.0),
-    ("aut_img36@276",  "img", False, True,  False, 36.0),
-    ("numaut_img36",   "img", True,  True,  False, 36.0),
-    ("numaut_img60",   "img", True,  True,  False, 60.0),
-    ("blk36@276",      "blk", True,  True,  False, 36.0),
+    ("txt@276",        "txt", False, False, False, 0,    {}),
+    ("aut_txt@276",    "txt", False, True,  True,  0,    {}),
+    ("num_txt@276",    "txt", True,  False, False, 0,    {}),
+    ("numaut_txt@276", "txt", True,  True,  True,  0,    {}),
+    ("img36@276",      "img", False, False, False, 36.0, {}),
+    ("num_img36@276",  "img", True,  False, False, 36.0, {}),
+    ("aut_img36@276",  "img", False, True,  False, 36.0, {}),
+    ("numaut_img36",   "img", True,  True,  False, 36.0, {}),
+    ("numaut_img60",   "img", True,  True,  False, 60.0, {}),
+    ("blk36@276",      "blk", True,  True,  False, 36.0, {}),
+    # ---- second cut (amounts-model sweep) ----
+    ("autB_txt@276",   "txt", False, True,  False, 0,    {}),          # before only
+    ("autA_txt@276",   "txt", False, False, True,  0,    {}),          # after only
+    ("autB_txt@240",   "txt", False, True,  False, 0,    {"line": 240}),
+    ("autB_txt14",     "txt", False, True,  False, 0,    {"sz": 28}),  # 14pt
+    ("numautB_txt",    "txt", True,  True,  False, 0,    {}),          # list, before only
+    ("numaut_img14",   "img", True,  True,  False, 36.0, {"sz": 28}),
+    ("numaut_img@240", "img", True,  True,  False, 36.0, {"line": 240}),
+    ("aut_img@240",    "img", False, True,  False, 36.0, {"line": 240}),
+    ("blk36_x67",      "blk", True,  True,  False, 36.0, {"cap_num": 6}),  # creative: cap 6 / fig 7
+    ("blk36_nolist",   "blk", False, True,  False, 36.0, {}),
 ]
 
 
-def rpr(font=FONT):
+def rpr(font=FONT, sz=SZ):
     return ('<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:cs="%s"/>'
-            '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (font, font, font, SZ, SZ))
+            '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>' % (font, font, font, sz, sz))
 
 
-def ppr(pbb=False, numpr=False, auto_b=False, auto_a=False, line=276):
-    num = ('<w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr>'
+def ppr(pbb=False, numpr=False, auto_b=False, auto_a=False, line=276, sz=SZ, numid=7):
+    num = ('<w:numPr><w:ilvl w:val="0"/><w:numId w:val="%d"/></w:numPr>' % numid
            if numpr else "")
     sp = ('<w:spacing w:before="100" w:beforeAutospacing="%d" w:after="100"'
           ' w:afterAutospacing="%d" w:line="%d" w:lineRule="auto"/>'
@@ -103,20 +125,25 @@ def ppr(pbb=False, numpr=False, auto_b=False, auto_a=False, line=276):
           if (auto_b or auto_a) else
           '<w:spacing w:before="0" w:after="0" w:line="%d" w:lineRule="auto"/>' % line)
     return ("<w:pPr>%s<w:widowControl w:val=\"0\"/>%s%s%s</w:pPr>"
-            % ("<w:pageBreakBefore/>" if pbb else "", num, sp, rpr()))
+            % ("<w:pageBreakBefore/>" if pbb else "", num, sp, rpr(sz=sz)))
 
 
-def subject(kind, numpr, auto_b, auto_a, h, idx):
+def subject(kind, numpr, auto_b, auto_a, h, idx, opts):
+    sz = opts.get("sz", SZ)
+    line = opts.get("line", 276)
     if kind == "txt":
         return ('<w:p>%s<w:r>%s<w:t xml:space="preserve">body text line</w:t></w:r></w:p>'
-                % (ppr(numpr=numpr, auto_b=auto_b, auto_a=auto_a), rpr()))
+                % (ppr(numpr=numpr, auto_b=auto_b, auto_a=auto_a, line=line, sz=sz),
+                   rpr(sz=sz)))
     img_p = ('<w:p>%s<w:r>%s<w:t xml:space="preserve"> </w:t></w:r>'
              "<w:r>%s%s</w:r></w:p>"
-             % (ppr(numpr=numpr, auto_b=auto_b, auto_a=False), rpr(), rpr(), pic(idx, h)))
+             % (ppr(numpr=numpr, auto_b=auto_b, auto_a=False, line=line, sz=sz),
+                rpr(sz=sz), rpr(sz=sz), pic(idx, h)))
     if kind == "img":
         return img_p
     cap_p = ('<w:p>%s<w:r>%s<w:t xml:space="preserve">Figure caption text</w:t></w:r></w:p>'
-             % (ppr(numpr=numpr, auto_b=True, auto_a=True), rpr()))
+             % (ppr(numpr=numpr, auto_b=True, auto_a=True, line=line, sz=sz,
+                    numid=opts.get("cap_num", 7)), rpr(sz=sz)))
     return cap_p + img_p
 
 
@@ -130,11 +157,11 @@ def gen():
     body, idx = [], 100
     body.append(marker("M00S", pbb=True))
     body.append(marker("M00E"))
-    for ai, (_lbl, kind, numpr, ab, aa, h) in enumerate(ARMS, start=1):
+    for ai, (_lbl, kind, numpr, ab, aa, h, opts) in enumerate(ARMS, start=1):
         body.append(marker("M%02dS" % ai, pbb=True))
         for _ in range(REPEAT):
             idx += 1
-            body.append(subject(kind, numpr, ab, aa, h, idx))
+            body.append(subject(kind, numpr, ab, aa, h, idx, opts))
         body.append(marker("M%02dE" % ai))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
            "><w:body>" + "".join(body) +
