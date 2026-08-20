@@ -2,8 +2,8 @@
 
 **Oxi = Opensource Xplatform Interoperability**
 
-A browser-native .docx rendering engine — Rust + WebAssembly, no server.
-Its layout is scored against Microsoft Word, page by page, on **frozen blind benchmarks of documents the engine has never been tuned against**.
+A browser-native Office document engine — Rust + WebAssembly, no server.
+Word (.docx) layout is scored against Microsoft Word page by page, PowerPoint (.pptx) against PowerPoint slide by slide, on **frozen blind benchmarks of documents the engine has never been tuned against** — and Excel (.xlsx) ships a formula engine and a browser VBA host verified against Excel itself.
 
 [Live Demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Layout Accuracy](#layout-accuracy-vs-microsoft-word) · [Contributing](#contributing)
 
@@ -50,25 +50,27 @@ Everything below is measured against **Microsoft Word's own render** of the same
 |--------|-----------------------------|-------------------------|
 | ONLYOFFICE 9.3.1.8 | 0.902 | 41 / 50 |
 | LibreOffice 26.2.1.2 | 0.876 | 43 / 50 |
-| **Oxi** (2026-07-29) | **0.825** | **48 / 50** |
+| **Oxi** (2026-08-20) | **0.875** | **48 / 50** |
 | SILURUS @silurus/ooxml 0.72.2 | 0.776 | 35 / 50 |
 | eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.739 | 33 / 50 |
 | BetterOffice @betteroffice/docx 0.0.4 | 0.734 | 25 / 50 |
+| GenOffice v0.1.0 | 0.731 | 12 / 50 |
 
-**Oxi places the page breaks better than any engine measured — 48 of the 50 documents match Word's page count, against ONLYOFFICE's 41 and LibreOffice's 43 — while still losing on within-page pixel placement.** That split is the honest state of the English work: pagination is ahead, the remaining gap is where the ink lands inside each page. On SSIM Oxi is ahead of SILURUS — the closest architectural peer, also a Rust + WebAssembly canvas renderer — on **36 of the 50** documents, and behind the two mature native suites (ahead of LibreOffice on 13, of ONLYOFFICE on 12). This is first-sight generalization on wild English documents, published as-is, and the set is re-measured as the engine improves rather than being fixed against: **0.800** at its first measurement (2026-07-19), **0.807** on 2026-07-20, **0.825** now, with the page-count match moving 38 → 48 over the same period.
+**Oxi places the page breaks better than any engine measured — 48 of the 50 documents match Word's page count, against ONLYOFFICE's 41 and LibreOffice's 43 — and has now caught LibreOffice on within-page pixels: the paired difference is −0.001 ± 0.011 (|t| = 0.1), a dead statistical tie, with each engine ahead on 25 of the 50 documents.** ONLYOFFICE keeps a real pixel lead (+0.027). On SSIM Oxi is ahead of SILURUS — the closest architectural peer, also a Rust + WebAssembly canvas renderer — on **44 of the 50** documents. This is first-sight generalization on wild English documents, published as-is, and the set is re-measured as the engine improves rather than being fixed against: **0.800** at its first measurement (2026-07-19), 0.807 on 2026-07-20, 0.825 on 2026-07-29, 0.849 on 2026-08-04, **0.875** now, with the page-count match moving 38 → 48 over the same period.
 
 ### Japanese blind set — 50 never-seen documents
 
 | Engine | mean SSIM vs Word (per doc) | page count matches Word |
 |--------|-----------------------------|-------------------------|
-| **Oxi** (2026-07-29) | **0.828** | 44 / 50 |
+| **Oxi** (2026-08-20) | **0.842** | 43 / 50 |
 | LibreOffice 26.2.1.2 | 0.816 | 41 / 50 |
 | SILURUS @silurus/ooxml 0.72.2 | 0.804 | 32 / 50 |
 | ONLYOFFICE 9.3.1.8 | 0.772 | 38 / 50 |
 | BetterOffice @betteroffice/docx 0.0.4 | 0.766 | 29 / 49 |
+| GenOffice v0.1.0 | 0.762 | 16 / 50 |
 | eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.744 | 36 / 50 |
 
-Oxi is top of the table on the same documents — ahead of SILURUS on 33 of 50, of ONLYOFFICE on 40, of BetterOffice on 38 of the 49 both engines open (BetterOffice's parser rejects `nextColumn`, a standard OOXML section-start type), of eigenpal on 43. **One honest qualifier: the lead over LibreOffice is not resolvable at this sample size.** The paired difference is +0.012 with a standard error of 0.011 (|t| = 1.2) — at n = 50 anything under roughly ±0.02 is inside the noise, so Oxi and LibreOffice should be read as tied in Japanese. Every other gap in both tables is separable (|t| = 2.6 to 8.1). Pagination on the same set: **41 of the 48 measurable documents place every paragraph on Word's page** (mean per-paragraph page-match score 0.883; 2 of the 50 are poster-style files whose text lives entirely inside images and text boxes, so no paragraph can be matched at all and they are excluded rather than counted as passes). ★Re-measured on 2026-07-29 against the same frozen ground truth: the pagination result is **identical on every one of the 50 documents** (no page assignment moved at all), and the SSIM mean moved by +0.0001 — 9 documents shifted slightly, 7 up and 2 down. The English fixes shipped since are scoped to non-CJK documents, and this re-measurement is the check that proves it rather than assuming it.
+Oxi is top of the table on the same documents — ahead of SILURUS on 38 of 50, of ONLYOFFICE on 41, of BetterOffice on 38 of the 49 both engines open (BetterOffice's parser rejects `nextColumn`, a standard OOXML section-start type), of GenOffice on 42, of eigenpal on 44. The lead over LibreOffice, which the 2026-07-29 measurement honestly called unresolvable at this sample size (+0.012 ± 0.011, |t| = 1.2), **now clears the noise threshold: +0.026 ± 0.012, |t| = 2.2, ahead on 34 of the 50 documents** — a real but still modest margin; every other gap in both tables is separable more decisively. Pagination on the same set: **43 of the 48 measurable documents place every paragraph on Word's page** (mean per-paragraph page-match score 0.923, up from 0.883 on 2026-07-29; 2 of the 50 are poster-style files whose text lives entirely inside images and text boxes, so no paragraph can be matched at all and they are excluded rather than counted as passes). One document's total page count drifted off Word's between measurements (44 → 43 in the table above) while the per-paragraph score rose — the set is re-measured as-is, movements in both directions included.
 
 Two honest caveats about the two tables together: (1) the English and Japanese sets are different documents, so the numbers are not directly comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes second-to-last in Japanese), which is exactly why blind sets per language exist.
 
@@ -82,20 +84,22 @@ The same measurement discipline, applied to real-world `.pptx` files. 50 files a
 
 | Engine | mean SSIM vs PowerPoint (per doc) | page count matches PowerPoint |
 |--------|----------------------------------|------------------------------|
-| LibreOffice 26.2.1.2 | **0.913** | **48 / 48** |
+| **Oxi** (2026-08-20, re-measured) | **0.953** | **48 / 48** |
+| LibreOffice 26.2.1.2 | 0.913 | 48 / 48 |
 | ONLYOFFICE 9.3.1.8 | 0.908 | 48 / 48 |
-| **Oxi** (2026-08-10, re-measured after group-transform + connector fixes) | **0.703** | **48 / 48** |
 
-Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxi all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. LibreOffice and ONLYOFFICE are statistically tied on within-slide pixels (paired difference +0.005 ± 0.009, |t| = 0.6); Oxi's PPTX renderer is brand new and trails both on pixel fidelity (paired differences −0.210 vs LibreOffice, −0.205 vs ONLYOFFICE, |t| = 11.6 and 10.4) — with the caveat that Oxi is closest on image-heavy decks (0.85–0.86 on posters and image-first decks) and furthest behind on text-heavy decks — but it already **opens and lays out all 48 decks with exact slide counts**, which is the same first-sight baseline discipline as the Word tables and a fixed, frozen, never-anatomized target for the PPTX engine. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Details and per-document scores: [REPORT_pptx_hf50_3way_v1.md](REPORT_pptx_hf50_3way_v1.md), raw results in `pipeline_data/pptx_benchmark/ssim_pptx/_result.json`.
+Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxi all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. **Oxi now leads both suites on this frozen set** (paired difference vs LibreOffice +0.040 ± 0.005, |t| = 8.7, ahead on 44 of the 48 documents; LibreOffice and ONLYOFFICE remain statistically tied with each other). The set was first measured at **0.679** (2026-08-13, the renderer's first PPTX measurement) — the week of renderer work since (slide-master placeholder inheritance, group transforms under mirroring, embedded fonts, color emoji, mixed-face line boxes) moved it to 0.953, with **every one of the 48 documents improving and none regressing**; the worst document now scores 0.880. As with the Word tables, the set is frozen, never anatomized, and re-measured as the engine improves. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Details and per-document scores: [REPORT_pptx_hf50_3way_v1.md](REPORT_pptx_hf50_3way_v1.md), raw results in `pipeline_data/pptx_benchmark/ssim_pptx/_result.json`.
 
 ### The internal gates (development corpus)
 
 The blind sets are the published claim; the development corpus is how regressions are caught before a change is committed. Every layout change must pass, in order:
 
-- **Pagination oracle** — per-paragraph page match against real Word (COM-measured) on the 87-document Japanese corpus: currently **87/87 = 100%**, plus 6 English government documents at 100%.
+- **Pagination oracle** — per-paragraph page match against real Word (COM-measured) on the 96-document development corpus (90 Japanese + 6 English government documents): currently **96/96 = 100%**.
 - **SSIM regression sentinel** — 238 documents pixel-compared against stored Word renders; a change that improves one document by regressing another has to justify the trade.
-- **Adversarial probe harness** — ~90 synthetic documents stressing under-tested layout paths, each gated against real Word ground truth.
+- **Adversarial probe harness** — 95 synthetic documents stressing under-tested layout paths, each gated against real Word ground truth.
 - **Feature-injection perturbation harness** — individual OOXML features injected one at a time into a clean base document and pixel-verified against Word.
+- **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.951), plus 146 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes).
+- **Spreadsheet oracles** — the formula engine recalculates 285 real .xlsx workbooks and diffs against Excel's own cached results; the browser VBA host is derived and verified against real Excel COM behaviour (82 scripted A/B comparisons in `tools/measure_vba_*_com.ps1`).
 - **Unit / integration suite** — `cargo test`.
 
 These numbers are *tuned* — every document in them has been individually root-caused — so they belong in a gate, not in a headline. The date-by-date development history is in [docs/layout_accuracy.md](docs/layout_accuracy.md); the derivation log is [RESEARCH_LOG.md](RESEARCH_LOG.md).
@@ -192,7 +196,8 @@ LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). M
 Beyond .docx rendering (the core mission), Oxi also ships:
 
 - **.xlsx / .pptx / PDF** — parsing, rendering, text extraction, PDF generation
-- **Round-trip editing** — edit .docx / .xlsx / .pptx; the original ZIP is preserved and only changed XML text nodes are patched, never rebuilt from scratch
+- **Round-trip editing** — edit .docx / .xlsx / .pptx; the original ZIP is preserved and only changed XML text nodes are patched, never rebuilt from scratch (a no-edit save is byte-identical, and that is a test)
+- **Spreadsheet formulas + browser VBA** — a dependency-graph formula engine (61 functions, recalculation diffed against Excel's own cached results across 285 real workbooks) and a client-side VBA host that runs workbook macros in the browser: Range / Worksheet / Workbook operations, Sort, AutoFilter, Find, Copy/PasteSpecial and WorksheetFunction — 95 members across 11 host objects, each derived from and A/B-verified against real Excel COM behaviour (82 scripted comparisons). Macro edits write back through the same differential patcher — values, formulas, hidden rows/columns, merges and cell styling.
 - **Rich formatting** — run/paragraph shading, character borders, text effects (shadow / emboss / imprint / outline), small caps, drop caps, tab leaders
 - **Hanko / Inkan** — Japanese digital stamp generation + PAdES PDF signatures
 - **100% client-side** — all processing runs in WebAssembly; nothing leaves your browser
