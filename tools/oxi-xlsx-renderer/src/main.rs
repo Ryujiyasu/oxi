@@ -106,13 +106,19 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
     for index in first_row..=last_row {
         let held = sheet.rows.iter().find(|row| row.index == index);
         let hidden = held.is_some_and(|row| row.hidden);
-        let points = held
-            .and_then(|row| row.height)
-            .unwrap_or(if sheet.default_row_height > 0.0 {
+        let points = held.and_then(|row| row.height).unwrap_or_else(|| {
+            // A row Excel draws is a whole number of pixels tall, and a pixel
+            // is 0.75pt, so the height a sheet states as its default is rounded
+            // UP to the next 0.75 before it is used: a sheet saying 13 is drawn
+            // at 13.5, which is 18px. A sheet already stating a multiple — 18.75
+            // for the usual 11pt font — is left where it is.
+            let stated = if sheet.default_row_height > 0.0 {
                 sheet.default_row_height
             } else {
                 DEFAULT_ROW_POINTS
-            });
+            };
+            (stated / 0.75).ceil() * 0.75
+        });
         let height = if hidden {
             0.0
         } else {
