@@ -49,7 +49,7 @@ def tree(inner):
             f'</p:spTree></p:cSld>')
 
 
-LVL = ('<a:lstStyle><a:lvl1pPr><a:defRPr sz="2400">'
+LVL = ('<a:lstStyle><a:lvl1pPr><a:defRPr sz="2400" i="1">'
        '<a:solidFill><a:srgbClr val="112233"/></a:solidFill>'
        '<a:highlight><a:srgbClr val="FFFF00"/></a:highlight>'
        '<a:latin typeface="Arial"/></a:defRPr></a:lvl1pPr></a:lstStyle>')

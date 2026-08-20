@@ -2407,6 +2407,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // A level can declare the highlight too, and then
                             // every run inherits it: d35's master title level
                             // carries the white slab behind "BIG CONCEPT".
+                            // The default for runs that state NO colour. It must be
+                            // the level's, never another run's: d16 slide 5's
+                            // quotation is two uncoloured runs around one accent1
+                            // run, and taking the first colour found painted the
+                            // whole quotation blue where PowerPoint has black.
+                            // 30 paragraphs over 9 decks mix the two.
+                            let run_default_color = if runcolordef_on() {
+                                phl.and_then(|l| l.color.clone())
+                            } else {
+                                color.clone()
+                            };
                             let para_highlight = if highlightlvl_on() {
                                 phl.and_then(|l| l.highlight.clone())
                             } else {
@@ -2483,7 +2494,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             } else {
                                 400
                             };
-                            let para_italic = p.runs.iter().any(|r| r.italic);
+                            // A LEVEL can ask for italic too: d16's layout body
+                            // level declares `<a:defRPr i="1"/>` and PowerPoint
+                            // sets the whole quotation slanted.
+                            let lvl_italic = lvlitalic_on() && phl.is_some_and(|l| l.italic);
+                            let para_italic = lvl_italic || p.runs.iter().any(|r| r.italic);
                             let para_ul = p.runs.iter().any(|r| r.underline);
                             // A highlight needs the per-run path even when the
                             // paragraph is one run, since only that path knows
@@ -2525,8 +2540,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         &p.runs,
                                         &family,
                                         fs,
-                                        color.as_deref(),
+                                        run_default_color.as_deref(),
                                         para_highlight.as_deref(),
+                                        lvl_italic,
                                         scale,
                                     );
                                     continue;
@@ -8963,6 +8979,8 @@ unsafe fn draw_line_runs(
     default_color: Option<&str>,
     // The level's own `a:highlight`, used by runs that declare none.
     default_highlight: Option<&str>,
+    // The level's `a:defRPr/@i`, which every run inherits.
+    default_italic: bool,
     scale: f64,
 ) {
     // Walk the runs, clipping each to this line's character range.
@@ -9051,7 +9069,16 @@ unsafe fn draw_line_runs(
             }
         }
         draw_text_baseline_wiu(
-            dc, cursor_x, baseline, &seg, fs, family, color, scale, weight, run.italic,
+            dc,
+            cursor_x,
+            baseline,
+            &seg,
+            fs,
+            family,
+            color,
+            scale,
+            weight,
+            run.italic || default_italic,
             run.underline,
         );
         cursor_x += w;
@@ -9678,6 +9705,17 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
 /// `a:bodyPr/@wrap="none"` is honoured unless this is set.
 fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
+}
+
+/// A level's `a:defRPr/@i` is honoured unless this is set.
+fn lvlitalic_on() -> bool {
+    std::env::var("OXI_LVLITALIC_DISABLE").is_err()
+}
+
+/// A run with no colour takes the LEVEL's rather than a sibling run's unless
+/// this is set.
+fn runcolordef_on() -> bool {
+    std::env::var("OXI_RUNCOLORDEF_DISABLE").is_err()
 }
 
 /// A level's inherited `a:highlight` is honoured unless this is set.

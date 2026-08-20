@@ -430,6 +430,24 @@ fn a_level_can_declare_the_highlight() {
     );
 }
 
+#[test]
+fn a_level_can_ask_for_italic() {
+    // d16's layout body level is `<a:defRPr i="1" sz="3600"/>` and PowerPoint
+    // sets the whole quotation slanted; 18 levels over two dev decks declare
+    // one, and MasterStyleLevel had nowhere to put it.
+    let p = parse_pptx(PHANYIDX_PPTX).expect("phanyidx_test.pptx must parse");
+    let shape = p.slides[0]
+        .shapes
+        .iter()
+        .find(|s| matches!(&s.content, ShapeContent::AutoShape { paragraphs }
+                           if !paragraphs.is_empty()))
+        .expect("the ctrTitle placeholder");
+    assert!(
+        shape.ph_levels.first().expect("the master title level").italic,
+        "a level's defRPr @i is the level's slant"
+    );
+}
+
 // --- a rotation inherited through a mirror ---------------------------------
 // Two nested groups, each rot=-90 flipH=1. Accumulating the two component-wise
 // gives -180 with the flips cancelling; the real composition is the IDENTITY,

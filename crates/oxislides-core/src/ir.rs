@@ -110,6 +110,11 @@ pub struct MasterStyleLevel {
     /// the dev corpus name a font this way.
     #[serde(default)]
     pub font_family: Option<String>,
+    /// `a:defRPr/@i` -- the level asks for italic. d16's layout body level
+    /// declares `<a:defRPr i="1" sz="3600"/>` and PowerPoint sets the whole
+    /// quotation in italic; 18 levels across two dev decks declare one.
+    #[serde(default)]
+    pub italic: bool,
     /// `a:defRPr/a:highlight` -- the box this outline level paints behind its
     /// text. d35's master TITLE placeholder declares a white one, which is the
     /// slab behind "BIG CONCEPT"; 19 levels in that deck carry one and no other

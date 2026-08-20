@@ -479,6 +479,7 @@ fn parse_layout_ph_lststyles(
     let mut levels: Vec<MasterStyleLevel> = Vec::new();
     let mut cur_lvl: Option<usize> = None;
     let mut in_def_rpr = false;
+    let s_lvlitalic = std::env::var("OXI_LVLITALIC_DISABLE").is_err();
     // `a:highlight` inside a level's defRPr holds a colour element shaped just
     // like the level's own solidFill, so without this flag it is read as the
     // level's TEXT colour -- the same trap the run-level highlight sprang.
@@ -541,6 +542,11 @@ fn parse_layout_ph_lststyles(
                         if let (Some(idx), Some(sz)) = (cur_lvl, get_attr(&e, "sz")) {
                             if let Ok(v) = sz.parse::<f32>() {
                                 levels[idx].font_size = Some(v / 100.0);
+                            }
+                        }
+                        if let (Some(idx), Some(i)) = (cur_lvl, get_attr(&e, "i")) {
+                            if s_lvlitalic {
+                                levels[idx].italic = i == "1" || i == "true";
                             }
                         }
                     }
@@ -4239,6 +4245,7 @@ fn merge_ph_levels(
                     l.font_family.clone()
                 },
                 highlight: l.highlight.clone().or(m.highlight.clone()),
+                italic: l.italic || m.italic,
                 ..l
             }
         })
