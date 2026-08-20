@@ -205,13 +205,18 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
   <section id="demo">
     <div class="wrap">
-      <h2>Open a Word document right now</h2>
+      <h2>Open a document right now</h2>
       <p class="sub">Everything happens locally in your browser via WebAssembly — parsing, layout, rendering and editing. No upload, no account.</p>
-      <div class="cards" style="grid-template-columns: minmax(260px, 620px); justify-content: center;">
+      <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
         <a class="card" href="./docs.html">
           <span class="tag docs">W</span>
           <h3>Oxidocs — Word (.docx) viewer &amp; editor</h3>
           <p>Open a .docx and see it laid out the way Word renders it — powered by the same layout engine that is measured against Microsoft Word below. Edit and save: the original file structure is preserved, and only your changes are patched in.</p>
+        </a>
+        <a class="card" href="./slides.html">
+          <span class="tag slides">P</span>
+          <h3>Oxislides — PowerPoint (.pptx) viewer</h3>
+          <p>Open a .pptx and page through it. Theme colours, placeholder inheritance, gradient and picture backgrounds, shape fills, rotation and text highlight are all resolved by the same engine that is measured slide by slide against PowerPoint's own export. Viewing only — editing is in the Word app.</p>
         </a>
       </div>
     </div>

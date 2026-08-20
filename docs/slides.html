@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oxislides — Free Online PowerPoint (.pptx) Viewer in Your Browser</title>
+<meta name="description" content="Open and view PowerPoint .pptx files directly in your browser. Free, open-source, Rust + WebAssembly — no upload, no account, nothing leaves your device.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Oxislides — Free Online PowerPoint (.pptx) Viewer">
+<meta property="og:description" content="Open and view .pptx files in the browser. Free, open-source, no upload.">
+<meta property="og:image" content="https://oxi-dd65f4.gitlab.io/oxi-logo.png">
+<meta property="og:url" content="https://oxi-dd65f4.gitlab.io/slides.html">
+<meta property="og:site_name" content="Oxi">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://oxi-dd65f4.gitlab.io/slides.html">
+<link rel="icon" type="image/x-icon" href="./favicon.ico">
+<script src="./analytics.js" defer></script>
+<style>
+:root {
+  --accent: #C43E1C;
+  --accent-h: #A63417;
+  --accent-l: #FAEBE7;
+  --txt: #333;
+  --bg: #E8E8E8;
+  --rail: #F3F3F3;
+  --border: #E1E1E1;
+  --shad: 0 1px 4px rgba(0,0,0,.18);
+}
+* { margin: 0; padding: 0; box-sizing: border-box }
+html, body { height: 100% }
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg); color: var(--txt);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* Title bar */
+.tb {
+  display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0;
+  background: #fff; padding: 0 14px; font-size: 13px; user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px }
+.logo-mark {
+  width: 22px; height: 22px; border-radius: 5px; background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
+}
+.dn { color: #555; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tb .sp { flex: 1 }
+.tb button, .tb a.btn {
+  font: inherit; border: 1px solid var(--border); background: #fff; color: var(--txt);
+  border-radius: 5px; padding: 5px 12px; cursor: pointer; text-decoration: none;
+}
+.tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
+.tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
+.tb button.primary:hover { background: var(--accent-h) }
+.lang { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden }
+.lang button { border: 0; border-radius: 0; padding: 5px 9px; font-size: 12px }
+.lang button.on { background: var(--accent); color: #fff }
+
+/* Stage */
+.stage { flex: 1; display: flex; min-height: 0 }
+.rail {
+  width: 172px; flex-shrink: 0; background: var(--rail); border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 10px 8px; display: none;
+}
+.thumb { display: flex; gap: 7px; align-items: flex-start; margin-bottom: 9px; cursor: pointer }
+.thumb-n { font-size: 11px; color: #888; width: 15px; text-align: right; padding-top: 3px; flex-shrink: 0 }
+.thumb-p {
+  width: 128px; position: relative; overflow: hidden; background: #fff;
+  border: 2px solid transparent; box-shadow: var(--shad);
+}
+.thumb.on .thumb-p { border-color: var(--accent) }
+.canvas { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 22px 20px }
+.slide { position: relative; box-shadow: 0 2px 14px rgba(0,0,0,.22); background: #fff; overflow: hidden }
+.slide-shape { position: absolute; overflow: visible }
+.slide-shape p { margin: 0 }
+.counter { margin-top: 12px; font-size: 13px; color: #777 }
+.nav { display: flex; gap: 8px; align-items: center; margin-top: 10px }
+.nav button { font: inherit; border: 1px solid var(--border); background: #fff; border-radius: 5px; padding: 5px 14px; cursor: pointer }
+.nav button:disabled { opacity: .4; cursor: default }
+
+/* Drop zone */
+.drop {
+  margin: auto; max-width: 620px; text-align: center; padding: 46px 30px;
+  border: 2px dashed #BDBDBD; border-radius: 12px; background: #fff; color: #666;
+}
+.drop.hot { border-color: var(--accent); background: var(--accent-l) }
+.drop h1 { font-size: 21px; color: var(--txt); margin-bottom: 8px; font-weight: 600 }
+.drop p { font-size: 14px; line-height: 1.65; margin-bottom: 18px }
+.drop .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
+.drop button {
+  font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  border-radius: 6px; padding: 9px 20px; cursor: pointer;
+}
+.drop button.ghost { background: #fff; color: var(--accent) }
+.drop button:disabled { opacity: .5; cursor: default }
+.note { font-size: 12px; color: #888; margin-top: 16px; line-height: 1.6 }
+.note a { color: var(--accent) }
+.msg { padding: 8px 14px; font-size: 13px; background: var(--accent-l); color: var(--accent-h); flex-shrink: 0 }
+.msg.err { background: #FDECEA; color: #B3261E }
+.msg[hidden] { display: none }
+@media (max-width: 720px) { .rail { display: none !important } }
+</style>
+</head>
+<body>
+
+<div class="tb">
+  <span class="logo"><span class="logo-mark">O</span><span>Oxislides</span></span>
+  <span class="dn" id="docName" data-i18n="noFile">No presentation open</span>
+  <span class="sp"></span>
+  <button id="btnOpen" data-i18n="open">Open</button>
+  <a class="btn" href="./docs.html" data-i18n="wordApp">Word app</a>
+  <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
+  <span class="lang">
+    <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
+  </span>
+</div>
+
+<div class="msg" id="msg" hidden></div>
+
+<div class="stage">
+  <div class="rail" id="rail"></div>
+  <div class="canvas" id="canvas">
+    <div class="drop" id="drop">
+      <h1 data-i18n="title">Open a PowerPoint file right now</h1>
+      <p data-i18n="lede">Drop a .pptx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.</p>
+      <div class="row">
+        <button id="btnChoose" data-i18n="choose">Choose a .pptx</button>
+        <button id="btnSample" class="ghost" disabled data-i18n="sample">Try a sample</button>
+      </div>
+      <p class="note" data-i18n="note">Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint's own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.</p>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileIn" accept=".pptx" hidden>
+
+<script type="module">
+const I18N = {
+  en: {
+    noFile: 'No presentation open', open: 'Open', wordApp: 'Word app', about: 'About Oxi',
+    title: 'Open a PowerPoint file right now',
+    lede: "Drop a .pptx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.",
+    choose: 'Choose a .pptx', sample: 'Try a sample',
+    note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
+    loading: 'Loading the engine…', parsing: 'Parsing…',
+    prev: 'Previous', next: 'Next',
+    parsed: (n, s, ms) => `${n} slides, ${s} shapes — parsed in ${ms} ms`,
+    slideOf: (a, b) => `Slide ${a} / ${b}`,
+    badType: 'That is not a .pptx file.',
+    failed: 'Could not open the presentation: ',
+  },
+  ja: {
+    noFile: 'ファイル未選択', open: '開く', wordApp: 'Word アプリ', about: 'Oxi について',
+    title: 'PowerPoint ファイルをその場で開く',
+    lede: '.pptx をここにドロップするか、選んでください。解析も描画も WebAssembly でブラウザの中だけで行われ、ファイルは端末から出ません。',
+    choose: '.pptx を選ぶ', sample: 'サンプルを開く',
+    note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
+    loading: 'エンジンを読み込み中…', parsing: '解析中…',
+    prev: '前へ', next: '次へ',
+    parsed: (n, s, ms) => `${n} スライド / ${s} 図形 — ${ms} ms で解析`,
+    slideOf: (a, b) => `${a} / ${b} 枚目`,
+    badType: '.pptx ファイルではありません。',
+    failed: 'プレゼンテーションを開けませんでした: ',
+  },
+};
+let lang = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+const t = k => I18N[lang][k];
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const v = I18N[lang][el.dataset.i18n];
+    if (typeof v === 'string') el.innerHTML = v;
+  });
+  document.getElementById('langEn').className = lang === 'en' ? 'on' : '';
+  document.getElementById('langJa').className = lang === 'ja' ? 'on' : '';
+  if (pres) render();
+}
+document.getElementById('langEn').onclick = () => { lang = 'en'; applyLang(); };
+document.getElementById('langJa').onclick = () => { lang = 'ja'; applyLang(); };
+
+const msgEl = document.getElementById('msg');
+function say(text, isErr) {
+  msgEl.textContent = text;
+  msgEl.className = isErr ? 'msg err' : 'msg';
+  msgEl.hidden = false;
+}
+
+// ---- rendering -------------------------------------------------------------
+// The slide model is the IR the Rust engine produces; every field read here is
+// resolved by the parser, including the layout/master inheritance a placeholder
+// needs. Shapes arrive in paint order.
+
+function bytesToDataUrl(bytes, contentType) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const part = bytes.subarray ? bytes.subarray(i, i + chunk) : bytes.slice(i, i + chunk);
+    binary += String.fromCharCode.apply(null, part);
+  }
+  return 'data:' + (contentType || 'image/png') + ';base64,' + btoa(binary);
+}
+
+// `a:lin/@ang` is degrees clockwise from +x: 0 = left to right, 90 = top to
+// bottom. CSS measures from +y anticlockwise, so the two differ by 90 degrees.
+function gradientCss(g) {
+  if (!g || !g.stops || !g.stops.length) return '';
+  const stops = g.stops.map(s => {
+    const c = s.color || '000000';
+    const r = parseInt(c.slice(0, 2), 16), gg = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
+    const a = (s.alpha === undefined || s.alpha === null) ? 1 : s.alpha;
+    return `rgba(${r},${gg},${b},${a}) ${(s.pos * 100).toFixed(2)}%`;
+  }).join(', ');
+  if (g.focus) {
+    return `radial-gradient(circle at ${(g.focus[0] * 100).toFixed(1)}% ${(g.focus[1] * 100).toFixed(1)}%, ${stops})`;
+  }
+  const ang = (g.angle_deg === undefined || g.angle_deg === null) ? 0 : g.angle_deg;
+  return `linear-gradient(${(ang + 90).toFixed(2)}deg, ${stops})`;
+}
+
+function paintBackground(el, slide) {
+  if (slide.background_image && slide.background_image.data && slide.background_image.data.length) {
+    el.style.backgroundImage = 'url(' + bytesToDataUrl(slide.background_image.data, slide.background_image.content_type) + ')';
+    el.style.backgroundSize = '100% 100%';
+  } else if (slide.background_gradient) {
+    el.style.backgroundImage = gradientCss(slide.background_gradient);
+  } else {
+    el.style.background = slide.background_color ? '#' + slide.background_color : 'white';
+  }
+}
+
+// The placeholder level a paragraph inherits: the layout's own lstStyle merged
+// over the master's. A run that states nothing takes its size, face, colour and
+// highlight from here -- without it a title inheriting 96pt draws at 18pt.
+function levelFor(shape, para) {
+  const lv = shape.ph_levels;
+  if (!lv || !lv.length) return null;
+  return lv[Math.min(para.lvl || 0, lv.length - 1)] || null;
+}
+
+function hexRgba(hex, alpha) {
+  if (alpha >= 1) return '#' + hex;
+  const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function buildSlide(container, slide, scale) {
+  slide.shapes.forEach(shape => {
+    const div = document.createElement('div');
+    div.className = 'slide-shape';
+    div.style.left = (shape.x * scale) + 'px';
+    div.style.top = (shape.y * scale) + 'px';
+    div.style.width = (shape.width * scale) + 'px';
+    div.style.height = (shape.height * scale) + 'px';
+
+    if (shape.gradient) {
+      div.style.backgroundImage = gradientCss(shape.gradient);
+    } else if (shape.fill_color) {
+      const a = (shape.fill_alpha === undefined || shape.fill_alpha === null) ? 1 : shape.fill_alpha;
+      div.style.backgroundColor = hexRgba(shape.fill_color, a);
+    }
+    if (shape.border_color) {
+      div.style.border = ((shape.border_width || 1) * scale) + 'px solid #' + shape.border_color;
+      div.style.boxSizing = 'border-box';
+    }
+    const xf = [];
+    if (shape.flip_h) xf.push('scaleX(-1)');
+    if (shape.flip_v) xf.push('scaleY(-1)');
+    if (shape.rotation) xf.push('rotate(' + shape.rotation + 'deg)');
+    if (xf.length) { div.style.transform = xf.join(' '); div.style.transformOrigin = 'center center'; }
+    if (shape.shape_type === 'ellipse') div.style.borderRadius = '50%';
+    else if (shape.shape_type === 'roundRect') {
+      const adj = (shape.adjustments && shape.adjustments.adj) || 16667;
+      div.style.borderRadius = (Math.min(shape.width, shape.height) * (adj / 100000) * scale) + 'px';
+    }
+    if (shape.anchor === 'ctr' || shape.anchor === 'b') {
+      div.style.display = 'flex';
+      div.style.flexDirection = 'column';
+      div.style.justifyContent = shape.anchor === 'ctr' ? 'center' : 'flex-end';
+    }
+
+    const c = shape.content;
+    // An AutoShape carries the same paragraphs a TextBox does, and most pptx
+    // text lives in one.
+    const paragraphs = c && (c.TextBox ? c.TextBox.paragraphs : (c.AutoShape ? c.AutoShape.paragraphs : null));
+    if (paragraphs) {
+      paragraphs.forEach(para => {
+        const p = document.createElement('p');
+        const lvl = levelFor(shape, para);
+        const align = para.alignment || (lvl && lvl.algn);
+        if (align === 'Center') p.style.textAlign = 'center';
+        else if (align === 'Right') p.style.textAlign = 'right';
+        else if (align === 'Justify') p.style.textAlign = 'justify';
+        if (lvl && lvl.line_spacing) p.style.lineHeight = lvl.line_spacing * 1.2;
+        para.runs.forEach(run => {
+          const span = document.createElement('span');
+          span.textContent = run.text;
+          span.style.fontSize = ((run.font_size || (lvl && lvl.font_size) || 18) * scale) + 'px';
+          if (run.bold) span.style.fontWeight = 'bold';
+          if (run.italic) span.style.fontStyle = 'italic';
+          if (run.underline) span.style.textDecoration = 'underline';
+          const color = run.color || (lvl && lvl.color);
+          if (color) span.style.color = '#' + color;
+          const face = run.font_family || (lvl && lvl.font_family);
+          if (face) span.style.fontFamily = face + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+          // `a:highlight` is a box behind the glyphs, and a LEVEL can declare
+          // it as well as a run.
+          const hl = run.highlight || (lvl && lvl.highlight);
+          if (hl) span.style.backgroundColor = '#' + hl;
+          p.appendChild(span);
+        });
+        div.appendChild(p);
+      });
+    } else if (c && c.Image && c.Image.data && c.Image.data.length) {
+      const img = document.createElement('img');
+      img.src = bytesToDataUrl(c.Image.data, c.Image.content_type);
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'contain';
+      div.appendChild(img);
+    }
+    container.appendChild(div);
+  });
+}
+
+// ---- page state ------------------------------------------------------------
+let pres = null, current = 0;
+const canvas = document.getElementById('canvas');
+const rail = document.getElementById('rail');
+
+function render() {
+  canvas.innerHTML = '';
+  rail.innerHTML = '';
+  rail.style.display = 'block';
+
+  const avail = Math.max(320, canvas.clientWidth - 40);
+  const scale = Math.min(avail, 980) / pres.slide_width;
+  const thumbScale = 128 / pres.slide_width;
+
+  const slide = pres.slides[current];
+  const el = document.createElement('div');
+  el.className = 'slide';
+  el.style.width = (pres.slide_width * scale) + 'px';
+  el.style.height = (pres.slide_height * scale) + 'px';
+  paintBackground(el, slide);
+  buildSlide(el, slide, scale);
+  canvas.appendChild(el);
+
+  const nav = document.createElement('div');
+  nav.className = 'nav';
+  const prev = document.createElement('button');
+  prev.textContent = '‹ ' + t('prev');
+  prev.disabled = current === 0;
+  prev.onclick = () => { current--; render(); };
+  const next = document.createElement('button');
+  next.textContent = t('next') + ' ›';
+  next.disabled = current >= pres.slides.length - 1;
+  next.onclick = () => { current++; render(); };
+  const counter = document.createElement('span');
+  counter.className = 'counter';
+  counter.style.marginTop = '0';
+  counter.textContent = t('slideOf')(current + 1, pres.slides.length);
+  nav.append(prev, counter, next);
+  canvas.appendChild(nav);
+
+  pres.slides.forEach((s, i) => {
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb' + (i === current ? ' on' : '');
+    const n = document.createElement('div');
+    n.className = 'thumb-n';
+    n.textContent = i + 1;
+    const prev2 = document.createElement('div');
+    prev2.className = 'thumb-p';
+    prev2.style.height = (pres.slide_height * thumbScale) + 'px';
+    paintBackground(prev2, s);
+    buildSlide(prev2, s, thumbScale);
+    thumb.append(n, prev2);
+    thumb.onclick = () => { current = i; render(); };
+    rail.appendChild(thumb);
+  });
+  rail.querySelectorAll('.thumb')[current].scrollIntoView({ block: 'nearest' });
+}
+
+// ---- engine ----------------------------------------------------------------
+import init, { parse_presentation } from './oxidocs_wasm.js';
+
+const btnSample = document.getElementById('btnSample');
+say(t('loading'));
+await init();
+msgEl.hidden = true;
+btnSample.disabled = false;
+
+async function open(name, bytes) {
+  try {
+    say(t('parsing'));
+    const t0 = performance.now();
+    pres = parse_presentation(bytes);
+    const ms = (performance.now() - t0).toFixed(1);
+    let shapes = 0;
+    for (const s of pres.slides) shapes += s.shapes.length;
+    current = 0;
+    document.getElementById('docName').textContent = name;
+    say(t('parsed')(pres.slides.length, shapes, ms));
+    render();
+  } catch (e) {
+    say(t('failed') + e.message, true);
+  }
+}
+
+async function openFile(file) {
+  if (!file.name.toLowerCase().endsWith('.pptx')) { say(t('badType'), true); return; }
+  open(file.name, new Uint8Array(await file.arrayBuffer()));
+}
+
+const fileIn = document.getElementById('fileIn');
+fileIn.onchange = () => { if (fileIn.files[0]) openFile(fileIn.files[0]); };
+document.getElementById('btnOpen').onclick = () => fileIn.click();
+document.getElementById('btnChoose').onclick = () => fileIn.click();
+btnSample.onclick = async () => {
+  const r = await fetch('./showcase.pptx');
+  if (!r.ok) { say(t('failed') + r.status, true); return; }
+  open('showcase.pptx', new Uint8Array(await r.arrayBuffer()));
+};
+
+const drop = document.getElementById('drop');
+document.addEventListener('dragover', e => { e.preventDefault(); drop && drop.classList.add('hot'); });
+document.addEventListener('dragleave', () => drop && drop.classList.remove('hot'));
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  drop && drop.classList.remove('hot');
+  if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]);
+});
+document.addEventListener('keydown', e => {
+  if (!pres) return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') { if (current < pres.slides.length - 1) { current++; render(); } }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { if (current > 0) { current--; render(); } }
+});
+let rt;
+window.addEventListener('resize', () => { if (pres) { clearTimeout(rt); rt = setTimeout(render, 120); } });
+
+applyLang();
+window.__oxiSlidesReady = true;
+</script>
+</body>
+</html>

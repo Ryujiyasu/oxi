@@ -50,6 +50,24 @@ export function create_blank_docx() {
 }
 
 /**
+ * Generate a PDF from scratch with the given text content.
+ * Returns the PDF bytes.
+ * @param {string} title
+ * @param {string} text
+ * @returns {Uint8Array}
+ */
+export function create_pdf(title, text) {
+    const ptr0 = passStringToWasm0(title, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.create_pdf(ptr0, len0, ptr1, len1);
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
  * Convert a .docx file to PDF bytes.
  * Parses the docx, runs layout, and converts positioned elements to PDF.
  * @param {Uint8Array} data
@@ -135,6 +153,24 @@ export function edit_docx_advanced(data, edits) {
 }
 
 /**
+ * Edit a .pptx file and return the modified bytes.
+ * @param {Uint8Array} data
+ * @param {any} edits
+ * @returns {Uint8Array}
+ */
+export function edit_pptx(data, edits) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.edit_pptx(ptr0, len0, edits);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * Fast text edit + re-layout using cached document (skips docx parse).
  * Returns layout result. Also updates the cached docx bytes.
  * @param {number} paragraph_index
@@ -150,6 +186,99 @@ export function edit_text_and_relayout(paragraph_index, run_index, new_text) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Edit a .xlsx file and return the modified bytes.
+ * @param {Uint8Array} data
+ * @param {any} edits
+ * @returns {Uint8Array}
+ */
+export function edit_xlsx(data, edits) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.edit_xlsx(ptr0, len0, edits);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Save a workbook a VBA run has changed back into the .xlsx it came from.
+ *
+ * `run_spreadsheet_vba` hands back the whole workbook rather than a list of
+ * edits, so the difference against the original file is worked out here.
+ * Styling and merged cells ride along in the original XML untouched, and a
+ * change to those is not written back.
+ * @param {Uint8Array} data
+ * @param {any} workbook
+ * @returns {Uint8Array}
+ */
+export function edit_xlsx_from_workbook(data, workbook) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.edit_xlsx_from_workbook(ptr0, len0, workbook);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Renders a number the way a sheet shows it under `format`.
+ *
+ * The browser used to carry its own reading of number formats; this is the
+ * one the rest of the engine uses, so a cell reads the same wherever it is
+ * shown.
+ * @param {number} value
+ * @param {string} format
+ * @returns {string}
+ */
+export function format_cell_number(value, format) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.format_cell_number(value, ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Generate a hanko stamp SVG.
+ *
+ * `config`: JS object with StampConfig fields:
+ *   { name: "山田", style: "Round"|"Square"|"Oval", size: 100, date?: "2026.03.13" }
+ * @param {any} config
+ * @returns {string}
+ */
+export function generate_hanko_svg(config) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.generate_hanko_svg(config);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
 }
 
 export function init() {
@@ -173,6 +302,21 @@ export function layout_document(data) {
 }
 
 /**
+ * List executable Sub and Function entry points in VBA source.
+ * @param {string} source
+ * @returns {any}
+ */
+export function list_spreadsheet_vba_procedures(source) {
+    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.list_spreadsheet_vba_procedures(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * @param {Uint8Array} data
  * @returns {any}
  */
@@ -180,6 +324,131 @@ export function parse_document(data) {
     const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.parse_document(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Parse a PDF file and return its structure as a JS object.
+ * @param {Uint8Array} data
+ * @returns {any}
+ */
+export function parse_pdf(data) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parse_pdf(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {Uint8Array} data
+ * @returns {any}
+ */
+export function parse_presentation(data) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parse_presentation(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {Uint8Array} data
+ * @returns {any}
+ */
+export function parse_spreadsheet(data) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parse_spreadsheet(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Extract all text from a PDF as a single string.
+ * @param {Uint8Array} data
+ * @returns {string}
+ */
+export function pdf_extract_text(data) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pdf_extract_text(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Verify signatures in a PDF. Returns an array of signature info objects.
+ * @param {Uint8Array} data
+ * @returns {any}
+ */
+export function pdf_verify_signatures(data) {
+    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.pdf_verify_signatures(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Preview a hanko stamp SVG with default config for the given name.
+ * @param {string} name
+ * @returns {string}
+ */
+export function preview_hanko(name) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.preview_hanko(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Execute VBA source against an OxiCells workbook IR.
+ * @param {any} workbook
+ * @param {string} source
+ * @param {string} procedure
+ * @param {any} args
+ * @param {number} active_sheet
+ * @returns {any}
+ */
+export function run_spreadsheet_vba(workbook, source, procedure, args, active_sheet) {
+    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(procedure, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.run_spreadsheet_vba(workbook, ptr0, len0, ptr1, len1, args, active_sheet);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -324,6 +593,10 @@ function __wbg_get_imports() {
             const ret = arg0.done;
             return ret;
         },
+        __wbg_entries_e8a20ff8c9757101: function(arg0) {
+            const ret = Object.entries(arg0);
+            return ret;
+        },
         __wbg_error_a6fa202b58aa1cd3: function(arg0, arg1) {
             let deferred0_0;
             let deferred0_1;
@@ -339,10 +612,22 @@ function __wbg_get_imports() {
             const ret = String.fromCodePoint(arg0 >>> 0);
             return ret;
         }, arguments); },
+        __wbg_getTime_1dad7b5386ddd2d9: function(arg0) {
+            const ret = arg0.getTime();
+            return ret;
+        },
+        __wbg_getTimezoneOffset_639bcf2dde21158b: function(arg0) {
+            const ret = arg0.getTimezoneOffset();
+            return ret;
+        },
         __wbg_get_326e41e095fb2575: function() { return handleError(function (arg0, arg1) {
             const ret = Reflect.get(arg0, arg1);
             return ret;
         }, arguments); },
+        __wbg_get_a8ee5c45dabc1b3b: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
         __wbg_get_unchecked_329cfe50afab7352: function(arg0, arg1) {
             const ret = arg0[arg1 >>> 0];
             return ret;
@@ -355,6 +640,16 @@ function __wbg_get_imports() {
             let result;
             try {
                 result = arg0 instanceof ArrayBuffer;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_instanceof_Map_f194b366846aca0c: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof Map;
             } catch (_) {
                 result = false;
             }
@@ -391,6 +686,10 @@ function __wbg_get_imports() {
             const ret = arg0.length;
             return ret;
         },
+        __wbg_new_0_1dcafdf5e786e876: function() {
+            const ret = new Date();
+            return ret;
+        },
         __wbg_new_227d7c05414eb861: function() {
             const ret = new Error();
             return ret;
@@ -419,8 +718,16 @@ function __wbg_get_imports() {
             const ret = arg0.next;
             return ret;
         },
+        __wbg_now_16f0c993d5dd6c27: function() {
+            const ret = Date.now();
+            return ret;
+        },
         __wbg_prototypesetcall_d62e5099504357e6: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_random_5bb86cae65a45bf6: function() {
+            const ret = Math.random();
+            return ret;
         },
         __wbg_set_282384002438957f: function(arg0, arg1, arg2) {
             arg0[arg1 >>> 0] = arg2;
