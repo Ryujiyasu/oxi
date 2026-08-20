@@ -189,10 +189,10 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 import init, { parse_spreadsheet, format_cell_number } from './oxidocs_wasm.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
-/// Excel states a column width as a count of digits and turns it into pixels
-/// as trunc(width * digit + 5). Measured against Excel on 17 columns of five
-/// workbooks, exact on every one.
-const COLUMN_PADDING = 5;
+/// A stored column width already carries the gutter either side of a cell's
+/// text, so it is not the width a person types into Excel: typing 10 stores
+/// 10.625. Pixels come back out of it by OOXML's own rule, confirmed to the
+/// pixel against a ruled worksheet.
 
 const sheetBox = document.getElementById('sheet');
 const stateBox = document.getElementById('state');
@@ -226,8 +226,9 @@ function widthOf(sheet, column) {
   return sheet.default_col_width > 0 ? sheet.default_col_width : DEFAULT_CHARACTERS;
 }
 
-function columnPixels(characters) {
-  return Math.trunc(characters * digitWidth + COLUMN_PADDING);
+function columnPixels(width) {
+  const padding = Math.trunc(128 / digitWidth);
+  return Math.trunc(((256 * width + padding) / 256) * digitWidth);
 }
 
 function columnName(index) {
@@ -308,7 +309,9 @@ function draw() {
 
     const source = held.get(index);
     const height = source && source.height ? source.height : sheet.default_row_height;
-    if (height) row.style.height = `${Math.round(height * 96 / 72)}px`;
+    // A height in points becomes whole pixels by truncation, the way Excel
+    // draws it.
+    if (height) row.style.height = `${Math.trunc(height * 96 / 72)}px`;
 
     for (let col = 0; col <= lastColumn; col++) {
       const box = merged.get(`${index},${col}`);
@@ -363,10 +366,12 @@ function describe() {
   }
 
   const characters = widthOf(sheet, 0);
+  const padding = Math.trunc(128 / digitWidth);
   widthBox.innerHTML =
-    `A width is a count of digits in the standard font. A digit here measures ` +
-    `<code>${digitWidth}px</code>, so column A at <code>${characters}</code> ` +
-    `characters is <code>trunc(${characters} × ${digitWidth} + ${COLUMN_PADDING}) = ` +
+    `A width counts digits of the standard font, with the cell's gutter already ` +
+    `in it. A digit here measures <code>${digitWidth}px</code>, so column A at ` +
+    `<code>${characters}</code> comes to ` +
+    `<code>trunc(((256 × ${characters} + ${padding}) ÷ 256) × ${digitWidth}) = ` +
     `${columnPixels(characters)}px</code>.`;
 
   const gaps = sheet.unsupported_elements || [];
