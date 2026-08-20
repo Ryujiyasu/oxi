@@ -28,32 +28,68 @@ try:
 except ImportError:  # pragma: no cover - reported at runtime
     fitz = None
 from PIL import Image
+from skimage.metrics import structural_similarity
 
 REPO = Path(__file__).resolve().parents[2]
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 EXPORTER = Path(__file__).resolve().parent / "_xlsx_export_pdf.ps1"
 
 
-def excel_pdfs(pairs: list[tuple[Path, Path]], out: Path) -> set[Path]:
+def excel_pdfs(
+    pairs: list[tuple[Path, Path]], out: Path, chunk: int = 25
+) -> set[Path]:
     """Prints a batch of workbooks to PDF, keeping Excel open throughout.
 
     Starting Excel once rather than per file is the difference between minutes
-    and an hour over a few hundred workbooks.
+    and an hour over a few hundred workbooks. The batch is split into chunks so
+    a workbook Excel will not let go of costs one chunk rather than the run, and
+    anything already printed is left alone so an interrupted run can pick up
+    where it stopped.
     """
-    if not pairs:
-        return set()
+    pending = [(source, dest) for source, dest in pairs if not dest.exists()]
+    already = {dest for _, dest in pairs if dest.exists()}
+    if not pending:
+        return already
     out.mkdir(parents=True, exist_ok=True)
-    listing = out / "_batch.txt"
-    body = [str(source) + chr(9) + str(destination) for source, destination in pairs]
-    listing.write_text(chr(10).join(body), encoding="utf-8")
-    subprocess.run(
-        ["powershell", "-NoProfile", "-File", str(EXPORTER), "-ListFile", str(listing)],
-        capture_output=True,
-        text=True,
-        timeout=60 * 60,
-    )
-    listing.unlink(missing_ok=True)
-    return {destination for _, destination in pairs if destination.exists()}
+
+    for start in range(0, len(pending), chunk):
+        batch = pending[start : start + chunk]
+        listing = out / "_batch.txt"
+        # PowerShell runs from its own directory, so a relative path would not
+        # find the workbook.
+        body = [
+            str(source.resolve()) + chr(9) + str(destination.resolve())
+            for source, destination in batch
+        ]
+        listing.write_text(chr(10).join(body), encoding="utf-8")
+        try:
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-File",
+                    str(EXPORTER),
+                    "-ListFile",
+                    str(listing.resolve()),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60 * len(batch),
+            )
+        except subprocess.TimeoutExpired:
+            # Excel is stuck on one of these. Kill it and carry on: the files it
+            # did print are on disk, and a later run will retry the rest.
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-Process EXCEL -ErrorAction SilentlyContinue | Stop-Process -Force"],
+                capture_output=True,
+            )
+            print(f"  Excel stalled on the chunk starting {batch[0][0].name}")
+        listing.unlink(missing_ok=True)
+        done = sum(1 for _, dest in pending[: start + len(batch)] if dest.exists())
+        print(f"  printed {done}/{len(pending)}")
+
+    return already | {dest for _, dest in pending if dest.exists()}
 
 
 def rasterise(pdf: Path, dpi: float) -> Image.Image:
@@ -83,20 +119,6 @@ def crop_to_ink(image: Image.Image, pad: int = 2) -> Image.Image:
     )
 
 
-def ssim(left: np.ndarray, right: np.ndarray) -> float:
-    """Structural similarity over the whole image, one window."""
-    left = left.astype(np.float64)
-    right = right.astype(np.float64)
-    mu_l, mu_r = left.mean(), right.mean()
-    var_l, var_r = left.var(), right.var()
-    covariance = ((left - mu_l) * (right - mu_r)).mean()
-    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
-    return float(
-        ((2 * mu_l * mu_r + c1) * (2 * covariance + c2))
-        / ((mu_l**2 + mu_r**2 + c1) * (var_l + var_r + c2))
-    )
-
-
 def compare(truth: Image.Image, ours: Image.Image, panel: Path) -> float:
     truth, ours = crop_to_ink(truth), crop_to_ink(ours)
     width = max(truth.width, ours.width)
@@ -110,7 +132,10 @@ def compare(truth: Image.Image, ours: Image.Image, panel: Path) -> float:
     truth, ours = onto_canvas(truth), onto_canvas(ours)
     left = np.asarray(truth.convert("L"))
     right = np.asarray(ours.convert("L"))
-    score = ssim(left, right)
+    # The same SSIM the docx gate reports, so the two numbers mean the same
+    # thing. Unlike that gate this one pads rather than resizes, because a
+    # printed page and a drawn range differ in size for a reason worth seeing.
+    score = float(structural_similarity(left, right, data_range=255))
 
     difference = Image.fromarray(255 - np.abs(left.astype(int) - right.astype(int)).astype(np.uint8))
     strip = Image.new("RGB", (width * 3 + 20, height), (240, 240, 240))
