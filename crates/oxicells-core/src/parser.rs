@@ -223,6 +223,7 @@ struct FontInfo {
     italic: bool,
     size: Option<f32>,
     color: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -418,6 +419,9 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                         current_font.size =
                             get_attr(&e, "val").and_then(|v| v.parse().ok());
                     }
+                    "name" | "rFont" if in_font => {
+                        current_font.name = get_attr(&e, "val");
+                    }
                     "color" if in_font => {
                         if let Some(c) = parse_color_attr(&e) {
                             current_font.color = Some(c);
@@ -536,6 +540,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         bold: font.bold,
         italic: font.italic,
         font_size: font.size,
+        font_name: font.name.clone(),
         font_color: font.color,
         bg_color: fill.bg_color,
         number_format,
@@ -704,10 +709,10 @@ fn parse_worksheet(
                         if in_cell {
                             let cell_value =
                                 resolve_cell_value(&value_text, &cell_type, shared_strings);
-                            let style = match cell_style_index {
-                                Some(idx) => resolve_cell_style(idx, stylesheet),
-                                None => CellStyle::default(),
-                            };
+                            // A cell without an s wears the workbook's default
+                            // format, which is cellXfs[0] — not no format at all.
+                            let style =
+                                resolve_cell_style(cell_style_index.unwrap_or(0), stylesheet);
                             let formula = if formula_text.is_empty() {
                                 None
                             } else {
@@ -759,10 +764,7 @@ fn parse_worksheet(
                         }
                         let si =
                             get_attr(&e, "s").and_then(|v| v.parse::<usize>().ok());
-                        let style = match si {
-                            Some(idx) => resolve_cell_style(idx, stylesheet),
-                            None => CellStyle::default(),
-                        };
+                        let style = resolve_cell_style(si.unwrap_or(0), stylesheet);
                         current_cells.push(Cell {
                             col,
                             value: CellValue::Empty,
@@ -1151,7 +1153,7 @@ mod tests {
         assert_eq!(CellValue::Empty.display(), "");
         assert_eq!(CellValue::String("hello".into()).display(), "hello");
         assert_eq!(CellValue::Number(42.0).display(), "42");
-        assert_eq!(CellValue::Number(3.14).display(), "3.14");
+        assert_eq!(CellValue::Number(2.75).display(), "2.75");
         assert_eq!(CellValue::Boolean(true).display(), "TRUE");
         assert_eq!(CellValue::Boolean(false).display(), "FALSE");
         assert_eq!(CellValue::Error("#N/A".into()).display(), "#N/A");

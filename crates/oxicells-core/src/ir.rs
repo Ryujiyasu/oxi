@@ -119,6 +119,9 @@ pub struct CellStyle {
     pub bold: bool,
     pub italic: bool,
     pub font_size: Option<f32>,
+    /// The typeface a cell asks for, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_name: Option<String>,
     pub font_color: Option<String>,
     pub bg_color: Option<String>,
     pub number_format: Option<String>,

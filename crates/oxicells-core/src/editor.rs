@@ -996,6 +996,9 @@ fn font_xml(style: &CellStyle) -> String {
     if let Some(color) = style.font_color.as_deref() {
         font.push_str(&format!("<color rgb=\"FF{}\"/>", escape(color)));
     }
+    if let Some(name) = style.font_name.as_deref() {
+        font.push_str(&format!("<name val=\"{}\"/>", escape(name)));
+    }
     font.push_str("</font>");
     font
 }

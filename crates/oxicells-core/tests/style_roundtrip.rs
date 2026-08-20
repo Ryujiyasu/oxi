@@ -164,3 +164,32 @@ fn an_unstyled_workbook_writes_nothing_back() {
     assert!(!editor.has_edits());
 }
 
+
+#[test]
+fn the_typeface_a_cell_names_is_read_and_saved() {
+    // The fixture was authored in 游ゴシック, so every cell already names a
+    // typeface before the editor touches anything.
+    let opened = parse_xlsx(FIXTURE).expect("the fixture parses");
+    assert_eq!(
+        style_at(&opened, 1, 0).font_name.as_deref(),
+        Some("游ゴシック")
+    );
+
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.set_cell_style(
+        0,
+        1,
+        0,
+        CellStyle {
+            font_name: Some("Meiryo UI".to_string()),
+            font_size: Some(9.0),
+            ..CellStyle::default()
+        },
+    );
+    let saved = editor.save().expect("the workbook saves");
+
+    let workbook = parse_xlsx(&saved).expect("the saved workbook parses");
+    let style = style_at(&workbook, 1, 0);
+    assert_eq!(style.font_name.as_deref(), Some("Meiryo UI"));
+    assert_eq!(style.font_size, Some(9.0));
+}
