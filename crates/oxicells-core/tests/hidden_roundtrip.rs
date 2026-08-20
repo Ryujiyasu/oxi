@@ -194,12 +194,13 @@ fn a_formula_the_run_wrote_is_saved() {
     assert_eq!(first.cells[0].formula.as_deref(), Some("SUM(A2:A3)"));
 }
 
+/// A workbook has to keep a sheet, the way Excel refuses to delete the last one.
 #[test]
-fn a_workbook_with_a_different_shape_is_refused() {
+fn a_workbook_with_no_sheets_at_all_is_refused() {
     let mut workbook = parse_xlsx(FIXTURE).expect("the fixture parses");
     workbook.sheets.clear();
     let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
     editor
         .apply_workbook(&workbook)
-        .expect_err("sheets cannot be added or removed this way");
+        .expect_err("a workbook cannot be left with nothing in it");
 }

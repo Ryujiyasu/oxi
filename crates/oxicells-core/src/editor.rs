@@ -63,6 +63,17 @@ pub struct XlsxEditor {
     styles: HashMap<(usize, u32, u32), CellStyle>,
     /// Sheets whose filter is being replaced. `None` takes the filter away.
     filters: HashMap<usize, Option<AutoFilter>>,
+    /// What the workbook's sheets should end up as, when they are changing.
+    sheet_plan: Option<Vec<PlannedSheet>>,
+}
+
+/// One sheet of a rearranged workbook: either one the file already holds, or a
+/// new one to be written from scratch.
+enum PlannedSheet {
+    /// The sheet at this position in the original file, under this name.
+    Held { origin: usize, name: String },
+    /// A sheet the file has never held.
+    Added(crate::ir::Sheet),
 }
 
 /// Convert 0-based column to letter reference (0->A, 25->Z, 26->AA).
@@ -90,6 +101,7 @@ impl XlsxEditor {
             merges: HashMap::new(),
             styles: HashMap::new(),
             filters: HashMap::new(),
+            sheet_plan: None,
         })
     }
 
@@ -128,20 +140,65 @@ impl XlsxEditor {
     /// which rows and columns are hidden, and which cells are merged. Styling
     /// travels with the original XML untouched, so a change to it is not saved.
     pub fn apply_workbook(&mut self, edited: &Workbook) -> Result<(), XlsxError> {
-        if edited.sheets.len() != self.workbook.sheets.len() {
+        if edited.sheets.is_empty() {
             return Err(XlsxError::InvalidData(
-                "the edited workbook has a different number of sheets".to_string(),
+                "a workbook must keep at least one sheet".to_string(),
             ));
         }
 
-        for (index, (before, after)) in self
-            .workbook
+        // Sheets are matched by position when there are as many as before, so a
+        // rename is a rename. Otherwise they are matched by name, and whatever
+        // is left over has been added or taken away.
+        let same_count = edited.sheets.len() == self.workbook.sheets.len();
+        let mut origins: Vec<Option<usize>> = Vec::with_capacity(edited.sheets.len());
+        for (index, sheet) in edited.sheets.iter().enumerate() {
+            let origin = if same_count {
+                Some(index)
+            } else {
+                self.workbook
+                    .sheets
+                    .iter()
+                    .position(|held| held.name.eq_ignore_ascii_case(&sheet.name))
+            };
+            origins.push(origin);
+        }
+
+        let rearranged = !same_count
+            || origins.iter().enumerate().any(|(index, origin)| {
+                *origin != Some(index)
+            })
+            || edited
+                .sheets
+                .iter()
+                .zip(&self.workbook.sheets)
+                .any(|(after, before)| after.name != before.name);
+        if rearranged {
+            self.sheet_plan = Some(
+                edited
+                    .sheets
+                    .iter()
+                    .zip(&origins)
+                    .map(|(sheet, origin)| match origin {
+                        Some(origin) => PlannedSheet::Held {
+                            origin: *origin,
+                            name: sheet.name.clone(),
+                        },
+                        None => PlannedSheet::Added(sheet.clone()),
+                    })
+                    .collect(),
+            );
+        }
+
+        let pairs: Vec<(usize, (&crate::ir::Sheet, &crate::ir::Sheet))> = edited
             .sheets
             .iter()
-            .zip(&edited.sheets)
-            .enumerate()
-            .collect::<Vec<_>>()
-        {
+            .zip(&origins)
+            .filter_map(|(after, origin)| {
+                origin.map(|origin| (origin, (&self.workbook.sheets[origin], after)))
+            })
+            .collect();
+
+        for (index, (before, after)) in pairs {
             let mut changes: Vec<((usize, u32, u32), CellEditValue)> = Vec::new();
             let held = cells_of(before);
             let now = cells_of(after);
@@ -258,6 +315,7 @@ impl XlsxEditor {
             || !self.merges.is_empty()
             || !self.styles.is_empty()
             || !self.filters.is_empty()
+            || self.sheet_plan.is_some()
     }
 
     /// Save edited xlsx.
@@ -301,6 +359,44 @@ impl XlsxEditor {
         // The style sheet is read ahead of the walk below, since a worksheet
         // needs the indices and may come before it in the archive.
         let mut patched_styles: Option<String> = None;
+        // What each planned sheet is called in the package, and which of the
+        // original parts it comes from.
+        let sheet_paths_by_index = self.resolve_sheet_paths()?;
+        let mut planned_parts: Vec<(String, Option<usize>)> = Vec::new();
+        if let Some(plan) = self.sheet_plan.as_ref() {
+            let mut next_part = sheet_paths_by_index.len() + 1;
+            for planned in plan {
+                match planned {
+                    PlannedSheet::Held { origin, .. } => {
+                        let path = sheet_paths_by_index.get(*origin).cloned().ok_or_else(|| {
+                            XlsxError::InvalidData(
+                                "a kept sheet is not in the original workbook".to_string(),
+                            )
+                        })?;
+                        planned_parts.push((path, Some(*origin)));
+                    }
+                    PlannedSheet::Added(_) => {
+                        // Take a part name nothing is using.
+                        let mut path = format!("xl/worksheets/sheet{next_part}.xml");
+                        while sheet_paths_by_index.contains(&path) {
+                            next_part += 1;
+                            path = format!("xl/worksheets/sheet{next_part}.xml");
+                        }
+                        next_part += 1;
+                        planned_parts.push((path, None));
+                    }
+                }
+            }
+        }
+        let dropped: Vec<String> = match self.sheet_plan.as_ref() {
+            None => Vec::new(),
+            Some(_) => sheet_paths_by_index
+                .iter()
+                .filter(|path| !planned_parts.iter().any(|(held, _)| held == *path))
+                .cloned()
+                .collect(),
+        };
+
         let mut style_indices: Vec<u32> = Vec::new();
         if !distinct.is_empty() {
             let mut xml = String::new();
@@ -383,6 +479,62 @@ impl XlsxEditor {
                 writer.start_file(&name, options)
                     .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
 
+                if dropped.contains(&name) {
+                    // The sheet is gone; leave its part out of the package.
+                    writer
+                        .abort_file()
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    continue;
+                }
+                if let (Some(plan), "xl/workbook.xml") = (self.sheet_plan.as_ref(), name.as_str())
+                {
+                    let mut xml = String::new();
+                    entry
+                        .read_to_string(&mut xml)
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    let names: Vec<String> = plan
+                        .iter()
+                        .map(|planned| match planned {
+                            PlannedSheet::Held { name, .. } => name.clone(),
+                            PlannedSheet::Added(sheet) => sheet.name.clone(),
+                        })
+                        .collect();
+                    let patched = patch_workbook_sheets(&xml, &names)?;
+                    writer
+                        .write_all(patched.as_bytes())
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    continue;
+                }
+                if self.sheet_plan.is_some() && name == "xl/_rels/workbook.xml.rels" {
+                    let mut xml = String::new();
+                    entry
+                        .read_to_string(&mut xml)
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    let targets: Vec<String> = planned_parts
+                        .iter()
+                        .map(|(path, _)| {
+                            path.strip_prefix("xl/").unwrap_or(path).to_string()
+                        })
+                        .collect();
+                    let patched = patch_workbook_rels(&xml, &targets)?;
+                    writer
+                        .write_all(patched.as_bytes())
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    continue;
+                }
+                if self.sheet_plan.is_some() && name == "[Content_Types].xml" {
+                    let mut xml = String::new();
+                    entry
+                        .read_to_string(&mut xml)
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    let parts: Vec<String> =
+                        planned_parts.iter().map(|(path, _)| path.clone()).collect();
+                    let patched = patch_content_types(&xml, &parts)?;
+                    writer
+                        .write_all(patched.as_bytes())
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    continue;
+                }
                 if name == "xl/styles.xml" {
                     if let Some(patched) = patched_styles.as_deref() {
                         writer
@@ -403,6 +555,24 @@ impl XlsxEditor {
                     entry.read_to_end(&mut buf)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     writer.write_all(&buf)
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                }
+            }
+
+            // Sheets the file never held are written after everything it did.
+            if let Some(plan) = self.sheet_plan.as_ref() {
+                for (planned, (path, origin)) in plan.iter().zip(&planned_parts) {
+                    if origin.is_some() {
+                        continue;
+                    }
+                    let PlannedSheet::Added(sheet) = planned else {
+                        continue;
+                    };
+                    writer
+                        .start_file(path, SimpleFileOptions::default())
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    writer
+                        .write_all(&write_new_sheet(sheet)?)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                 }
             }
@@ -891,6 +1061,160 @@ fn builtin_number_format_id(format: &str) -> Option<u32> {
         "m/d/yy h:mm" => Some(22),
         _ => None,
     }
+}
+
+/// Rewrites the `<sheets>` list of `xl/workbook.xml`.
+///
+/// Each sheet is named in order and given a relationship id matching its
+/// position, which is what `patch_workbook_rels` writes on the other side.
+fn patch_workbook_sheets(xml: &str, names: &[String]) -> Result<String, XlsxError> {
+    let start = xml.find("<sheets").ok_or_else(|| {
+        XlsxError::InvalidData("the workbook does not list its sheets".to_string())
+    })?;
+    let end = xml[start..]
+        .find("</sheets>")
+        .map(|at| start + at + "</sheets>".len())
+        .or_else(|| {
+            // A self-closing <sheets/> holds nothing, but is still the place.
+            xml[start..].find("/>").map(|at| start + at + 2)
+        })
+        .ok_or_else(|| {
+            XlsxError::InvalidData("the workbook's sheet list has no end".to_string())
+        })?;
+
+    let mut listed = String::from("<sheets>");
+    for (position, name) in names.iter().enumerate() {
+        listed.push_str(&format!(
+            "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rIdSheet{}\"/>",
+            escape(name),
+            position + 1,
+            position + 1
+        ));
+    }
+    listed.push_str("</sheets>");
+    Ok(format!("{}{}{}", &xml[..start], listed, &xml[end..]))
+}
+
+/// Rewrites the worksheet relationships of `xl/_rels/workbook.xml.rels`,
+/// leaving every other relationship — styles, theme, shared strings — as it is.
+fn patch_workbook_rels(xml: &str, targets: &[String]) -> Result<String, XlsxError> {
+    const WORKSHEET: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+
+    let mut kept = String::new();
+    let mut rest = xml;
+    let end = rest.find("</Relationships>").ok_or_else(|| {
+        XlsxError::InvalidData("the workbook has no relationships".to_string())
+    })?;
+    let tail = &rest[end..];
+    rest = &rest[..end];
+
+    // Keep everything that is not a worksheet, in the order it was written.
+    let head_end = rest.find('>').map(|at| at + 1).unwrap_or(0);
+    let mut head = rest[..head_end].to_string();
+    if !head.contains("<Relationships") {
+        // The declaration came first; find the real opening tag.
+        let at = rest.find("<Relationships").ok_or_else(|| {
+            XlsxError::InvalidData("the workbook has no relationships".to_string())
+        })?;
+        let close = rest[at..].find('>').map(|offset| at + offset + 1).unwrap();
+        head = rest[..close].to_string();
+        rest = &rest[close..];
+    } else {
+        rest = &rest[head_end..];
+    }
+
+    for piece in rest.split_inclusive("/>") {
+        if piece.contains(WORKSHEET) {
+            continue;
+        }
+        kept.push_str(piece);
+    }
+
+    let mut added = String::new();
+    for (position, target) in targets.iter().enumerate() {
+        added.push_str(&format!(
+            "<Relationship Id=\"rIdSheet{}\" Type=\"{WORKSHEET}\" Target=\"{}\"/>",
+            position + 1,
+            escape(target)
+        ));
+    }
+    Ok(format!("{head}{added}{kept}{tail}"))
+}
+
+/// Rewrites the worksheet overrides of `[Content_Types].xml`.
+fn patch_content_types(xml: &str, parts: &[String]) -> Result<String, XlsxError> {
+    const WORKSHEET: &str =
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+
+    let end = xml.find("</Types>").ok_or_else(|| {
+        XlsxError::InvalidData("the package has no content types".to_string())
+    })?;
+    let (body, tail) = xml.split_at(end);
+
+    let mut kept = String::new();
+    for piece in body.split_inclusive("/>") {
+        if piece.contains(WORKSHEET) {
+            continue;
+        }
+        kept.push_str(piece);
+    }
+
+    let mut added = String::new();
+    for part in parts {
+        added.push_str(&format!(
+            "<Override PartName=\"/{}\" ContentType=\"{WORKSHEET}\"/>",
+            escape(part)
+        ));
+    }
+    Ok(format!("{kept}{added}{tail}"))
+}
+
+/// Writes a worksheet part from scratch, for a sheet the file never held.
+fn write_new_sheet(sheet: &crate::ir::Sheet) -> Result<Vec<u8>, XlsxError> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut root = BytesStart::new("worksheet");
+    root.push_attribute((
+        "xmlns",
+        "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    ));
+    writer
+        .write_event(Event::Start(root))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+
+    if sheet.rows.iter().all(|row| row.cells.is_empty() && !row.hidden) {
+        writer
+            .write_event(Event::Empty(BytesStart::new("sheetData")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    } else {
+        writer
+            .write_event(Event::Start(BytesStart::new("sheetData")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        for row in &sheet.rows {
+            let mut cells = BTreeMap::new();
+            for cell in &row.cells {
+                if let Some(value) = edit_for(cell) {
+                    cells.insert(cell.col, value);
+                }
+            }
+            if cells.is_empty() && !row.hidden {
+                continue;
+            }
+            write_inserted_row(&mut writer, row.index, cells, Some(row.hidden))?;
+        }
+        writer
+            .write_event(Event::End(BytesEnd::new("sheetData")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+
+    write_merges(&mut writer, &sheet.merge_cells)?;
+    writer
+        .write_event(Event::End(BytesEnd::new("worksheet")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+
+    let mut part = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#.to_vec();
+    part.extend(writer.into_inner().into_inner());
+    Ok(part)
 }
 
 /// Writes an `<autoFilter>` block, or nothing when the filter has been taken
