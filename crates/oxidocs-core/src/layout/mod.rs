@@ -9586,18 +9586,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         cursor.advance(img_before);
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
                     }
-                    // S1181: an image-only paragraph's top snaps to the 96dpi
-                    // pixel like any other paragraph under a no-type docGrid
-                    // (walk group C/F: term exact, boundary rounded). Restore
-                    // the fraction after the advance — no page transition
-                    // happens between here and the advance.
+                    // S1181 v2: an image-only paragraph's top PAINTS on the
+                    // 96dpi pixel like any other paragraph under a no-type
+                    // docGrid (walk group C/F: term exact, boundary rounded).
+                    // Visual track only — the fit already happened on the
+                    // exact cursor above. Re-sync after the advance.
                     let s1181_img_unsnap = if page.doc_grid_no_type
                         && !self.doc_body_has_real_cjk
                         && std::env::var("OXI_S1181").is_ok()
                     {
-                        let exact = cursor.cursor_y;
+                        let exact = cursor.visual_y;
                         let snapped = (exact / 0.75).round() * 0.75;
-                        cursor.set(snapped);
+                        cursor.advance_split(0.0, snapped - exact);
                         exact - snapped
                     } else {
                         0.0
@@ -9618,7 +9618,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     ));
                     cursor.advance(img_adv);
                     if s1181_img_unsnap != 0.0 {
-                        cursor.advance(s1181_img_unsnap);
+                        cursor.advance_split(0.0, s1181_img_unsnap);
                     }
                     prev_para_style_id = None;
                     prev_borders = None; // S658: an image breaks border-merge adjacency
@@ -13933,28 +13933,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
 
         cursor.advance(effective_spacing);
 
-        // S1181 (2026-08-20, OPT-IN OXI_S1181=1): a NO-TYPE docGrid runs Word's
-        // legacy 96dpi engine — every paragraph's FIRST-LINE TOP lands on a
-        // whole device pixel: round(cumulative_exact / 0.75) × 0.75, half-up,
-        // while the stream itself stays EXACT (compounding was falsified twice
-        // on the _pb_gridwalk walk: A-group k=7 needs 214.50→215 from the exact
-        // stream). Snap here (the cursor is at the post-spacing first-line
-        // top), remember the fraction, and restore it at paragraph exit UNLESS
-        // a page break happened inside (a new page restarts the exact stream
-        // at the page top). Derived: _pb_gridwalk (110-paragraph walk × pitch
-        // 360/326 — the quantum is 0.75pt regardless of linePitch), 40+
-        // boundaries, text/empty/image/after=160 all round-exact. Body flow
-        // only; JP/gen2 no-type-grid docs are excluded by the real-CJK gate
-        // (S671/S674 calibrations untouched).
+        // S1181 v2 (2026-08-20, OPT-IN OXI_S1181=1): a NO-TYPE docGrid runs
+        // Word's legacy 96dpi engine — every paragraph's FIRST-LINE TOP is
+        // PAINTED on a whole device pixel: round(cumulative_exact / 0.75) ×
+        // 0.75, half-up on the ABSOLUTE coordinate, while the stream stays
+        // EXACT (compounding falsified twice on _pb_gridwalk A-group k=7) AND
+        // the page-bottom fit is judged on the EXACT position (_pb_gridfit
+        // F240: the FIT→PUSH transition sits exactly on the exact threshold;
+        // both rounded-fit variants over-fit x=566/568 and are refuted — v1's
+        // cursor-snap regressed nyserda/uklocal/legal_0001482d and cratered
+        // technical__002c1ffa through exactly that). So: VISUAL track only —
+        // pagination is byte-identical by construction. Restore at exit
+        // unless a page break re-synced both tracks. Derived: _pb_gridwalk
+        // (110-para walk × pitch 360/326, quantum 0.75 pitch-independent,
+        // exact/atLeast/auto all quantized, absolute anchor) + _pb_gridfit.
+        // JP/gen2 no-type-grid docs excluded by the real-CJK gate.
         let (s1181_unsnap, s1181_pages0) = if page.doc_grid_no_type
             && !self.doc_body_has_real_cjk
             && !in_textbox
             && body_para_index.is_some()
             && std::env::var("OXI_S1181").is_ok()
         {
-            let exact = cursor.cursor_y;
+            let exact = cursor.visual_y;
             let snapped = (exact / 0.75).round() * 0.75;
-            cursor.set(snapped);
+            cursor.advance_split(0.0, snapped - exact);
             (exact - snapped, pages.len())
         } else {
             (0.0, usize::MAX)
@@ -20559,11 +20561,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             out.extend(s900_deferred_ids);
         }
 
-        // S1181 exit: give the fraction back so the stream stays exact — but
-        // only if the paragraph stayed on its page (a break restarted the
-        // stream at the new page top; the pre-break fraction is gone).
+        // S1181 v2 exit: re-sync the visual track to the exact stream — but
+        // only if the paragraph stayed on its page (a break already re-synced
+        // both tracks at the new page top).
         if s1181_unsnap != 0.0 && pages.len() == s1181_pages0 {
-            cursor.advance(s1181_unsnap);
+            cursor.advance_split(0.0, s1181_unsnap);
         }
         (elements, space_after, cur_col)
     }
