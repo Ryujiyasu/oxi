@@ -389,3 +389,29 @@ fn a_placeholder_with_an_unmatched_idx_still_inherits_the_master_level() {
     );
     assert_eq!(lvl.font_family.as_deref(), Some("Arial"));
 }
+
+// --- a rotation inherited through a mirror ---------------------------------
+// Two nested groups, each rot=-90 flipH=1. Accumulating the two component-wise
+// gives -180 with the flips cancelling; the real composition is the IDENTITY,
+// because a mirror reverses the rotation it passes through:
+// R(-90) F R(-90) F = R(-90) R(+90) F F. d19's layout stacks 29 pencils exactly
+// this way and every one of them came out upside down, blunt end up.
+
+const GRPFLIPROT_PPTX: &[u8] = include_bytes!("../../../tests/fixtures/grpfliprot_test.pptx");
+
+#[test]
+fn a_group_rotation_reverses_when_it_passes_through_a_mirror() {
+    let p = parse_pptx(GRPFLIPROT_PPTX).expect("grpfliprot_test.pptx must parse");
+    let leaf = p.slides[0]
+        .shapes
+        .iter()
+        .find(|s| s.fill_color.as_deref() == Some("FF0000"))
+        .expect("the layout's leaf shape");
+    assert!(
+        leaf.rotation.abs() < 0.01,
+        "two -90 flipH groups compose to the identity, not {}",
+        leaf.rotation
+    );
+    assert!(!leaf.flip_h, "the two mirrors cancel");
+    assert!(!leaf.flip_v);
+}

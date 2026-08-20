@@ -3218,7 +3218,25 @@ fn parse_inherited_shapes(
                                 by - gg.5 * sy,
                                 sx,
                                 sy,
-                                base.4 + gg_rot,
+                                // A rotation inherited THROUGH a mirror turns
+                                // the other way: for a mirror F and rotation R,
+                                // F R(t) = R(-t) F, so the accumulated
+                                // transform R_total F_total takes a new group's
+                                // own rotation negated whenever the flips so far
+                                // are an odd number of mirrors. Adding the two
+                                // component-wise instead made d19's pencil
+                                // stack read rot -180 -- two groups at rot=-90
+                                // flipH=1, which compose to the IDENTITY -- and
+                                // drew all 29 pencils upside down, blunt end up.
+                                // The leaf path already conjugates a shape's own
+                                // rotation this way (`if gfh ^ gfv`); the entry
+                                // did not.
+                                base.4
+                                    + if grpfliprot_on() && (base.7 ^ base.8) {
+                                        -gg_rot
+                                    } else {
+                                        gg_rot
+                                    },
                                 bx + bw / 2.0,
                                 by + bh / 2.0,
                                 base.7 ^ (gg_flip.0 && s_grp_nest),
@@ -4158,6 +4176,11 @@ fn lookup_ph_geom(
 /// is set.
 fn phfont_merge_on() -> bool {
     std::env::var("OXI_PHFONTMERGE_DISABLE").is_err()
+}
+
+/// A group's rotation is conjugated by the flips above it unless this is set.
+fn grpfliprot_on() -> bool {
+    std::env::var("OXI_GRPFLIPROT_DISABLE").is_err()
 }
 
 fn merge_ph_levels(
