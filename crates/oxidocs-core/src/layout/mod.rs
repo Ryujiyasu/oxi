@@ -38617,13 +38617,6 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     0.0
                 };
                 let host_line = (full - sp).max(0.0);
-                if std::env::var("OXI_DBG_S1180").is_ok() {
-                    eprintln!(
-                        "[S1180DBG] s971: ext={:.2} full={:.2} sp={:.2} img_sb={:.2} img_sa={:.2} host_ls={:?} host_lr={:?}",
-                        ext, full, sp, img.paragraph_space_before, img.paragraph_space_after,
-                        host.style.line_spacing, host.style.line_spacing_rule,
-                    );
-                }
                 // S1179 (2026-08-20, opt-out OXI_S1179_DISABLE): under an AUTO
                 // MULTIPLE spacing the image line is NOT max(host, ext) — the
                 // multiple's leading rides ON TOP of the image:

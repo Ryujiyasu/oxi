@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
 """What do a Symbol bullet and HTML autospacing add to an image line?
 
-creative__0158c02a's figure blocks lose −1.4pt/block in Oxi even after S1179:
-every figure host is a Symbol-bullet LIST item (numId 7, lvlText U+F0B7) with
-`w:beforeAutospacing="1"`, and its captions are list items with before+after
-autospacing — decorations the _pb_brimg arms (which already match Word) do not
-carry.  This probe decomposes the −1.4: marker growth on an IMAGE line
+★PREMISE CORRECTED (2026-08-20, second session): "every figure host is a
+Symbol-bullet LIST item (numId 7) with beforeAutospacing" is FALSE — the real
+creative__0158c02a has that form ONCE (p1058 "Amir Siraj"); the other 28 image
+hosts are PLAIN paragraphs (pPr = w:line only, docDefaults after=160).  Their
+−1.4/block was the S1180 double-subtraction (see _pb_crfig_gen.py).  The
+autospacing×image amounts below are still real Word derivations (numaut_img
+6.75 / aut_img 14.625 vs Oxi's flat 5.625, the S931 before-only asymmetry, the
+same-list blk collapse) — but their corpus exposure is that single block, so
+they are bug-mine material, not the creative lever.
+
+Original framing: this probe decomposes marker growth on an IMAGE line
 ([[word_marker_line_height_law]]'s image-line variant), the body autospacing
-amount @276, and their combination, plus one arm shaped exactly like the real
+amount @276, and their combination, plus one arm shaped like the
 [caption][sp+img] block.
 
     python _pb_imgnum_gen.py gen
