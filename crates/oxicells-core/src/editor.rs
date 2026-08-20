@@ -107,6 +107,93 @@ impl XlsxEditor {
         }
     }
 
+    /// Works out what changed between the workbook this editor opened and the
+    /// one it is handed, and records those changes as edits.
+    ///
+    /// This is how a VBA run reaches the file: the runtime rewrites the IR in
+    /// place, and the difference against the original is what has to be
+    /// written back.
+    ///
+    /// Only what the editor can write is compared — cell values, cell formulas,
+    /// and which rows and columns are hidden. Styling and merged cells travel
+    /// with the original XML untouched, so a change to those is not saved.
+    pub fn apply_workbook(&mut self, edited: &Workbook) -> Result<(), XlsxError> {
+        if edited.sheets.len() != self.workbook.sheets.len() {
+            return Err(XlsxError::InvalidData(
+                "the edited workbook has a different number of sheets".to_string(),
+            ));
+        }
+
+        for (index, (before, after)) in self
+            .workbook
+            .sheets
+            .iter()
+            .zip(&edited.sheets)
+            .enumerate()
+            .collect::<Vec<_>>()
+        {
+            let mut changes: Vec<((usize, u32, u32), CellEditValue)> = Vec::new();
+            let held = cells_of(before);
+            let now = cells_of(after);
+            for (&(row, col), cell) in &now {
+                let same = held
+                    .get(&(row, col))
+                    .is_some_and(|before| same_content(before, cell));
+                if !same {
+                    if let Some(value) = edit_for(cell) {
+                        changes.push(((index, row, col), value));
+                    }
+                }
+            }
+            // A cell the run emptied has to be written as empty, not left alone.
+            for &(row, col) in held.keys() {
+                if !now.contains_key(&(row, col)) {
+                    changes.push(((index, row, col), CellEditValue::Empty));
+                }
+            }
+            for (key, value) in changes {
+                self.edits.insert(key, value);
+            }
+
+            let mut rows: Vec<(u32, bool)> = Vec::new();
+            for row in &after.rows {
+                let was = before
+                    .rows
+                    .iter()
+                    .find(|held| held.index == row.index)
+                    .is_some_and(|held| held.hidden);
+                if was != row.hidden {
+                    rows.push((row.index, row.hidden));
+                }
+            }
+            for row in &before.rows {
+                let gone = !after.rows.iter().any(|held| held.index == row.index);
+                if gone && row.hidden {
+                    rows.push((row.index, false));
+                }
+            }
+            for (row, hidden) in rows {
+                self.row_hidden.insert((index, row), hidden);
+            }
+
+            let mut cols: Vec<(u32, bool)> = Vec::new();
+            for col in &after.hidden_cols {
+                if !before.hidden_cols.contains(col) {
+                    cols.push((*col, true));
+                }
+            }
+            for col in &before.hidden_cols {
+                if !after.hidden_cols.contains(col) {
+                    cols.push((*col, false));
+                }
+            }
+            for (col, hidden) in cols {
+                self.col_hidden.insert((index, col), hidden);
+            }
+        }
+        Ok(())
+    }
+
     /// Hide or reveal a whole row. `row` is one-based, as OOXML counts them.
     pub fn set_row_hidden(&mut self, sheet_index: usize, row: u32, hidden: bool) {
         self.row_hidden.insert((sheet_index, row), hidden);
@@ -341,6 +428,48 @@ fn write_cell_value(
     writer
         .write_event(Event::End(BytesEnd::new("c")))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
+/// Every cell a sheet holds, keyed by its one-based row and zero-based column.
+fn cells_of(sheet: &crate::ir::Sheet) -> BTreeMap<(u32, u32), &crate::ir::Cell> {
+    let mut cells = BTreeMap::new();
+    for row in &sheet.rows {
+        for cell in &row.cells {
+            cells.insert((row.index, cell.col), cell);
+        }
+    }
+    cells
+}
+
+fn same_content(before: &crate::ir::Cell, after: &crate::ir::Cell) -> bool {
+    before.formula == after.formula && same_value(&before.value, &after.value)
+}
+
+fn same_value(before: &crate::ir::CellValue, after: &crate::ir::CellValue) -> bool {
+    use crate::ir::CellValue::*;
+    match (before, after) {
+        (Empty, Empty) => true,
+        (String(before), String(after)) => before == after,
+        (Number(before), Number(after)) => before == after,
+        (Boolean(before), Boolean(after)) => before == after,
+        (Error(before), Error(after)) => before == after,
+        _ => false,
+    }
+}
+
+/// How a cell should be written back, or `None` for one this editor cannot
+/// express — an error value has no edit of its own.
+fn edit_for(cell: &crate::ir::Cell) -> Option<CellEditValue> {
+    if let Some(formula) = cell.formula.as_ref() {
+        return Some(CellEditValue::Formula(formula.clone()));
+    }
+    match &cell.value {
+        crate::ir::CellValue::Empty => Some(CellEditValue::Empty),
+        crate::ir::CellValue::String(value) => Some(CellEditValue::String(value.clone())),
+        crate::ir::CellValue::Number(value) => Some(CellEditValue::Number(*value)),
+        crate::ir::CellValue::Boolean(value) => Some(CellEditValue::Boolean(*value)),
+        crate::ir::CellValue::Error(_) => None,
+    }
 }
 
 /// Writes one `<col>` span, splitting it where a change covers only part of it.

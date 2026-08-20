@@ -126,3 +126,80 @@ fn cells_rows_and_columns_all_change_together() {
         .expect("row 1 is still there");
     assert_eq!(first.cells[0].value.display(), "99");
 }
+
+/// The whole way round: read the file, change the workbook the way a VBA run
+/// would, hand it back, and save.
+#[test]
+fn a_changed_workbook_saves_what_it_changed() {
+    let mut workbook = parse_xlsx(FIXTURE).expect("the fixture parses");
+    {
+        let sheet = &mut workbook.sheets[0];
+        // Reveal row 2, hide row 3, reveal column B and hide column C.
+        sheet.rows.iter_mut().find(|row| row.index == 2).unwrap().hidden = false;
+        sheet.rows.iter_mut().find(|row| row.index == 3).unwrap().hidden = true;
+        sheet.hidden_cols = vec![2];
+        // ...and put a number in a cell.
+        let first = sheet.rows.iter_mut().find(|row| row.index == 1).unwrap();
+        first.cells[0].value = oxicells_core::ir::CellValue::Number(99.0);
+    }
+
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor
+        .apply_workbook(&workbook)
+        .expect("the change is one the editor can write");
+    let saved = editor.save().expect("the workbook saves");
+
+    let reread = parse_xlsx(&saved).expect("the saved workbook parses");
+    assert_eq!(hidden_rows(&reread), vec![3, 4]);
+    assert_eq!(reread.sheets[0].hidden_cols, vec![2]);
+    let first = reread.sheets[0]
+        .rows
+        .iter()
+        .find(|row| row.index == 1)
+        .expect("row 1 is still there");
+    assert_eq!(first.cells[0].value.display(), "99");
+}
+
+/// A workbook that has not been touched should produce the file it came from.
+#[test]
+fn an_unchanged_workbook_writes_nothing_back() {
+    let workbook = parse_xlsx(FIXTURE).expect("the fixture parses");
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.apply_workbook(&workbook).expect("nothing to write");
+    assert!(!editor.has_edits());
+    assert_eq!(editor.save().expect("saves"), FIXTURE);
+}
+
+/// A formula the run wrote reaches the file.
+#[test]
+fn a_formula_the_run_wrote_is_saved() {
+    let mut workbook = parse_xlsx(FIXTURE).expect("the fixture parses");
+    {
+        let sheet = &mut workbook.sheets[0];
+        let first = sheet.rows.iter_mut().find(|row| row.index == 1).unwrap();
+        first.cells[0].formula = Some("SUM(A2:A3)".to_string());
+        first.cells[0].value = oxicells_core::ir::CellValue::Empty;
+    }
+
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor.apply_workbook(&workbook).expect("the editor can write it");
+    let saved = editor.save().expect("the workbook saves");
+
+    let reread = parse_xlsx(&saved).expect("the saved workbook parses");
+    let first = reread.sheets[0]
+        .rows
+        .iter()
+        .find(|row| row.index == 1)
+        .expect("row 1 is still there");
+    assert_eq!(first.cells[0].formula.as_deref(), Some("SUM(A2:A3)"));
+}
+
+#[test]
+fn a_workbook_with_a_different_shape_is_refused() {
+    let mut workbook = parse_xlsx(FIXTURE).expect("the fixture parses");
+    workbook.sheets.clear();
+    let mut editor = XlsxEditor::new(FIXTURE).expect("the fixture opens");
+    editor
+        .apply_workbook(&workbook)
+        .expect_err("sheets cannot be added or removed this way");
+}

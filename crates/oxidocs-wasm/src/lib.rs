@@ -605,6 +605,28 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Save a workbook a VBA run has changed back into the .xlsx it came from.
+///
+/// `run_spreadsheet_vba` hands back the whole workbook rather than a list of
+/// edits, so the difference against the original file is worked out here.
+/// Styling and merged cells ride along in the original XML untouched, and a
+/// change to those is not written back.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>, JsError> {
+    let workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+
+    let mut editor = oxicells_core::XlsxEditor::new(data)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    editor
+        .apply_workbook(&workbook)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    editor
+        .save()
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// A single slide text edit operation from JavaScript.
 #[cfg(feature = "suite")]
 #[derive(Deserialize)]
