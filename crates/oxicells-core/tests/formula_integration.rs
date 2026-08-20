@@ -49,6 +49,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         default_row_height: 15.0,
         merge_cells: vec![],
         hidden_cols: Vec::new(),
+        auto_filter: None,
         unsupported_elements: vec![],
     };
     evaluate_sheet_formulas(&mut sheet);

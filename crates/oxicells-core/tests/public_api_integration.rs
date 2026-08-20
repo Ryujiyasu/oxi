@@ -192,6 +192,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         default_row_height: 15.0,
         merge_cells: vec![],
         hidden_cols: Vec::new(),
+        auto_filter: None,
         unsupported_elements: vec![],
     }
 }

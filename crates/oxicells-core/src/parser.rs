@@ -11,6 +11,18 @@ use thiserror::Error;
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
 
+/// Turns an OOXML custom-filter operator into the prefix VBA states it with.
+fn filter_operator(operator: &str) -> &'static str {
+    match operator {
+        "greaterThan" => ">",
+        "greaterThanOrEqual" => ">=",
+        "lessThan" => "<",
+        "lessThanOrEqual" => "<=",
+        "notEqual" => "<>",
+        _ => "",
+    }
+}
+
 /// OOXML writes a boolean attribute as `1`/`0` or `true`/`false`.
 fn is_true(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
@@ -528,6 +540,10 @@ fn parse_worksheet(
     // Column widths: index is 0-based col number
     let mut col_widths: Vec<f32> = Vec::new();
     let mut hidden_cols: Vec<u32> = Vec::new();
+    let mut auto_filter: Option<crate::ir::AutoFilter> = None;
+    let mut filter_field: Option<u32> = None;
+    let mut filter_criteria: Vec<String> = Vec::new();
+    let mut filter_either = false;
     let mut default_col_width: f32 = 8.43;
     let mut default_row_height: f32 = 15.0;
     let mut merge_cells: Vec<MergeCell> = Vec::new();
@@ -557,6 +573,34 @@ fn parse_worksheet(
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "autoFilter" => {
+                        if let Some(reference) = get_attr(&e, "ref") {
+                            if let Some((start_col, start_row, end_col, end_row)) =
+                                parse_range_ref(&reference)
+                            {
+                                auto_filter = Some(crate::ir::AutoFilter {
+                                    start_row,
+                                    start_col,
+                                    end_row,
+                                    end_col,
+                                    columns: Vec::new(),
+                                });
+                            }
+                        }
+                    }
+                    "filterColumn" => {
+                        filter_field = get_attr(&e, "colId")
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .map(|col| col + 1);
+                        filter_criteria.clear();
+                        filter_either = false;
+                    }
+                    "filters" => {
+                        filter_either = true;
+                    }
+                    "customFilters" => {
+                        filter_either = get_attr(&e, "and").as_deref() != Some("1");
+                    }
                     "row" => {
                         in_row = true;
                         current_cells.clear();
@@ -609,6 +653,19 @@ fn parse_worksheet(
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
+                    "filterColumn" => {
+                        if let (Some(field), Some(filter)) =
+                            (filter_field.take(), auto_filter.as_mut())
+                        {
+                            if !filter_criteria.is_empty() {
+                                filter.columns.push(crate::ir::AutoFilterColumn {
+                                    field,
+                                    criteria: std::mem::take(&mut filter_criteria),
+                                    either: filter_either,
+                                });
+                            }
+                        }
+                    }
                     "row" => {
                         in_row = false;
                         rows.push(Row {
@@ -705,6 +762,47 @@ fn parse_worksheet(
                     }
 
                     // <col min="1" max="3" width="12.5" ... />
+                    "autoFilter" => {
+                        if let Some(reference) = get_attr(&e, "ref") {
+                            if let Some((start_col, start_row, end_col, end_row)) =
+                                parse_range_ref(&reference)
+                            {
+                                auto_filter = Some(crate::ir::AutoFilter {
+                                    start_row,
+                                    start_col,
+                                    end_row,
+                                    end_col,
+                                    columns: Vec::new(),
+                                });
+                            }
+                        }
+                    }
+                    "filterColumn" => {
+                        // colId counts from zero within the filtered range;
+                        // Field counts from one.
+                        filter_field = get_attr(&e, "colId")
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .map(|col| col + 1);
+                        filter_criteria.clear();
+                        filter_either = false;
+                    }
+                    "filters" => {
+                        // A list of values is an "is one of these" test.
+                        filter_either = true;
+                    }
+                    "filter" => {
+                        if let Some(value) = get_attr(&e, "val") {
+                            filter_criteria.push(value);
+                        }
+                    }
+                    "customFilter" => {
+                        let operator = get_attr(&e, "operator").unwrap_or_default();
+                        let value = get_attr(&e, "val").unwrap_or_default();
+                        filter_criteria.push(format!("{}{value}", filter_operator(&operator)));
+                    }
+                    "customFilters" => {
+                        filter_either = get_attr(&e, "and").as_deref() != Some("1");
+                    }
                     "col" => {
                         let min_col = get_attr(&e, "min")
                             .and_then(|v| v.parse::<u32>().ok())
@@ -786,6 +884,7 @@ fn parse_worksheet(
         default_col_width,
         default_row_height,
         merge_cells,
+        auto_filter,
         hidden_cols: {
             // The order columns appear in says nothing; keep the list tidy.
             let mut hidden_cols = hidden_cols;

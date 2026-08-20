@@ -177,6 +177,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: vec![],
             hidden_cols: vec![],
+            auto_filter: None,
             unsupported_elements: vec![],
         }
     }

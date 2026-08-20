@@ -424,6 +424,7 @@ impl<'a> WorkbookHost<'a> {
             default_row_height: template.default_row_height,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         };
         self.workbook.sheets.insert(at, sheet);
@@ -3006,6 +3007,7 @@ impl<'a> WorkbookHost<'a> {
             // Excel treats a bare call as a switch: on becomes off.
             if self.auto_filter.is_some() {
                 self.auto_filter = None;
+                self.workbook.sheets[range.sheet].auto_filter = None;
                 self.show_all_rows(range.sheet)?;
             } else {
                 self.auto_filter = Some(AutoFilter {
@@ -3062,6 +3064,7 @@ impl<'a> WorkbookHost<'a> {
             either,
         });
         self.apply_auto_filter(&filter)?;
+        self.record_auto_filter(&filter);
         self.auto_filter = Some(filter);
         Ok(Value::Boolean(true))
     }
@@ -3085,6 +3088,31 @@ impl<'a> WorkbookHost<'a> {
             self.set_row_visible(filter.range.sheet, row, showing);
         }
         Ok(())
+    }
+
+    /// Writes the filter onto the sheet, so saving the workbook keeps it.
+    fn record_auto_filter(&mut self, filter: &AutoFilter) {
+        let columns = filter
+            .fields
+            .iter()
+            .map(|test| oxicells_core::ir::AutoFilterColumn {
+                field: test.field,
+                criteria: [Some(&test.first), test.second.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .map(criteria_text)
+                    .collect(),
+                either: test.either,
+            })
+            .collect();
+        self.workbook.sheets[filter.range.sheet].auto_filter =
+            Some(oxicells_core::ir::AutoFilter {
+                start_row: filter.range.start_row,
+                start_col: filter.range.start_column,
+                end_row: filter.range.end_row,
+                end_col: filter.range.end_column,
+                columns,
+            });
     }
 
     fn set_row_visible(&mut self, sheet: usize, row: u32, showing: bool) {
@@ -4567,6 +4595,24 @@ fn criteria_equal(cell: &Value, operand: &Value, coercing: bool) -> bool {
     }
 }
 
+/// Writes a criterion back out the way VBA stated it, so a saved filter reads
+/// as the macro wrote it.
+fn criteria_text(criteria: &Criteria) -> String {
+    let operand = match &criteria.operand {
+        Value::Empty => String::new(),
+        value => find_value_text(value),
+    };
+    let prefix = match criteria.operator {
+        CriteriaOperator::Equal => "",
+        CriteriaOperator::NotEqual => "<>",
+        CriteriaOperator::Less => "<",
+        CriteriaOperator::LessOrEqual => "<=",
+        CriteriaOperator::Greater => ">",
+        CriteriaOperator::GreaterOrEqual => ">=",
+    };
+    format!("{prefix}{operand}")
+}
+
 fn criteria_number(value: &Value) -> Option<f64> {
     match value {
         Value::Integer(value) => Some(*value as f64),
@@ -5700,6 +5746,7 @@ mod tests {
                 default_row_height: 15.0,
                 merge_cells: Vec::new(),
                 hidden_cols: Vec::new(),
+                auto_filter: None,
                 unsupported_elements: Vec::new(),
             }],
         }
@@ -5910,6 +5957,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -5958,6 +6006,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8578,6 +8627,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         });
         let invalid = parse_module(
@@ -8817,6 +8867,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8857,6 +8908,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(
@@ -8969,6 +9021,7 @@ mod tests {
             default_row_height: 15.0,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
+            auto_filter: None,
             unsupported_elements: Vec::new(),
         });
         let module = parse_module(

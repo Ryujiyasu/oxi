@@ -18,7 +18,7 @@ use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::ir::{CellStyle, MergeCell, Workbook};
+use crate::ir::{AutoFilter, CellStyle, MergeCell, Workbook};
 use crate::parser::{parse_xlsx, XlsxError};
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::parse_relationships;
@@ -61,6 +61,8 @@ pub struct XlsxEditor {
     merges: HashMap<usize, Vec<MergeCell>>,
     /// (sheet_idx, 1-based row, 0-based column) -> the style it should carry.
     styles: HashMap<(usize, u32, u32), CellStyle>,
+    /// Sheets whose filter is being replaced. `None` takes the filter away.
+    filters: HashMap<usize, Option<AutoFilter>>,
 }
 
 /// Convert 0-based column to letter reference (0->A, 25->Z, 26->AA).
@@ -87,6 +89,7 @@ impl XlsxEditor {
             col_hidden: HashMap::new(),
             merges: HashMap::new(),
             styles: HashMap::new(),
+            filters: HashMap::new(),
         })
     }
 
@@ -202,6 +205,10 @@ impl XlsxEditor {
                 self.merges.insert(index, after.merge_cells.clone());
             }
 
+            if before.auto_filter != after.auto_filter {
+                self.filters.insert(index, after.auto_filter.clone());
+            }
+
             for (&(row, col), cell) in &now {
                 let was = held.get(&(row, col)).map(|before| &before.style);
                 if was != Some(&cell.style) {
@@ -239,12 +246,18 @@ impl XlsxEditor {
         self.styles.insert((sheet_index, row, col), style);
     }
 
+    /// Puts a sheet under a filter, or takes its filter away with `None`.
+    pub fn set_auto_filter(&mut self, sheet_index: usize, filter: Option<AutoFilter>) {
+        self.filters.insert(sheet_index, filter);
+    }
+
     pub fn has_edits(&self) -> bool {
         !self.edits.is_empty()
             || !self.row_hidden.is_empty()
             || !self.col_hidden.is_empty()
             || !self.merges.is_empty()
             || !self.styles.is_empty()
+            || !self.filters.is_empty()
     }
 
     /// Save edited xlsx.
@@ -337,6 +350,7 @@ impl XlsxEditor {
             .chain(cols_by_sheet.keys())
             .chain(self.merges.keys())
             .chain(cell_styles.keys())
+            .chain(self.filters.keys())
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
         {
@@ -349,6 +363,7 @@ impl XlsxEditor {
                         cols: cols_by_sheet.get(&sheet).unwrap_or(&empty_lines),
                         merges: self.merges.get(&sheet).map(Vec::as_slice),
                         styles: cell_styles.get(&sheet).unwrap_or(&empty_styles),
+                        filter: self.filters.get(&sheet),
                     },
                 );
             }
@@ -878,6 +893,114 @@ fn builtin_number_format_id(format: &str) -> Option<u32> {
     }
 }
 
+/// Writes an `<autoFilter>` block, or nothing when the filter has been taken
+/// away.
+///
+/// A criterion is stated the way VBA states it — `"apple"`, `">15"` — and is
+/// written as a plain value list when it names values, or as a custom filter
+/// when it compares.
+fn write_auto_filter(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    filter: Option<&AutoFilter>,
+) -> Result<(), XlsxError> {
+    let Some(filter) = filter else {
+        return Ok(());
+    };
+    let reference = format!(
+        "{}{}:{}{}",
+        col_to_letter(filter.start_col),
+        filter.start_row,
+        col_to_letter(filter.end_col),
+        filter.end_row
+    );
+    let mut block = BytesStart::new("autoFilter");
+    block.push_attribute(("ref", reference.as_str()));
+    if filter.columns.is_empty() {
+        return writer
+            .write_event(Event::Empty(block))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()));
+    }
+    writer
+        .write_event(Event::Start(block))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+
+    for column in &filter.columns {
+        let mut tag = BytesStart::new("filterColumn");
+        tag.push_attribute(("colId", (column.field.saturating_sub(1)).to_string().as_str()));
+        writer
+            .write_event(Event::Start(tag))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+
+        let comparing = column
+            .criteria
+            .iter()
+            .any(|criterion| filter_comparison(criterion).is_some());
+        if comparing {
+            let mut customs = BytesStart::new("customFilters");
+            if !column.either {
+                customs.push_attribute(("and", "1"));
+            }
+            writer
+                .write_event(Event::Start(customs))
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            for criterion in &column.criteria {
+                let (operator, value) = match filter_comparison(criterion) {
+                    Some(split) => split,
+                    None => ("equal", criterion.as_str()),
+                };
+                let mut custom = BytesStart::new("customFilter");
+                custom.push_attribute(("operator", operator));
+                custom.push_attribute(("val", value));
+                writer
+                    .write_event(Event::Empty(custom))
+                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new("customFilters")))
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        } else {
+            writer
+                .write_event(Event::Start(BytesStart::new("filters")))
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            for criterion in &column.criteria {
+                let mut value = BytesStart::new("filter");
+                value.push_attribute(("val", criterion.as_str()));
+                writer
+                    .write_event(Event::Empty(value))
+                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new("filters")))
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        }
+
+        writer
+            .write_event(Event::End(BytesEnd::new("filterColumn")))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+
+    writer
+        .write_event(Event::End(BytesEnd::new("autoFilter")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
+/// Splits a comparing criterion into the operator OOXML names it by and the
+/// value it compares against. A criterion that only names a value answers None.
+fn filter_comparison(criterion: &str) -> Option<(&'static str, &str)> {
+    for (prefix, operator) in [
+        ("<>", "notEqual"),
+        (">=", "greaterThanOrEqual"),
+        ("<=", "lessThanOrEqual"),
+        (">", "greaterThan"),
+        ("<", "lessThan"),
+    ] {
+        if let Some(rest) = criterion.strip_prefix(prefix) {
+            return Some((operator, rest));
+        }
+    }
+    None
+}
+
 /// Writes a `<mergeCells>` block, or nothing at all when there is none left.
 fn write_merges(
     writer: &mut Writer<Cursor<Vec<u8>>>,
@@ -1063,6 +1186,9 @@ struct SheetEdits<'a> {
     merges: Option<&'a [MergeCell]>,
     /// (one-based row, zero-based column) -> the cellXfs index it should carry.
     styles: &'a BTreeMap<(u32, u32), u32>,
+    /// The filter the sheet should end up under, when it is being replaced.
+    /// `Some(None)` takes an existing filter away.
+    filter: Option<&'a Option<AutoFilter>>,
 }
 
 fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
@@ -1086,6 +1212,9 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
     // block goes: in place of the old one, or straight after the data.
     let has_merge_block = xml.contains("<mergeCells");
     let mut wrote_merges = false;
+    let has_filter_block = xml.contains("<autoFilter");
+    let mut wrote_filter = false;
+    let mut skip_filter_depth = 0_u32;
 
     let mut current_row: u32 = 0;
     let mut in_row = false;
@@ -1101,6 +1230,10 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
         match reader.read_event().map_err(XlsxError::Xml)? {
             Event::Eof => break,
             Event::Start(ref e) => {
+                if skip_filter_depth > 0 {
+                    skip_filter_depth += 1;
+                    continue;
+                }
                 if skip_merges_depth > 0 {
                     skip_merges_depth += 1;
                     continue;
@@ -1116,6 +1249,10 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 }
                 if name == "cols" {
                     seen_cols = true;
+                }
+                if name == "autoFilter" && sheet_edits.filter.is_some() {
+                    skip_filter_depth = 1;
+                    continue;
                 }
                 if name == "mergeCells" && sheet_edits.merges.is_some() {
                     skip_merges_depth = 1;
@@ -1230,6 +1367,16 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
             }
             Event::End(ref e) => {
+                if skip_filter_depth > 0 {
+                    skip_filter_depth -= 1;
+                    if skip_filter_depth == 0 {
+                        if let Some(filter) = sheet_edits.filter {
+                            write_auto_filter(&mut writer, filter.as_ref())?;
+                            wrote_filter = true;
+                        }
+                    }
+                    continue;
+                }
                 if skip_merges_depth > 0 {
                     skip_merges_depth -= 1;
                     if skip_merges_depth == 0 {
@@ -1310,6 +1457,13 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     _ => {}
                 }
                 writer.write_event(Event::End(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                // A filter sits between the data and the merges.
+                if name == "sheetData" && !wrote_filter && !has_filter_block {
+                    if let Some(filter) = sheet_edits.filter {
+                        write_auto_filter(&mut writer, filter.as_ref())?;
+                        wrote_filter = true;
+                    }
+                }
                 // A sheet that never had a mergeCells element needs one, and it
                 // belongs directly after the data.
                 if name == "sheetData" && !wrote_merges && !has_merge_block {
@@ -1334,6 +1488,13 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 if name == "col" {
                     seen_cols = true;
                     write_col_span(&mut writer, e, &mut pending_cols)?;
+                    continue;
+                }
+                if name == "autoFilter" && sheet_edits.filter.is_some() {
+                    if let Some(filter) = sheet_edits.filter {
+                        write_auto_filter(&mut writer, filter.as_ref())?;
+                        wrote_filter = true;
+                    }
                     continue;
                 }
                 if name == "mergeCells" && sheet_edits.merges.is_some() {
@@ -1652,6 +1813,7 @@ mod tests {
             cols: nothing,
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
+            filter: None,
         }
     }
 

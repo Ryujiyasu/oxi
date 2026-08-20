@@ -22,9 +22,35 @@ pub struct Sheet {
     /// record of their own, so this sits beside `col_widths`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_cols: Vec<u32>,
+    /// The filter a sheet is under, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_filter: Option<AutoFilter>,
     /// Unsupported elements found in this sheet (e.g. "Chart", "PivotTable", "Drawing")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_elements: Vec<String>,
+}
+
+/// A filter over a range, and what each filtered column is testing for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoFilter {
+    pub start_row: u32, // 1-based
+    pub start_col: u32, // 0-based
+    pub end_row: u32,   // 1-based
+    pub end_col: u32,   // 0-based
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<AutoFilterColumn>,
+}
+
+/// One column's test, written the way VBA states it: `"apple"`, `">15"`,
+/// `"<>banana"`. Two entries are joined by `either`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoFilterColumn {
+    /// One-based column within the filtered range.
+    pub field: u32,
+    pub criteria: Vec<String>,
+    /// True when the criteria are joined by xlOr rather than xlAnd.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub either: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
