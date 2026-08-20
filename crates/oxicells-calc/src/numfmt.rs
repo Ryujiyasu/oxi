@@ -432,3 +432,23 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod format_codes_from_the_wild {
+    use super::format_number;
+
+    /// Both codes are lifted from a government workbook, after the XML
+    /// unescaping that turns `&quot;` back into a quotation mark.
+    #[test]
+    fn a_negative_section_can_carry_its_own_marker() {
+        assert_eq!(format_number(1.5, "0.0;\"▲\"0.0"), "1.5");
+        assert_eq!(format_number(-1.5, "0.0;\"▲\"0.0"), "▲1.5");
+        assert_eq!(format_number(0.0, "0.0;\"▲\"0.0"), "0.0");
+    }
+
+    #[test]
+    fn a_backslash_makes_the_next_character_literal() {
+        assert_eq!(format_number(1.5, r"\(0.0\)"), "(1.5)");
+        assert_eq!(format_number(-1.5, r#"\(0.0\);"（▲"0.0\)"#), "（▲1.5)");
+    }
+}

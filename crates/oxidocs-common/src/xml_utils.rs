@@ -16,7 +16,13 @@ pub fn get_attr(e: &quick_xml::events::BytesStart, attr_name: &str) -> Option<St
     for attr in e.attributes().flatten() {
         let key = local_name(attr.key.as_ref());
         if key == attr_name {
-            return Some(String::from_utf8_lossy(&attr.value).to_string());
+            // An attribute holds escaped XML: a format code reading
+            // `"▲"0.0` is stored as `&quot;▲&quot;0.0`. Fall back to the raw
+            // bytes only if the escaping is malformed.
+            return Some(match attr.unescape_value() {
+                Ok(value) => value.to_string(),
+                Err(_) => String::from_utf8_lossy(&attr.value).to_string(),
+            });
         }
     }
     None
