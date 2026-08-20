@@ -110,6 +110,12 @@ pub struct MasterStyleLevel {
     /// the dev corpus name a font this way.
     #[serde(default)]
     pub font_family: Option<String>,
+    /// `a:defRPr/a:highlight` -- the box this outline level paints behind its
+    /// text. d35's master TITLE placeholder declares a white one, which is the
+    /// slab behind "BIG CONCEPT"; 19 levels in that deck carry one and no other
+    /// dev deck does.
+    #[serde(default)]
+    pub highlight: Option<String>,
     /// `a:lnSpc/a:spcPct` as a multiple (90000 -> 0.9). PowerPoint render-truth
     /// (d24 slide 1, 2026-08-18): the MASTER's title PLACEHOLDER carries
     /// `lnSpc 90%` while the master's `p:txStyles/p:titleStyle` says 100%, and

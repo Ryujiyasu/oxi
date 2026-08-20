@@ -479,6 +479,11 @@ fn parse_layout_ph_lststyles(
     let mut levels: Vec<MasterStyleLevel> = Vec::new();
     let mut cur_lvl: Option<usize> = None;
     let mut in_def_rpr = false;
+    // `a:highlight` inside a level's defRPr holds a colour element shaped just
+    // like the level's own solidFill, so without this flag it is read as the
+    // level's TEXT colour -- the same trap the run-level highlight sprang.
+    let mut in_lvl_highlight = false;
+    let s_highlight_lvl = std::env::var("OXI_HIGHLIGHTLVL_DISABLE").is_err();
     let mut in_ln_spc_lvl = false;
     loop {
         match reader.read_event_into(&mut buf) {
@@ -539,6 +544,21 @@ fn parse_layout_ph_lststyles(
                             }
                         }
                     }
+                    "highlight" if in_def_rpr => in_lvl_highlight = true,
+                    "srgbClr" | "schemeClr" if in_def_rpr && in_lvl_highlight => {
+                        if let (Some(idx), Some(val)) = (cur_lvl, get_attr(&e, "val")) {
+                            if levels[idx].highlight.is_none() && s_highlight_lvl {
+                                levels[idx].highlight = Some(if name == "srgbClr" {
+                                    val
+                                } else {
+                                    theme_colors
+                                        .get(&val)
+                                        .cloned()
+                                        .unwrap_or_else(|| scheme_color_to_hex(&val))
+                                });
+                            }
+                        }
+                    }
                     "srgbClr" | "schemeClr" if in_def_rpr => {
                         if let (Some(idx), Some(val)) = (cur_lvl, get_attr(&e, "val")) {
                             if levels[idx].color.is_none() {
@@ -557,7 +577,11 @@ fn parse_layout_ph_lststyles(
                 }
             }
             Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
-                "defRPr" => in_def_rpr = false,
+                "defRPr" => {
+                    in_def_rpr = false;
+                    in_lvl_highlight = false;
+                }
+                "highlight" if in_lvl_highlight => in_lvl_highlight = false,
                 "lnSpc" => in_ln_spc_lvl = false,
                 "lstStyle" => in_lst = false,
                 "sp" => {
@@ -4214,6 +4238,7 @@ fn merge_ph_levels(
                 } else {
                     l.font_family.clone()
                 },
+                highlight: l.highlight.clone().or(m.highlight.clone()),
                 ..l
             }
         })
@@ -4262,20 +4287,42 @@ fn lookup_ph_levels_in(
     }
     if any_idx && phanyidx_on() {
         if let Some(ty) = ph_type {
+            // `title` and `ctrTitle` name the same slot, and the exact-key list
+            // above only pairs the alias with the shape's OWN idx. d35's slide
+            // shape is `ctrTitle idx=4294967295` while its master declares one
+            // `<p:ph type="title"/>` with no idx, so neither the alias key nor a
+            // same-type sweep reaches it -- and the level it carries is the
+            // white `a:highlight` behind BIG CONCEPT and the condensed Oswald
+            // that lets PowerPoint fit the line in 473.7pt of a 553pt box. 74
+            // title/ctrTitle placeholders over 8 dev decks are reachable only
+            // this way.
+            let alias = match ty.as_str() {
+                _ if !phalias_on() => None,
+                "ctrTitle" => Some("title"),
+                "title" => Some("ctrTitle"),
+                _ => None,
+            };
             // Deterministic: several entries of one type would otherwise
-            // depend on HashMap order.
-            let mut hit: Option<(&Option<String>, &Vec<MasterStyleLevel>)> = None;
-            for ((t, i), v) in layout {
-                if t.as_ref() == Some(ty) && hit.is_none_or(|(bi, _)| i < bi) {
-                    hit = Some((i, v));
+            // depend on HashMap order. Own type first, then the alias.
+            for want in [Some(ty.as_str()), alias].into_iter().flatten() {
+                let mut hit: Option<(&Option<String>, &Vec<MasterStyleLevel>)> = None;
+                for ((t, i), v) in layout {
+                    if t.as_deref() == Some(want) && hit.is_none_or(|(bi, _)| i < bi) {
+                        hit = Some((i, v));
+                    }
                 }
-            }
-            if let Some((_, v)) = hit {
-                return v.clone();
+                if let Some((_, v)) = hit {
+                    return v.clone();
+                }
             }
         }
     }
     Vec::new()
+}
+
+/// `title` and `ctrTitle` are matched as the same slot unless this is set.
+fn phalias_on() -> bool {
+    std::env::var("OXI_PHALIAS_DISABLE").is_err()
 }
 
 /// A master placeholder is inherited by type regardless of idx unless this is

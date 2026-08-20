@@ -2404,6 +2404,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .iter()
                                 .find_map(|r| r.color.clone())
                                 .or_else(|| phl.and_then(|l| l.color.clone()));
+                            // A level can declare the highlight too, and then
+                            // every run inherits it: d35's master title level
+                            // carries the white slab behind "BIG CONCEPT".
+                            let para_highlight = if highlightlvl_on() {
+                                phl.and_then(|l| l.highlight.clone())
+                            } else {
+                                None
+                            };
                             let (lines, marker) = layout_paragraph_baselines(
                                 mem_dc,
                                 p,
@@ -2480,8 +2488,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // A highlight needs the per-run path even when the
                             // paragraph is one run, since only that path knows
                             // where a run starts and ends on the line.
-                            let has_highlight =
-                                highlight_on() && p.runs.iter().any(|r| r.highlight.is_some());
+                            let has_highlight = highlight_on()
+                                && (para_highlight.is_some()
+                                    || p.runs.iter().any(|r| r.highlight.is_some()));
                             let styled = runstyle_on()
                                 && (has_highlight
                                     || (p.runs.len() > 1
@@ -2517,6 +2526,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         &family,
                                         fs,
                                         color.as_deref(),
+                                        para_highlight.as_deref(),
                                         scale,
                                     );
                                     continue;
@@ -8951,6 +8961,8 @@ unsafe fn draw_line_runs(
     default_family: &str,
     default_fs: f32,
     default_color: Option<&str>,
+    // The level's own `a:highlight`, used by runs that declare none.
+    default_highlight: Option<&str>,
     scale: f64,
 ) {
     // Walk the runs, clipping each to this line's character range.
@@ -8963,7 +8975,9 @@ unsafe fn draw_line_runs(
     // on this line sets both edges.
     let mut box_up = 0.0f32;
     let mut box_down = 0.0f32;
-    if highlight_on() && runs.iter().any(|r| r.highlight.is_some()) {
+    if highlight_on()
+        && (default_highlight.is_some() || runs.iter().any(|r| r.highlight.is_some()))
+    {
         let mut at = 0usize;
         for run in runs {
             let n = run.text.chars().count();
@@ -9010,7 +9024,12 @@ unsafe fn draw_line_runs(
         // probe's `HIGH ` arm put the box's right edge on the trailing space's
         // right edge, not on the last letter's.
         if highlight_on() {
-            if let Some(hex) = run.highlight.as_deref().filter(|_| box_up + box_down > 0.0) {
+            if let Some(hex) = run
+                .highlight
+                .as_deref()
+                .or(default_highlight)
+                .filter(|_| box_up + box_down > 0.0)
+            {
                 if let Some((r, g, b)) = parse_hex_rgb(hex) {
                     let base_px = (baseline as f64 * scale).round() as i32;
                     let rect = windows::Win32::Foundation::RECT {
@@ -9659,6 +9678,11 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
 /// `a:bodyPr/@wrap="none"` is honoured unless this is set.
 fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
+}
+
+/// A level's inherited `a:highlight` is honoured unless this is set.
+fn highlightlvl_on() -> bool {
+    std::env::var("OXI_HIGHLIGHTLVL_DISABLE").is_err()
 }
 
 /// `a:highlight` boxes are drawn unless this is set.

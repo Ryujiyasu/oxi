@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """Build tests/fixtures/phanyidx_test.pptx.
 
-A slide body placeholder whose idx matches nothing: 4294967295, the sentinel
-PowerPoint writes for an unset one. The layout has no body placeholder at all
-and the master's is idx="1" declaring sz="2400", while the master's
+A slide placeholder whose idx matches nothing: 4294967295, the sentinel
+PowerPoint writes for an unset one. The layout has no placeholder at all and the
+master's is `<p:ph type="title"/>` declaring sz="2400", while the master's
 p:txStyles/p:bodyStyle says 1400. PowerPoint drew d24 slide 22's paragraph at
 exactly 24.00pt, so the master PLACEHOLDER wins and the idx is not part of the
 match.
+
+The slide asks for `ctrTitle` and the master declares `title`, which are the
+same slot, so this also pins the alias. The level carries a yellow
+`a:highlight`, which d35's master title level uses for the white slab behind
+BIG CONCEPT.
 
 python-pptx cannot express this, so the parts are written by hand into a
 minimal package.
@@ -45,11 +50,13 @@ def tree(inner):
 
 
 LVL = ('<a:lstStyle><a:lvl1pPr><a:defRPr sz="2400">'
+       '<a:solidFill><a:srgbClr val="112233"/></a:solidFill>'
+       '<a:highlight><a:srgbClr val="FFFF00"/></a:highlight>'
        '<a:latin typeface="Arial"/></a:defRPr></a:lvl1pPr></a:lstStyle>')
 
 SLIDE = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
          f'<p:sld {NS}>'
-         + tree(sp('<p:ph idx="4294967295" type="body"/>',
+         + tree(sp('<p:ph idx="4294967295" type="ctrTitle"/>',
                    '<a:p><a:r><a:rPr lang="en"/><a:t>inherit me</a:t></a:r></a:p>'))
          + '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>')
 
@@ -62,7 +69,7 @@ LAYOUT = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
 MASTER = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
           f'<p:sldMaster {NS}>'
           + tree('<p:sp><p:nvSpPr><p:cNvPr id="3" name="body"/><p:cNvSpPr/>'
-                 '<p:nvPr><p:ph idx="1" type="body"/></p:nvPr></p:nvSpPr>'
+                 '<p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>'
                  '<p:spPr/><p:txBody><a:bodyPr/>' + LVL + '<a:p/></p:txBody></p:sp>')
           + '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1"'
             ' accent2="accent2" accent3="accent3" accent4="accent4"'

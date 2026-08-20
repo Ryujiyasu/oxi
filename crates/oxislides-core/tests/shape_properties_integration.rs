@@ -390,6 +390,46 @@ fn a_placeholder_with_an_unmatched_idx_still_inherits_the_master_level() {
     assert_eq!(lvl.font_family.as_deref(), Some("Arial"));
 }
 
+#[test]
+fn title_and_ctr_title_name_the_same_slot() {
+    // The slide asks for ctrTitle, the master declares title. 74 title /
+    // ctrTitle placeholders over 8 dev decks are reachable only through that
+    // alias, d35's "BIG CONCEPT" among them.
+    let p = parse_pptx(PHANYIDX_PPTX).expect("phanyidx_test.pptx must parse");
+    let shape = p.slides[0]
+        .shapes
+        .iter()
+        .find(|s| matches!(&s.content, ShapeContent::AutoShape { paragraphs }
+                           if !paragraphs.is_empty()))
+        .expect("the ctrTitle placeholder");
+    assert!(
+        !shape.ph_levels.is_empty(),
+        "a ctrTitle must find the master's title level"
+    );
+}
+
+#[test]
+fn a_level_can_declare_the_highlight() {
+    let p = parse_pptx(PHANYIDX_PPTX).expect("phanyidx_test.pptx must parse");
+    let shape = p.slides[0]
+        .shapes
+        .iter()
+        .find(|s| matches!(&s.content, ShapeContent::AutoShape { paragraphs }
+                           if !paragraphs.is_empty()))
+        .expect("the ctrTitle placeholder");
+    let lvl = shape.ph_levels.first().expect("the master title level");
+    assert_eq!(
+        lvl.highlight.as_deref(),
+        Some("FFFF00"),
+        "a:highlight inside a level's defRPr is the level's box, not its text colour"
+    );
+    assert_eq!(
+        lvl.color.as_deref(),
+        Some("112233"),
+        "and the level's own solidFill still reads as the text colour"
+    );
+}
+
 // --- a rotation inherited through a mirror ---------------------------------
 // Two nested groups, each rot=-90 flipH=1. Accumulating the two component-wise
 // gives -180 with the flips cancelling; the real composition is the IDENTITY,
