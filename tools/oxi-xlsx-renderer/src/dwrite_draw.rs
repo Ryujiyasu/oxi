@@ -12,7 +12,7 @@
 //! changes with the font size, which no gutter can correct.
 
 use oxicells_core::ir::{CellValue, Sheet};
-use windows::core::{Result, HSTRING, PCWSTR};
+use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
@@ -256,6 +256,7 @@ pub fn draw(
                     Align::Left => DWRITE_TEXT_ALIGNMENT_LEADING,
                     Align::Centre => DWRITE_TEXT_ALIGNMENT_CENTER,
                     Align::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
+                    Align::Spread => DWRITE_TEXT_ALIGNMENT_JUSTIFIED,
                 })?;
                 format.SetWordWrapping(if cell.style.wrap_text {
                     DWRITE_WORD_WRAPPING_WRAP
@@ -286,7 +287,13 @@ pub fn draw(
                 // Text too long for its cell runs on over the empty neighbours
                 // beside it, which is what Excel shows.
                 let body = HSTRING::from(text.as_str());
-                if !cell.style.wrap_text && matches!(cell.value, CellValue::String(_)) {
+                // Text spread across its cell is meant to fill exactly that
+                // cell, so it never runs on: widening the area first would
+                // spread it over the neighbours.
+                if !cell.style.wrap_text
+                    && placed != Align::Spread
+                    && matches!(cell.value, CellValue::String(_))
+                {
                     let held = writer.CreateTextLayout(
                         body.as_wide(),
                         &format,
@@ -298,7 +305,7 @@ pub fn draw(
                     let spare = measured.width - (area.right - area.left);
                     if spare > 0.0 {
                         let (before, after) = match placed {
-                            Align::Left => (0.0, spare),
+                            Align::Left | Align::Spread => (0.0, spare),
                             Align::Right => (spare, 0.0),
                             Align::Centre => (spare / 2.0, spare - spare / 2.0),
                         };
@@ -321,7 +328,49 @@ pub fn draw(
                     shade(cell.style.font_color.as_deref(), 0)
                 });
 
-                if cell.runs.is_empty() {
+                if placed == Align::Spread {
+                    // Excel spreads a distributed cell across its whole width,
+                    // one line or many — which is how a Japanese sheet sets a
+                    // heading: 第 ３ 表, not 第３表. DirectWrite's justification
+                    // leaves a last line alone, so the gap is put between the
+                    // letters instead.
+                    let laid = writer.CreateTextLayout(
+                        body.as_wide(),
+                        &format,
+                        area.right - area.left,
+                        area.bottom - area.top,
+                    )?;
+                    let mut measured = DWRITE_TEXT_METRICS::default();
+                    laid.GetMetrics(&mut measured)?;
+                    let letters = text.chars().count() as f32;
+                    let spare = (area.right - area.left) - measured.width;
+                    if letters > 1.0 && spare > 0.0 {
+                        if let Ok(spaced) = laid.cast::<IDWriteTextLayout1>() {
+                            let gap = spare / (letters - 1.0);
+                            // Half either side of every letter comes to one gap
+                            // between each pair, and half a gap at each end,
+                            // which is where Excel puts them.
+                            spaced.SetCharacterSpacing(
+                                gap / 2.0,
+                                gap / 2.0,
+                                0.0,
+                                DWRITE_TEXT_RANGE {
+                                    startPosition: 0,
+                                    length: body.as_wide().len() as u32,
+                                },
+                            )?;
+                        }
+                    }
+                    target.DrawTextLayout(
+                        D2D_POINT_2F {
+                            x: area.left,
+                            y: area.top,
+                        },
+                        &laid,
+                        &brush,
+                        D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    );
+                } else if cell.runs.is_empty() {
                     target.DrawText(
                         body.as_wide(),
                         &format,

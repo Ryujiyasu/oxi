@@ -422,6 +422,12 @@ pub(crate) fn alignment(style: &CellStyle, value: &CellValue) -> Align {
         Some("center") => Align::Centre,
         Some("right") => Align::Right,
         Some("left") => Align::Left,
+        // A heading centred across its neighbours is centred within the cell
+        // that holds the text.
+        Some("centerContinuous") => Align::Centre,
+        // Spread out to fill the cell, which is how Japanese workbooks set a
+        // title: 第 ３ 表, not 第３表.
+        Some("distributed") | Some("justify") => Align::Spread,
         _ => match value {
             CellValue::Number(_) => Align::Right,
             CellValue::Boolean(_) => Align::Centre,
@@ -430,11 +436,13 @@ pub(crate) fn alignment(style: &CellStyle, value: &CellValue) -> Align {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Align {
     Left,
     Centre,
     Right,
+    /// Spread across the width of the cell, letters and all.
+    Spread,
 }
 
 #[cfg(windows)]
@@ -753,6 +761,7 @@ mod windows_draw {
                     // Only text runs on. A number that will not fit stays in
                     // its cell — Excel shows ##### rather than let it spill.
                     let runs_on = !cell.style.wrap_text
+                        && placed != Align::Spread
                         && matches!(cell.value, CellValue::String(_));
                     if runs_on {
                         let mut measured = SIZE::default();
@@ -761,7 +770,7 @@ mod windows_draw {
                         {
                             let spare = measured.cx - (area.right - area.left);
                             let (leftward, rightward) = match placed {
-                                Align::Left => (0, spare),
+                                Align::Left | Align::Spread => (0, spare),
                                 Align::Right => (spare, 0),
                                 Align::Centre => (spare / 2, spare - spare / 2),
                             };
@@ -784,7 +793,8 @@ mod windows_draw {
 
                     let placed_flag = match placed {
                         Align::Left => DT_LEFT,
-                        Align::Centre => DT_CENTER,
+                        // GDI has no spread; centring is the closest it gets.
+                        Align::Centre | Align::Spread => DT_CENTER,
                         Align::Right => DT_RIGHT,
                     } | DT_NOPREFIX;
                     // A cell can hold its own breaks, put there with alt+enter,
