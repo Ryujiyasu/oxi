@@ -34,28 +34,26 @@ RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xl
 EXPORTER = Path(__file__).resolve().parent / "_xlsx_export_pdf.ps1"
 
 
-def excel_pdf(source: Path, destination: Path) -> bool:
-    """Print a workbook to PDF through Excel."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-File",
-            str(EXPORTER),
-            "-Source",
-            str(source),
-            "-Destination",
-            str(destination),
-        ],
+def excel_pdfs(pairs: list[tuple[Path, Path]], out: Path) -> set[Path]:
+    """Prints a batch of workbooks to PDF, keeping Excel open throughout.
+
+    Starting Excel once rather than per file is the difference between minutes
+    and an hour over a few hundred workbooks.
+    """
+    if not pairs:
+        return set()
+    out.mkdir(parents=True, exist_ok=True)
+    listing = out / "_batch.txt"
+    body = [str(source) + chr(9) + str(destination) for source, destination in pairs]
+    listing.write_text(chr(10).join(body), encoding="utf-8")
+    subprocess.run(
+        ["powershell", "-NoProfile", "-File", str(EXPORTER), "-ListFile", str(listing)],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=60 * 60,
     )
-    if not destination.exists():
-        print(f"  Excel could not print {source.name}: {result.stdout.strip()[:120]}")
-        return False
-    return True
+    listing.unlink(missing_ok=True)
+    return {destination for _, destination in pairs if destination.exists()}
 
 
 def rasterise(pdf: Path, dpi: float) -> Image.Image:
@@ -143,12 +141,17 @@ def main() -> int:
         print("no workbooks to compare")
         return 1
 
+    printed = excel_pdfs(
+        [(source, args.out / f"{source.stem}.pdf") for source in sources], args.out
+    )
+    print(f"Excel printed {len(printed)} of {len(sources)} workbook(s)")
+
     scores: dict[str, float] = {}
     for source in sources:
         stem = source.stem
         pdf = args.out / f"{stem}.pdf"
         ours_png = args.out / f"{stem}.oxi.png"
-        if not excel_pdf(source, pdf):
+        if pdf not in printed:
             continue
         drawn = subprocess.run(
             [str(RENDERER), str(source), str(ours_png), str(args.dpi)],
