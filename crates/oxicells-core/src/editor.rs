@@ -136,9 +136,14 @@ impl XlsxEditor {
     /// place, and the difference against the original is what has to be
     /// written back.
     ///
-    /// Only what the editor can write is compared — cell values, cell formulas,
-    /// which rows and columns are hidden, and which cells are merged. Styling
-    /// travels with the original XML untouched, so a change to it is not saved.
+    /// Only what the editor can write is compared: cell values and formulas,
+    /// which rows and columns are hidden, which cells are merged, the styling
+    /// each cell wears, the filter the sheet is under, and which sheets the
+    /// workbook holds.
+    ///
+    /// Anything the IR does not model — conditional formatting, data
+    /// validation, charts, drawings — rides along in the original XML
+    /// untouched. A run cannot change those, and cannot lose them either.
     pub fn apply_workbook(&mut self, edited: &Workbook) -> Result<(), XlsxError> {
         if edited.sheets.is_empty() {
             return Err(XlsxError::InvalidData(

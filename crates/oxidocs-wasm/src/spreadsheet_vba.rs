@@ -2925,7 +2925,9 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// Whether a range covers whole rows or whole columns, which is all that
-    /// `Hidden` can speak about. Excel refuses to hide part of a row.
+    /// `Hidden` can speak about. Excel refuses part of a row, and refuses a
+    /// range covering the whole sheet as well — `Cells.Hidden` raises either
+    /// way round.
     fn hidden_band(range: CellRange) -> Result<ShiftAxis, String> {
         let whole_row = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
         let whole_column = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
@@ -8490,8 +8492,9 @@ mod tests {
         ));
         assert!(WorkbookHost::hidden_band(span(2, 1, 2, 2)).is_err());
 
-        // A range covering the whole sheet is both at once, which this build
-        // refuses rather than guessing at. Not measured against Excel.
+        // A range covering the whole sheet is both at once. Excel refuses it
+        // too: `Cells.Hidden` raises whether it is read or written, as does
+        // the range spelled out as A1:XFD1048576.
         let everything = span(1, 0, MAX_WORKSHEET_ROW, MAX_WORKSHEET_COLUMN);
         assert!(WorkbookHost::hidden_band(everything).is_err());
     }

@@ -23,6 +23,27 @@ fn filter_operator(operator: &str) -> &'static str {
     }
 }
 
+/// Records a worksheet feature this parser walks past, so a caller can say
+/// what it could not show. The part itself is left alone when the workbook is
+/// saved, so nothing is lost — it simply does not reach the IR.
+fn note_unsupported(name: &str, noted: &mut Vec<String>) {
+    let feature = match name {
+        "conditionalFormatting" => "Conditional formatting",
+        "dataValidation" | "dataValidations" => "Data validation",
+        "hyperlink" | "hyperlinks" => "Hyperlinks",
+        "pane" => "Frozen panes",
+        "sheetProtection" => "Sheet protection",
+        "drawing" => "Drawings",
+        "legacyDrawing" => "Comments",
+        "tableParts" => "Tables",
+        "pivotSelection" => "Pivot tables",
+        _ => return,
+    };
+    if !noted.iter().any(|held| held == feature) {
+        noted.push(feature.to_string());
+    }
+}
+
 /// OOXML writes a boolean attribute as `1`/`0` or `true`/`false`.
 fn is_true(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
@@ -541,6 +562,7 @@ fn parse_worksheet(
     let mut col_widths: Vec<f32> = Vec::new();
     let mut hidden_cols: Vec<u32> = Vec::new();
     let mut auto_filter: Option<crate::ir::AutoFilter> = None;
+    let mut unsupported: Vec<String> = Vec::new();
     let mut filter_field: Option<u32> = None;
     let mut filter_criteria: Vec<String> = Vec::new();
     let mut filter_either = false;
@@ -572,6 +594,7 @@ fn parse_worksheet(
         match reader.read_event()? {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
+                note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
                     "autoFilter" => {
                         if let Some(reference) = get_attr(&e, "ref") {
@@ -725,6 +748,7 @@ fn parse_worksheet(
             }
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
+                note_unsupported(&name, &mut unsupported);
                 match name.as_str() {
                     // Handle self-closing <c .../> (cell with no value)
                     "c" if in_row => {
@@ -892,7 +916,7 @@ fn parse_worksheet(
             hidden_cols.dedup();
             hidden_cols
         },
-        unsupported_elements: Vec::new(),
+        unsupported_elements: unsupported,
     })
 }
 
