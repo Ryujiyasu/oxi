@@ -131,6 +131,14 @@ pub struct CellStyle {
     pub bg_color: Option<String>,
     pub number_format: Option<String>,
     pub horizontal_align: Option<String>,
+    /// Where the text sits within the cell's height: "top", "center", "bottom".
+    /// Excel leaves a cell at the bottom when it says nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_align: Option<String>,
+    /// True when the text breaks onto further lines rather than running past
+    /// the cell's right edge.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap_text: bool,
     pub border_top: bool,
     pub border_bottom: bool,
     pub border_left: bool,

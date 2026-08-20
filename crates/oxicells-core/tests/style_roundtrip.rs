@@ -193,3 +193,28 @@ fn the_typeface_a_cell_names_is_read_and_saved() {
     assert_eq!(style.font_name.as_deref(), Some("Meiryo UI"));
     assert_eq!(style.font_size, Some(9.0));
 }
+
+#[test]
+fn how_a_cell_places_and_breaks_its_text_is_read() {
+    // A statistics table from the corpus: every cell centres its text
+    // vertically, and the header cells break onto a second line.
+    const TABLE: &[u8] =
+        include_bytes!("../../../tools/golden-test/documents/xlsx/16c7b9f9ed53_toukeihyo.xlsx");
+    let workbook = parse_xlsx(TABLE).expect("the workbook parses");
+
+    let placed = workbook.sheets[0]
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .filter(|cell| cell.style.vertical_align.is_some())
+        .count();
+    assert!(placed > 0, "no cell said where its text sits");
+
+    let wrapped = workbook.sheets[0]
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .filter(|cell| cell.style.wrap_text)
+        .count();
+    assert!(wrapped > 0, "no cell said it breaks its text");
+}

@@ -246,6 +246,8 @@ struct XfRecord {
     fill_id: usize,
     border_id: usize,
     horizontal_align: Option<String>,
+    vertical_align: Option<String>,
+    wrap_text: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -348,10 +350,15 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(0),
                             horizontal_align: None,
+                            vertical_align: None,
+                            wrap_text: false,
                         };
                     }
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
+                        current_xf.vertical_align = get_attr(&e, "vertical");
+                        current_xf.wrap_text =
+                            matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
                     }
 
                     // Inside a border element, parse child elements with style attr
@@ -455,6 +462,9 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                     }
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
+                        current_xf.vertical_align = get_attr(&e, "vertical");
+                        current_xf.wrap_text =
+                            matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
                     }
                     "xf" if section == Section::CellXfs => {
                         // Self-closing <xf ... />
@@ -472,6 +482,8 @@ fn parse_styles_xml(xml: &str) -> Result<StyleSheet, XlsxError> {
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(0),
                             horizontal_align: None,
+                            vertical_align: None,
+                            wrap_text: false,
                         };
                         ss.cell_xfs.push(xf);
                     }
@@ -545,6 +557,8 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         bg_color: fill.bg_color,
         number_format,
         horizontal_align: xf.horizontal_align.clone(),
+        vertical_align: xf.vertical_align.clone(),
+        wrap_text: xf.wrap_text,
         border_top: border.top,
         border_bottom: border.bottom,
         border_left: border.left,
