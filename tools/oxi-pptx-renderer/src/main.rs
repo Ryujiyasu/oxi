@@ -2595,10 +2595,50 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             draw_table_legacy(mem_dc, pres, sh, table, x, y, scale);
                             continue;
                         }
+                        // `a:tr/@h` is a MINIMUM. PowerPoint grows a row until
+                        // its tallest cell's text fits inside that cell's own
+                        // margins, and everything below moves down with it.
+                        // d35 slide 35's planner header declares 18.55pt and
+                        // holds 7pt text in a cell with marT = marB = 7.2pt --
+                        // twice the default -- so PowerPoint draws it 23.5pt and
+                        // Oxi's seven data rows all sat 5.3pt high. 4 of the
+                        // corpus's 181 table rows need the growth, one each in
+                        // d11, d15, d16 and d35: the same template page.
+                        let row_h: Vec<f32> = table
+                            .rows
+                            .iter()
+                            .enumerate()
+                            .map(|(r, row)| {
+                                let declared =
+                                    table.row_heights.get(r).copied().unwrap_or(0.0);
+                                if !tblgrow_on() {
+                                    return declared;
+                                }
+                                // Only a cell whose runs all STATE a size can be
+                                // measured here: the draw path falls back to 18pt
+                                // for a run that inherits one, and feeding that
+                                // guess into the row height grew rows that should
+                                // not move -- four decks lost 0.003 to 0.006 each.
+                                let mut need = 0.0f32;
+                                for cell in row {
+                                    let mut text = 0.0f32;
+                                    let mut sized = true;
+                                    for p in &cell.paragraphs {
+                                        match p.runs.iter().find_map(|r| r.font_size) {
+                                            Some(fs) => text += fs * 1.2,
+                                            None => sized = false,
+                                        }
+                                    }
+                                    if sized && !cell.paragraphs.is_empty() {
+                                        need = need.max(text + cell.mar_t + cell.mar_b);
+                                    }
+                                }
+                                declared.max(need)
+                            })
+                            .collect();
                         let mut cy = y;
                         for (r, row) in table.rows.iter().enumerate() {
-                            let ph = (table.row_heights.get(r).copied().unwrap_or(0.0) as f64
-                                * scale)
+                            let ph = (row_h.get(r).copied().unwrap_or(0.0) as f64 * scale)
                                 .round() as i32;
                             let mut cx = x;
                             for (c, cell) in row.iter().enumerate() {
@@ -9705,6 +9745,11 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
 /// `a:bodyPr/@wrap="none"` is honoured unless this is set.
 fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
+}
+
+/// A table row grows to fit its cells unless this is set.
+fn tblgrow_on() -> bool {
+    std::env::var("OXI_TBLGROW_DISABLE").is_err()
 }
 
 /// A level's `a:defRPr/@i` is honoured unless this is set.
