@@ -90,6 +90,61 @@ fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
     (first_row, first_column, last_row, last_column)
 }
 
+/// The height the blank of a row asks for, in 96-dpi pixels: the tallest
+/// font worn by a column that has room to show it. Every column is written
+/// in its `<col>` style's font, or the workbook's Normal font where no
+/// `<col>` dresses it, and a blank cell still stands one line of that font
+/// tall. A column whose cell in this row is swallowed by a merge shows
+/// nothing and so asks for nothing — which is why 00876's rows of 11pt
+/// cells draw 18px even though its column A wears an 18pt font: A is inside
+/// a merge that spans those rows.
+///
+/// `None` means a font the measured table does not know, so the caller must
+/// fall back rather than guess.
+fn blank_row_px(sheet: &Sheet, merged_columns: &[(u32, u32)]) -> Option<u16> {
+    // Where a merge does not reach, the sheet's own columns are on show.
+    let free = |first: u32, last: u32| {
+        (first..=last).any(|column| {
+            !merged_columns
+                .iter()
+                .any(|(from, to)| *from <= column && column <= *to)
+        })
+    };
+    let mut tallest: Option<u16> = None;
+    let mut raise = |face: &str, size: f32| -> Option<()> {
+        let px = row_defaults::font_default_row_px(face, size)?;
+        tallest = Some(tallest.unwrap_or(0).max(px));
+        Some(())
+    };
+    let mut dressed: Vec<(u32, u32)> = Vec::new();
+    for (first, last, face, size) in &sheet.col_fonts {
+        dressed.push((*first, *last));
+        if free(*first, *last) {
+            raise(face, *size)?;
+        }
+    }
+    // The columns no <col> covers wear Normal. Excel's sheets run to 16384
+    // columns whether or not a file says so.
+    dressed.sort_unstable();
+    let mut next = 0u32;
+    let mut bare = Vec::new();
+    for (first, last) in dressed {
+        if first > next {
+            bare.push((next, first - 1));
+        }
+        next = next.max(last + 1);
+    }
+    if next < 16384 {
+        bare.push((next, 16383));
+    }
+    if let Some((face, size)) = &sheet.normal_font {
+        if bare.iter().any(|(first, last)| free(*first, *last)) {
+            raise(face, *size)?;
+        }
+    }
+    tallest
+}
+
 /// The height of a row the sheet says nothing about. A sheet that pins its
 /// default (customHeight) gets the stated number, given 0.05pt of grace and
 /// floored to the 96-dpi pixel: 17.18 draws 22px but 17.2 draws 23px. A sheet
@@ -102,16 +157,7 @@ fn default_row_points(sheet: &Sheet) -> f32 {
     if sheet.default_row_custom && sheet.default_row_height > 0.0 {
         return ((sheet.default_row_height + 0.05) / 0.75).floor() * 0.75;
     }
-    let mut tallest: Option<u16> = None;
-    for (face, size) in &sheet.default_font_candidates {
-        match row_defaults::font_default_row_px(face, *size) {
-            Some(px) => tallest = Some(tallest.unwrap_or(0).max(px)),
-            // A font the table has never measured: fall back to the stated
-            // number rather than guess a height for it.
-            None => return fallback_row_points(sheet),
-        }
-    }
-    match tallest {
+    match blank_row_px(sheet, &[]) {
         Some(px) => px as f32 * 0.75,
         None => fallback_row_points(sheet),
     }
@@ -128,6 +174,8 @@ fn default_row_points(sheet: &Sheet) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn row_pixels(
     held: Option<&Row>,
+    sheet: &Sheet,
+    merged_columns: &[(u32, u32)],
     default_px: f32,
     columns: &[f32],
     first_column: u32,
@@ -145,26 +193,46 @@ fn row_pixels(
             return (((ht + 0.05) / 0.75).floor()).min(CEILING_PX);
         }
     }
-    // The row's base: its own format's font when it wears one (that is how
-    // a row sinks to 17px under a sheet whose untouched rows get 25 — no
-    // cell needs to say anything), otherwise the sheet default. Cells only
-    // ever RAISE a row above its base, never pull it below.
+    // What the row's blank asks for. A row with a format of its own
+    // (customFormat) wears that font from end to end, whatever its columns
+    // say; otherwise the columns are on show, minus the ones a merge
+    // swallows in this row.
+    let stated = |row: &Row| match row.height {
+        Some(ht) => (((ht + 0.05) / 0.75).floor()).min(CEILING_PX),
+        None => default_px,
+    };
     let base = match &row.style_font {
         Some((face, size)) => match row_defaults::font_default_row_px(face, *size) {
             Some(px) => px as f32,
-            None => {
-                return match row.height {
-                    Some(ht) => (((ht + 0.05) / 0.75).floor()).min(CEILING_PX),
-                    None => default_px,
-                }
-            }
+            None => return stated(row),
         },
-        None => default_px,
+        None => match blank_row_px(sheet, merged_columns) {
+            Some(px) => px as f32,
+            None => return stated(row),
+        },
     };
     let mut raise: f32 = 0.0;
     for cell in &row.cells {
-        let face = cell.style.font_name.as_deref().unwrap_or("Calibri");
-        let size = cell.style.font_size.unwrap_or(11.0);
+        let mut face = cell.style.font_name.as_deref().unwrap_or("Calibri");
+        let mut size = cell.style.font_size.unwrap_or(11.0);
+        // A cell whose text is dressed in stretches stands as tall as its
+        // tallest stretch: 6dca80's B43 is 10pt with an 11pt run inside it,
+        // and Excel gives the row the 11pt line.
+        for run in &cell.runs {
+            let run_face = run.font.as_deref().unwrap_or(face);
+            let run_size = run.size.unwrap_or(size);
+            let taller = match (
+                row_defaults::font_default_row_px(run_face, run_size),
+                row_defaults::font_default_row_px(face, size),
+            ) {
+                (Some(theirs), Some(ours)) => theirs > ours,
+                _ => false,
+            };
+            if taller {
+                face = run_face;
+                size = run_size;
+            }
+        }
         let Some(font_px) = row_defaults::font_default_row_px(face, size) else {
             // A font the table has never measured: trust the cached height
             // the way the pre-derivation renderer did.
@@ -175,6 +243,19 @@ fn row_pixels(
         };
         let text = cell_text(&cell.value, &cell.style).replace("\r\n", "\n");
         let text = text.as_str();
+        if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
+            eprintln!(
+                "row {} col {} font {} {} ({}px) wrap {} merge {} chars {}",
+                row.index, cell.col, face, size, font_px, cell.style.wrap_text,
+                match merged.get(&(row.index, cell.col)) {
+                    Some(Merged::Anchor { rows, columns }) =>
+                        format!("anchor {rows}x{columns}"),
+                    Some(Merged::Covered) => "covered".to_string(),
+                    None => "-".to_string(),
+                },
+                text.chars().count()
+            );
+        }
         match merged.get(&(row.index, cell.col)) {
             // A cell whose merge crosses rows holds no single row open:
             // an 18pt two-row title leaves both its rows at the default.
@@ -258,11 +339,17 @@ fn row_pixels(
         let contribution = (lines * font_px as u32) as f32;
         raise = raise.max(contribution);
     }
+    // Every column swallowed by a merge and nothing written in the row: the
+    // sheet's own default stands in.
+    let measured = base.max(raise);
+    if measured == 0.0 {
+        return default_px;
+    }
     // A thick rule along an edge is drawn in room the fitter keeps for it:
     // a pixel per edge, and only on a height Excel works out. A pinned row
     // measures the same with the rule as without.
     let thick = u32::from(row.thick_top) + u32::from(row.thick_bottom);
-    (base.max(raise) + thick as f32).min(CEILING_PX)
+    (measured + thick as f32).min(CEILING_PX)
 }
 
 /// Counts the lines a cell's text wraps into, through DirectWrite's
@@ -409,6 +496,13 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
     }
 
     let default_px = default_row_points(sheet) / 0.75;
+    if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
+        eprintln!(
+            "sheet default {:.0}px from stated {} custom {} normal {:?} columns {:?}",
+            default_px, sheet.default_row_height, sheet.default_row_custom,
+            sheet.normal_font, sheet.col_fonts
+        );
+    }
     let counter = LineCounter::new();
     let merged = merges(sheet);
     let mut rows = vec![0.0];
@@ -418,8 +512,17 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
         let height = if hidden {
             0.0
         } else {
+            // The stretches of columns a merge swallows in this row.
+            let merged_columns: Vec<(u32, u32)> = sheet
+                .merge_cells
+                .iter()
+                .filter(|merge| merge.start_row <= index && index <= merge.end_row)
+                .map(|merge| (merge.start_col, merge.end_col))
+                .collect();
             let px = row_pixels(
                 held,
+                sheet,
+                &merged_columns,
                 default_px,
                 &columns,
                 first_column,

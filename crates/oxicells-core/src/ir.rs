@@ -27,12 +27,16 @@ pub struct Sheet {
     /// height from the fonts the columns wear.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub default_row_custom: bool,
-    /// The fonts an unpinned default row height is derived from: every font a
-    /// `<col>` style names, plus the Normal font when any of the sheet's
-    /// columns is left unstyled. `(name, size)` pairs, deduplicated. The
-    /// height Excel gives an untouched row is the tallest of their defaults.
+    /// The font each stretch of columns wears, as `(first, last, name, size)`
+    /// with columns zero-based and both ends inside. A cell that states no
+    /// format of its own is written in its column's font, and so is the
+    /// blank space in every row — which is what a row's height is measured
+    /// from when nothing in the row is taller.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub default_font_candidates: Vec<(String, f32)>,
+    pub col_fonts: Vec<(u32, u32, String, f32)>,
+    /// The workbook's Normal font, worn by every column no `<col>` dresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_font: Option<(String, f32)>,
     pub merge_cells: Vec<MergeCell>,
     /// Zero-based indices of the columns that are hidden. Columns have no
     /// record of their own, so this sits beside `col_widths`.
