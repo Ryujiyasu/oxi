@@ -47,6 +47,16 @@ fn measuring_mode() -> DWRITE_MEASURING_MODE {
     }
 }
 
+/// How tall to ask for a font, in pixels.
+///
+/// Excel asks GDI for its fonts, and GDI takes a whole number of pixels: ten
+/// point at 96dpi is thirteen pixels, not thirteen and a third. Asking for the
+/// third draws ＭＳ ゴシック a pixel larger in each direction than Excel does,
+/// which is visible in every glyph on the sheet.
+fn em_pixels(points: f32, scale: f32) -> f32 {
+    (points * scale * 96.0 / 72.0).round()
+}
+
 fn box_of(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
     D2D_RECT_F {
         left,
@@ -247,7 +257,7 @@ pub fn draw(
                         DWRITE_FONT_STYLE_NORMAL
                     },
                     DWRITE_FONT_STRETCH_NORMAL,
-                    points * scale * 96.0 / 72.0,
+                    em_pixels(points, scale),
                     &HSTRING::from("ja-JP"),
                 )?;
 
@@ -269,16 +279,34 @@ pub fn draw(
                     _ => DWRITE_PARAGRAPH_ALIGNMENT_FAR,
                 })?;
 
+                // A line of text stands in the box Excel gives it — the row a
+                // sheet of this font alone would have — with its baseline where
+                // Excel puts it, rather than wherever this engine's own font
+                // metrics would land. Measured against Excel's picture across
+                // twenty faces; see `line_box`.
+                let placed_line = crate::line_box(
+                    cell.style.font_name.as_deref().unwrap_or("Calibri"),
+                    points,
+                    cell.style.bold,
+                    cell.style.italic,
+                );
+                if let Some((line, baseline)) = placed_line {
+                    format.SetLineSpacing(
+                        DWRITE_LINE_SPACING_METHOD_UNIFORM,
+                        line * scale,
+                        baseline * scale,
+                    )?;
+                }
+
                 // Measured against Excel on a sheet with no borders to confuse
                 // the reading: DirectWrite lays the same glyphs down one pixel
-                // left and one pixel high of where Excel puts them, at every
-                // size tried.
+                // left of where Excel puts them, at every size tried.
                 let gutter = (2.0 * scale).round() + 1.0;
                 let mut area = box_of(
                     cell_box.left + gutter,
-                    cell_box.top + 1.0,
+                    cell_box.top,
                     cell_box.right - gutter,
-                    cell_box.bottom + 1.0,
+                    cell_box.bottom,
                 );
                 if filtered {
                     area.right -= FILTER_BUTTON as f32;
@@ -294,15 +322,34 @@ pub fn draw(
                     && placed != Align::Spread
                     && matches!(cell.value, CellValue::String(_))
                 {
-                    let held = writer.CreateTextLayout(
-                        body.as_wide(),
-                        &format,
-                        100_000.0,
-                        area.bottom - area.top,
-                    )?;
-                    let mut measured = DWRITE_TEXT_METRICS::default();
-                    held.GetMetrics(&mut measured)?;
-                    let spare = measured.width - (area.right - area.left);
+                    // How far the text reaches is Excel's own measurement —
+                    // its characters' advances added up — and not this
+                    // engine's, which runs a shade narrower and leaves the
+                    // last letter or two outside the room asked for, where
+                    // they are then clipped away.
+                    let reach = crate::run_width(
+                        cell.style.font_name.as_deref().unwrap_or("Calibri"),
+                        points / scale,
+                        cell.style.bold,
+                        cell.style.italic,
+                        &text,
+                    )
+                    .map(|width| width * scale);
+                    let width = match reach {
+                        Some(width) => width,
+                        None => {
+                            let held = writer.CreateTextLayout(
+                                body.as_wide(),
+                                &format,
+                                100_000.0,
+                                area.bottom - area.top,
+                            )?;
+                            let mut measured = DWRITE_TEXT_METRICS::default();
+                            held.GetMetrics(&mut measured)?;
+                            measured.width
+                        }
+                    };
+                    let spare = width - (area.right - area.left);
                     if spare > 0.0 {
                         let (before, after) = match placed {
                             Align::Left | Align::Spread => (0.0, spare),
@@ -407,7 +454,7 @@ pub fn draw(
                         let points = run.size.unwrap_or(points);
                         if run.size.is_some() || raised {
                             let shrunk = if raised { points * 0.65 } else { points };
-                            laid.SetFontSize(shrunk * scale * 96.0 / 72.0, span)?;
+                            laid.SetFontSize(em_pixels(shrunk, scale), span)?;
                         }
                         if let Some(font) = run.font.as_deref() {
                             laid.SetFontFamilyName(&HSTRING::from(font), span)?;

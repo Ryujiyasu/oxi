@@ -405,6 +405,68 @@ fn may_break(before: char, after: char) -> bool {
     ideographic(before) || ideographic(after)
 }
 
+/// How far a run of text reaches, measured the way Excel measures it: each
+/// character's own advance, added up. A text engine's run measurement is not
+/// the same number — GDI compresses neighbouring Japanese punctuation and
+/// DirectWrite runs a shade narrow — and the difference is what decides
+/// whether the last letter of a spilling cell is drawn or clipped.
+///
+/// `None` when the platform cannot be asked, so the caller falls back.
+pub(crate) fn run_width(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+) -> Option<f32> {
+    held(|counter| {
+        let letters: Vec<char> = text.chars().collect();
+        let advances = counter.advances_of(face, points, bold, italic, &letters)?;
+        Some(advances.iter().sum::<i32>() as f32)
+    })
+}
+
+/// One counter for the life of the program, holding its device context and
+/// remembering every character it has measured. The renderer draws on one
+/// thread, so it lives there.
+fn held<T>(ask: impl FnOnce(&LineCounter) -> Option<T>) -> Option<T> {
+    thread_local! {
+        static HELD: Option<LineCounter> = LineCounter::new();
+    }
+    HELD.with(|counter| ask(counter.as_ref()?))
+}
+
+/// The box Excel lays one line of this font in, and how far down that box its
+/// baseline sits.
+///
+/// The box is the row a sheet of nothing but this font would have — the height
+/// the renderer already carries as a measured table, and the same height a
+/// wrapped cell spends per line. Where the baseline sits in it was measured
+/// against Excel's own picture across twenty faces: it is the device's descent
+/// above the bottom of the box for the ＭＳ faces, Calibri, Arial and Consolas,
+/// and a pixel or two higher for the faces with a large internal leading
+/// (Meiryo, the 游 family, Segoe UI, Times New Roman), which is the part of
+/// this that is not yet derived.
+///
+/// `None` when the platform cannot be asked, so the caller draws the way it
+/// did before.
+pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Option<(f32, f32)> {
+    match (
+        row_defaults::font_default_row_px(face, points),
+        row_defaults::font_baseline_px(face, points),
+    ) {
+        (Some(box_px), Some(baseline)) => Some((box_px as f32, baseline as f32)),
+        // A face the table has never seen: the device's own line, with the
+        // baseline where the descent puts it, which is where two thirds of the
+        // measured table sits anyway.
+        _ => {
+            let (_, descent, height) =
+                held(|counter| counter.shape_of(face, points, bold, italic))?;
+            Some((height, height - descent))
+        }
+    }
+}
+
 /// How many lines one paragraph takes in a box this wide, given what each
 /// character advances. The line holds characters until the next would not
 /// fit, then gives them back one at a time until the break is one Excel
@@ -463,12 +525,19 @@ type FontKey = (String, u32, bool, bool);
 type AdvanceCache =
     std::collections::HashMap<FontKey, std::collections::HashMap<char, i32>>;
 
+/// How the device lays a line of a font out: ascent, descent, and the height
+/// of the two together.
+#[cfg(windows)]
+type LineShape = (f32, f32, f32);
+
 #[cfg(windows)]
 struct LineCounter {
     dc: windows::Win32::Graphics::Gdi::HDC,
     /// One character's advance, kept per font so a sheet of one typeface
     /// asks the device about each character once.
     advances: std::cell::RefCell<AdvanceCache>,
+    /// What the device says about each font as a whole.
+    shapes: std::cell::RefCell<std::collections::HashMap<FontKey, LineShape>>,
 }
 
 #[cfg(windows)]
@@ -482,8 +551,58 @@ impl LineCounter {
             Some(Self {
                 dc,
                 advances: std::cell::RefCell::new(std::collections::HashMap::new()),
+                shapes: std::cell::RefCell::new(std::collections::HashMap::new()),
             })
         }
+    }
+
+    /// What the device makes of this font: how far its ascent reaches above
+    /// the baseline, how far its descent falls below, and the two together.
+    fn shape_of(&self, face: &str, points: f32, bold: bool, italic: bool) -> Option<LineShape> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Graphics::Gdi::*;
+        let pixels = (points * 96.0 / 72.0).round();
+        let key = (face.to_string(), pixels as u32, bold, italic);
+        if let Some(held) = self.shapes.borrow().get(&key) {
+            return Some(*held);
+        }
+        let shape = unsafe {
+            let name: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+            let font = CreateFontW(
+                -(pixels as i32),
+                0,
+                0,
+                0,
+                if bold { 700 } else { 400 },
+                u32::from(italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                ANTIALIASED_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                PCWSTR(name.as_ptr()),
+            );
+            if font.is_invalid() {
+                return None;
+            }
+            let previous = SelectObject(self.dc, font);
+            let mut measured = TEXTMETRICW::default();
+            let ok = GetTextMetricsW(self.dc, &mut measured).as_bool();
+            SelectObject(self.dc, previous);
+            let _ = DeleteObject(font);
+            if !ok {
+                return None;
+            }
+            (
+                measured.tmAscent as f32,
+                measured.tmDescent as f32,
+                measured.tmHeight as f32,
+            )
+        };
+        self.shapes.borrow_mut().insert(key, shape);
+        Some(shape)
     }
 
     /// What each of these characters advances, in whole pixels.
@@ -598,6 +717,27 @@ impl LineCounter {
         _text: &str,
         _width: f32,
     ) -> Option<u32> {
+        None
+    }
+
+    fn advances_of(
+        &self,
+        _face: &str,
+        _points: f32,
+        _bold: bool,
+        _italic: bool,
+        _letters: &[char],
+    ) -> Option<Vec<i32>> {
+        None
+    }
+
+    fn shape_of(
+        &self,
+        _face: &str,
+        _points: f32,
+        _bold: bool,
+        _italic: bool,
+    ) -> Option<(f32, f32, f32)> {
         None
     }
 }

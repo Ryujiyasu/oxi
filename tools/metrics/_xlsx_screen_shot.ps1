@@ -37,8 +37,13 @@ try {
             $sh.Activate()
             try { $excel.ActiveWindow.DisplayGridlines = $false } catch {}
             # xlScreen = 1, xlBitmap = 2 — what the sheet looks like, not what
-            # the printer would be told.
-            $sh.UsedRange.CopyPicture(1, 2)
+            # the printer would be told. The first ask after a workbook opens
+            # is often refused and the second one answers, so it is asked again
+            # rather than counted as a workbook Excel would not draw.
+            for ($try = 1; $try -le 3; $try++) {
+                try { $sh.UsedRange.CopyPicture(1, 2); break }
+                catch { if ($try -eq 3) { throw }; Start-Sleep -Milliseconds 400 }
+            }
             Start-Sleep -Milliseconds 120
             $image = [System.Windows.Forms.Clipboard]::GetImage()
             if ($image) {
