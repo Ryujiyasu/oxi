@@ -60,10 +60,26 @@ fn split_sections(format: &str) -> Vec<&str> {
 /// A format is a date format when it names a date or time part outside quotes.
 fn looks_like_a_date(format: &str) -> bool {
     let mut quoted = false;
-    for character in format.chars() {
+    let mut characters = format.chars().peekable();
+    while let Some(character) = characters.next() {
         match character {
             '"' => quoted = !quoted,
-            'y' | 'd' | 'h' | 's' if !quoted => return true,
+            _ if quoted => {}
+            // The character after one of these belongs to the directive.
+            '_' | '\\' | '*' => {
+                characters.next();
+            }
+            // `[Red]` holds a d, `[$-411]` holds neither, and neither of them
+            // is a date part. Reading the d in Red as a day turned every
+            // negative number in an accounting format into a date.
+            '[' => {
+                for held in characters.by_ref() {
+                    if held == ']' {
+                        break;
+                    }
+                }
+            }
+            'y' | 'd' | 'h' | 's' => return true,
             _ => {}
         }
     }
@@ -97,6 +113,16 @@ fn format_numeric(value: f64, format: &str) -> String {
         match character {
             '"' => quoted = !quoted,
             _ if quoted => {}
+            // `_x` keeps the width of x, `\x` shows x, `*x` fills with x:
+            // in each the character after belongs to the directive, not to
+            // the number.
+            '_' | '\\' | '*' => at += 1,
+            // A bracketed part names a colour, a condition or a locale.
+            '[' => {
+                while at < body.len() && body[at] != ']' {
+                    at += 1;
+                }
+            }
             '.' => seen_point = true,
             '0' | '#' | '?' => {
                 if seen_point {
@@ -231,6 +257,30 @@ fn decorate(number: &str, format: &str) -> String {
                         after.push(escaped);
                     } else {
                         before.push(escaped);
+                    }
+                }
+            }
+            // `_x` asks for the width of x and shows nothing there. Excel's
+            // own `Range.Text` gives a space, which is what a sheet shows.
+            '_' => {
+                characters.next();
+                if seen_digit {
+                    after.push(' ');
+                } else {
+                    before.push(' ');
+                }
+            }
+            // `*x` fills the rest of the cell with x. What that comes to
+            // depends on the width of the cell, so nothing is put here.
+            '*' => {
+                characters.next();
+            }
+            // `[Red]`, `[$-411]`, `[>100]`: a colour, a locale, a condition.
+            // None of them is text.
+            '[' => {
+                for held in characters.by_ref() {
+                    if held == ']' {
+                        break;
                     }
                 }
             }
@@ -379,6 +429,22 @@ mod tests {
 
     /// Every expectation is what Excel 16 put in `Range.Text` for that value
     /// under that format.
+    /// A format's spacing, fill and bracket parts are instructions to the
+    /// renderer, not text to show. `#,##0.0_);(#,##0.0)` is what the machinery
+    /// statistics are written with, and printing the `_)` leaves every number
+    /// on the sheet with a stray bracket.
+    #[test]
+    fn spacing_and_colour_are_not_text() {
+        assert_eq!(format_number(105.3, "#,##0.0_);(#,##0.0)"), "105.3 ");
+        assert_eq!(format_number(24493.0, "#,##0 ;[Red](#,##0)"), "24,493 ");
+        assert_eq!(format_number(-24493.0, "#,##0 ;[Red](#,##0)"), "(24,493)");
+        assert_eq!(format_number(5.0, "[Blue]0"), "5");
+        // A fill takes the width of the cell, which text cannot say.
+        assert_eq!(format_number(7.0, "0*-"), "7");
+        // An escaped character is still shown.
+        assert_eq!(format_number(7.0, r"0\%"), "7%");
+    }
+
     #[test]
     fn numbers_render_the_way_excel_shows_them() {
         for (value, format, shown) in [
