@@ -25617,7 +25617,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         std::env::var("OXI_S1188").is_ok() || self.s1189_on()
     }
 
-    /// S1191 (2026-08-21, opt-in `OXI_S1191`; also on under `OXI_S1189`): the
+    /// S1191 (2026-08-21, default ON, opt-out `OXI_S1191_DISABLE`, Latin scope): the
     /// table's BOTTOM edge advances the flow below the table by its DRAWN width.
     ///
     /// DERIVED (`tools/metrics/_pb_tblfoot_gen.py`, 10 arms, one per page — only
@@ -25690,9 +25690,33 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// 93→93 — the JP table stack carries its own calibrated row/foot overhead
     /// (S200/S661/S682b's render-only pluses), so a second foot advance
     /// double-counts there. Latin docs have no such compensator.
+    /// GATE (default ON as of the S1191b predicate): EN 248 A/B — PASS
+    /// 50/43/44/42/45 **unchanged, no PASS→FAIL**, `forms__000ee7c0` pcd −1 → 0
+    /// (the EN pcd-census target this whole chain started from) and
+    /// `legal__001410a8` 0.9629 → 0.9649; JP 96 PASS 93→93 with 0 docs changed;
+    /// ssim_ab 238 = 0 changed bytes.
     fn s1191_on(&self) -> bool {
-        !self.doc_body_has_real_cjk
-            && (std::env::var("OXI_S1191").is_ok() || self.s1189_on())
+        !self.doc_body_has_real_cjk && std::env::var("OXI_S1191_DISABLE").is_err()
+    }
+
+    /// S1191b: fire the foot advance ONLY for a table whose row boxes have not
+    /// already absorbed the bottom rule — i.e. one with NO table-level
+    /// `tblBorders` (the same gate S870 uses for the row-top pad).
+    ///
+    /// MEASURED (`_tblfoot_audit.py`, the foot term = bottom rule -> next
+    /// paragraph, Oxi minus Word):
+    ///   forms__0020466f  tblBorders present   +0.04 +0.01 +0.01 +0.07 (−1.02)
+    ///   forms__000ee7c0  tcBorders only       −2.60, and one table with no
+    ///                                          foot rule emitted at all
+    /// With a table-level `tblBorders`, `rowbox2_border_pad`/`rowbox2_trh_bw`
+    /// take the table-width arm on every row and the box already carries the
+    /// rule — `_rowpitch_audit.py` confirms those row pitches land within ±0.09
+    /// of Word — so adding the foot again is pure double-charge (18 tables x
+    /// 0.75 ≈ +13.5pt, which is what pushed 'Muslim' onto page 12). A
+    /// cell-borders-only table goes down the S870 path, which pads a row from
+    /// the rule ABOVE it and so never accounts for the table's last edge.
+    fn s1191_table_needs_foot(&self, table: &Table) -> bool {
+        !table.style.border && !table.style.has_inside_h
     }
 
     /// S1189 (2026-08-21, opt-in `OXI_S1189`): the CO-GATED PAIR — the S1188
@@ -37788,7 +37812,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 
         // S1191: the table's bottom rule is drawn BELOW the last row's box, and
         // Word starts the following block under it (see s1191_foot_bw).
-        if self.s1191_on() {
+        if self.s1191_on() && self.s1191_table_needs_foot(table) {
             let foot = self.s1191_foot_bw(table);
             if foot > 0.0 {
                 cursor.advance(foot);
