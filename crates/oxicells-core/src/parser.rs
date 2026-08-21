@@ -343,6 +343,11 @@ struct StyleSheet {
 }
 
 /// Built-in number format strings for well-known IDs.
+/// The formats OOXML gives a number rather than spelling them out, from
+/// ECMA-376 §18.8.30. A workbook that uses one of these writes only its id:
+/// the accounting formats 37 to 40 are how a Japanese statistical table asks
+/// for thousands separators, and reading them as "General" prints 24493 where
+/// Excel shows 24,493.
 fn builtin_number_format(id: u32) -> Option<&'static str> {
     match id {
         0 => Some("General"),
@@ -350,11 +355,47 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
         2 => Some("0.00"),
         3 => Some("#,##0"),
         4 => Some("#,##0.00"),
+        5 => Some("$#,##0_);($#,##0)"),
+        6 => Some("$#,##0_);[Red]($#,##0)"),
+        7 => Some("$#,##0.00_);($#,##0.00)"),
+        8 => Some("$#,##0.00_);[Red]($#,##0.00)"),
         9 => Some("0%"),
         10 => Some("0.00%"),
         11 => Some("0.00E+00"),
+        12 => Some("# ?/?"),
+        13 => Some("# ??/??"),
         14 => Some("mm-dd-yy"),
+        15 => Some("d-mmm-yy"),
+        16 => Some("d-mmm"),
+        17 => Some("mmm-yy"),
+        18 => Some("h:mm AM/PM"),
+        19 => Some("h:mm:ss AM/PM"),
+        20 => Some("h:mm"),
+        21 => Some("h:mm:ss"),
         22 => Some("m/d/yy h:mm"),
+        37 => Some("#,##0 ;(#,##0)"),
+        38 => Some("#,##0 ;[Red](#,##0)"),
+        39 => Some("#,##0.00;(#,##0.00)"),
+        40 => Some("#,##0.00;[Red](#,##0.00)"),
+        // The Japanese locale fills in 27 to 36 and 50 to 58, which is what a
+        // government workbook's dates are written with. The era forms — ggge,
+        // 令和 — are given their Gregorian equivalent here, because the
+        // formatter has no calendar to name an era from; a date in the right
+        // shape is nearer Excel's ink than the serial number that reading
+        // none of them at all leaves behind.
+        27 | 36 | 50 | 57 => Some("yyyy\".\"m\".\"d"),
+        28 | 29 | 51 | 54 | 58 => Some("yyyy\"年\"m\"月\"d\"日\""),
+        30 => Some("m/d/yy"),
+        31 => Some("yyyy\"年\"m\"月\"d\"日\""),
+        32 => Some("h\"時\"mm\"分\""),
+        33 => Some("h\"時\"mm\"分\"ss\"秒\""),
+        34 | 52 | 55 => Some("yyyy\"年\"m\"月\""),
+        35 | 53 | 56 => Some("m\"月\"d\"日\""),
+        45 => Some("mm:ss"),
+        46 => Some("[h]:mm:ss"),
+        47 => Some("mmss.0"),
+        48 => Some("##0.0E+0"),
+        49 => Some("@"),
         _ => None,
     }
 }

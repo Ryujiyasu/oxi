@@ -16,7 +16,7 @@
 //!     8.38 characters as 54 pixels at 96 DPI.
 //!   - A row's height is stated in points, 18.75 by default.
 
-use oxicells_core::ir::{CellStyle, CellValue, Row, Sheet, Workbook};
+use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Sheet, Workbook};
 use oxicells_core::parser::parse_xlsx;
 
 mod row_defaults;
@@ -351,8 +351,10 @@ fn row_pixels(
             continue;
         }
         let lines = {
-            let column = cell.col.saturating_sub(first_column) as usize;
-            let width = match (columns.get(column), columns.get(column + 1)) {
+            let (from, to) = centred_across(row, cell, 0);
+            let column = from.saturating_sub(first_column) as usize;
+            let beyond = to.saturating_sub(first_column) as usize + 1;
+            let width = match (columns.get(column), columns.get(beyond)) {
                 (Some(left), Some(right)) => (right - left) / scale,
                 _ => 0.0,
             };
@@ -547,6 +549,37 @@ pub(crate) fn shrunk_to_fit(
         .map(|em| em as f32 * 72.0 / 96.0)
         .find(|smaller| fits(*smaller))
         .unwrap_or(points)
+}
+
+/// The columns a cell's text is laid out across: its own — and the ones a
+/// merge takes with it — plus the run of neighbours that carry the same
+/// `centerContinuous` alignment and hold nothing themselves.
+///
+/// This is how a heading is put over a group of columns without merging them,
+/// and Excel lays the text out across the whole run: it centres it there, and
+/// it *wraps* it there. Measuring the wrap against the cell's own column
+/// alone makes a one-line heading two lines and the row twice as tall, which
+/// is what h2dee1989kre's second row was.
+pub(crate) fn centred_across(row: &Row, cell: &Cell, spans_columns: u32) -> (u32, u32) {
+    if cell.style.horizontal_align.as_deref() != Some("centerContinuous") {
+        return (cell.col, cell.col + spans_columns);
+    }
+    let joins = |column: u32| {
+        row.cells.iter().any(|other| {
+            other.col == column
+                && other.style.horizontal_align.as_deref() == Some("centerContinuous")
+                && matches!(other.value, CellValue::Empty)
+        })
+    };
+    let mut first = cell.col;
+    while first > 0 && joins(first - 1) {
+        first -= 1;
+    }
+    let mut last = cell.col + spans_columns;
+    while joins(last + 1) {
+        last += 1;
+    }
+    (first, last)
 }
 
 /// The room Excel keeps either side of a cell's text, in pixels.
@@ -1685,30 +1718,16 @@ mod windows_draw {
                     // which is how a heading is put over a group of columns
                     // without merging them. 45 of the corpus's 285 workbooks
                     // do it.
-                    if cell.style.horizontal_align.as_deref() == Some("centerContinuous") {
-                        let joins = |column: u32| {
-                            row.cells.iter().any(|other| {
-                                other.col == column
-                                    && other.style.horizontal_align.as_deref()
-                                        == Some("centerContinuous")
-                                    && matches!(other.value, CellValue::Empty)
-                            })
-                        };
-                        let mut first = cell.col;
-                        while first > layout.first_column && joins(first - 1) {
-                            first -= 1;
-                        }
-                        let mut last = cell.col + spans_columns;
-                        while joins(last + 1) {
-                            last += 1;
-                        }
+                    let (from, to) = super::centred_across(row, cell, spans_columns);
+                    if from != cell.col || to != cell.col + spans_columns {
                         if let (Some(left), Some(right)) = (
-                            layout.columns.get((first - layout.first_column) as usize),
-                            layout.columns.get((last + 1 - layout.first_column) as usize),
+                            layout.columns.get(from.saturating_sub(layout.first_column) as usize),
+                            layout
+                                .columns
+                                .get(to.saturating_sub(layout.first_column) as usize + 1),
                         ) {
-                            area.left = *left as i32 + gutter;
-                            area.right =
-                                *right as i32 - (gutter - scale.round() as i32).max(0);
+                            area.left = *left as i32 + (left_room * scale).round() as i32;
+                            area.right = *right as i32 - (right_room * scale).round() as i32;
                         }
                     }
 
