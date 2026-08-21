@@ -2020,6 +2020,22 @@ fn cell_width_pt(
         .sum::<f32>()
 }
 
+/// A cell's text sits on the font's own baseline only when this is set.
+///
+/// DERIVED but HELD OPT-IN (2026-08-21). On d25 s7 PowerPoint's own PDF gives
+/// three baselines whose offset below each line's top is 0.9807 / 0.9761 /
+/// 0.9717 em — the face's ascent (Arial 0.9727) — so the model is right there,
+/// and the slide gains 0.0123. But the corpus reads 4 improved / 2 regressed
+/// (d35 s35 −0.0239, d11 s35 −0.0075 against d19 s35 +0.0036), and on d35 s35
+/// the same measurement implies A ≈ 1.63 em, which no face has. Working that
+/// back: those rows are consistent with the SAME model once row 0's growth is
+/// taken into account (18.55pt declared, but 7pt text between 7.199pt insets
+/// needs ~23pt), i.e. the residual is in the row-growth amount, not in the
+/// baseline. One document is not three; pin the growth first, then re-gate.
+fn cellbase_on() -> bool {
+    std::env::var("OXI_CELLBASE_ENABLE").is_ok()
+}
+
 /// A centred or bottom-anchored cell is positioned by the height of its
 /// WRAPPED text unless this is set, which restores counting one line per
 /// paragraph.
@@ -3136,16 +3152,47 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 }
                                                 _ => left,
                                             };
-                                            draw_text_line(
-                                                mem_dc,
-                                                lx,
-                                                cursor_y,
-                                                line,
-                                                fs,
-                                                &family,
-                                                color.as_deref(),
-                                                scale,
-                                            );
+                                            if cellbase_on() {
+                                                // A cell is a text frame: its
+                                                // baseline sits the FONT's own
+                                                // ascent below the line box, not
+                                                // wherever GDI's TextOut top
+                                                // happens to put it. Measured on
+                                                // d25 s7 against PowerPoint's own
+                                                // PDF (read_pptx_cellbase.py):
+                                                // its three baselines imply
+                                                // A = 0.9807 / 0.9761 / 0.9717 em
+                                                // below each line's top, which is
+                                                // the face's ascent (Arial
+                                                // 0.9727), while TextOut anchors
+                                                // by tmAscent.
+                                                let base_pt = cursor_y as f32 / scale as f32
+                                                    + font_baseline_offset_em(&family) * fs;
+                                                draw_text_baseline_wiu(
+                                                    mem_dc,
+                                                    lx,
+                                                    base_pt,
+                                                    line,
+                                                    fs,
+                                                    &family,
+                                                    color.as_deref(),
+                                                    scale,
+                                                    if bold { 700 } else { 400 },
+                                                    false,
+                                                    false,
+                                                );
+                                            } else {
+                                                draw_text_line(
+                                                    mem_dc,
+                                                    lx,
+                                                    cursor_y,
+                                                    line,
+                                                    fs,
+                                                    &family,
+                                                    color.as_deref(),
+                                                    scale,
+                                                );
+                                            }
                                             cursor_y += advance.round() as i32;
                                         }
                                         continue;
