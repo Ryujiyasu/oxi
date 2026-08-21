@@ -2257,7 +2257,13 @@ impl<'a> WorkbookHost<'a> {
                 .col_widths
                 .get(column as usize)
                 .copied()
-                .unwrap_or(sheet.default_col_width);
+                .filter(|width| *width > 0.0)
+                .unwrap_or(if sheet.default_col_width > 0.0 {
+                    sheet.default_col_width
+                } else {
+                    // What Excel reports for a column nobody has resized.
+                    8.43
+                });
             if first.is_some_and(|first| first != width) {
                 return Ok(Value::Null);
             }

@@ -31,6 +31,12 @@ fn column_pixels(width: f32, digit: f32) -> f32 {
 /// which is what a workbook that names no font gets.
 const FALLBACK_DIGIT_WIDTH: f32 = 7.0;
 const DEFAULT_ROW_POINTS: f32 = 18.75;
+/// Excel's own default column width for a sheet that states none, as a plain
+/// count of digits.
+const DEFAULT_CHARACTERS: f32 = 8.43;
+/// The gutter Excel keeps either side of a cell's text, in pixels. A width the
+/// sheet states already has it folded in; a default width does not.
+const COLUMN_GUTTER: f32 = 5.0;
 
 pub(crate) struct Geometry {
     /// Left edge of each column, and the sheet's full width.
@@ -87,17 +93,27 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
 
     let mut columns = vec![0.0];
     for column in first_column..=last_column {
-        let characters = sheet
+        let stated = sheet
             .col_widths
             .get(column as usize)
             .copied()
-            .filter(|width| *width > 0.0)
-            .unwrap_or(sheet.default_col_width);
+            .filter(|width| *width > 0.0);
         let hidden = sheet.hidden_cols.contains(&column);
         let width = if hidden {
             0.0
         } else {
-            column_pixels(characters, digit_width) * scale
+            match stated {
+                // A stated width already carries the gutter either side of the
+                // cell's text.
+                Some(width) => column_pixels(width, digit_width) * scale,
+                // A default the sheet states is measured the same way. Excel's
+                // own default, for a sheet that states none, is a plain count
+                // of characters, so there the gutter is added here instead.
+                None if sheet.default_col_width > 0.0 => {
+                    column_pixels(sheet.default_col_width, digit_width) * scale
+                }
+                None => (DEFAULT_CHARACTERS * digit_width + COLUMN_GUTTER).trunc() * scale,
+            }
         };
         columns.push(columns.last().unwrap() + width);
     }

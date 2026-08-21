@@ -904,7 +904,10 @@ fn parse_worksheet(
     let mut filter_field: Option<u32> = None;
     let mut filter_criteria: Vec<String> = Vec::new();
     let mut filter_either = false;
-    let mut default_col_width: f32 = 8.43;
+    // Zero until the sheet states one. A stated default is measured the same
+    // way a <col> width is; Excel's own default, for a sheet that states none,
+    // is a plain count of characters instead, so the two cannot share a value.
+    let mut default_col_width: f32 = 0.0;
     let mut default_row_height: f32 = 15.0;
     let mut merge_cells: Vec<MergeCell> = Vec::new();
 
@@ -1194,7 +1197,7 @@ fn parse_worksheet(
                         // Ensure col_widths vec is large enough (0-based)
                         let needed = max_col_attr as usize;
                         if col_widths.len() < needed {
-                            col_widths.resize(needed, default_col_width);
+                            col_widths.resize(needed, 0.0);
                         }
                         for c in min_col..=max_col_attr {
                             col_widths[(c - 1) as usize] = width;
@@ -1250,7 +1253,11 @@ fn parse_worksheet(
     // Ensure col_widths covers all columns
     let col_count = max_col as usize;
     if col_widths.len() < col_count {
-        col_widths.resize(col_count, default_col_width);
+        // A column with no <col> entry of its own keeps a width of zero. The
+        // sheet's default is measured in plain characters while a stated width
+        // carries the cell's gutter, so a reader has to be able to tell them
+        // apart.
+        col_widths.resize(col_count, 0.0);
     }
 
     Ok(Sheet {
