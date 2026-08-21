@@ -33,7 +33,10 @@ SCRATCH = Path(r"C:\tmp\xlsx_wrap")
 BOOK = SCRATCH / "wrap.xlsx"
 TRUTH = SCRATCH / "wrap.excel.png"
 
-FONTS = [("ＭＳ Ｐゴシック", 11.0), ("ＭＳ ゴシック", 11.0), ("游ゴシック", 11.0)]
+FONTS = [("ＭＳ Ｐゴシック", 11.0), ("ＭＳ ゴシック", 11.0), ("游ゴシック", 11.0),
+         # Bigger sizes as well: the allowance a line keeps beyond its text is
+         # not obviously the same five pixels once the em passes twenty.
+         ("ＭＳ 明朝", 14.0), ("ＭＳ 明朝", 18.0), ("ＭＳ ゴシック", 20.0)]
 WIDTHS = [10.0, 14.0, 20.0]          # in the characters Excel counts columns in
 SAMPLES = [
     "行政手続におけるオンラインによる本人確認の手法に関するガイドライン",

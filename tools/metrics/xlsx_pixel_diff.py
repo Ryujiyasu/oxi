@@ -220,6 +220,12 @@ def main() -> int:
     )
     parser.add_argument("--limit", type=int, help="stop after this many workbooks")
     parser.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        help="start this many workbooks in, so a long run can be taken in slices",
+    )
+    parser.add_argument(
         "--baseline",
         type=Path,
         default=REPO / "pipeline_data" / "xlsx_ssim_baseline.json",
@@ -238,6 +244,8 @@ def main() -> int:
 
     sources = sorted(args.target.glob("*.xlsx")) if args.target.is_dir() else [args.target]
     sources = [path for path in sources if not path.name.startswith("~$")]
+    if args.skip:
+        sources = sources[args.skip :]
     if args.limit:
         sources = sources[: args.limit]
     if not sources:

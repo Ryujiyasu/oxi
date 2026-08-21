@@ -356,11 +356,11 @@ fn row_pixels(
                 (Some(left), Some(right)) => (right - left) / scale,
                 _ => 0.0,
             };
-            // Excel wraps within the column minus its 5px gutter — the same
-            // gutter the column width model carries. Measured by sweeping a
-            // column under あx10 of 游ゴシック 11: ten 15px advances fit at
-            // 155px and wrap at 154.
-            let width = width - COLUMN_GUTTER;
+            // A line is measured against the column minus the room Excel
+            // keeps either side of it, which is the cell font's own — five
+            // pixels for an eight-pixel digit, more for a bigger one.
+            let (left_room, right_room) = gutters(face, size, cell.style.bold, cell.style.italic);
+            let width = width - left_room - right_room;
             counter
                 .and_then(|counter| {
                     counter.lines(
@@ -394,7 +394,11 @@ fn row_pixels(
                             cell.style.bold,
                             cell.style.italic,
                             para,
-                            box_px - COLUMN_GUTTER,
+                            {
+                                let (left, right) =
+                                    gutters(face, size, cell.style.bold, cell.style.italic);
+                                box_px - left - right
+                            },
                         )
                     });
                     eprintln!(
@@ -545,6 +549,22 @@ pub(crate) fn shrunk_to_fit(
         .unwrap_or(points)
 }
 
+/// The room Excel keeps either side of a cell's text, in pixels.
+///
+/// Not a constant. Measured by narrowing a column a pixel at a time until the
+/// text takes a second line — across four faces, ten sizes and both weights,
+/// 23 readings — the pair grows with the cell font's own digit: five pixels
+/// together up to an eight-pixel digit, seven to twelve, nine to sixteen,
+/// eleven beyond. The left keeps one more than the right, which is the three
+/// and two that the small sizes show.
+pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32, f32) {
+    let digit = advances(face, points, bold, italic, "0")
+        .and_then(|held| held.first().copied())
+        .unwrap_or(7) as f32;
+    let extra = (((digit - 5.0) / 4.0).floor()).max(0.0);
+    (3.0 + extra, 2.0 + extra)
+}
+
 /// The box Excel lays one line of this font in, and how far down that box its
 /// baseline sits.
 ///
@@ -609,7 +629,13 @@ fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
         {
             take -= 1;
         }
-        if take <= 1 && fill > 1 {
+        // A line of one character is a line: Excel leaves 者 on its own
+        // rather than end the line before （. Only a run with no break in it
+        // anywhere — a web address — is cut where it stops fitting instead.
+        let nowhere_to_break = take == 1
+            && start + 1 < letters.len()
+            && !may_break(letters[start], letters[start + 1]);
+        if nowhere_to_break && fill > 1 {
             take = fill;
         }
         // The spaces at a break belong to the line they end. Excel starts the
@@ -1143,22 +1169,33 @@ pub(crate) struct Dressed {
     bold: bool,
 }
 
-/// A table's header carries a filter button in every column. Measured off a
-/// worksheet Excel drew: 17 by 17 pixels against the right edge of the cell,
-/// eight below its top, a pale face inside a grey outline, and a seven-wide
-/// triangle narrowing to a point four rows down.
+/// A filtered column carries a button in its heading. Measured against Excel
+/// across headings of 20, 30, 45 and 90 pixels and columns of two widths: 17
+/// by 17 pixels, its right edge a pixel in from the cell's, and its foot two
+/// pixels up from the cell's foot — it hangs from the bottom of the heading,
+/// wherever the top of it is. A pale face inside a grey outline, with a
+/// seven-wide triangle narrowing to a point four rows down.
 pub(crate) const FILTER_BUTTON: i32 = 17;
-pub(crate) const FILTER_BUTTON_TOP: i32 = 8;
+/// How far the button's foot sits above the cell's.
+pub(crate) const FILTER_BUTTON_FOOT: i32 = 2;
 
 /// Whether the cell at this spot carries a filter button.
+///
+/// A table's header row carries one in every column, and so does the heading
+/// row of a sheet's own `<autoFilter>` — the procurement lists filter that
+/// way, with no table in sight.
 pub(crate) fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
-    sheet.tables.iter().any(|table| {
+    let in_a_table = sheet.tables.iter().any(|table| {
         table.header_rows > 0
             && row >= table.start_row
             && row < table.start_row + table.header_rows
             && column >= table.start_col
             && column <= table.end_col
-    })
+    });
+    let filtered = sheet.auto_filter.as_ref().is_some_and(|filter| {
+        row == filter.start_row && column >= filter.start_col && column <= filter.end_col
+    });
+    in_a_table || filtered
 }
 
 pub(crate) fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
@@ -1559,12 +1596,15 @@ mod windows_draw {
                     // A carriage return would otherwise be drawn as a glyph.
                     let filtered = super::has_filter_button(sheet, row.index, cell.col);
                     if filtered {
-                        let left = box_.right - super::FILTER_BUTTON;
-                        let top = box_.top + super::FILTER_BUTTON_TOP;
+                        // The button hangs from the foot of the heading, a
+                        // pixel in from its right edge.
+                        let left = box_.right - super::FILTER_BUTTON - 1;
+                        let top = box_.bottom - super::FILTER_BUTTON_FOOT
+                            - super::FILTER_BUTTON;
                         let face = RECT {
                             left,
                             top,
-                            right: box_.right,
+                            right: box_.right - 1,
                             bottom: top + super::FILTER_BUTTON,
                         };
                         let outline = CreateSolidBrush(colour(Some("A6ACB3"), 0xA6ACB3));
@@ -1615,12 +1655,14 @@ mod windows_draw {
                     let bold = cell.style.bold
                         || matches!(&dress, Some(dress) if dress.bold);
 
-                    // Excel keeps three pixels at the left of a cell and two
-                    // at the right; the gutter is not even.
-                    let gutter = (2.0 * scale).round() as i32 + 1;
+                    // Excel keeps more room at the left of a cell than at
+                    // the right, and both grow with the font's digit.
+                    let (left_room, right_room) =
+                        super::gutters(name, cell.style.font_size.unwrap_or(11.0), bold, cell.style.italic);
+                    let gutter = (left_room * scale).round() as i32;
                     let mut area = box_;
                     area.left += gutter;
-                    area.right -= (gutter - scale.round() as i32).max(0);
+                    area.right -= (right_room * scale).round() as i32;
                     if filtered {
                         area.right -= super::FILTER_BUTTON;
                     }
@@ -2058,6 +2100,26 @@ mod windows_draw {
 #[cfg(test)]
 mod tests {
     use super::{column_pixels, stacked_text};
+
+    /// The room a cell keeps either side of its text grows with the font's
+    /// digit, in steps of two pixels — measured against Excel by narrowing a
+    /// column until the text wraps, over four faces, ten sizes and both
+    /// weights. The left keeps a pixel more than the right.
+    #[test]
+    fn the_gutter_grows_with_the_digit() {
+        // ＭＳ ゴシック at 11pt has an eight pixel digit, at 18pt a twelve
+        // pixel one, at 24pt a sixteen: five, seven and nine together.
+        let small = super::gutters("ＭＳ ゴシック", 11.0, false, false);
+        let middle = super::gutters("ＭＳ ゴシック", 18.0, false, false);
+        let large = super::gutters("ＭＳ ゴシック", 24.0, false, false);
+        assert_eq!(small, (3.0, 2.0));
+        assert_eq!(middle, (4.0, 3.0));
+        assert_eq!(large, (5.0, 4.0));
+        // The left always keeps one more than the right.
+        for (left, right) in [small, middle, large] {
+            assert_eq!(left - right, 1.0);
+        }
+    }
 
     /// Where a line of text is allowed to end. Read back out of Excel's own
     /// picture, character by character, over six samples in three faces and

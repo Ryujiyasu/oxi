@@ -21,7 +21,7 @@ use windows::Win32::System::Com::*;
 
 use crate::{
     alignment, cell_text, dressed_by_table, has_filter_button, merges, room_after, room_before,
-    rule_for, Align, Geometry, Merged, FILTER_BUTTON, FILTER_BUTTON_TOP,
+    rule_for, Align, Geometry, Merged, FILTER_BUTTON, FILTER_BUTTON_FOOT,
 };
 
 fn shade(hex: Option<&str>, fallback: u32) -> D2D1_COLOR_F {
@@ -269,9 +269,10 @@ pub fn draw(
 
                 let filtered = has_filter_button(sheet, row.index, cell.col);
                 if filtered {
-                    let left = cell_box.right - FILTER_BUTTON as f32;
-                    let top = cell_box.top + FILTER_BUTTON_TOP as f32;
-                    let face = box_of(left, top, cell_box.right, top + FILTER_BUTTON as f32);
+                    let left = cell_box.right - (FILTER_BUTTON + 1) as f32;
+                    // The button hangs from the foot of the heading.
+                    let top = cell_box.bottom - (FILTER_BUTTON_FOOT + FILTER_BUTTON) as f32;
+                    let face = box_of(left, top, cell_box.right - 1.0, top + FILTER_BUTTON as f32);
                     brush.SetColor(&shade(Some("A6ACB3"), 0));
                     target.FillRectangle(&face, &brush);
                     brush.SetColor(&shade(Some("FEFEFE"), 0x00FF_FFFF));
