@@ -505,6 +505,35 @@ fn held<T>(ask: impl FnOnce(&LineCounter) -> Option<T>) -> Option<T> {
     HELD.with(|counter| ask(counter.as_ref()?))
 }
 
+/// The size Excel draws a cell at when it is told to shrink the text to fit.
+///
+/// Not a scaling of the size the cell asks for: measured against Excel's own
+/// picture across three faces and fifteen lengths, the em comes down a whole
+/// pixel at a time and stops at the first size whose text fits the room. At
+/// 96dpi a pixel of em is three quarters of a point, which is why the sizes
+/// Excel settles on step 11, 10.25, 9.5, 8.75 and so on.
+pub(crate) fn shrunk_to_fit(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+    room: f32,
+) -> f32 {
+    let fits = |points: f32| {
+        run_width(face, points, bold, italic, text).is_some_and(|width| width <= room)
+    };
+    if room <= 0.0 || fits(points) {
+        return points;
+    }
+    let natural = (points * 96.0 / 72.0).round() as i32;
+    (1..natural)
+        .rev()
+        .map(|em| em as f32 * 72.0 / 96.0)
+        .find(|smaller| fits(*smaller))
+        .unwrap_or(points)
+}
+
 /// The box Excel lays one line of this font in, and how far down that box its
 /// baseline sits.
 ///
@@ -1561,8 +1590,6 @@ mod windows_draw {
                     if text.is_empty() {
                         continue;
                     }
-                    let points = cell.style.font_size.unwrap_or(11.0);
-                    let pixels = -((points * scale * 96.0 / 72.0).round() as i32);
                     // A cell names its own typeface; Calibri is only the
                     // fallback for one that does not.
                     let name = cell.style.font_name.as_deref().unwrap_or("Calibri");
@@ -1571,6 +1598,37 @@ mod windows_draw {
                     // range says so in its own style.
                     let bold = cell.style.bold
                         || matches!(&dress, Some(dress) if dress.bold);
+
+                    // Excel keeps three pixels at the left of a cell and two
+                    // at the right; the gutter is not even.
+                    let gutter = (2.0 * scale).round() as i32 + 1;
+                    let mut area = box_;
+                    area.left += gutter;
+                    area.right -= (gutter - scale.round() as i32).max(0);
+                    if filtered {
+                        area.right -= super::FILTER_BUTTON;
+                    }
+                    let placed = alignment(&cell.style, &cell.value);
+
+                    // A cell told to shrink to fit is drawn smaller until its
+                    // text fits, and the size it settles on is not a scaling
+                    // of the one it asks for: measured across three faces and
+                    // fifteen lengths, Excel comes down a whole pixel of em at
+                    // a time and stops at the first that fits.
+                    let asked = cell.style.font_size.unwrap_or(11.0);
+                    let points = if cell.style.shrink_to_fit && !cell.style.wrap_text {
+                        super::shrunk_to_fit(
+                            name,
+                            asked,
+                            bold,
+                            cell.style.italic,
+                            &text,
+                            (area.right - area.left) as f32 / scale,
+                        )
+                    } else {
+                        asked
+                    };
+                    let pixels = -((points * scale * 96.0 / 72.0).round() as i32);
                     let font = CreateFontW(
                         pixels,
                         0,
@@ -1605,17 +1663,6 @@ mod windows_draw {
                         },
                     );
                     SetBkMode(dc, TRANSPARENT);
-
-                    // Excel keeps three pixels at the left of a cell and two
-                    // at the right; the gutter is not even.
-                    let gutter = (2.0 * scale).round() as i32 + 1;
-                    let mut area = box_;
-                    area.left += gutter;
-                    area.right -= (gutter - scale.round() as i32).max(0);
-                    if filtered {
-                        area.right -= super::FILTER_BUTTON;
-                    }
-                    let placed = alignment(&cell.style, &cell.value);
 
                     // The lines to draw: the cell's own breaks, and where it
                     // wraps, the breaks the row's height was measured with.

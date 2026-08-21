@@ -329,6 +329,7 @@ struct XfRecord {
     vertical_align: Option<String>,
     wrap_text: bool,
     stacked_text: bool,
+    shrink_to_fit: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -593,6 +594,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             vertical_align: None,
                             wrap_text: false,
                             stacked_text: false,
+                            shrink_to_fit: false,
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
                             applies_font: unless_denied(
                                 get_attr(&e, "applyFont").as_deref(),
@@ -617,6 +619,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         // characters stand one above the next.
                         current_xf.stacked_text =
                             get_attr(&e, "textRotation").as_deref() == Some("255");
+                        current_xf.shrink_to_fit =
+                            is_true(get_attr(&e, "shrinkToFit").as_deref());
                     }
 
                     // Inside a border element, parse child elements with style attr
@@ -722,6 +726,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         // characters stand one above the next.
                         current_xf.stacked_text =
                             get_attr(&e, "textRotation").as_deref() == Some("255");
+                        current_xf.shrink_to_fit =
+                            is_true(get_attr(&e, "shrinkToFit").as_deref());
                     }
                     "xf" if section == Section::CellXfs
                         || section == Section::CellStyleXfs =>
@@ -744,6 +750,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             vertical_align: None,
                             wrap_text: false,
                             stacked_text: false,
+                            shrink_to_fit: false,
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
                             applies_font: unless_denied(
                                 get_attr(&e, "applyFont").as_deref(),
@@ -904,6 +911,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         vertical_align: xf.vertical_align.clone(),
         wrap_text: xf.wrap_text,
         stacked_text: xf.stacked_text,
+        shrink_to_fit: xf.shrink_to_fit,
         border_top: border.top.clone(),
         border_bottom: border.bottom.clone(),
         border_left: border.left.clone(),

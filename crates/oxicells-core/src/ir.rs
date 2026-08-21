@@ -247,6 +247,11 @@ pub struct CellStyle {
     /// the cell's right edge.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wrap_text: bool,
+    /// True when the text is made smaller until it fits the cell's width
+    /// rather than running on or being clipped — 85 of the conformance
+    /// corpus's 285 workbooks ask for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shrink_to_fit: bool,
     /// True when the cell's characters are stacked one above the next rather
     /// than set in a line — `textRotation="255"`, which is how a Japanese
     /// form labels a narrow column. 771 of the 774 rotations in the

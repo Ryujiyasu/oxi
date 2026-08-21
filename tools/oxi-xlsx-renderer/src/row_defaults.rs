@@ -401,7 +401,22 @@ pub(crate) fn font_baseline_px(face: &str, size: f32) -> Option<u16> {
 
 fn found(face: &str, size: f32) -> Option<&'static (&'static str, u16, u16, u16)> {
     let size_q = (size * 4.0).round() as u16;
+    let exact = FONT_DEFAULT_ROW_PX
+        .iter()
+        .find(|(f, s, _, _)| *f == face && *s == size_q);
+    if exact.is_some() {
+        return exact;
+    }
+    // A size the table has not been asked about before — the three quarters
+    // of a point a cell shrinks by, say — draws exactly like any other size
+    // that lands on the same whole pixel of em, because that pixel is all the
+    // device is given. So the entry for any such size is this size's entry.
+    let em = em_pixels(size);
     FONT_DEFAULT_ROW_PX
         .iter()
-        .find(|(f, s, _, _)| *f == face && *s == size_q)
+        .find(|(f, s, _, _)| *f == face && em_pixels(*s as f32 / 4.0) == em)
+}
+
+fn em_pixels(points: f32) -> i32 {
+    (points * 96.0 / 72.0).round() as i32
 }
