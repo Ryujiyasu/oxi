@@ -57,6 +57,25 @@ ARMS = [
     ("exact600", 16, 600, "exact"),
     ("atleast200", 16, 200, "atLeast"),
     ("atleast400", 16, 400, "atLeast"),
+    # ★Composition arms (2026-08-21, the 047ff775/01535587 pcd=-6/-5 hunt):
+    # sz21 = 10.5pt MS明朝, natural column 14.16 > pitch 12.8 → the run-1
+    # observation says single snaps to 2 cells (25.68). These discriminate
+    # model A (advance = mult × cells × pitch) from model B (advance =
+    # ceil(natural×mult/pitch) × pitch):
+    #   x1.5: A=38.4  B=25.6      x2: A=51.2  B=38.4     x3: A=76.8 B=51.2
+    ("cell2_single", 21, None, None),
+    ("cell2_x1_5", 21, 360, "auto"),
+    ("cell2_x2", 21, 480, "auto"),
+    ("cell2_x3", 21, 720, "auto"),
+    ("cell2_exact200", 21, 200, "exact"),
+    ("cell2_exact400", 21, 400, "exact"),
+    ("cell2_atl200", 21, 200, "atLeast"),
+    ("cell2_atl400", 21, 400, "atLeast"),
+    # ceil tolerance boundary: 9.5pt natural = 12.81 vs pitch 12.80 (horizontal
+    # S752 uses ceil((nat-0.5)/pitch) — does vertical share the 0.5pt window?);
+    # 10pt natural = 13.49 (clears any sub-0.7 tolerance → 2 cells).
+    ("boundary_sz19", 19, None, None),
+    ("boundary_sz20", 20, None, None),
 ]
 COLS = 3                   # columns of body text after the swept paragraph
 

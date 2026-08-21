@@ -3796,16 +3796,56 @@ impl LayoutEngine {
             //     atLeast 10 / 20pt      -> 12.72 / 19.92 = max(value, pitch)
             // Same shape as a horizontal line height, except `auto` multiplies
             // the GRID PITCH rather than the natural column width.
+            // S1185 (2026-08-21, opt-out OXI_S1185_DISABLE): a column whose
+            // NATURAL width exceeds the grid pitch occupies ceil-cells exactly
+            // like a horizontal line — the S1143b/c count (whole-twip rounding,
+            // equality lands in ONE cell, no tolerance for text). The 10-arm
+            // extension of _pb_vertpitch (sz21 = natural 14.16 on the 12.8 grid)
+            // pins the composition:
+            //     single / x1.5 / x2 -> 25.68 (2 cells)   x3 -> 38.40 (3 cells)
+            //     => auto advance = pitch × max(cells, mult)  (the multiplier is
+            //        a competing FLOOR, it does not multiply the natural)
+            //     exact stays the value; atLeast = max(value, cells × pitch)
+            //     boundary: sz19 nat 12.81 -> 256tw = the pitch -> 1 cell;
+            //               sz20 nat 13.49 -> 270tw -> 2 cells
+            // Real anchors: 047ff775 / 01535587 (游明朝 10.5 nat 18.375 ->
+            // 368tw > 360 -> 2 cells = the 36pt columns Word shows, W17/O11 and
+            // W13/O8 pcd craters). Their EMPTY paragraphs also advance 36
+            // (truth x-walk) — no S195-style 0.5pt shrink in vertical, so the
+            // same cells apply to the empty arm below.
+            let s1185_cells: f32 = if std::env::var("OXI_S1185_DISABLE").is_err() {
+                if let Some(pitch) = page.grid_line_pitch {
+                    let m = self.metrics_for_text(&para_text, &style, &para.style);
+                    let nat = m.word_line_height_no_grid(fs);
+                    let h_tw = (nat * 20.0).round();
+                    let pitch_tw = (pitch * 20.0).round().max(1.0);
+                    (h_tw / pitch_tw).ceil().max(1.0)
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
             let line_pitch = if std::env::var("OXI_S1166_DISABLE").is_ok() {
                 line_pitch
             } else {
                 match para.style.line_spacing_rule.as_deref() {
                     Some("exact") => para.style.line_spacing.unwrap_or(line_pitch).max(0.0),
-                    Some("atLeast") => {
-                        para.style.line_spacing.unwrap_or(0.0).max(line_pitch)
+                    Some("atLeast") => para
+                        .style
+                        .line_spacing
+                        .unwrap_or(0.0)
+                        .max(line_pitch * s1185_cells),
+                    // auto (or absent): multiplier and cell count compete.
+                    _ => {
+                        line_pitch
+                            * para
+                                .style
+                                .line_spacing
+                                .unwrap_or(1.0)
+                                .max(0.0)
+                                .max(s1185_cells)
                     }
-                    // auto (or absent): a multiplier on the grid pitch.
-                    _ => line_pitch * para.style.line_spacing.unwrap_or(1.0).max(0.0),
                 }
             };
 
