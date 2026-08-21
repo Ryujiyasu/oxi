@@ -1609,6 +1609,50 @@ mod windows_draw {
                         area.right -= super::FILTER_BUTTON;
                     }
                     let placed = alignment(&cell.style, &cell.value);
+                    // A stacked cell that says nothing about where its text
+                    // sits across the cell is centred, not left: measured on
+                    // data_B01, whose column headings say only `vertical` and
+                    // come out down the middle of their columns.
+                    let placed = if cell.style.stacked_text
+                        && cell.style.horizontal_align.is_none()
+                    {
+                        Align::Centre
+                    } else {
+                        placed
+                    };
+
+                    // Text centred *across* cells rather than in one: Excel
+                    // spreads the centring over the run of neighbours that
+                    // carry the same alignment and hold nothing themselves,
+                    // which is how a heading is put over a group of columns
+                    // without merging them. 45 of the corpus's 285 workbooks
+                    // do it.
+                    if cell.style.horizontal_align.as_deref() == Some("centerContinuous") {
+                        let joins = |column: u32| {
+                            row.cells.iter().any(|other| {
+                                other.col == column
+                                    && other.style.horizontal_align.as_deref()
+                                        == Some("centerContinuous")
+                                    && matches!(other.value, CellValue::Empty)
+                            })
+                        };
+                        let mut first = cell.col;
+                        while first > layout.first_column && joins(first - 1) {
+                            first -= 1;
+                        }
+                        let mut last = cell.col + spans_columns;
+                        while joins(last + 1) {
+                            last += 1;
+                        }
+                        if let (Some(left), Some(right)) = (
+                            layout.columns.get((first - layout.first_column) as usize),
+                            layout.columns.get((last + 1 - layout.first_column) as usize),
+                        ) {
+                            area.left = *left as i32 + gutter;
+                            area.right =
+                                *right as i32 - (gutter - scale.round() as i32).max(0);
+                        }
+                    }
 
                     // A cell told to shrink to fit is drawn smaller until its
                     // text fits, and the size it settles on is not a scaling
@@ -1844,7 +1888,60 @@ mod windows_draw {
                             }
                         }
                     }
-                    for line in lines.iter().filter(|_| !dressed_runs) {
+                    // A stacked cell is drawn through the vertical face —
+                    // "@ＭＳ ゴシック" turned a quarter turn — because that is
+                    // the face Excel takes its shapes from: measured character
+                    // by character, ー ｰ ～ （ ） 「 」 【 】 ＝ come out on
+                    // their side and everything else upright, exactly as the
+                    // "@" face draws them. The character sits at the top of
+                    // its own line box, the em's width across.
+                    if cell.style.stacked_text && !dressed_runs {
+                        let em = -pixels;
+                        let turned = wide(&format!("@{name}"));
+                        let font = CreateFontW(
+                            pixels,
+                            0,
+                            2700,
+                            2700,
+                            if bold { 700 } else { 400 },
+                            u32::from(cell.style.italic),
+                            u32::from(cell.style.underline),
+                            0,
+                            DEFAULT_CHARSET.0 as u32,
+                            OUT_DEFAULT_PRECIS.0 as u32,
+                            CLIP_DEFAULT_PRECIS.0 as u32,
+                            CLEARTYPE_QUALITY.0 as u32,
+                            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                            PCWSTR(turned.as_ptr()),
+                        );
+                        let held = SelectObject(dc, font);
+                        let room = area.right - area.left;
+                        let left = match placed {
+                            Align::Left | Align::Spread => area.left,
+                            Align::Right => area.right - em,
+                            Align::Centre => {
+                                area.left + ((room - em) as f32 / 2.0).ceil() as i32
+                            }
+                        };
+                        for (step, line) in lines.iter().enumerate() {
+                            let letters = wide(line);
+                            let letters = &letters[..letters.len() - 1];
+                            if letters.is_empty() {
+                                continue;
+                            }
+                            // The pen of a turned face sits at the top left of
+                            // the character, not on a baseline, so the line
+                            // box's own padding is what puts it in place.
+                            let down = top + step as i32 * line_px + (line_px - em).max(0);
+                            let _ = TextOutW(dc, left, down, letters);
+                        }
+                        SelectObject(dc, held);
+                        let _ = DeleteObject(font);
+                    }
+                    for line in lines
+                        .iter()
+                        .filter(|_| !dressed_runs && !cell.style.stacked_text)
+                    {
                         let held = wide(line);
                         let letters = &held[..held.len() - 1];
                         if !letters.is_empty() {
