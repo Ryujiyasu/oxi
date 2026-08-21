@@ -544,6 +544,14 @@ fn shape_json(sh: &Shape) -> Value {
                                 if let Some(o) = v.as_object_mut() {
                                     o.insert("grid_span".into(), json!(cell.grid_span));
                                     o.insert("h_merge".into(), json!(cell.h_merge));
+                                    o.insert(
+                                        "end_para_sizes".into(),
+                                        json!(cell
+                                            .paragraphs
+                                            .iter()
+                                            .map(|p| p.end_para_size)
+                                            .collect::<Vec<_>>()),
+                                    );
                                 }
                                 v
                             })
@@ -2020,6 +2028,28 @@ fn cell_width_pt(
         .sum::<f32>()
 }
 
+/// An empty paragraph counts toward its row's height only when this is set.
+///
+/// It is the other half of `cellbase_on` — counting it moves every row below
+/// DOWN, the baseline model moves the text within a row UP — and the two were
+/// each measured alone before that was noticed. Ink-band centres on d35 s35
+/// against PowerPoint's own page, mean absolute error over 9 bands:
+///
+/// | arm                | error |
+/// |--------------------|-------|
+/// | shipped (both off) | 0.213pt |
+/// | cellbase only      | 1.066pt |
+/// | emptycell only     | 1.600pt |
+/// | **both on**        | 0.533pt |
+///
+/// So they genuinely are each other's missing half, and still do not beat the
+/// state that ships. The residual is a uniform +0.64pt, and d16 s36 wants the
+/// empty cell counted (+0.0192) while d35 s35 does not — so what decides it is
+/// still unknown. Both stay off.
+fn emptycell_on() -> bool {
+    std::env::var("OXI_EMPTYCELL_ENABLE").is_ok()
+}
+
 /// A cell's text sits on the font's own baseline only when this is set.
 ///
 /// DERIVED but HELD OPT-IN (2026-08-21). On d25 s7 PowerPoint's own PDF gives
@@ -2906,6 +2936,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     let mut text = 0.0f32;
                                     let mut sized = true;
                                     for p in &cell.paragraphs {
+                                        // An EMPTY paragraph still occupies a
+                                        // line, sized by its paragraph mark.
+                                        let empty_sz = p
+                                            .runs
+                                            .iter()
+                                            .all(|r| r.text.trim().is_empty())
+                                            .then_some(p.end_para_size)
+                                            .flatten()
+                                            .filter(|_| emptycell_on());
+                                        if let Some(sz) = empty_sz {
+                                            text += sz * 1.2;
+                                            continue;
+                                        }
                                         match p.runs.iter().find_map(|r| r.font_size) {
                                             Some(fs) => {
                                                 // A wrapped paragraph is as many
@@ -2951,6 +2994,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     if sized && !cell.paragraphs.is_empty() {
                                         need = need.max(text + cell.mar_t + cell.mar_b);
                                     }
+                                }
+                                if std::env::var("OXI_ROW_DEBUG").is_ok() {
+                                    eprintln!(
+                                        "ROW r={r} declared={declared:.3} need={need:.3} \
+                                         -> {:.3}",
+                                        declared.max(need)
+                                    );
                                 }
                                 declared.max(need)
                             })
