@@ -3494,15 +3494,60 @@ fn parse_paragraph(
     // (visible text + all non-placeholder + sum(w) ≤ tcW); the faithful repro
     // + the real doc both confirm Word's max(line, image) cell model.
     let s1066_cell_single_flow = s1066_cell_text_flow && inline_img_runs.len() == 1;
+    // S1186 (2026-08-21, default ON, opt-out OXI_S1186_DISABLE): the ≥2 gate
+    // counted PICTURES only. An inline OBJECT is line content too — a
+    // `<w:object>` OLE routed to the run by S851/S974, or an S839 inline visual
+    // vector group — so a paragraph pairing ONE picture with an object never
+    // reached the flow path, and Word puts them on ONE line.
+    // WORD TRUTH (`tools/metrics/_pb_inlineobj_gen.py`, 13 arms built on the
+    // witness document's OWN package so the object is a real OLE): obj+pic,
+    // obj+spaces+pic, pic+obj, obj+pic+pic, and the OLE-less <w:object> variant
+    // all advance exactly as the object ALONE does (81.00 / 81.02 / 81.00 /
+    // 81.03 / 80.88 against obj_alone's 80.91) — the picture rides the object's
+    // line at x = 72 + 106 and costs zero height. Both orders, adjacent or with
+    // 66 spaces between, and whether or not the object carries <o:OLEObject>.
+    // WITNESS correspondence__000407cd (EN pcd census, Word 1 page / Oxi 2):
+    // its para 17 is `[OLE 106×49.3][66 spaces][picture 45.9×44.2]`. Word draws
+    // the row at y 635.7 (PDF: OLE x 72.06..178.16, picture x 297.40..343.30)
+    // and starts the next paragraph 80.6pt below; Oxi stacked the picture on
+    // its own line = 125.1pt, and the trailing empty paragraph fell to page 2.
+    // ★It also un-drops the object. With no visible text the paragraph was
+    // `image_only` (ooxml.rs:1363), which CLEARS the runs (s971_host) to build
+    // an image line — taking the run-carried OLE with it. The repro's obj+pic /
+    // pic+obj / objwide+pic / objfit+pic / objnoole+pic arms all rendered the
+    // picture ALONE (−5.25 advance, object missing) for exactly that reason.
+    // Routing the picture in-run empties `inline_images`, so `image_only` no
+    // longer fires and the object survives.
+    // Data-LESS images keep the block path (the S537b/S741 flow-reservation
+    // placeholder must stay a whole-line block — probeqwps 1.0 → 0.925), and an
+    // S852 `o:hr` is not a co-tenant: that rule owns its line by construction.
+    // BODY only (allow_inline_flow) — a cell's inline-object width is not in
+    // `s984_inline_w`, so the S984/S1066 tcW gate could not judge the pair.
+    let s1186_object_pair = std::env::var("OXI_S1186_DISABLE").is_err()
+        && allow_inline_flow
+        && !inline_img_runs.is_empty()
+        && inline_img_runs.len() < 2
+        && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty())
+        // ★The object must sit on a DIFFERENT run from the picture. Routing the
+        // picture writes inline_object_extent/_image, so a run carrying both
+        // would have its object silently replaced by the picture. No such run
+        // exists in any corpus (census: 0 across 769 docs) — this keeps the
+        // predicate honest rather than relying on that.
+        && runs.iter().enumerate().any(|(i, r)| {
+            r.style.inline_object_extent.is_some()
+                && r.style.hr_rule.is_none()
+                && !inline_img_runs.iter().any(|(ri, _)| *ri == i)
+        });
     if ((allow_inline_flow || s984_cell_flow || s1066_cell_text_flow) && inline_img_runs.len() >= 2)
         || s1034_single_inline
         || s1066_cell_single_flow
+        || s1186_object_pair
     {
         if std::env::var("OXI_DBG_S854").is_ok() {
             let txt: String = runs.iter().flat_map(|r| r.text.chars()).take(24).collect();
-            eprintln!("[S854] KEEP-IN-RUN allow_inline_flow={} s984={} s1066={} s1066b={} n={} s1034={} has_text={} txt={:?}",
+            eprintln!("[S854] KEEP-IN-RUN allow_inline_flow={} s984={} s1066={} s1066b={} n={} s1034={} s1186={} has_text={} txt={:?}",
                 allow_inline_flow, s984_cell_flow, s1066_cell_text_flow, s1066_cell_single_flow,
-                inline_img_runs.len(), s1034_single_inline,
+                inline_img_runs.len(), s1034_single_inline, s1186_object_pair,
                 runs.iter().any(|r| !r.text.trim().is_empty()), txt);
         }
         for (ridx, image) in inline_img_runs {
