@@ -1937,18 +1937,15 @@ fn cell_width_pt(
         .sum::<f32>()
 }
 
-/// A table cell wraps its text only when this is set.
+/// A table cell wraps its text unless this is set, which restores drawing each
+/// paragraph as one line however wide the column is.
 ///
-/// HELD OPT-IN (2026-08-21) because it needs horizontal cell merging first.
-/// The IR has no `gridSpan`, so a header cell that PowerPoint spans across
-/// fourteen columns is modelled as ONE column wide, and wrapping it there
-/// breaks "Week 1" into "Wee / k 1" — d35 s29 −0.0914, d24 s29 −0.0547,
-/// d11 s29 −0.0440 on the same Gantt template. Net over the five table decks
-/// was −0.000955, 0 improved / 4 regressed, and even the target slide
-/// (d25 s7) lost 0.0028. Wrapping is right; wrapping to the wrong width is
-/// not. Turn this on again once a spanned cell knows its real width.
+/// It needed horizontal merging first: while `gridSpan` was unmodelled a header
+/// PowerPoint spans across seven columns measured one column wide, and wrapping
+/// it there broke "Week 1" into "Wee / k 1" (d35 s29 −0.0914 and the same on
+/// d24 / d11). With the span in place the width is the real one.
 fn cellwrap_on() -> bool {
-    std::env::var("OXI_CELLWRAP_ENABLE").is_ok()
+    std::env::var("OXI_CELLWRAP_DISABLE").is_err()
 }
 
 /// An empty paragraph is sized by its paragraph mark unless this is set,
