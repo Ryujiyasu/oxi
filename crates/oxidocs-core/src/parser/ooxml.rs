@@ -1477,6 +1477,51 @@ fn parse_body(
                                         joined.style.indent_first_line =
                                             prev.style.indent_first_line;
                                     }
+                                    // S1190 (2026-08-21, default ON, opt-out
+                                    // `OXI_S1190_DISABLE`): the merged paragraph's
+                                    // spacing-BEFORE is the HIDDEN paragraph's, not the
+                                    // continuation's. S784b already carries the hidden
+                                    // para's first-line indent for the same reason — the
+                                    // merged line physically BEGINS at the hidden para,
+                                    // so the space above it is that paragraph's.
+                                    // DERIVED (`tools/metrics/_pb_specvanish_gen.py`, 6
+                                    // arms; anchor paragraph carries after=200 = 10pt,
+                                    // Times New Roman 10 line 11.48):
+                                    //   continuation before=240 -> Word gap 21.48
+                                    //   continuation before=480 -> Word gap 21.48
+                                    //   continuation before=0   -> Word gap 21.48
+                                    //     => the continuation's before is IGNORED, at
+                                    //        any size
+                                    //   HIDDEN para before=360  -> Word gap 29.40
+                                    //        = 11.48 + max(after 10, before 18)
+                                    //     => the hidden para's before is what collapses
+                                    //        with the previous paragraph's after
+                                    //   HIDDEN para after=360   -> Word gap 21.48
+                                    //     => the hidden para's after is ignored (it is
+                                    //        mid-merge)
+                                    // Oxi used the continuation's before in every arm
+                                    // (23.50 / 35.50 / 21.50 / 23.50), which is
+                                    // technical__00501ca3's residual +2.02pt: its
+                                    // `T.1.1. Repeatability.` is a Heading4 with
+                                    // `<w:vanish/><w:specVanish/>` running into a
+                                    // BodyTextIndent that declares before=240, and
+                                    // Heading4 itself carries no spacing.
+                                    // GATE: `specVanish` exists in exactly 2 corpus
+                                    // docs (corp_en technical__00501ca3 x19 and
+                                    // technical__0056b52f x112; golden and corp_ja have
+                                    // NONE), so JP and SSIM are inert by construction —
+                                    // and measured so: EN 248 A/B **0 docs changed**,
+                                    // PASS 50/43/44/42/45 unchanged; JP 96 PASS 93->93,
+                                    // 0 changed; ssim_ab 238 = 0 changed bytes. It is
+                                    // pagination-neutral today and simply moves the
+                                    // geometry onto Word (00501ca3's run-in line
+                                    // +2.84 -> +0.84).
+                                    if std::env::var("OXI_S1190_DISABLE").is_err() {
+                                        joined.style.space_before = prev.style.space_before;
+                                        joined.style.before_lines = prev.style.before_lines;
+                                        joined.style.has_direct_before =
+                                            prev.style.has_direct_before;
+                                    }
                                     current_blocks.push(Block::Paragraph(joined));
                                 }
                             } else {
