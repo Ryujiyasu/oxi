@@ -42,7 +42,10 @@ def measured_rows():
     """The row height Excel gives a sheet of each font, as already measured."""
     held = {}
     for line in TABLE.read_text(encoding="utf-8").splitlines():
-        found = re.search(r'\("([^"]+)",\s*(\d+),\s*(\d+)\)', line)
+        # The table carries the baseline beside the height now, so the entry
+        # has a fourth field. Reading only three-field entries quietly returns
+        # nothing at all, and every caller falls back to a guessed 20px line.
+        found = re.search(r'\("([^"]+)",\s*(\d+),\s*(\d+)(?:,\s*\d+)?\)', line)
         if found:
             held[(found.group(1), int(found.group(2)) / 4.0)] = int(found.group(3))
     return held

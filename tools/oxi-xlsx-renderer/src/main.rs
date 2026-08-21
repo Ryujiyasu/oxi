@@ -471,10 +471,27 @@ pub(crate) fn run_width(
     italic: bool,
     text: &str,
 ) -> Option<f32> {
+    advances(face, points, bold, italic, text)
+        .map(|advances| advances.iter().sum::<i32>() as f32)
+}
+
+/// What each character of this text advances, in whole pixels.
+///
+/// Excel puts every character at the running total of these, and the total is
+/// not what a text engine laying the same run out arrives at: DirectWrite
+/// packs a Latin run one or two pixels tighter over a web address of fifty
+/// characters. Drawing character by character at these positions is what
+/// makes a long line of Latin text land where Excel's does.
+pub(crate) fn advances(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+) -> Option<Vec<i32>> {
     held(|counter| {
         let letters: Vec<char> = text.chars().collect();
-        let advances = counter.advances_of(face, points, bold, italic, &letters)?;
-        Some(advances.iter().sum::<i32>() as f32)
+        counter.advances_of(face, points, bold, italic, &letters)
     })
 }
 
@@ -519,16 +536,16 @@ pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Opt
     }
 }
 
-/// How many lines one paragraph takes in a box this wide, given what each
-/// character advances. The line holds characters until the next would not
-/// fit, then gives them back one at a time until the break is one Excel
-/// would make.
-fn count_lines(letters: &[char], advances: &[i32], width: f32) -> u32 {
+/// Where one paragraph breaks in a box this wide, given what each character
+/// advances: the first character of each line after the first. The line holds
+/// characters until the next would not fit, then gives them back one at a time
+/// until the break is one Excel would make.
+fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
+    let mut breaks = Vec::new();
     if letters.is_empty() {
-        return 1;
+        return breaks;
     }
     let box_px = width.max(1.0) as i32;
-    let mut lines = 0u32;
     let mut start = 0usize;
     while start < letters.len() {
         let mut take = 0usize;
@@ -555,10 +572,48 @@ fn count_lines(letters: &[char], advances: &[i32], width: f32) -> u32 {
         if take <= 1 && fill > 1 {
             take = fill;
         }
-        lines += 1;
         start += take.max(1);
+        if start < letters.len() {
+            breaks.push(start);
+        }
     }
-    lines.max(1)
+    breaks
+}
+
+/// How many lines one paragraph takes in a box this wide.
+fn count_lines(letters: &[char], advances: &[i32], width: f32) -> u32 {
+    line_breaks(letters, advances, width).len() as u32 + 1
+}
+
+/// The lines a cell's text is drawn as: its own breaks, and the wrapping ones
+/// where it wraps. The same rule that gives the row its height, so what is
+/// drawn and what the row was measured for cannot disagree.
+pub(crate) fn wrapped_lines(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+    width: Option<f32>,
+) -> Vec<String> {
+    let mut held = Vec::new();
+    for paragraph in text.split('\n') {
+        let letters: Vec<char> = paragraph.chars().collect();
+        let breaks = match width {
+            Some(width) => advances(face, points, bold, italic, paragraph)
+                .map(|advances| line_breaks(&letters, &advances, width))
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut at = 0usize;
+        // The last stretch runs to the end of the paragraph, and an empty
+        // paragraph is one empty line rather than none.
+        for stop in breaks.iter().copied().chain(std::iter::once(letters.len())) {
+            held.push(letters[at..stop].iter().collect());
+            at = stop;
+        }
+    }
+    held
 }
 
 /// Counts the lines a cell's text wraps into, measuring the way Excel does:
@@ -969,9 +1024,13 @@ fn draw(
     height: u32,
     scale: f32,
 ) -> image::RgbImage {
-    // Excel draws its own text through DirectWrite, so that is the path that
-    // can match it. GDI stays reachable while the two are being compared.
-    if std::env::var("OXI_XLSX_GDI").is_err() {
+    // Excel's sheet text is GDI's own ClearType — fringe colour for fringe
+    // colour, measured against its picture — and Direct2D cannot be asked for
+    // the same: over a WIC bitmap it ignores its text rendering parameters
+    // entirely. So GDI draws, and DirectWrite stays reachable for comparison
+    // (0.9478 against 0.9456 over the 285-workbook corpus, and ahead on 128
+    // of them to DirectWrite's 89).
+    if std::env::var("OXI_XLSX_DWRITE").is_ok() {
         match dwrite_draw::draw(sheet, layout, width, height, scale) {
             Ok(canvas) => return canvas,
             Err(error) => eprintln!("DirectWrite could not draw the sheet: {error}"),
@@ -1032,8 +1091,11 @@ pub(crate) fn stacked_text(text: &str) -> String {
 /// the range carries any of it in its own style.
 pub(crate) struct Dressed {
     fill: Option<String>,
-    /// A header row is written in white on the accent colour.
+    /// A header row is written in white on the accent colour, and in bold:
+    /// Excel's own table styles set the header heavier than the body, and no
+    /// cell inside the range says so in its own style.
     white_text: bool,
+    bold: bool,
 }
 
 /// A table's header carries a filter button in every column. Measured off a
@@ -1065,6 +1127,7 @@ pub(crate) fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<D
         return Some(Dressed {
             fill: table.accent.clone(),
             white_text: true,
+            bold: true,
         });
     }
     if !table.banded_rows {
@@ -1075,6 +1138,7 @@ pub(crate) fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<D
     Some(Dressed {
         fill: if below % 2 == 0 { table.band.clone() } else { None },
         white_text: false,
+        bold: false,
     })
 }
 
@@ -1239,7 +1303,7 @@ mod dwrite_draw;
 #[cfg(windows)]
 mod windows_draw {
     use super::{alignment, cell_text, Align, Geometry, Merged};
-    use oxicells_core::ir::{BorderLine, CellStyle, CellValue, Row, Sheet};
+    use oxicells_core::ir::{BorderLine, CellStyle, CellValue, Sheet};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
     use windows::Win32::Graphics::Gdi::*;
@@ -1489,6 +1553,11 @@ mod windows_draw {
 
                     let text = cell_text(&cell.value, &cell.style)
                         .replace("\r\n", "\n");
+                    let text = if cell.style.stacked_text {
+                        super::stacked_text(&text)
+                    } else {
+                        text
+                    };
                     if text.is_empty() {
                         continue;
                     }
@@ -1496,25 +1565,30 @@ mod windows_draw {
                     let pixels = -((points * scale * 96.0 / 72.0).round() as i32);
                     // A cell names its own typeface; Calibri is only the
                     // fallback for one that does not.
-                    let face = wide(
-                        cell.style.font_name.as_deref().unwrap_or("Calibri"),
-                    );
+                    let name = cell.style.font_name.as_deref().unwrap_or("Calibri");
+                    let face = wide(name);
+                    // A table's header row is bold, and no cell inside the
+                    // range says so in its own style.
+                    let bold = cell.style.bold
+                        || matches!(&dress, Some(dress) if dress.bold);
                     let font = CreateFontW(
                         pixels,
                         0,
                         0,
                         0,
-                        if cell.style.bold { 700 } else { 400 },
+                        if bold { 700 } else { 400 },
                         u32::from(cell.style.italic),
                         u32::from(cell.style.underline),
                         0,
                         DEFAULT_CHARSET.0 as u32,
                         OUT_DEFAULT_PRECIS.0 as u32,
                         CLIP_DEFAULT_PRECIS.0 as u32,
-                        // Excel prints greyscale-antialiased glyphs. ClearType
-                        // would colour their edges, which reads as a horizontal
-                        // shift once the comparison turns both to grey.
-                        ANTIALIASED_QUALITY.0 as u32,
+                        // Excel *prints* greyscale-antialiased glyphs, and the
+                        // comparison used to be against a print. It is against
+                        // the sheet on screen now, and there Excel's edges are
+                        // its own ClearType, which this reproduces fringe
+                        // colour for fringe colour where DirectWrite cannot.
+                        CLEARTYPE_QUALITY.0 as u32,
                         (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
                         PCWSTR(face.as_ptr()),
                     );
@@ -1530,102 +1604,263 @@ mod windows_draw {
                             colour(cell.style.font_color.as_deref(), 0x0000_0000)
                         },
                     );
+                    SetBkMode(dc, TRANSPARENT);
 
-                    // Excel keeps a small gutter either side of a cell's text.
-                    let gutter = (2.0 * scale).round() as i32;
+                    // Excel keeps three pixels at the left of a cell and two
+                    // at the right; the gutter is not even.
+                    let gutter = (2.0 * scale).round() as i32 + 1;
                     let mut area = box_;
                     area.left += gutter;
-                    area.right -= gutter;
+                    area.right -= (gutter - scale.round() as i32).max(0);
                     if filtered {
                         area.right -= super::FILTER_BUTTON;
                     }
                     let placed = alignment(&cell.style, &cell.value);
-                    let mut body = wide(&text);
-                    body.pop();
+
+                    // The lines to draw: the cell's own breaks, and where it
+                    // wraps, the breaks the row's height was measured with.
+                    let lines = super::wrapped_lines(
+                        name,
+                        points,
+                        bold,
+                        cell.style.italic,
+                        &text,
+                        cell.style
+                            .wrap_text
+                            .then(|| (area.right - area.left) as f32 / scale),
+                    );
+                    if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
+                        eprintln!(
+                            "drawn row {} col {} lines {:?}",
+                            row.index, cell.col, lines
+                        );
+                    }
+                    let width_of = |line: &str| -> i32 {
+                        let held = wide(line);
+                        let letters = &held[..held.len() - 1];
+                        let mut measured = SIZE::default();
+                        if !letters.is_empty()
+                            && GetTextExtentPoint32W(dc, letters, &mut measured).as_bool()
+                        {
+                            measured.cx
+                        } else {
+                            0
+                        }
+                    };
+                    let reach = lines.iter().map(|line| width_of(line)).max().unwrap_or(0);
 
                     // Text too long for its cell runs on over the neighbours,
                     // as long as they are empty — that is what Excel shows, and
-                    // a wrapping cell keeps to itself instead.
-                    // Only text runs on. A number that will not fit stays in
-                    // its cell — Excel shows ##### rather than let it spill.
+                    // a wrapping cell keeps to itself instead. Only text runs
+                    // on: a number that will not fit stays in its cell, where
+                    // Excel shows ##### rather than let it spill.
                     let runs_on = !cell.style.wrap_text
                         && placed != Align::Spread
                         && matches!(cell.value, CellValue::String(_));
-                    if runs_on {
-                        let mut measured = SIZE::default();
-                        if GetTextExtentPoint32W(dc, &body, &mut measured).as_bool()
-                            && measured.cx > area.right - area.left
-                        {
-                            let spare = measured.cx - (area.right - area.left);
-                            let (leftward, rightward) = match placed {
-                                Align::Left | Align::Spread => (0, spare),
-                                Align::Right => (spare, 0),
-                                Align::Centre => (spare / 2, spare - spare / 2),
-                            };
-                            area.left -=
-                                super::room_before(layout, row, cell.col, leftward, &merged);
-                            // A merged block's own columns are already inside
-                            // the box, so the search for room starts past them.
-                            // A merged block's own columns are already inside
-                            // the box, so the search for room starts past them.
-                            let after = super::room_after(
-                                layout,
-                                row,
-                                cell.col + spans_columns,
-                                rightward,
-                                &merged,
-                            );
-                            area.right += after;
-                        }
-                    }
-
-                    let placed_flag = match placed {
-                        Align::Left => DT_LEFT,
-                        // GDI has no spread; centring is the closest it gets.
-                        Align::Centre | Align::Spread => DT_CENTER,
-                        Align::Right => DT_RIGHT,
-                    } | DT_NOPREFIX;
-                    // A cell can hold its own breaks, put there with alt+enter,
-                    // whatever it says about wrapping.
-                    if cell.style.wrap_text || text.contains('\n') {
-                        let format = if cell.style.wrap_text {
-                            placed_flag | DT_WORDBREAK
-                        } else {
-                            placed_flag
+                    if runs_on && reach > area.right - area.left {
+                        let spare = reach - (area.right - area.left);
+                        let (leftward, rightward) = match placed {
+                            Align::Left | Align::Spread => (0, spare),
+                            Align::Right => (spare, 0),
+                            Align::Centre => (spare / 2, spare - spare / 2),
                         };
-                        // Several lines need their own height measured before
-                        // they can be placed; DT_VCENTER only centres one.
-                        let mut measured = area;
-                        let mut probe = body.clone();
-                        DrawTextW(dc, &mut probe, &mut measured, format | DT_CALCRECT);
-                        let slack =
-                            (area.bottom - area.top) - (measured.bottom - measured.top);
-                        if slack > 0 {
-                            // Where the block of lines sits is the cell's own
-                            // rule; Excel leaves a cell at the bottom when it
-                            // says nothing.
-                            area.top += match cell.style.vertical_align.as_deref() {
-                                Some("top") => 0,
-                                Some("center") | Some("centre") => slack / 2,
-                                _ => slack,
-                            };
-                        }
-                        DrawTextW(dc, &mut body, &mut area, format);
-                    } else {
-                        // One line sits where the cell says; Excel leaves it
-                        // at the bottom when the cell says nothing.
-                        let upright = match cell.style.vertical_align.as_deref() {
-                            Some("top") => DT_TOP,
-                            Some("center") | Some("centre") => DT_VCENTER,
-                            _ => DT_BOTTOM,
-                        };
-                        DrawTextW(
-                            dc,
-                            &mut body,
-                            &mut area,
-                            placed_flag | upright | DT_SINGLELINE,
+                        area.left -= super::room_before(layout, row, cell.col, leftward, &merged);
+                        // A merged block's own columns are already inside the
+                        // box, so the search for room starts past them.
+                        area.right += super::room_after(
+                            layout,
+                            row,
+                            cell.col + spans_columns,
+                            rightward,
+                            &merged,
                         );
                     }
+
+                    // A line stands in the box Excel gives its font, with the
+                    // baseline where Excel puts it, and the block of lines sits
+                    // in the cell by the cell's own rule.
+                    let (line_px, baseline) =
+                        super::line_box(name, points, bold, cell.style.italic)
+                            .unwrap_or(((-pixels) as f32, (-pixels) as f32));
+                    let line_px = (line_px * scale).round() as i32;
+                    let block = line_px * lines.len() as i32;
+                    let slack = (box_.bottom - box_.top) - block;
+                    let top = box_.top
+                        + match cell.style.vertical_align.as_deref() {
+                            Some("top") => 0,
+                            // The odd pixel goes above the text.
+                            Some("center") | Some("centre") => (slack as f32 / 2.0).floor() as i32,
+                            _ => slack,
+                        };
+
+                    // Nothing is drawn outside the cell, or outside the room
+                    // the text was given to run on into.
+                    let clip = CreateRectRgn(area.left, box_.top, area.right, box_.bottom);
+                    SelectClipRgn(dc, clip);
+                    SetTextAlign(dc, TA_BASELINE | TA_LEFT);
+                    let mut at = top + (baseline * scale).round() as i32;
+
+                    // Parts of the text dressed differently — an 8pt aside
+                    // inside an 11pt cell, a raised footnote marker — are
+                    // drawn one after another, each in its own font. Only a
+                    // cell that fits on one line: a wrapped one is left to the
+                    // plain path below, where the breaking is what matters.
+                    let dressed_runs = !cell.runs.is_empty() && lines.len() == 1;
+                    if dressed_runs {
+                        let piece = |run: &oxicells_core::ir::TextRun| {
+                            let raised = run.vert_align.is_some();
+                            let size = run.size.unwrap_or(points);
+                            let size = if raised { size * 0.65 } else { size };
+                            let face = wide(run.font.as_deref().unwrap_or(name));
+                            let font = CreateFontW(
+                                -((size * scale * 96.0 / 72.0).round() as i32),
+                                0,
+                                0,
+                                0,
+                                if run.bold || bold { 700 } else { 400 },
+                                u32::from(run.italic || cell.style.italic),
+                                u32::from(run.underline || cell.style.underline),
+                                0,
+                                DEFAULT_CHARSET.0 as u32,
+                                OUT_DEFAULT_PRECIS.0 as u32,
+                                CLIP_DEFAULT_PRECIS.0 as u32,
+                                CLEARTYPE_QUALITY.0 as u32,
+                                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                                PCWSTR(face.as_ptr()),
+                            );
+                            (font, size)
+                        };
+                        let mut width = 0i32;
+                        for run in &cell.runs {
+                            let (font, _) = piece(run);
+                            let held = SelectObject(dc, font);
+                            let letters = wide(&run.text);
+                            let mut measured = SIZE::default();
+                            if letters.len() > 1
+                                && GetTextExtentPoint32W(
+                                    dc,
+                                    &letters[..letters.len() - 1],
+                                    &mut measured,
+                                )
+                                .as_bool()
+                            {
+                                width += measured.cx;
+                            }
+                            SelectObject(dc, held);
+                            let _ = DeleteObject(font);
+                        }
+                        let room = area.right - area.left;
+                        let mut x = match placed {
+                            Align::Left | Align::Spread => area.left,
+                            Align::Right => area.right - width,
+                            Align::Centre => {
+                                area.left + ((room - width) as f32 / 2.0).ceil() as i32
+                            }
+                        };
+                        for run in &cell.runs {
+                            let (font, size) = piece(run);
+                            let held = SelectObject(dc, font);
+                            // A run can carry its own colour — a red aside in
+                            // a black line — and it goes back afterwards.
+                            if let Some(shade) = run.color.as_deref() {
+                                if !header {
+                                    SetTextColor(dc, colour(Some(shade), 0x0000_0000));
+                                }
+                            }
+                            let letters = wide(&run.text);
+                            if letters.len() > 1 {
+                                let letters = &letters[..letters.len() - 1];
+                                // A raised run sits a third of its own size
+                                // above the line; a lowered one, below it.
+                                let lift = match run.vert_align.as_deref() {
+                                    Some("superscript") => {
+                                        -((size * scale * 96.0 / 72.0) / 2.2).round() as i32
+                                    }
+                                    Some("subscript") => {
+                                        ((size * scale * 96.0 / 72.0) / 4.0).round() as i32
+                                    }
+                                    _ => 0,
+                                };
+                                let _ = TextOutW(dc, x, at + lift, letters);
+                                let mut measured = SIZE::default();
+                                if GetTextExtentPoint32W(dc, letters, &mut measured).as_bool() {
+                                    x += measured.cx;
+                                }
+                            }
+                            SelectObject(dc, held);
+                            let _ = DeleteObject(font);
+                            if run.color.is_some() && !header {
+                                SetTextColor(
+                                    dc,
+                                    colour(cell.style.font_color.as_deref(), 0x0000_0000),
+                                );
+                            }
+                        }
+                    }
+                    for line in lines.iter().filter(|_| !dressed_runs) {
+                        let held = wide(line);
+                        let letters = &held[..held.len() - 1];
+                        if !letters.is_empty() {
+                            let width = width_of(line);
+                            let room = area.right - area.left;
+                            let left = match placed {
+                                Align::Left | Align::Spread => area.left,
+                                Align::Right => area.right - width,
+                                // The odd pixel goes to the left of the text.
+                                Align::Centre => {
+                                    area.left + ((room - width) as f32 / 2.0).ceil() as i32
+                                }
+                            };
+                            // A distributed cell fills its whole width, which
+                            // is how a Japanese sheet sets a heading: 第 ３ 表,
+                            // not 第３表. The gap goes between every pair of
+                            // characters, with half of one at each end.
+                            let spread = placed == Align::Spread
+                                && line.chars().count() > 1
+                                && room > width;
+                            if spread {
+                                let letters_in = line.chars().count() as i32;
+                                let spare = room - width;
+                                let gap = spare / letters_in;
+                                let mut steps: Vec<i32> = Vec::new();
+                                for letter in line.chars() {
+                                    let one = wide(&letter.to_string());
+                                    let mut measured = SIZE::default();
+                                    let advance = if GetTextExtentPoint32W(
+                                        dc,
+                                        &one[..one.len() - 1],
+                                        &mut measured,
+                                    )
+                                    .as_bool()
+                                    {
+                                        measured.cx
+                                    } else {
+                                        0
+                                    };
+                                    // A character written as a surrogate pair
+                                    // takes two of the units GDI steps by.
+                                    for step in 0..letter.len_utf16() {
+                                        steps.push(if step == 0 { advance + gap } else { 0 });
+                                    }
+                                }
+                                let _ = ExtTextOutW(
+                                    dc,
+                                    area.left + gap / 2,
+                                    at,
+                                    ETO_OPTIONS(0),
+                                    None,
+                                    PCWSTR(letters.as_ptr()),
+                                    letters.len() as u32,
+                                    Some(steps.as_ptr()),
+                                );
+                            } else {
+                                let _ = TextOutW(dc, left, at, letters);
+                            }
+                        }
+                        at += line_px;
+                    }
+                    SelectClipRgn(dc, None);
+                    let _ = DeleteObject(clip);
 
                     SelectObject(dc, previous_font);
                     let _ = DeleteObject(font);
@@ -1660,6 +1895,17 @@ mod windows_draw {
 #[cfg(test)]
 mod tests {
     use super::{column_pixels, stacked_text};
+
+    /// What a cell is drawn as, line by line. A cell that does not wrap keeps
+    /// its own breaks and nothing else; an empty stretch between two breaks is
+    /// a line of its own, which the row was measured for.
+    #[test]
+    fn a_cell_is_drawn_as_the_lines_its_row_was_measured_for() {
+        let lines = super::wrapped_lines("Calibri", 11.0, false, false, "one\n\ntwo", None);
+        assert_eq!(lines, vec!["one", "", "two"]);
+        let one = super::wrapped_lines("Calibri", 11.0, false, false, "", None);
+        assert_eq!(one, vec![""]);
+    }
 
     /// A stacked cell is the same thing as text with a break after every
     /// character, which is how its row's height and its drawing both come

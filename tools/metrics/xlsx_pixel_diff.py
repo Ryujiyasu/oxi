@@ -125,6 +125,15 @@ def compare(truth: Image.Image, ours: Image.Image, panel: Path) -> float:
     # element Excel draws and Oxi does not — a rule above the first row, say —
     # moves Excel's ink upward and shifts the whole sheet against itself, which
     # showed as a 3px drift where the true one was 1px.
+    # A picture Excel could not finish is not a difference in drawing. Its
+    # bitmaps stop at 32766 pixels, and a sheet longer than that comes back
+    # cut off — g00200502_indicator is 32766 tall and its sheet is longer —
+    # so the comparison stops where the picture does.
+    if truth.height >= 32760 and ours.height > truth.height:
+        ours = ours.crop((0, 0, ours.width, truth.height))
+    if truth.width >= 32760 and ours.width > truth.width:
+        ours = ours.crop((0, 0, truth.width, ours.height))
+
     width = max(truth.width, ours.width)
     height = max(truth.height, ours.height)
 

@@ -2,14 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Draws a sheet the way Excel does: through Direct2D and DirectWrite rather
-//! than GDI.
+//! Draws a sheet through Direct2D and DirectWrite, beside the GDI path.
 //!
-//! The geometry is the one the GDI path uses — every rule derived from Excel
-//! so far applies unchanged. What differs is the engine the glyphs come out
-//! of. Measured against Excel's own picture, GDI lays down 15% less ink than
-//! Excel does and starts a line up to three pixels off, in a direction that
-//! changes with the font size, which no gutter can correct.
+//! The geometry is the same one — every rule derived from Excel applies to
+//! both. What differs is the engine the glyphs come out of, and that engine
+//! is why this is no longer the path that runs: Excel's sheet text is GDI's
+//! own ClearType, and Direct2D over a WIC bitmap cannot be asked for it.
+//! This is kept reachable with `OXI_XLSX_DWRITE=1`, because a second engine
+//! that agrees about geometry is the cheapest check there is on the first.
 
 use oxicells_core::ir::{CellValue, Sheet};
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
@@ -106,9 +106,72 @@ pub fn draw(
         // asks for ClearType rather than the greyscale the docx side wants
         // against Word's EMF.
         target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+        // Every glyph lands in the same place as Excel's and the edges still
+        // differ, because Excel's are GDI's own ClearType bitmaps. Asking for
+        // GDI-compatible glyphs here does nothing: a Direct2D
+        // target over a WIC bitmap ignores its text rendering parameters
+        // altogether — gamma swept from 1.0 to 2.4 leaves the picture
+        // byte-identical. Excel's edges are GDI's own ClearType, which only
+        // the GDI path can lay down; this is left in as the record of what
+        // was tried.
+        if let Ok(display) = writer.CreateRenderingParams() {
+            if let Ok(alike) = writer.CreateCustomRenderingParams(
+                display.GetGamma(),
+                display.GetEnhancedContrast(),
+                display.GetClearTypeLevel(),
+                display.GetPixelGeometry(),
+                DWRITE_RENDERING_MODE_GDI_CLASSIC,
+            ) {
+                target.SetTextRenderingParams(&alike);
+            }
+        }
 
         let brush = target.CreateSolidColorBrush(&shade(None, 0), None)?;
         let merged = merges(sheet);
+
+        // A table dresses the whole of its range, and not only the cells a
+        // sheet happens to record: doi-list bands eight columns whose rows
+        // stop recording cells two thirds of the way across, and Excel bands
+        // the rest of them all the same. Painted before the cells, so a cell
+        // with a fill of its own still covers it.
+        let recorded: std::collections::HashSet<(u32, u32)> = sheet
+            .rows
+            .iter()
+            .flat_map(|row| row.cells.iter().map(move |cell| (row.index, cell.col)))
+            .collect();
+        for table in &sheet.tables {
+            for row in table.start_row..=table.end_row {
+                let top_at = row.saturating_sub(layout.first_row) as usize;
+                if row < layout.first_row {
+                    continue;
+                }
+                let (Some(top), Some(bottom)) =
+                    (layout.rows.get(top_at), layout.rows.get(top_at + 1))
+                else {
+                    continue;
+                };
+                for column in table.start_col..=table.end_col {
+                    if column < layout.first_column
+                        || recorded.contains(&(row, column))
+                        || matches!(merged.get(&(row, column)), Some(Merged::Covered))
+                    {
+                        continue;
+                    }
+                    let left_at = (column - layout.first_column) as usize;
+                    let (Some(left), Some(right)) =
+                        (layout.columns.get(left_at), layout.columns.get(left_at + 1))
+                    else {
+                        continue;
+                    };
+                    let Some(fill) = dressed_by_table(sheet, row, column).and_then(|d| d.fill)
+                    else {
+                        continue;
+                    };
+                    brush.SetColor(&shade(Some(&fill), 0x00FF_FFFF));
+                    target.FillRectangle(&box_of(*left, *top, *right, *bottom), &brush);
+                }
+            }
+        }
 
         for row in &sheet.rows {
             if row.index < layout.first_row {
@@ -248,10 +311,13 @@ pub fn draw(
                 }
                 let points = cell.style.font_size.unwrap_or(11.0);
                 let face = HSTRING::from(cell.style.font_name.as_deref().unwrap_or("Calibri"));
+                // A table's header row is bold, and no cell inside the range
+                // says so in its own style.
+                let bold = cell.style.bold || matches!(&dress, Some(dress) if dress.bold);
                 let format = writer.CreateTextFormat(
                     PCWSTR(face.as_ptr()),
                     None,
-                    if cell.style.bold {
+                    if bold {
                         DWRITE_FONT_WEIGHT_BOLD
                     } else {
                         DWRITE_FONT_WEIGHT_NORMAL
@@ -292,7 +358,7 @@ pub fn draw(
                 let placed_line = crate::line_box(
                     cell.style.font_name.as_deref().unwrap_or("Calibri"),
                     points,
-                    cell.style.bold,
+                    bold,
                     cell.style.italic,
                 );
                 if let Some((line, baseline)) = placed_line {
@@ -334,7 +400,7 @@ pub fn draw(
                         crate::run_width(
                             cell.style.font_name.as_deref().unwrap_or("Calibri"),
                             points,
-                            cell.style.bold,
+                            bold,
                             cell.style.italic,
                             &text,
                         )

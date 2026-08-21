@@ -36,6 +36,11 @@ try {
             # its window will answer, and CopyPicture wants it active anyway.
             $sh.Activate()
             try { $excel.ActiveWindow.DisplayGridlines = $false } catch {}
+            # A sheet saved in page-break preview shows a blue frame round its
+            # print area, and the picture carries it. That is a property of the
+            # window, not of the sheet, so the window is put back to the normal
+            # view first. xlNormalView = 1.
+            try { $excel.ActiveWindow.View = 1 } catch {}
             # xlScreen = 1, xlBitmap = 2 — what the sheet looks like, not what
             # the printer would be told. The first ask after a workbook opens
             # is often refused and the second one answers, so it is asked again
