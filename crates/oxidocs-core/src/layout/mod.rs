@@ -37753,6 +37753,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 && visual_row_h + 0.4 < row_height
                         })
                         .unwrap_or(false);
+                if std::env::var("OXI_DBG_ROWADV").is_ok() {
+                    eprintln!("[ROWADV] r={} rh={:.3} vrh={:.3} trH={:?} cy={:.2}",
+                        row_idx, row_height, visual_row_h, row.height, cursor.cursor_y);
+                }
                 if self.rowbox2_active() {
                     // ROWBOX2: the border-box is already IN row_height
                     // (cursor-real); the render-only visual pluses
