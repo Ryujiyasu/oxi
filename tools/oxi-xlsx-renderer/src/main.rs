@@ -54,19 +54,57 @@ pub(crate) struct Geometry {
     first_row: u32,
 }
 
-fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
+/// The range to draw, when the caller states one: `OXI_XLSX_RANGE="2,1,140,100"`
+/// is rows 2 to 140 and columns 1 to 100, counted the way a sheet counts them.
+///
+/// Excel's own `UsedRange` is part content and part cache — it leaves out a
+/// row of empty cells in a font of their own in one workbook and keeps the
+/// same thing in another — so a comparison against a picture of it has to be
+/// told which rectangle that was, rather than working it out again and
+/// differing for reasons that are nothing to do with drawing.
+fn stated_extent() -> Option<(u32, u32, u32, u32)> {
+    let held = std::env::var("OXI_XLSX_RANGE").ok()?;
+    let numbers: Vec<u32> = held
+        .split(',')
+        .filter_map(|part| part.trim().parse().ok())
+        .collect();
+    match numbers[..] {
+        [first_row, first_column, last_row, last_column] if first_column >= 1 => Some((
+            first_row,
+            first_column - 1,
+            last_row,
+            last_column.saturating_sub(1),
+        )),
+        _ => None,
+    }
+}
+
+fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
+    if let Some(stated) = stated_extent() {
+        return stated;
+    }
     let mut first_row = u32::MAX;
     let mut last_row = 0;
     let mut first_column = u32::MAX;
     let mut last_column = 0;
     for row in &sheet.rows {
+        // A row with nothing in it but a height of its own, or a format of
+        // its own, is still part of the range Excel hands over: the 8.5pt
+        // spacer at the top of a procurement list is a row like any other.
+        if row.custom_height || row.style_font.is_some() {
+            first_row = first_row.min(row.index);
+            last_row = last_row.max(row.index);
+        }
         for cell in &row.cells {
-            // A cell counts as used when it holds something OR when it is
-            // dressed differently from the workbook's default — a ruled but
-            // empty cell is part of the range Excel hands over, and leaving it
-            // out shifts the whole sheet against Excel's own picture.
+            // A cell counts as used when it holds something, or when it has
+            // something to show: a ruled or filled but empty cell is part of
+            // the range Excel hands over, and leaving it out shifts the whole
+            // sheet against Excel's own picture. A font or a number format is
+            // not something to show — data_A28's first row is a hundred empty
+            // cells in ＭＳ 明朝 11 with a text format, and Excel's own range
+            // starts at the row below it.
             let empty = matches!(cell.value, CellValue::Empty) && cell.formula.is_none();
-            if empty && &cell.style == plain {
+            if empty && cell.style == CellStyle::default() {
                 continue;
             }
             first_row = first_row.min(row.index);
@@ -78,13 +116,18 @@ fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
     // A sheet says how far it reaches, and that can be further than its last
     // filled cell. Excel hands over the declared range when asked for a
     // picture, so text running on past the last cell has somewhere to go.
+    //
+    // Only the far end of it, though. The near end is a cache like the row
+    // heights are: data_A28 declares a range from row 1 while Excel's own
+    // picture starts at row 2, and following the declaration puts an extra
+    // row above the sheet and every row below it out of place.
     if let Some((start_row, start_column, end_row, end_column)) = sheet.declared_range {
         if first_row == u32::MAX {
             return (start_row, start_column, end_row, end_column);
         }
         return (
-            first_row.min(start_row),
-            first_column.min(start_column),
+            first_row,
+            first_column,
             last_row.max(end_row),
             last_column.max(end_column),
         );
@@ -288,6 +331,15 @@ fn row_pixels(
                 continue;
             }
             None => {}
+        }
+        // Stacked text spends a whole line of its font on every character,
+        // and Excel gives the row two pixels beyond them: measured across
+        // three faces and stacks of one to eight characters, a row of N
+        // stands at N lines and two, unless the row's own font wants more.
+        if cell.style.stacked_text && !text.is_empty() {
+            let letters = text.chars().filter(|letter| *letter != '\n').count();
+            raise = raise.max(letters as f32 * font_px as f32 + 2.0);
+            continue;
         }
         // A cell that does not wrap is one line however many breaks it
         // holds: Excel shows "あ\n\nあ" on a single line and leaves the row
@@ -755,8 +807,8 @@ fn fallback_row_points(sheet: &Sheet) -> f32 {
     (stated / 0.75).ceil() * 0.75
 }
 
-fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> Geometry {
-    let (first_row, first_column, last_row, last_column) = used_extent(sheet, plain);
+fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
+    let (first_row, first_column, last_row, last_column) = used_extent(sheet);
 
     let mut columns = vec![0.0];
     for column in first_column..=last_column {
@@ -864,7 +916,7 @@ fn main() {
     // A column is measured in digits of the workbook's standard font, so the
     // sheet cannot be laid out until that digit has been measured.
     let digit_width = digit_width(&workbook.default_style).unwrap_or(FALLBACK_DIGIT_WIDTH);
-    let layout = geometry(sheet, scale, digit_width, &workbook.default_style);
+    let layout = geometry(sheet, scale, digit_width);
     // One pixel past the last edge, because a rule on that edge is drawn there
     // and Excel's own picture is that pixel wider and taller.
     let width = *layout.columns.last().unwrap_or(&0.0) as u32 + 1;
@@ -954,6 +1006,24 @@ pub(crate) fn cell_text(value: &CellValue, style: &CellStyle) -> String {
             style.number_format.as_deref().unwrap_or("General"),
         ),
     }
+}
+
+/// A stacked cell's text, one character to a line.
+///
+/// `textRotation="255"` stands the characters one above the next rather than
+/// turning them on their side, which is how a Japanese form labels a narrow
+/// column. Each character takes a whole line of the font, so the cell is the
+/// same thing as text with a break after every character — and everything
+/// downstream, from the row's height to where each line is drawn, follows.
+pub(crate) fn stacked_text(text: &str) -> String {
+    let mut held = String::with_capacity(text.len() * 2);
+    for letter in text.chars().filter(|letter| *letter != '\n') {
+        if !held.is_empty() {
+            held.push('\n');
+        }
+        held.push(letter);
+    }
+    held
 }
 
 /// Where the text sits across a cell. Excel puts numbers to the right and text
@@ -1589,7 +1659,18 @@ mod windows_draw {
 
 #[cfg(test)]
 mod tests {
-    use super::column_pixels;
+    use super::{column_pixels, stacked_text};
+
+    /// A stacked cell is the same thing as text with a break after every
+    /// character, which is how its row's height and its drawing both come
+    /// out right. Breaks already in the text are not counted twice.
+    #[test]
+    fn stacked_text_puts_every_character_on_its_own_line() {
+        assert_eq!(stacked_text("政府統計"), "政\n府\n統\n計");
+        assert_eq!(stacked_text("A1"), "A\n1");
+        assert_eq!(stacked_text("あ\nい"), "あ\nい");
+        assert_eq!(stacked_text(""), "");
+    }
 
     /// Every pair here was read off a worksheet Excel drew: the stored width on
     /// the left, the pixels its column occupied on the right, with a digit of

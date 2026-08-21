@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,22 @@ RENDERER = (
     REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 )
 SHOOTER = Path(__file__).resolve().parent / "_xlsx_screen_shot.ps1"
+# Which rectangle Excel handed over, per workbook, from xlsx_used_range.py.
+# Excel's UsedRange is part content and part cache, so the renderer is told
+# which one to draw rather than working it out again: what is being compared
+# here is the drawing, and where the range starts is measured on its own.
+RANGES = REPO / "pipeline_data" / "xlsx_used_range.json"
+
+
+def stated_ranges() -> dict[str, str]:
+    if not RANGES.exists():
+        return {}
+    held = json.loads(RANGES.read_text(encoding="utf-8"))
+    return {
+        stem: ",".join(str(number) for number in found["excel"])
+        for stem, found in held.items()
+        if found.get("excel")
+    }
 
 
 def excel_shots(pairs: list[tuple[Path, Path]], out: Path, chunk: int = 25) -> set[Path]:
@@ -227,16 +244,21 @@ def main() -> int:
         print(f"Excel gave up {len(taken)} of {len(sources)} picture(s)")
 
     scores: dict[str, float] = {}
+    ranges = stated_ranges()
     for source in sources:
         stem = source.stem
         truth_png = args.out / f"{stem}.excel.png"
         ours_png = args.out / f"{stem}.oxi.png"
         if truth_png not in taken:
             continue
+        drawing = dict(os.environ)
+        if stem in ranges:
+            drawing["OXI_XLSX_RANGE"] = ranges[stem]
         drawn = subprocess.run(
             [str(RENDERER), str(source), str(ours_png), str(args.dpi)],
             capture_output=True,
             text=True,
+            env=drawing,
         )
         if not ours_png.exists():
             print(f"  Oxi could not draw {source.name}: {drawn.stderr.strip()[:120]}")

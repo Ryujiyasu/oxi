@@ -238,6 +238,11 @@ pub fn draw(
                 }
 
                 let text = cell_text(&cell.value, &cell.style).replace("\r\n", "\n");
+                let text = if cell.style.stacked_text {
+                    crate::stacked_text(&text)
+                } else {
+                    text
+                };
                 if text.is_empty() {
                     continue;
                 }

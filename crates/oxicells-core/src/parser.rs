@@ -328,6 +328,7 @@ struct XfRecord {
     horizontal_align: Option<String>,
     vertical_align: Option<String>,
     wrap_text: bool,
+    stacked_text: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -591,6 +592,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             horizontal_align: None,
                             vertical_align: None,
                             wrap_text: false,
+                            stacked_text: false,
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
                             applies_font: unless_denied(
                                 get_attr(&e, "applyFont").as_deref(),
@@ -611,6 +613,10 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_xf.vertical_align = get_attr(&e, "vertical");
                         current_xf.wrap_text =
                             matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
+                        // 255 is not an angle: it is Excel's way of saying the
+                        // characters stand one above the next.
+                        current_xf.stacked_text =
+                            get_attr(&e, "textRotation").as_deref() == Some("255");
                     }
 
                     // Inside a border element, parse child elements with style attr
@@ -712,6 +718,10 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         current_xf.vertical_align = get_attr(&e, "vertical");
                         current_xf.wrap_text =
                             matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
+                        // 255 is not an angle: it is Excel's way of saying the
+                        // characters stand one above the next.
+                        current_xf.stacked_text =
+                            get_attr(&e, "textRotation").as_deref() == Some("255");
                     }
                     "xf" if section == Section::CellXfs
                         || section == Section::CellStyleXfs =>
@@ -733,6 +743,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             horizontal_align: None,
                             vertical_align: None,
                             wrap_text: false,
+                            stacked_text: false,
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
                             applies_font: unless_denied(
                                 get_attr(&e, "applyFont").as_deref(),
@@ -892,6 +903,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         horizontal_align: xf.horizontal_align.clone(),
         vertical_align: xf.vertical_align.clone(),
         wrap_text: xf.wrap_text,
+        stacked_text: xf.stacked_text,
         border_top: border.top.clone(),
         border_bottom: border.bottom.clone(),
         border_left: border.left.clone(),
