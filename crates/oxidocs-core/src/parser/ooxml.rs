@@ -2302,7 +2302,8 @@ fn parse_paragraph(
                         // number in <w:hyperlink>) get their fldChar sentinels stripped
                         // and their cached result kept/suppressed correctly. Without
                         // this the ToC page numbers rendered with U+FFFE/U+FFFF tofu.
-                        for mut run in hyperlink_runs {
+                        let s1184 = std::env::var("OXI_S1184_DISABLE").is_err();
+                        for (mut run, dr) in hyperlink_runs {
                             if run.field_type.is_some() {
                                 current_field_type = run.field_type.clone();
                             }
@@ -2331,7 +2332,47 @@ fn parse_paragraph(
                                 run.style.underline = false;
                                 run.style.underline_style = None;
                             }
+                            // S1184: hyperlink-wrapped drawings feed the SAME
+                            // machinery as top-level runs (S839 extent mark,
+                            // S854 inline_img_runs routing, shapes, textboxes).
+                            if s1184 {
+                                if let Some(tb) = dr.as_ref().and_then(|d| d.text_box.as_ref()) {
+                                    if !tb.vector_shapes.is_empty()
+                                        && tb.blocks.is_empty()
+                                        && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))
+                                        && tb.position.as_ref().map_or(false, |tp| {
+                                            tp.x == 0.0
+                                                && tp.y == 0.0
+                                                && tp.h_relative.as_deref() == Some("column")
+                                                && tp.v_relative.as_deref() == Some("paragraph")
+                                        })
+                                    {
+                                        run.style.inline_object_extent =
+                                            Some((tb.width, tb.height));
+                                    }
+                                }
+                            }
                             runs.push(run);
+                            if !s1184 {
+                                continue;
+                            }
+                            if let Some(drawing) = dr {
+                                if let Some(image) = drawing.image {
+                                    if std::env::var("OXI_S854_DISABLE").is_err()
+                                        && image.position.is_none()
+                                    {
+                                        inline_img_runs.push((runs.len() - 1, image));
+                                    } else {
+                                        images.push(image);
+                                    }
+                                }
+                                if let Some(shape) = drawing.shape {
+                                    found_shapes.push(shape);
+                                }
+                                if let Some(tb) = drawing.text_box {
+                                    found_text_boxes.push(tb);
+                                }
+                            }
                         }
                     }
                     // Track changes: inserted / deleted / moved content.
@@ -5016,7 +5057,13 @@ fn parse_hyperlink_runs(
     url: Option<String>,
     allow_inline_flow: bool,
     in_cell: bool,
-) -> Result<Vec<Run>, ParseError> {
+) -> Result<Vec<(Run, Option<DrawingResult>)>, ParseError> {
+    // S1184 (2026-08-21): the DrawingResult is returned alongside each run —
+    // it used to be dropped here (`let (run, _dr)`), so EVERY image inside a
+    // <w:hyperlink> vanished from layout and render (creative__0158c02a's
+    // hyperlinked 48×48 Amir Siraj photo: Word line 52.5 vs Oxi 30.8, the
+    // w106-108 cascade). The caller feeds it through the same machinery as
+    // top-level runs.
     let mut runs = Vec::new();
     let mut depth = 0;
 
@@ -5025,9 +5072,9 @@ fn parse_hyperlink_runs(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 if local == "r" && depth == 0 {
-                    let (run, _dr) =
+                    let (run, dr) =
                         parse_run(reader, ctx, styles, url.clone(), allow_inline_flow, in_cell)?;
-                    runs.push(run);
+                    runs.push((run, dr));
                 } else {
                     depth += 1;
                 }
