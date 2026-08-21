@@ -2914,6 +2914,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         n = gdi_wrap_lines(
                                                             mem_dc, &body, inner, inner,
                                                             scale, fs, &family, bold, false,
+                                                            Some((&p.runs[..], 0)),
                                                         )
                                                         .len()
                                                         .max(1);
@@ -3069,6 +3070,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             &family,
                                             bold,
                                             false,
+                                            Some((&p.runs[..], 0)),
                                         );
                                         for line in &lines {
                                             let lw = measure_text_width(
@@ -9812,6 +9814,74 @@ fn master_units(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> 
     Some(sum)
 }
 
+/// The styles a paragraph's runs impose on a candidate line, so the break test
+/// can measure each character at the size and weight it is DRAWN at.
+///
+/// `draw_line_runs` already walks runs by character offset in the paragraph's
+/// concatenated text; this is the same walk on the measuring side. 112 of the
+/// corpus's 6366 non-empty paragraphs switch style mid-paragraph (99 change
+/// weight, 57 size, 11 slant; none change family), and measuring those as one
+/// style breaks them in the wrong place.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct RunStyles<'a> {
+    runs: &'a [oxislides_core::ir::SlideRun],
+    /// Characters of the paragraph already committed to earlier lines.
+    line_start: usize,
+}
+
+/// Per-run master units are used when the paragraph has run styles unless this
+/// is set, which restores measuring the whole line in one style.
+fn runmeasure_on() -> bool {
+    std::env::var("OXI_RUNMEASURE_DISABLE").is_err()
+}
+
+/// Master units for `text`, each character measured at its own run's size and
+/// weight. None when any character's advance is unknown.
+#[cfg(windows)]
+fn master_units_runs(
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    styles: RunStyles<'_>,
+) -> Option<i64> {
+    if text.chars().any(|c| c as u32 > 0xFFFF) {
+        return None;
+    }
+    // Coverage is asked ONCE for the line, as the single-style path does: the
+    // per-character form issued a GDI font creation per character per candidate
+    // prefix, which is quadratic in the paragraph.
+    if !font_has_all_glyphs(family, bold, italic, text) {
+        return None;
+    }
+    let mut sum: i64 = 0;
+    for (i, ch) in text.chars().enumerate() {
+        // Which run owns this character. Runs are contiguous and in order, so
+        // this is a running total, not a search over the whole paragraph.
+        let at = styles.line_start + i;
+        let mut seen = 0usize;
+        let mut run_fs = fs;
+        let mut run_bold = bold;
+        let mut run_italic = italic;
+        for run in styles.runs {
+            let n = run.text.chars().count();
+            if at < seen + n {
+                run_fs = run.font_size.unwrap_or(fs);
+                run_bold = run.bold;
+                run_italic = run.italic;
+                break;
+            }
+            seen += n;
+        }
+        let em = font_adv::hmtx_advance_em(family, ch)
+            .or_else(|| precise_advance_em(family, run_bold, run_italic, ch))?;
+        sum += f64::from(em * run_fs * 8.0).round() as i64;
+    }
+    Some(sum)
+}
+
 /// One fit test for every break site: master units when derivable, the
 /// legacy pixel measure otherwise.
 #[cfg(windows)]
@@ -9826,9 +9896,14 @@ fn fits_line(
     width_pt: f32,
     width_px: i32,
     scale: f64,
+    styles: Option<RunStyles<'_>>,
 ) -> bool {
     if masterunit_on() {
-        if let Some(mu) = master_units(text, fs, family, bold, italic) {
+        let mu = match styles.filter(|_| runmeasure_on()) {
+            Some(s) => master_units_runs(text, fs, family, bold, italic, s),
+            None => master_units(text, fs, family, bold, italic),
+        };
+        if let Some(mu) = mu {
             return mu as f64 / 8.0 <= f64::from(width_pt) + 1e-6;
         }
     }
@@ -10148,6 +10223,7 @@ fn gdi_wrap_lines(
     family: &str,
     bold: bool,
     italic: bool,
+    runs: Option<(&[oxislides_core::ir::SlideRun], usize)>,
 ) -> Vec<String> {
     let first_px = (first_width_pt as f64 * scale).round().max(1.0) as i32;
     let rest_px = (rest_width_pt as f64 * scale).round().max(1.0) as i32;
@@ -10156,6 +10232,15 @@ fn gdi_wrap_lines(
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut current_w = 0i32;
+    // Characters already committed to finished lines: the candidate's offset in
+    // the paragraph, which is what maps a character back to its run.
+    let mut emitted = 0usize;
+    let styles = |start: usize| {
+        runs.map(|(runs, base)| RunStyles {
+            runs,
+            line_start: base + start,
+        })
+    };
     let trim_on = std::env::var("OXI_WRAPTRIM_DISABLE").is_err();
     for word in break_pieces(text) {
         // A line's trailing space HANGS past the right edge -- it is not part
@@ -10173,11 +10258,12 @@ fn gdi_wrap_lines(
             let mut candidate = current.clone();
             candidate.push_str(word);
             let trimmed = candidate.trim_end();
-            fits_line(dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale)
+            fits_line(dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale, styles(emitted))
         } else {
             current_w + gdi_measure_text_px(dc, word) <= width_px
         };
         if !current.is_empty() && !fits {
+            emitted += current.chars().count();
             lines.push(std::mem::take(&mut current));
             current_w = 0;
             // Every line after the first is judged against the continuation
@@ -10196,7 +10282,10 @@ fn gdi_wrap_lines(
             loop {
                 let trimmed = rest.trim_end();
                 if trimmed.is_empty()
-                    || fits_line(dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale)
+                    || fits_line(
+                        dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale,
+                        styles(emitted),
+                    )
                 {
                     break;
                 }
@@ -10206,7 +10295,7 @@ fn gdi_wrap_lines(
                     let end = i + ch.len_utf8();
                     if fits_line(
                         dc, rest[..end].trim_end(), fs, family, bold, italic,
-                        width_pt, width_px, scale,
+                        width_pt, width_px, scale, styles(emitted),
                     ) {
                         last_ok = end;
                     } else {
@@ -10218,6 +10307,7 @@ fn gdi_wrap_lines(
                 } else {
                     rest.char_indices().nth(1).map(|(i, _)| i).unwrap_or(rest.len())
                 };
+                emitted += rest[..take].chars().count();
                 lines.push(rest[..take].to_string());
                 rest = &rest[take..];
                 width_px = rest_px;
@@ -11045,6 +11135,7 @@ fn layout_paragraph_baselines(
         vec![text.clone()]
     } else if softbreak_on() && text.contains('\n') {
         let mut out: Vec<String> = Vec::new();
+        let mut seg_base = 0usize;
         for (si, seg) in text.split('\n').enumerate() {
             if si > 0 {
                 match out.last_mut() {
@@ -11053,8 +11144,11 @@ fn layout_paragraph_baselines(
                 }
             }
             let w = if out.is_empty() { first_w } else { rest_w };
-            let mut part =
-                gdi_wrap_lines(dc, seg, w, rest_w, scale, fs, &family, bold, italic);
+            let mut part = gdi_wrap_lines(
+                dc, seg, w, rest_w, scale, fs, &family, bold, italic,
+                Some((&para.runs[..], seg_base)),
+            );
+            seg_base += seg.chars().count() + 1;
             if part.is_empty() {
                 part.push(String::new());
             }
@@ -11062,7 +11156,10 @@ fn layout_paragraph_baselines(
         }
         out
     } else {
-        gdi_wrap_lines(dc, &text, first_w, rest_w, scale, fs, &family, bold, italic)
+        gdi_wrap_lines(
+            dc, &text, first_w, rest_w, scale, fs, &family, bold, italic,
+            Some((&para.runs[..], 0)),
+        )
     };
     let n_lines = lines.len();
 
