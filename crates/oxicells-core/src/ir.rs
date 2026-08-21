@@ -22,6 +22,17 @@ pub struct Sheet {
     pub col_widths: Vec<f32>,
     pub default_col_width: f32,
     pub default_row_height: f32,
+    /// True when the sheet pins its default row height (customHeight="1").
+    /// Without the pin Excel throws the stated number away and derives the
+    /// height from the fonts the columns wear.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default_row_custom: bool,
+    /// The fonts an unpinned default row height is derived from: every font a
+    /// `<col>` style names, plus the Normal font when any of the sheet's
+    /// columns is left unstyled. `(name, size)` pairs, deduplicated. The
+    /// height Excel gives an untouched row is the tallest of their defaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_font_candidates: Vec<(String, f32)>,
     pub merge_cells: Vec<MergeCell>,
     /// Zero-based indices of the columns that are hidden. Columns have no
     /// record of their own, so this sits beside `col_widths`.

@@ -177,6 +177,8 @@ mod tests {
             col_widths: vec![],
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: vec![],
             hidden_cols: vec![],
             auto_filter: None,

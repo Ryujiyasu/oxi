@@ -22,6 +22,8 @@ fn blank_sheet(name: &str) -> Sheet {
         col_widths: Vec::new(),
         default_col_width: 8.43,
         default_row_height: 15.0,
+        default_row_custom: false,
+        default_font_candidates: vec![],
         merge_cells: Vec::new(),
         hidden_cols: Vec::new(),
         auto_filter: None,

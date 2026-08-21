@@ -19,6 +19,8 @@
 use oxicells_core::ir::{CellStyle, CellValue, Row, Sheet, Workbook};
 use oxicells_core::parser::parse_xlsx;
 
+mod row_defaults;
+
 /// A stored column width already carries the gutter either side of a cell's
 /// text, so it is not the width a person types into Excel: typing 10 stores
 /// 10.625. Pixels come back out of it by OOXML's own rule, which a ruled
@@ -88,6 +90,46 @@ fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
     (first_row, first_column, last_row, last_column)
 }
 
+/// The height of a row the sheet says nothing about. A sheet that pins its
+/// default (customHeight) gets the stated number, given 0.05pt of grace and
+/// floored to the 96-dpi pixel: 17.18 draws 22px but 17.2 draws 23px. A sheet
+/// that does not pin it has the number thrown away — Excel derives the height
+/// from the fonts on show instead, and the tallest one wins. Both rules were
+/// measured on Excel itself (2026-08-21); the stated number only *looks*
+/// honoured in most files because the author's Excel derived it from the same
+/// fonts this rule sees.
+fn default_row_points(sheet: &Sheet) -> f32 {
+    if sheet.default_row_custom && sheet.default_row_height > 0.0 {
+        return ((sheet.default_row_height + 0.05) / 0.75).floor() * 0.75;
+    }
+    let mut tallest: Option<u16> = None;
+    for (face, size) in &sheet.default_font_candidates {
+        match row_defaults::font_default_row_px(face, *size) {
+            Some(px) => tallest = Some(tallest.unwrap_or(0).max(px)),
+            // A font the table has never measured: fall back to the stated
+            // number rather than guess a height for it.
+            None => return fallback_row_points(sheet),
+        }
+    }
+    match tallest {
+        Some(px) => px as f32 * 0.75,
+        None => fallback_row_points(sheet),
+    }
+}
+
+/// The pre-derivation reading of the stated default, kept for sheets whose
+/// fonts the table does not know: rounded UP to the next 0.75, which matched
+/// Excel on most Excel-authored files because their stated number was already
+/// the font-derived one.
+fn fallback_row_points(sheet: &Sheet) -> f32 {
+    let stated = if sheet.default_row_height > 0.0 {
+        sheet.default_row_height
+    } else {
+        DEFAULT_ROW_POINTS
+    };
+    (stated / 0.75).ceil() * 0.75
+}
+
 fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> Geometry {
     let (first_row, first_column, last_row, last_column) = used_extent(sheet, plain);
 
@@ -118,23 +160,12 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
         columns.push(columns.last().unwrap() + width);
     }
 
+    let default_points = default_row_points(sheet);
     let mut rows = vec![0.0];
     for index in first_row..=last_row {
         let held = sheet.rows.iter().find(|row| row.index == index);
         let hidden = held.is_some_and(|row| row.hidden);
-        let points = held.and_then(|row| row.height).unwrap_or_else(|| {
-            // A row Excel draws is a whole number of pixels tall, and a pixel
-            // is 0.75pt, so the height a sheet states as its default is rounded
-            // UP to the next 0.75 before it is used: a sheet saying 13 is drawn
-            // at 13.5, which is 18px. A sheet already stating a multiple — 18.75
-            // for the usual 11pt font — is left where it is.
-            let stated = if sheet.default_row_height > 0.0 {
-                sheet.default_row_height
-            } else {
-                DEFAULT_ROW_POINTS
-            };
-            (stated / 0.75).ceil() * 0.75
-        });
+        let points = held.and_then(|row| row.height).unwrap_or(default_points);
         let height = if hidden {
             0.0
         } else {

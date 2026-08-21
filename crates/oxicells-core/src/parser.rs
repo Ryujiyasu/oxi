@@ -909,6 +909,12 @@ fn parse_worksheet(
     // is a plain count of characters instead, so the two cannot share a value.
     let mut default_col_width: f32 = 0.0;
     let mut default_row_height: f32 = 15.0;
+    let mut default_row_custom = false;
+    // The fonts <col> styles put on their columns, and the columns they cover.
+    // An unpinned default row height is derived from these, not from the
+    // number the sheet states.
+    let mut col_style_fonts: Vec<(String, f32)> = Vec::new();
+    let mut styled_col_runs: Vec<(u32, u32)> = Vec::new();
     let mut merge_cells: Vec<MergeCell> = Vec::new();
 
     // State tracking
@@ -1126,6 +1132,8 @@ fn parse_worksheet(
                                 default_row_height = h;
                             }
                         }
+                        default_row_custom =
+                            is_true(get_attr(&e, "customHeight").as_deref());
                         if let Some(v) = get_attr(&e, "defaultColWidth") {
                             if let Ok(w) = v.parse::<f32>() {
                                 default_col_width = w;
@@ -1207,6 +1215,25 @@ fn parse_worksheet(
                                 hidden_cols.push(c - 1);
                             }
                         }
+                        // A column's style puts a font on every cell in it,
+                        // and the sheet's unpinned default row height is the
+                        // tallest default among those fonts.
+                        if let Some(si) =
+                            get_attr(&e, "style").and_then(|v| v.parse::<usize>().ok())
+                        {
+                            let style = resolve_cell_style(si, stylesheet);
+                            if let (Some(name), Some(size)) =
+                                (style.font_name, style.font_size)
+                            {
+                                if !col_style_fonts
+                                    .iter()
+                                    .any(|(n, s)| *n == name && *s == size)
+                                {
+                                    col_style_fonts.push((name, size));
+                                }
+                                styled_col_runs.push((min_col, max_col_attr));
+                            }
+                        }
                     }
 
                     // <mergeCell ref="A1:C3"/>
@@ -1260,6 +1287,37 @@ fn parse_worksheet(
         col_widths.resize(col_count, 0.0);
     }
 
+    // The Normal font joins the candidates unless <col> styles dress every
+    // one of the 16384 columns — a partly styled sheet still shows Normal on
+    // the rest, and the default row height is the tallest default among the
+    // fonts on show.
+    let default_font_candidates = {
+        let mut candidates = col_style_fonts;
+        styled_col_runs.sort_unstable();
+        let mut next_uncovered = 1u32;
+        for (min, max) in &styled_col_runs {
+            if *min > next_uncovered {
+                break;
+            }
+            next_uncovered = next_uncovered.max(max + 1);
+        }
+        if next_uncovered <= 16384 {
+            let normal_font_id = stylesheet
+                .cell_style_xfs
+                .first()
+                .map(|xf| xf.font_id)
+                .unwrap_or(0);
+            if let Some(font) = stylesheet.fonts.get(normal_font_id) {
+                if let (Some(name), Some(size)) = (font.name.clone(), font.size) {
+                    if !candidates.iter().any(|(n, s)| *n == name && *s == size) {
+                        candidates.push((name, size));
+                    }
+                }
+            }
+        }
+        candidates
+    };
+
     Ok(Sheet {
         tables: Vec::new(),
         name: sheet_name.to_string(),
@@ -1268,6 +1326,8 @@ fn parse_worksheet(
         col_widths,
         default_col_width,
         default_row_height,
+        default_row_custom,
+        default_font_candidates,
         merge_cells,
         auto_filter,
         declared_range,
