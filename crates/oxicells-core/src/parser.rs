@@ -48,6 +48,20 @@ fn note_unsupported(name: &str, noted: &mut Vec<String>) {
 fn is_true(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
 }
+
+/// Whether a cell format applies a part of itself, rather than taking that
+/// part from the named style it is built on.
+///
+/// Absent is not the same as `0` here. Excel leaves the flag off when the
+/// format's own value is the one to use, and writes `applyFont="0"` when it
+/// is not — a cell that draws its blue underline from the Hyperlink style
+/// says so explicitly. Writers that are not Excel commonly leave every flag
+/// off while still naming a font on each cell, and reading absent as "do not
+/// apply" throws that font away and draws the whole sheet in the workbook's
+/// default face.
+fn unless_denied(value: Option<&str>) -> bool {
+    !matches!(value, Some("0") | Some("false"))
+}
 use oxidocs_common::xml_utils::{get_attr, local_name};
 
 use crate::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
@@ -578,10 +592,16 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             vertical_align: None,
                             wrap_text: false,
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
-                            applies_font: is_true(get_attr(&e, "applyFont").as_deref()),
-                            applies_fill: is_true(get_attr(&e, "applyFill").as_deref()),
-                            applies_border: is_true(get_attr(&e, "applyBorder").as_deref()),
-                            applies_number_format: is_true(
+                            applies_font: unless_denied(
+                                get_attr(&e, "applyFont").as_deref(),
+                            ),
+                            applies_fill: unless_denied(
+                                get_attr(&e, "applyFill").as_deref(),
+                            ),
+                            applies_border: unless_denied(
+                                get_attr(&e, "applyBorder").as_deref(),
+                            ),
+                            applies_number_format: unless_denied(
                                 get_attr(&e, "applyNumberFormat").as_deref(),
                             ),
                         };
@@ -714,10 +734,16 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             vertical_align: None,
                             wrap_text: false,
                             style_id: get_attr(&e, "xfId").and_then(|v| v.parse().ok()),
-                            applies_font: is_true(get_attr(&e, "applyFont").as_deref()),
-                            applies_fill: is_true(get_attr(&e, "applyFill").as_deref()),
-                            applies_border: is_true(get_attr(&e, "applyBorder").as_deref()),
-                            applies_number_format: is_true(
+                            applies_font: unless_denied(
+                                get_attr(&e, "applyFont").as_deref(),
+                            ),
+                            applies_fill: unless_denied(
+                                get_attr(&e, "applyFill").as_deref(),
+                            ),
+                            applies_border: unless_denied(
+                                get_attr(&e, "applyBorder").as_deref(),
+                            ),
+                            applies_number_format: unless_denied(
                                 get_attr(&e, "applyNumberFormat").as_deref(),
                             ),
                         };
@@ -818,7 +844,22 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
     let fill_id = inherited(xf.applies_fill, xf.fill_id, |xf| xf.fill_id);
     let border_id = inherited(xf.applies_border, xf.border_id, |xf| xf.border_id);
 
-    let font = stylesheet.fonts.get(font_id).cloned().unwrap_or_default();
+    let mut font = stylesheet.fonts.get(font_id).cloned().unwrap_or_default();
+    // A font record that names no face, or no size, is not asking for the
+    // reader's own default: it is saying "the workbook's font, in bold" —
+    // which is how a generated header row is written. The parts it leaves out
+    // come from the Normal style's font.
+    if font.name.is_none() || font.size.is_none() {
+        let normal = stylesheet
+            .cell_style_xfs
+            .first()
+            .map(|xf| xf.font_id)
+            .and_then(|id| stylesheet.fonts.get(id));
+        if let Some(normal) = normal {
+            font.name = font.name.or_else(|| normal.name.clone());
+            font.size = font.size.or(normal.size);
+        }
+    }
     let fill = stylesheet.fills.get(fill_id).cloned().unwrap_or_default();
     let border = stylesheet
         .borders
@@ -1006,6 +1047,14 @@ fn parse_worksheet(
     let mut value_text = String::new();
     let mut in_formula = false;
     let mut formula_text = String::new();
+    // A cell may carry its text itself, in an <is>, instead of pointing into
+    // the shared table. Anything that writes a sheet without building that
+    // table does it this way. Its text sits in <t> elements, and its phonetic
+    // guides in <rPh><t>, which are no more part of the cell's text here than
+    // they are in a shared string.
+    let mut in_inline = false;
+    let mut in_inline_text = false;
+    let mut in_inline_phonetic = false;
 
     // Section tracking
     let mut in_merge_cells = false;
@@ -1099,6 +1148,13 @@ fn parse_worksheet(
                         in_value = true;
                         value_text.clear();
                     }
+                    "is" if in_cell => {
+                        in_inline = true;
+                        in_inline_phonetic = false;
+                        value_text.clear();
+                    }
+                    "rPh" if in_inline => in_inline_phonetic = true,
+                    "t" if in_inline && !in_inline_phonetic => in_inline_text = true,
                     "cols" => {
                         // We'll handle col elements inside
                     }
@@ -1174,6 +1230,12 @@ fn parse_worksheet(
                     "v" => {
                         in_value = false;
                     }
+                    "is" => {
+                        in_inline = false;
+                        in_inline_text = false;
+                    }
+                    "rPh" => in_inline_phonetic = false,
+                    "t" => in_inline_text = false,
                     "mergeCells" => {
                         in_merge_cells = false;
                     }
@@ -1184,7 +1246,7 @@ fn parse_worksheet(
                 if in_formula {
                     let text = e.unescape()?.to_string();
                     formula_text.push_str(&text);
-                } else if in_value {
+                } else if in_value || in_inline_text {
                     let text = e.unescape()?.to_string();
                     value_text.push_str(&text);
                 }
@@ -1615,6 +1677,38 @@ mod tests {
         assert_eq!(held, vec!["区分", "山田太郎", "plain"]);
     }
 
+    /// A cell can hold its own text instead of pointing into the shared table.
+    /// Whole sheets are written that way by anything that streams a workbook
+    /// out without building the table first, and Excel shows them like any
+    /// other text — so a reader that only looks in <v> draws an empty sheet.
+    #[test]
+    fn inline_strings_are_read_from_the_cell() {
+        let xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Ag亜</t></is></c>
+      <c r="B1" t="inlineStr"><is><r><t>half </t></r><r><t>and half</t></r></is></c>
+      <c r="C1" t="inlineStr"><is><t>区分</t><rPh sb="0" eb="2"><t>クブン</t></rPh></is></c>
+      <c r="D1"><v>42</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+        let sheet = parse_worksheet(xml, "probe", &[], &StyleSheet::default())
+            .expect("should parse");
+        let cells = &sheet.rows[0].cells;
+        let text_of = |cell: &Cell| match &cell.value {
+            CellValue::String(held) => held.clone(),
+            other => panic!("wanted text, found {other:?}"),
+        };
+        assert_eq!(text_of(&cells[0]), "Ag亜");
+        assert_eq!(text_of(&cells[1]), "half and half");
+        // A phonetic guide is no more part of the text here than in a shared
+        // string: Excel shows 区分, not 区分クブン.
+        assert_eq!(text_of(&cells[2]), "区分");
+        assert!(matches!(cells[3].value, CellValue::Number(n) if n == 42.0));
+    }
+
     /// Shared strings that are all dressed alike, which is what most tests want.
     fn shared(texts: &[&str]) -> Vec<SharedString> {
         texts
@@ -1744,6 +1838,66 @@ mod tests {
         assert_eq!(parse_range_ref("A1:C3"), Some((0, 1, 2, 3)));
         assert_eq!(parse_range_ref("B2:D5"), Some((1, 2, 3, 5)));
         assert_eq!(parse_range_ref("A1"), None);
+    }
+
+    /// A cell format that names a font and says nothing about applying it is
+    /// using that font. Only an explicit `applyFont="0"` sends the reader to
+    /// the named style the format is built on — which is how a hyperlink keeps
+    /// its blue underline. Files written by anything other than Excel
+    /// routinely leave every flag off, so reading absent as "do not apply"
+    /// draws whole workbooks in the wrong face.
+    #[test]
+    fn a_font_is_applied_unless_the_format_denies_it() {
+        let xml = r##"<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><sz val="10"/><name val="ＭＳ ゴシック"/></font>
+    <font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font>
+  </fonts>
+  <cellStyleXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="1" applyFont="0"/>
+  </cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+        let named = resolve_cell_style(1, &sheet);
+        assert_eq!(named.font_name.as_deref(), Some("ＭＳ ゴシック"));
+        assert_eq!(named.font_size, Some(10.0));
+        let denied = resolve_cell_style(2, &sheet);
+        assert!(denied.underline, "should wear the style's own font");
+    }
+
+    /// A generated header row is written as `<font><b/></font>` — bold, and
+    /// nothing else. The face and size it leaves out are the workbook's, not
+    /// the reader's idea of a default: read otherwise, every such row is drawn
+    /// in the wrong face and stands the wrong height.
+    #[test]
+    fn a_font_that_names_no_face_wears_the_workbook_s() {
+        let xml = r##"<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><name val="ＭＳ Ｐゴシック"/><sz val="9"/></font>
+    <font><b val="1"/><color rgb="00FFFFFF"/></font>
+  </fonts>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0"/>
+  </cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+        let header = resolve_cell_style(1, &sheet);
+        assert!(header.bold);
+        assert_eq!(header.font_name.as_deref(), Some("ＭＳ Ｐゴシック"));
+        assert_eq!(header.font_size, Some(9.0));
     }
 
     #[test]
