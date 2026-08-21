@@ -290,6 +290,10 @@ pub struct Shape {
     pub fill_alpha: Option<f32>,
     pub border_color: Option<String>, // hex color for outline
     pub border_width: Option<f32>,    // border width in points
+    /// `a:ln/a:prstDash/@val` — "dash", "dot", "lgDashDot" and friends. None
+    /// (or "solid") is an unbroken line.
+    #[serde(default)]
+    pub border_dash: Option<String>,
     /// Text-area insets from a:bodyPr (lIns/rIns/tIns/bIns) in points.
     /// A placeholder with no bodyPr inset uses 7.2 / 7.2 / 3.6 / 3.6; a textbox
     /// carries its own insets (e.g. lIns=914400 EMU = 72pt). The left text

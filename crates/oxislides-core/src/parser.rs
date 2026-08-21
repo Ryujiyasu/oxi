@@ -986,6 +986,7 @@ fn parse_slide(
     let mut shape_fill_alpha: Option<f32> = None;
     let mut shape_border_color: Option<String> = None;
     let mut shape_border_width: Option<f32> = None;
+    let mut shape_border_dash: Option<String> = None;
     // Placeholder identity (p:ph type/idx from nvPr) and whether spPr had an
     // explicit xfrm. Spec #3: a placeholder without an explicit xfrm inherits
     // its geometry from the referenced slideLayout's matching placeholder.
@@ -1511,12 +1512,18 @@ fn parse_slide(
                     }
                     "ln" if in_sp_pr => {
                         in_ln = true;
+                        shape_border_dash = None;
                         // Width attribute in EMU; 12700 EMU = 1pt
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
                                 shape_border_width = Some(v / 12700.0);
                             }
                         }
+                    }
+                    // `a:prstDash` is self-closing, so it arrives on the Empty
+                    // arm as well -- both are routed here.
+                    "prstDash" if in_ln => {
+                        shape_border_dash = get_attr(&e, "val").filter(|v| v != "solid");
                     }
                     "off" if in_grp_xfrm => {
                         if let Some(x) = get_attr(&e, "x") {
@@ -1926,11 +1933,18 @@ fn parse_slide(
                     }
                     "ln" if in_sp_pr => {
                         // Empty <a:ln/> — no border content, just attributes
+                        shape_border_dash = None;
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
                                 shape_border_width = Some(v / 12700.0);
                             }
                         }
+                    }
+                    // `<a:prstDash val="dash"/>` is ALWAYS self-closing, so this
+                    // Empty arm is the one that actually fires; the Start arm
+                    // above exists only for symmetry.
+                    "prstDash" if in_ln => {
+                        shape_border_dash = get_attr(&e, "val").filter(|v| v != "solid");
                     }
                     "xfrm" if in_shape => {
                         shape_has_xfrm = true;
@@ -2518,6 +2532,7 @@ fn parse_slide(
                             fill_alpha: shape_fill_alpha.take(),
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
+                            border_dash: shape_border_dash.take(),
                             l_ins: shape_l_ins,
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
@@ -2682,6 +2697,7 @@ fn parse_slide(
                             fill_alpha: shape_fill_alpha.take(),
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
+                            border_dash: shape_border_dash.take(),
                             l_ins: shape_l_ins,
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
@@ -3455,6 +3471,10 @@ fn parse_inherited_shapes(
                                         },
                                         border_color: bc,
                                         border_width: bw,
+                                        // Group members carry no dash yet; the
+                                        // corpus states prstDash on top-level
+                                        // shapes and connectors only.
+                                        border_dash: None,
                                         l_ins: default_l_ins(),
                                         r_ins: default_r_ins(),
                                         t_ins: default_t_ins(),

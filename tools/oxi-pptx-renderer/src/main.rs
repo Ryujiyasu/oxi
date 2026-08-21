@@ -875,10 +875,11 @@ unsafe fn draw_custom_geometry_gdi(
             .as_deref()
             .and_then(parse_hex_rgb)
             .unwrap_or((0, 0, 0));
-        Some(CreatePen(
-            PS_SOLID,
+        Some(outline_pen(
             (border_w as f64 * scale).round().max(1.0) as i32,
-            COLORREF(colorref(c.0, c.1, c.2)),
+            colorref(c.0, c.1, c.2),
+            sh.border_dash.as_deref(),
+            border_w as f64 * scale,
         ))
     } else {
         None
@@ -1906,6 +1907,88 @@ fn openpath_on() -> bool {
     std::env::var("OXI_OPENPATH_DISABLE").is_err()
 }
 
+/// A line is drawn broken when its `a:prstDash` says so unless this is set.
+fn prstdash_on() -> bool {
+    std::env::var("OXI_PRSTDASH_DISABLE").is_err()
+}
+
+/// The on/off run lengths of a `prstDash` preset, in multiples of the LINE
+/// WIDTH.
+///
+/// Read out of PowerPoint's own PDFs (`tools/metrics/read_pptx_dash.py`): every
+/// dashed stroke in the dev corpus carries its pattern verbatim in the PDF's
+/// `d` operator, and dividing by the stroke width gives the same small integers
+/// at every width from 0.75pt to 6pt — dash `[3 2.25]` at 0.75pt and
+/// `[24 18]` at 6pt are both 4 on / 3 off. The `sys*` presets are the
+/// ECMA-376 §20.1.10.49 values; the corpus does not use them, so they are not
+/// measured.
+fn dash_pattern(preset: &str) -> Option<&'static [u32]> {
+    Some(match preset {
+        "dot" => &[1, 3],
+        "dash" => &[4, 3],
+        "lgDash" => &[8, 3],
+        "dashDot" => &[4, 3, 1, 3],
+        "lgDashDot" => &[8, 3, 1, 3],
+        "lgDashDotDot" => &[8, 3, 1, 3, 1, 3],
+        "sysDash" => &[3, 1],
+        "sysDot" => &[1, 1],
+        "sysDashDot" => &[3, 1, 1, 1],
+        "sysDashDotDot" => &[3, 1, 1, 1, 1, 1],
+        _ => return None,
+    })
+}
+
+/// A pen for a shape outline: broken when the shape declares a `prstDash`.
+///
+/// `CreatePen`'s PS_DASH is cosmetic — it is ignored for any pen wider than one
+/// pixel, which is most of them — so a wide dashed line needs a GEOMETRIC pen
+/// with an explicit user style in device units.
+#[cfg(windows)]
+fn outline_pen(
+    width_px: i32,
+    color: u32,
+    dash: Option<&str>,
+    width_dev: f64,
+) -> windows::Win32::Graphics::Gdi::HPEN {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+
+    let pattern = dash.filter(|_| prstdash_on()).and_then(dash_pattern);
+    let Some(pattern) = pattern else {
+        return unsafe { CreatePen(PS_SOLID, width_px, COLORREF(color)) };
+    };
+    // The run lengths are multiples of the TRUE line width, not of the pen's
+    // rounded integer width: a 0.75pt line at this scale is 4.7 device units,
+    // and rounding it to 5 first stretches every dash by 6%.
+    let unit = if width_dev > 0.0 {
+        width_dev
+    } else {
+        width_px.max(1) as f64
+    };
+    let style: Vec<u32> = pattern
+        .iter()
+        .map(|n| ((f64::from(*n) * unit).round() as u32).max(1))
+        .collect();
+    let brush = LOGBRUSH {
+        lbStyle: BS_SOLID,
+        lbColor: COLORREF(color),
+        lbHatch: 0,
+    };
+    unsafe {
+        let pen = ExtCreatePen(
+            PS_GEOMETRIC | PS_USERSTYLE | PS_ENDCAP_FLAT | PS_JOIN_MITER,
+            width_px.max(1) as u32,
+            &brush,
+            Some(&style),
+        );
+        if pen.is_invalid() {
+            CreatePen(PS_SOLID, width_px, COLORREF(color))
+        } else {
+            pen
+        }
+    }
+}
+
 /// A cell spans the columns its `gridSpan` claims unless this is set, which
 /// restores giving every cell exactly one column.
 fn hmerge_on() -> bool {
@@ -2378,10 +2461,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         let (ax, ay) = map(x0, y0);
                         let (bx, by) = map(x1, y1);
-                        let pen = CreatePen(
-                            PS_SOLID,
+                        let pen = outline_pen(
                             (bw as f64 * scale).round().max(1.0) as i32,
-                            COLORREF(colorref(col.0, col.1, col.2)),
+                            colorref(col.0, col.1, col.2),
+                            sh.border_dash.as_deref(),
+                            bw as f64 * scale,
                         );
                         let old_pen = SelectObject(mem_dc, pen);
                         let _ = MoveToEx(mem_dc, ax, ay, None);
@@ -2475,10 +2559,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         .as_deref()
                         .and_then(parse_hex_rgb)
                         .unwrap_or((0, 0, 0));
-                    let pen = CreatePen(
-                        PS_SOLID,
+                    let pen = outline_pen(
                         (border_w as f64 * scale).round() as i32,
-                        COLORREF(colorref(col.0, col.1, col.2)),
+                        colorref(col.0, col.1, col.2),
+                        sh.border_dash.as_deref(),
+                        border_w as f64 * scale,
                     );
                     let old_pen = SelectObject(mem_dc, pen);
                     let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
