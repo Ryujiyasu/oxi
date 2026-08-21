@@ -115,9 +115,11 @@ fn face_matches(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool) 
     if !fam_ok {
         return false;
     }
-    for rec in font.localized_strings(skrifa::string::StringId::SUBFAMILY_NAME) {
+    if let Some(rec) = font
+        .localized_strings(skrifa::string::StringId::SUBFAMILY_NAME)
+        .next()
+    {
         style = rec.to_string().to_ascii_lowercase();
-        break;
     }
     let has_bold = style.contains("bold");
     let has_italic = style.contains("italic") || style.contains("oblique");
