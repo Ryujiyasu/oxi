@@ -3711,14 +3711,21 @@ impl LayoutEngine {
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut pages_out: Vec<LayoutPage> = Vec::new();
         let mut band = 0usize;
-        let mut line_x = right - line_pitch; // leftmost x of the rightmost line
-                                             // S759 (2026-07-06): multi-page vertical writing. The v1 (S679) BROKE
-                                             // out of the loops when the last band filled — a 5-page probevert
-                                             // rendered 1 page and DROPPED 47/60 paragraphs (the gate-masked
-                                             // content-loss class, honest FAIL since S724). Now a full page is
-                                             // finalized (with its band separators) and layout continues on a
-                                             // fresh page. Single-page docs (albaluna×3) never overflow → the
-                                             // finalize path never runs → byte-identical.
+        // S1185b: `next_right` = the right edge available to the NEXT column.
+        // A leftward advance means a new column's box is
+        // [next_right − its_own_pitch, next_right], so the step into a column
+        // uses THAT column's pitch — the old `line_x = right - line_pitch` seed
+        // charged the page-level pitch (047ff775: Word's first column box is
+        // [right−36, right]; the old seed put it at right−18) and mixed-pitch
+        // adjacency stepped with the previous paragraph's pitch.
+        // S759 (2026-07-06): multi-page vertical writing. The v1 (S679) BROKE
+        // out of the loops when the last band filled — a 5-page probevert
+        // rendered 1 page and DROPPED 47/60 paragraphs (the gate-masked
+        // content-loss class, honest FAIL since S724). Now a full page is
+        // finalized (with its band separators) and layout continues on a
+        // fresh page. Single-page docs (albaluna×3) never overflow → the
+        // finalize path never runs → byte-identical.
+        let mut next_right = right;
         let sep_needed = page.columns.as_ref().map_or(false, |c| c.separator) && num_bands > 1;
         let push_separators = |els: &mut Vec<LayoutElement>| {
             if !sep_needed {
@@ -3768,7 +3775,7 @@ impl LayoutEngine {
                     elements: std::mem::take(&mut elements),
                 });
                 band = 0;
-                line_x = right - line_pitch;
+                next_right = right;
             }
             let style = para
                 .runs
@@ -3808,18 +3815,65 @@ impl LayoutEngine {
             //     exact stays the value; atLeast = max(value, cells × pitch)
             //     boundary: sz19 nat 12.81 -> 256tw = the pitch -> 1 cell;
             //               sz20 nat 13.49 -> 270tw -> 2 cells
-            // Real anchors: 047ff775 / 01535587 (游明朝 10.5 nat 18.375 ->
-            // 368tw > 360 -> 2 cells = the 36pt columns Word shows, W17/O11 and
+            // Real anchors: 047ff775 / 01535587 (メイリオ 10.5 nat 20.43 ->
+            // 409tw > 360 -> 2 cells = the 36pt columns Word shows, W17/O11 and
             // W13/O8 pcd craters). Their EMPTY paragraphs also advance 36
             // (truth x-walk) — no S195-style 0.5pt shrink in vertical, so the
             // same cells apply to the empty arm below.
+            // S1185c: the basis is the MAX over the paragraph's runs (a column
+            // is as wide as its tallest run, exactly like a horizontal line's
+            // height) PLUS the ruby expansion. Both were measured on the same
+            // _pb_vertpitch round (12.8 grid, MS明朝/メイリオ 8pt):
+            //     msm_bold  1 cell  = msm plain    -> BOLD does NOT widen
+            //     mei_plain 2 cells = mei_bold     -> the face does
+            //     msm_ruby  2 cells (Word) vs 1 (Oxi before this) -> RUBY DOES
+            // i.e. natural 10.375 + ruby_expansion 3.75 = 14.1 > 12.8. The
+            // expansion is the SAME `paragraph_ruby_expansion_pt` the
+            // horizontal grid path uses (S752), so one rule covers both axes.
             let s1185_cells: f32 = if std::env::var("OXI_S1185_DISABLE").is_err() {
                 if let Some(pitch) = page.grid_line_pitch {
-                    let m = self.metrics_for_text(&para_text, &style, &para.style);
-                    let nat = m.word_line_height_no_grid(fs);
+                    // An empty paragraph has no runs, so its fonts live in the
+                    // pPr/rPr mark properties — route it through the ¶-mark
+                    // resolution with ppr_rpr, the same convention as every
+                    // horizontal empty-para site (047ff775's empties are
+                    // メイリオ 10.5 → 83/64 natural 20.4 → 2 cells; the truth
+                    // x-walk shows every empty advancing 36).
+                    let (m, nat_fs) = if para_text.chars().all(|c| c.is_whitespace()) {
+                        let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                        let mark_fs = self.resolve_font_size(&rpr, &para.style);
+                        (self.metrics_for_para_mark(&rpr, &para.style), mark_fs)
+                    } else {
+                        (self.metrics_for_text(&para_text, &style, &para.style), fs)
+                    };
+                    let mut nat = m.word_line_height_no_grid(nat_fs);
+                    for run in &para.runs {
+                        if run.text.chars().all(|c| c.is_whitespace()) {
+                            continue;
+                        }
+                        let rfs = self.resolve_font_size(&run.style, &para.style);
+                        let rm = self.metrics_for_text(&run.text, &run.style, &para.style);
+                        nat = nat.max(rm.word_line_height_no_grid(rfs));
+                    }
+                    nat += ruby::paragraph_ruby_expansion_pt(&para.runs, fs);
                     let h_tw = (nat * 20.0).round();
                     let pitch_tw = (pitch * 20.0).round().max(1.0);
-                    (h_tw / pitch_tw).ceil().max(1.0)
+                    let cells = (h_tw / pitch_tw).ceil().max(1.0);
+                    if std::env::var("OXI_DBGVERT").is_ok() {
+                        eprintln!(
+                            "[DBGVERT] blk={} fam={:?} 83/64={} fs={:.2} nat={:.3} \
+h_tw={} pitch_tw={} cells={} text={:?}",
+                            block_idx,
+                            m.family,
+                            m.is_cjk_83_64_font(),
+                            nat_fs,
+                            nat,
+                            h_tw,
+                            pitch_tw,
+                            cells,
+                            para_text.chars().take(14).collect::<String>()
+                        );
+                    }
+                    cells
                 } else {
                     1.0
                 }
@@ -3849,37 +3903,59 @@ impl LayoutEngine {
                 }
             };
 
-            // Empty paragraph: occupies one (blank) line.
+            // S1185b: one band/page wrap, shared by every placement site.
+            let mut wrap_band = |elements: &mut Vec<LayoutElement>,
+                                 pages_out: &mut Vec<LayoutPage>,
+                                 band: &mut usize| {
+                *band += 1;
+                if *band >= num_bands {
+                    push_separators(elements);
+                    pages_out.push(LayoutPage {
+                        width: page_w,
+                        height: page_h,
+                        elements: std::mem::take(elements),
+                    });
+                    *band = 0;
+                }
+            };
+
+            // Empty paragraph: occupies one (blank) column of its own pitch.
             if para_text.chars().all(|c| c.is_whitespace()) {
-                line_x -= line_pitch;
-                if line_x < left - 0.01 {
-                    band += 1;
-                    line_x = right - line_pitch;
-                    if band >= num_bands {
-                        push_separators(&mut elements);
-                        pages_out.push(LayoutPage {
-                            width: page_w,
-                            height: page_h,
-                            elements: std::mem::take(&mut elements),
-                        });
-                        band = 0;
-                    }
+                let nl = next_right - line_pitch;
+                if nl < left - 0.01 {
+                    // Band boundary absorbs the empty (the next paragraph takes
+                    // the fresh band's first slot) — unchanged behaviour.
+                    wrap_band(&mut elements, &mut pages_out, &mut band);
+                    next_right = right;
+                } else {
+                    next_right = nl;
                 }
                 continue;
             }
 
             // Lay the paragraph's chars into vertical lines (each line starts at
-            // the band top and runs down; wrap to the next line leftward).
+            // the band top and runs down; wrap to the next line leftward). Each
+            // column's box is [next_right − line_pitch, next_right].
             let mut buf: Vec<char> = Vec::new();
             let mut cur_y = band_top(band);
             let mut buf_top = cur_y;
-            for ch in para_text.chars() {
-                if cur_y + char_adv > band_bottom(band) + 0.01 && !buf.is_empty() {
-                    // Flush this line, move to the next line (leftward).
+            let mut flush =
+                |buf: &mut Vec<char>,
+                 buf_top: f32,
+                 elements: &mut Vec<LayoutElement>,
+                 pages_out: &mut Vec<LayoutPage>,
+                 band: &mut usize,
+                 next_right: &mut f32| {
+                    let mut lx = *next_right - line_pitch;
+                    if lx < left - 0.01 {
+                        wrap_band(elements, pages_out, band);
+                        *next_right = right;
+                        lx = right - line_pitch;
+                    }
                     let n = buf.len() as f32;
                     elements.push(self.vertical_line_element(
-                        buf.iter().collect(),
-                        line_x,
+                        buf.drain(..).collect(),
+                        lx,
                         buf_top,
                         line_pitch,
                         n * char_adv,
@@ -3890,21 +3966,13 @@ impl LayoutEngine {
                         &para.style,
                         block_idx,
                     ));
-                    buf.clear();
-                    line_x -= line_pitch;
-                    if line_x < left - 0.01 {
-                        band += 1;
-                        line_x = right - line_pitch;
-                        if band >= num_bands {
-                            push_separators(&mut elements);
-                            pages_out.push(LayoutPage {
-                                width: page_w,
-                                height: page_h,
-                                elements: std::mem::take(&mut elements),
-                            });
-                            band = 0;
-                        }
-                    }
+                    *next_right = lx;
+                };
+            for ch in para_text.chars() {
+                if cur_y + char_adv > band_bottom(band) + 0.01 && !buf.is_empty() {
+                    // Flush this line, move to the next line (leftward).
+                    flush(&mut buf, buf_top, &mut elements, &mut pages_out,
+                          &mut band, &mut next_right);
                     cur_y = band_top(band);
                     buf_top = cur_y;
                 }
@@ -3912,35 +3980,8 @@ impl LayoutEngine {
                 cur_y += char_adv;
             }
             if !buf.is_empty() {
-                let n = buf.len() as f32;
-                elements.push(self.vertical_line_element(
-                    buf.iter().collect(),
-                    line_x,
-                    buf_top,
-                    line_pitch,
-                    n * char_adv,
-                    fs,
-                    char_adv - fs,
-                    &font_family,
-                    &style,
-                    &para.style,
-                    block_idx,
-                ));
-            }
-            // Next paragraph starts a new line.
-            line_x -= line_pitch;
-            if line_x < left - 0.01 {
-                band += 1;
-                line_x = right - line_pitch;
-                if band >= num_bands {
-                    push_separators(&mut elements);
-                    pages_out.push(LayoutPage {
-                        width: page_w,
-                        height: page_h,
-                        elements: std::mem::take(&mut elements),
-                    });
-                    band = 0;
-                }
+                flush(&mut buf, buf_top, &mut elements, &mut pages_out,
+                      &mut band, &mut next_right);
             }
         }
 

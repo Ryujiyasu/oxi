@@ -76,6 +76,17 @@ ARMS = [
     # 10pt natural = 13.49 (clears any sub-0.7 tolerance → 2 cells).
     ("boundary_sz19", 19, None, None),
     ("boundary_sz20", 20, None, None),
+    # ★What ELSE widens a column? (2026-08-21, the 01535587 residual: its body
+    # paragraphs are メイリオ 10.5 BOLD carrying RUBY, and Oxi gives them one
+    # cell where Word gives two.) Meiryo's own natural (83/64 x 1.5em x 10.5 =
+    # 20.43) already needs 2 cells on an 18pt grid, so these arms use the 12.8
+    # grid where Meiryo 8pt = 15.56 (2 cells) and MS Mincho 8pt = 10.4 (1) —
+    # bold / ruby are then read against their OWN plain control.
+    ("mei_plain", 16, None, None, {"face": "メイリオ"}),
+    ("mei_bold", 16, None, None, {"face": "メイリオ", "bold": True}),
+    ("msm_bold", 16, None, None, {"bold": True}),
+    ("msm_ruby", 16, None, None, {"ruby": True}),
+    ("msm_bold_ruby", 16, None, None, {"bold": True, "ruby": True}),
 ]
 COLS = 3                   # columns of body text after the swept paragraph
 
@@ -84,23 +95,44 @@ def docx():
     return os.path.join(OUT, "vertpitch.docx")
 
 
-def para(text, sz, ppr=""):
-    return ('<w:p><w:pPr>%s<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>'
-            '<w:sz w:val="%d"/></w:rPr></w:pPr><w:r><w:rPr>'
-            '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>'
-            '<w:sz w:val="%d"/><w:szCs w:val="%d"/></w:rPr>'
-            '<w:t xml:space="preserve">%s</w:t></w:r></w:p>'
-            % (ppr, FACE, FACE, FACE, sz, FACE, FACE, FACE, sz, sz, text))
+def para(text, sz, ppr="", opt=None):
+    """One paragraph. `opt` = {face, bold, ruby} for the 2026-08-21 arms."""
+    opt = opt or {}
+    face = opt.get("face", FACE)
+    bold = "<w:b/><w:bCs/>" if opt.get("bold") else ""
+    rpr = ('<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>%s'
+           '<w:sz w:val="%d"/><w:szCs w:val="%d"/>' % (face, face, face, bold, sz, sz))
+    if opt.get("ruby"):
+        # Same shape as 01535587's: hps 5pt, raise 9pt, base = this size.
+        inner = ('<w:r><w:rPr>%s</w:rPr><w:t xml:space="preserve">%s</w:t></w:r>'
+                 '<w:r><w:rPr>%s</w:rPr><w:ruby><w:rubyPr>'
+                 '<w:rubyAlign w:val="distributeSpace"/><w:hps w:val="10"/>'
+                 '<w:hpsRaise w:val="18"/><w:hpsBaseText w:val="%d"/>'
+                 '<w:lid w:val="ja-JP"/></w:rubyPr>'
+                 '<w:rt><w:r><w:rPr>%s<w:sz w:val="10"/></w:rPr><w:t>るび</w:t></w:r></w:rt>'
+                 '<w:rubyBase><w:r><w:rPr>%s</w:rPr><w:t>漢字</w:t></w:r></w:rubyBase>'
+                 '</w:ruby></w:r>'
+                 % (rpr, text, rpr, sz,
+                    '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>' % (face, face, face),
+                    rpr))
+    else:
+        inner = ('<w:r><w:rPr>%s</w:rPr><w:t xml:space="preserve">%s</w:t></w:r>'
+                 % (rpr, text))
+    return ('<w:p><w:pPr>%s<w:rPr><w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>%s'
+            '<w:sz w:val="%d"/></w:rPr></w:pPr>%s</w:p>'
+            % (ppr, face, face, face, bold, sz, inner))
 
 
 def gen():
     os.makedirs(OUT, exist_ok=True)
     body = []
-    for ai, (label, sz, line, rule) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        label, sz, line, rule = arm[:4]
+        opt = arm[4] if len(arm) > 4 else None
         body.append(para("A%02dZ" % ai, 16,
                          "<w:pageBreakBefore/>" if ai else ""))
         ppr = ('<w:spacing w:line="%d" w:lineRule="%s"/>' % (line, rule)) if line else ""
-        body.append(para("M%02dマーカー" % ai, sz, ppr))
+        body.append(para("M%02dマーカー" % ai, sz, ppr, opt))
         for k in range(COLS):
             body.append(para("B%02d%d本文の列です" % (ai, k), 16))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + NS +
@@ -145,7 +177,8 @@ def report(per, who):
     print("== %s == (grid pitch %.2fpt)" % (who, PITCH / 20.0))
     print("%-16s %-6s %-11s %-9s %-9s %-9s %s"
           % ("arm", "sz_pt", "line", "marker_x", "body0_x", "advance", "body pitch"))
-    for ai, (label, sz, line, rule) in enumerate(ARMS):
+    for ai, arm in enumerate(ARMS):
+        label, sz, line, rule = arm[:4]
         g = per.get(ai) or {}
         mx, bx = g.get("m"), g.get("b")
         bp = g.get("bp")
