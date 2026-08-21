@@ -99,15 +99,26 @@ fn used_extent(sheet: &Sheet, plain: &CellStyle) -> (u32, u32, u32, u32) {
 /// cells draw 18px even though its column A wears an 18pt font: A is inside
 /// a merge that spans those rows.
 ///
+/// A column the row records a cell in speaks for itself and is not counted
+/// here, whatever its `<col>` says: 119a4's column D wears 14pt while its
+/// rows hold a bare `<c r="D29"/>`, which is the Normal format, and Excel
+/// draws those rows at Normal's height.
+///
 /// `None` means a font the measured table does not know, so the caller must
 /// fall back rather than guess.
-fn blank_row_px(sheet: &Sheet, merged_columns: &[(u32, u32)]) -> Option<u16> {
-    // Where a merge does not reach, the sheet's own columns are on show.
+fn blank_row_px(
+    sheet: &Sheet,
+    merged_columns: &[(u32, u32)],
+    recorded_columns: &[u32],
+) -> Option<u16> {
+    // Where neither a merge nor a cell of its own reaches, the sheet's
+    // columns are what is on show.
     let free = |first: u32, last: u32| {
         (first..=last).any(|column| {
             !merged_columns
                 .iter()
                 .any(|(from, to)| *from <= column && column <= *to)
+                && !recorded_columns.contains(&column)
         })
     };
     let mut tallest: Option<u16> = None;
@@ -157,7 +168,7 @@ fn default_row_points(sheet: &Sheet) -> f32 {
     if sheet.default_row_custom && sheet.default_row_height > 0.0 {
         return ((sheet.default_row_height + 0.05) / 0.75).floor() * 0.75;
     }
-    match blank_row_px(sheet, &[]) {
+    match blank_row_px(sheet, &[], &[]) {
         Some(px) => px as f32 * 0.75,
         None => fallback_row_points(sheet),
     }
@@ -206,10 +217,13 @@ fn row_pixels(
             Some(px) => px as f32,
             None => return stated(row),
         },
-        None => match blank_row_px(sheet, merged_columns) {
-            Some(px) => px as f32,
-            None => return stated(row),
-        },
+        None => {
+            let recorded: Vec<u32> = row.cells.iter().map(|cell| cell.col).collect();
+            match blank_row_px(sheet, merged_columns, &recorded) {
+                Some(px) => px as f32,
+                None => return stated(row),
+            }
+        }
     };
     let mut raise: f32 = 0.0;
     for cell in &row.cells {
