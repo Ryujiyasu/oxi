@@ -298,14 +298,17 @@ pub fn draw(
                     )?;
                 }
 
-                // Measured against Excel on a sheet with no borders to confuse
-                // the reading: DirectWrite lays the same glyphs down one pixel
-                // left of where Excel puts them, at every size tried.
+                // Excel keeps three pixels between the left edge of a cell and
+                // its text, and two on the right. The gutter either side is
+                // not the same: measured across fourteen faces, right-aligned
+                // and centred text both sit a pixel further right than an even
+                // gutter puts them, on every face whose glyphs the two engines
+                // place alike.
                 let gutter = (2.0 * scale).round() + 1.0;
                 let mut area = box_of(
                     cell_box.left + gutter,
                     cell_box.top,
-                    cell_box.right - gutter,
+                    cell_box.right - (gutter - scale).max(0.0),
                     cell_box.bottom,
                 );
                 if filtered {
@@ -315,6 +318,24 @@ pub fn draw(
                 // Text too long for its cell runs on over the empty neighbours
                 // beside it, which is what Excel shows.
                 let body = HSTRING::from(text.as_str());
+                // How far the text reaches is Excel's own measurement — its
+                // characters' advances added up — and not this engine's, which
+                // runs a shade narrower. The difference decides two things:
+                // whether the last letter of a spilling cell is drawn or
+                // clipped, and where right- and centre-aligned text starts.
+                let one_line = !cell.style.wrap_text && !text.contains('\n');
+                let reach = one_line
+                    .then(|| {
+                        crate::run_width(
+                            cell.style.font_name.as_deref().unwrap_or("Calibri"),
+                            points,
+                            cell.style.bold,
+                            cell.style.italic,
+                            &text,
+                        )
+                        .map(|width| width * scale)
+                    })
+                    .flatten();
                 // Text spread across its cell is meant to fill exactly that
                 // cell, so it never runs on: widening the area first would
                 // spread it over the neighbours.
@@ -322,19 +343,6 @@ pub fn draw(
                     && placed != Align::Spread
                     && matches!(cell.value, CellValue::String(_))
                 {
-                    // How far the text reaches is Excel's own measurement —
-                    // its characters' advances added up — and not this
-                    // engine's, which runs a shade narrower and leaves the
-                    // last letter or two outside the room asked for, where
-                    // they are then clipped away.
-                    let reach = crate::run_width(
-                        cell.style.font_name.as_deref().unwrap_or("Calibri"),
-                        points / scale,
-                        cell.style.bold,
-                        cell.style.italic,
-                        &text,
-                    )
-                    .map(|width| width * scale);
                     let width = match reach {
                         Some(width) => width,
                         None => {
@@ -365,6 +373,27 @@ pub fn draw(
                             after as i32,
                             &merged,
                         ) as f32;
+                    }
+                }
+
+                // Right- and centre-aligned text is started where Excel's own
+                // measurement puts it, rather than where this engine's would:
+                // a pixel of difference in the run's width is a pixel of
+                // difference on every number in the column.
+                if let Some(width) = reach {
+                    let room = area.right - area.left;
+                    let start = match placed {
+                        Align::Right => Some(area.right - width),
+                        // Excel gives the odd pixel to the left of the text.
+                        Align::Centre => Some(area.left + ((room - width) / 2.0).ceil()),
+                        Align::Left | Align::Spread => None,
+                    };
+                    // Text with no room to spare is left to the engine, which
+                    // anchors it the way Excel does and clips the end that
+                    // overflows.
+                    if let Some(start) = start.filter(|start| *start >= area.left) {
+                        format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+                        area.left = start;
                     }
                 }
 
