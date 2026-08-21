@@ -1915,12 +1915,15 @@ mod windows_draw {
                             PCWSTR(turned.as_ptr()),
                         );
                         let held = SelectObject(dc, font);
-                        let room = area.right - area.left;
+                        // A stacked character is centred in the whole cell,
+                        // gutters and all: measured on data_B01, where the
+                        // heading of a merged group lands a pixel further
+                        // right than centring inside the gutters puts it.
                         let left = match placed {
                             Align::Left | Align::Spread => area.left,
                             Align::Right => area.right - em,
                             Align::Centre => {
-                                area.left + ((room - em) as f32 / 2.0).ceil() as i32
+                                box_.left + ((box_.right - box_.left - em) as f32 / 2.0).round() as i32
                             }
                         };
                         for (step, line) in lines.iter().enumerate() {
