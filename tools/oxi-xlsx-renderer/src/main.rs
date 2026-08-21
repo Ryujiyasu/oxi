@@ -373,22 +373,31 @@ const NEVER_STARTS: &str = "、。，．・：；？！゛゜ゝゞヽヾー々�
 /// Characters that may not end one: the opening half of a pair.
 const NEVER_ENDS: &str = "（［｛〈《「『【〔〘〖“‘￥＄";
 
+/// Text written on the body of the em, which breaks between any two
+/// characters the kinsoku rules allow.
+fn ideographic(letter: char) -> bool {
+    matches!(letter as u32,
+        0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE6F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6
+        | 0x20000..=0x2FA1F)
+}
+
 /// Where Excel is willing to end a line. Measured from its own PDF: a line
 /// that would start with a forbidden character does not hang it past the
 /// edge — the break moves back a character at a time until it is allowed, so
 /// the line simply holds fewer glyphs.
 fn may_break(before: char, after: char) -> bool {
-    if before == ' ' || before == '\u{3000}' {
+    if before == ' ' || before == '\u{3000}' || before == '\t' {
         return true;
     }
     if NEVER_STARTS.contains(after) || NEVER_ENDS.contains(before) {
         return false;
     }
-    // A Latin word travels whole; Japanese breaks wherever it likes.
-    let word = |letter: char| {
-        letter.is_ascii_alphanumeric() || matches!(letter, '\'' | '-' | '/' | '.' | ',')
-    };
-    !(word(before) && word(after))
+    // Anything that is not written on the em travels as one run to the next
+    // space — a Latin word, and a web address with it. Excel puts a 94
+    // character URL on two lines rather than breaking it after its colon.
+    ideographic(before) || ideographic(after)
 }
 
 /// How many lines one paragraph takes in a box this wide, given what each
@@ -413,11 +422,19 @@ fn count_lines(letters: &[char], advances: &[i32], width: f32) -> u32 {
             run = next;
             take += 1;
         }
+        // Give characters back until the break is one Excel would make. A
+        // run with nowhere to break — a long web address — is cut where it
+        // stops fitting rather than left to fill a line a character at a
+        // time, which is what Excel draws.
+        let fill = take;
         while start + take < letters.len()
             && take > 1
             && !may_break(letters[start + take - 1], letters[start + take])
         {
             take -= 1;
+        }
+        if take <= 1 && fill > 1 {
+            take = fill;
         }
         lines += 1;
         start += take.max(1);
@@ -535,6 +552,14 @@ impl LineCounter {
         for paragraph in text.split('\n') {
             let letters: Vec<char> = paragraph.chars().collect();
             let advances = self.advances_of(face, points, bold, italic, &letters)?;
+            if std::env::var("OXI_XLSX_DUMP_ADVANCES").is_ok() {
+                eprintln!(
+                    "      advances in {:.0}px: sum {} first {:?}",
+                    width,
+                    advances.iter().sum::<i32>(),
+                    advances.iter().take(8).collect::<Vec<_>>()
+                );
+            }
             total += count_lines(&letters, &advances, width);
         }
         Some(total.max(1))
