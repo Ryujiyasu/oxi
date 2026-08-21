@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oxi — Why a row is that tall</title>
+<style>
+:root {
+  --accent: #217346;
+  --accent-d: #1B5E3A;
+  --accent-l: #E4F0E9;
+  --rule: #D0D7DE;
+  --head: #F3F5F7;
+  --txt: #24292F;
+  --dim: #656D76;
+  --bg: #FFFFFF;
+  --code: #F6F8FA;
+  --pin: #8250DF;
+  --cell: #217346;
+  --blank: #0969DA;
+  --edge: #BF8700;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Hiragino Sans',
+    'Noto Sans JP', sans-serif;
+  color: var(--txt);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+header {
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+header .name { font-weight: 700; letter-spacing: .3px; }
+header .what { opacity: .9; font-size: 13px; }
+header .spacer { flex: 1; }
+header button, header label.file {
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, .3);
+  border-radius: 4px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+header button:hover, header label.file:hover { background: rgba(255, 255, 255, .28); }
+header input[type=file] { display: none; }
+
+main { flex: 1; display: flex; min-height: 0; }
+#rows { flex: 1; overflow: auto; padding-bottom: 30px; }
+#state { padding: 24px; color: var(--dim); font-size: 14px; }
+
+table.rows { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.rows th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--head); color: var(--dim);
+  font-weight: 600; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .5px; text-align: left;
+  padding: 7px 10px; border-bottom: 1px solid var(--rule);
+}
+table.rows td { padding: 4px 10px; border-bottom: 1px solid #EFF2F5; vertical-align: middle; }
+table.rows tr { cursor: pointer; }
+table.rows tr:hover td { background: #F6FAF8; }
+table.rows tr.picked td { background: var(--accent-l); }
+td.num { color: var(--dim); font-variant-numeric: tabular-nums; width: 60px; }
+td.px { font-variant-numeric: tabular-nums; width: 60px; font-weight: 600; }
+td.bar { width: 210px; }
+td.bar div { height: 12px; border-radius: 2px; background: var(--accent); opacity: .75; }
+td.why { color: var(--dim); }
+.tag {
+  display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px;
+  border: 1px solid currentColor; margin-right: 7px; vertical-align: 1px;
+  font-variant-numeric: tabular-nums;
+}
+.tag.pin { color: var(--pin); }
+.tag.cell { color: var(--cell); }
+.tag.blank { color: var(--blank); }
+.tag.edge { color: var(--edge); }
+
+aside {
+  width: 400px;
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+  padding: 16px 18px 40px;
+  background: #FBFCFD;
+  flex-shrink: 0;
+}
+aside h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--dim); margin: 20px 0 8px; font-weight: 600;
+}
+aside h2:first-child { margin-top: 0; }
+aside .lead { font-size: 15px; line-height: 1.5; }
+aside .lead b { font-variant-numeric: tabular-nums; }
+aside dl { display: grid; grid-template-columns: 132px 1fr; gap: 5px 10px; font-size: 13px; }
+aside dt { color: var(--dim); }
+aside dd { word-break: break-word; }
+aside ul { list-style: none; font-size: 13px; }
+aside li { padding: 5px 0; line-height: 1.5; color: var(--dim); }
+aside li.won { color: var(--txt); }
+aside .none { color: var(--dim); font-style: italic; font-size: 13px; }
+aside .law { font-size: 12.5px; line-height: 1.65; color: var(--dim); }
+aside .law b { color: var(--txt); font-weight: 600; }
+
+.tabs {
+  display: flex; gap: 2px; padding: 0 12px 8px;
+  border-top: 1px solid var(--rule); background: var(--head); flex-shrink: 0;
+}
+.tabs button {
+  font: inherit; font-size: 12px; padding: 6px 12px; border: 1px solid var(--rule);
+  border-top: none; border-radius: 0 0 4px 4px; background: #fff;
+  color: var(--dim); cursor: pointer;
+}
+.tabs button.on { color: var(--accent-d); font-weight: 600; border-color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <span class="name">Oxi</span>
+  <span class="what">Why a row is the height it is</span>
+  <span class="spacer"></span>
+  <button id="reset">Sample workbook</button>
+  <label class="file">Open a .xlsx<input type="file" id="pick" accept=".xlsx"></label>
+</header>
+<main>
+  <div id="rows"><div id="state">Loading the engine…</div></div>
+  <aside>
+    <h2>This row</h2>
+    <p class="lead" id="lead"><span class="none">Pick a row</span></p>
+    <h2>What asked for it</h2>
+    <ul id="parts"><li class="none">—</li></ul>
+    <h2>The sheet</h2>
+    <dl id="facts"></dl>
+    <h2>The rule</h2>
+    <p class="law" id="law"></p>
+  </aside>
+</main>
+<div class="tabs" id="tabs"></div>
+
+<script type="module">
+import init, { parse_spreadsheet } from './oxidocs_wasm.js';
+import { explainRow, sheetDefault, GUTTER } from './row-model.js';
+
+const SAMPLE = './samples/quarterly-sales.xlsx';
+/// Excel's own default column width for a sheet that states none.
+const DEFAULT_CHARACTERS = 8.43;
+
+const rowsBox = document.getElementById('rows');
+const leadBox = document.getElementById('lead');
+const partsBox = document.getElementById('parts');
+const factsBox = document.getElementById('facts');
+const lawBox = document.getElementById('law');
+const tabsBox = document.getElementById('tabs');
+
+let book = null;
+let shown = 0;
+let heights = {};
+let digitWidth = 7;
+let table = null;
+
+/// The height Excel gives a row of this font on its own, measured from Excel
+/// and shipped beside this page. A face it was never asked about comes back
+/// undefined, and the model falls back rather than guessing.
+const heightOf = (face, size) =>
+  (!face || !size) ? undefined : heights[`${face}|${Math.round(size * 4)}`];
+
+/// One character's advance. Excel measures each on its own rather than as
+/// part of a run; the browser's font engine stands in for the device here, so
+/// a line landing within a pixel of the edge may be counted differently from
+/// the way Excel counts it.
+const advances = new Map();
+function advance(face, points, bold, italic, letter) {
+  const key = `${face}|${points}|${bold}|${italic}|${letter}`;
+  let held = advances.get(key);
+  if (held === undefined) {
+    const canvas = advance.canvas ||= document.createElement('canvas');
+    const pen = canvas.getContext('2d');
+    pen.font = `${italic ? 'italic ' : ''}${bold ? '700 ' : ''}` +
+      `${Math.round(points * 96 / 72)}px "${face}", sans-serif`;
+    held = Math.round(pen.measureText(letter).width);
+    advances.set(key, held);
+  }
+  return held;
+}
+
+function measureDigit(name, points) {
+  const canvas = measureDigit.canvas ||= document.createElement('canvas');
+  const pen = canvas.getContext('2d');
+  pen.font = `${(points || 11) * 96 / 72}px ${name ? `"${name}"` : 'Calibri'}, Calibri, sans-serif`;
+  return Math.round(pen.measureText('0').width) || 7;
+}
+
+/// A stored column width already carries the gutter either side of the text.
+function columnPixels(width) {
+  const padding = Math.trunc(128 / digitWidth);
+  return Math.trunc(((256 * width + padding) / 256) * digitWidth);
+}
+
+function columnEdges(sheet) {
+  const edges = [0];
+  for (let column = 0; column < Math.max(sheet.col_count || 0, 1); column += 1) {
+    const stated = (sheet.col_widths || [])[column];
+    const width = stated > 0 ? columnPixels(stated)
+      : sheet.default_col_width > 0 ? columnPixels(sheet.default_col_width)
+        : Math.trunc(DEFAULT_CHARACTERS * digitWidth + GUTTER);
+    edges.push(edges[edges.length - 1] + width);
+  }
+  return edges;
+}
+
+const KIND = { pin: 'pinned', cell: 'a cell', blank: 'the blank', edge: 'an edge' };
+
+function escape(text) {
+  return String(text).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function draw() {
+  const sheet = book.sheets[shown];
+  digitWidth = measureDigit(book.default_style?.font_name, book.default_style?.font_size);
+  const columns = columnEdges(sheet);
+  const held = new Map((sheet.rows || []).map(row => [row.index, row]));
+  const indices = (sheet.rows || []).map(row => row.index);
+  const first = indices.length ? Math.min(...indices) : 1;
+  const last = indices.length ? Math.max(...indices) : 1;
+
+  const explained = [];
+  for (let index = first; index <= last; index += 1) {
+    explained.push({
+      index,
+      ...explainRow({ sheet, index, row: held.get(index), columns, heightOf, advance }),
+    });
+  }
+  const tallest = Math.max(...explained.map(row => row.px), 1);
+
+  table = document.createElement('table');
+  table.className = 'rows';
+  table.innerHTML = '<thead><tr><th>Row</th><th>Height</th><th></th>' +
+    '<th>What decided it</th></tr></thead>';
+  const body = document.createElement('tbody');
+  for (const row of explained) {
+    const won = row.parts.find(part => part.won) || row.parts[0];
+    const line = document.createElement('tr');
+    line.innerHTML =
+      `<td class="num">${row.index}</td>` +
+      `<td class="px">${row.px}px</td>` +
+      `<td class="bar"><div style="width:${Math.max(2, row.px / tallest * 200)}px"></div></td>` +
+      `<td class="why"><span class="tag ${won?.kind ?? 'blank'}">${
+        KIND[won?.kind ?? 'blank']}</span>${escape(won?.what ?? '')}</td>`;
+    line.onclick = () => pick(row, line);
+    body.appendChild(line);
+  }
+  table.appendChild(body);
+  rowsBox.replaceChildren(table);
+
+  factsBox.innerHTML = [
+    ['Sheet', escape(sheet.name)],
+    ['Rows recorded', String(sheet.rows?.length ?? 0)],
+    ['Normal font', sheet.normal_font
+      ? escape(`${sheet.normal_font[0]} ${sheet.normal_font[1]}`)
+      : '<em>none stated</em>'],
+    ['Sheet default', `${sheetDefault(sheet, heightOf)}px` + (sheet.default_row_custom
+      ? ` — pinned at ${sheet.default_row_height}pt`
+      : ` — the file says ${sheet.default_row_height}pt, which Excel works out again`)],
+    ['Column fonts', `${(sheet.col_fonts || []).length} stretch(es)`],
+  ].map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`).join('');
+
+  lawBox.innerHTML =
+    '<b>A row that pins its height</b> (customHeight) keeps the stated number, ' +
+    'given 0.05pt of grace and floored to the 96-dpi pixel. <b>Any other stated ' +
+    'height is a cache</b> from the machine that wrote the file, and Excel works ' +
+    'the row out again: the tallest of what its cells ask for and what the blank ' +
+    'of the row asks for, plus a pixel for each thick rule, capped at 546px. ' +
+    'A column swallowed by a merge shows nothing and asks for nothing; a column ' +
+    'the row records a cell in is spoken for by that cell. Every number here was ' +
+    'derived from Excel by measurement.';
+
+  tabsBox.replaceChildren(...book.sheets.map((each, index) => {
+    const button = document.createElement('button');
+    button.textContent = each.name;
+    button.className = index === shown ? 'on' : '';
+    button.onclick = () => { shown = index; draw(); };
+    return button;
+  }));
+
+  if (explained.length) pick(explained[0], body.firstChild);
+}
+
+function pick(row, line) {
+  for (const other of table.querySelectorAll('tr.picked')) other.classList.remove('picked');
+  if (line) line.classList.add('picked');
+  const won = row.parts.find(part => part.won);
+  leadBox.innerHTML = `Row ${row.index} is <b>${row.px}px</b> tall` +
+    (won ? ` because ${escape(won.what)}.` : '.') +
+    (row.note ? ` <span class="none">(${escape(row.note)})</span>` : '');
+  const items = row.parts.map(part => {
+    const item = document.createElement('li');
+    item.className = part.won ? 'won' : '';
+    item.innerHTML = `<span class="tag ${part.kind}">${part.px}px</span>${escape(part.what)}`;
+    return item;
+  });
+  partsBox.replaceChildren(...(items.length ? items
+    : [Object.assign(document.createElement('li'), { className: 'none', textContent: '—' })]));
+}
+
+function open(bytes) {
+  try {
+    book = parse_spreadsheet(new Uint8Array(bytes));
+    if (!book.sheets?.length) throw new Error('the workbook holds no sheets');
+    shown = 0;
+    draw();
+  } catch (error) {
+    rowsBox.replaceChildren(Object.assign(document.createElement('div'), {
+      id: 'state', textContent: `Could not read it: ${error.message ?? error}`,
+    }));
+  }
+}
+
+document.getElementById('pick').addEventListener('change', async event => {
+  const file = event.target.files?.[0];
+  if (file) open(await file.arrayBuffer());
+});
+document.getElementById('reset').addEventListener('click', async () => {
+  open(await (await fetch(SAMPLE)).arrayBuffer());
+});
+
+(async () => {
+  await init();
+  heights = await (await fetch('./row-heights.json')).json();
+  document.getElementById('state').textContent =
+    'Open a .xlsx, or start from the sample workbook.';
+  try {
+    const response = await fetch(SAMPLE);
+    if (response.ok) open(await response.arrayBuffer());
+  } catch { /* the sample is optional */ }
+})();
+</script>
+</body>
+</html>
