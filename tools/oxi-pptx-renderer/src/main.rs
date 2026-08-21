@@ -876,10 +876,36 @@ unsafe fn draw_custom_geometry_gdi(
         // filled, so this is real ink. ALTERNATE is also GDI's default, but
         // the DC is shared with every other draw path, so set it explicitly.
         let old_fill_mode = SetPolyFillMode(dc, ALTERNATE);
-        let _ = BeginPath(dc);
-        emit_geom_path_gdi(dc, sh, path, scale);
-        let _ = EndPath(dc);
-        let _ = StrokeAndFillPath(dc);
+        if openpath_on() {
+            // `StrokeAndFillPath` CLOSES every open figure before stroking, so
+            // a path that never says `a:close` gets an extra segment drawn from
+            // its last point back to its first. d06's winding road (two noFill
+            // shapes, an 18pt black stroke and a 1.5pt white dashed one, 58
+            // points from the top-right corner to the bottom-left) came out with
+            // a straight diagonal ruled across the whole slide, on ten slides of
+            // that template. PowerPoint strokes only the segments the path
+            // declares. Filling still closes implicitly -- that part is right,
+            // and is what `FillPath` does -- so the two passes are split rather
+            // than the close suppressed.
+            let has_fill = !path.fill_none && fill_brush.is_some();
+            if has_fill {
+                let _ = BeginPath(dc);
+                emit_geom_path_gdi(dc, sh, path, scale);
+                let _ = EndPath(dc);
+                let _ = FillPath(dc);
+            }
+            if border_pen.is_some() {
+                let _ = BeginPath(dc);
+                emit_geom_path_gdi(dc, sh, path, scale);
+                let _ = EndPath(dc);
+                let _ = StrokePath(dc);
+            }
+        } else {
+            let _ = BeginPath(dc);
+            emit_geom_path_gdi(dc, sh, path, scale);
+            let _ = EndPath(dc);
+            let _ = StrokeAndFillPath(dc);
+        }
         drew = true;
 
         SetPolyFillMode(dc, CREATE_POLYGON_RGN_MODE(old_fill_mode));
@@ -1839,6 +1865,12 @@ fn mixpitch_on() -> bool {
 /// unless this is set, which restores the geometry path claiming it.
 fn geomgrad_on() -> bool {
     std::env::var("OXI_GEOMGRAD_DISABLE").is_err()
+}
+
+/// An open custGeom subpath is stroked open unless this is set, which restores
+/// the single `StrokeAndFillPath` pass that closes it first.
+fn openpath_on() -> bool {
+    std::env::var("OXI_OPENPATH_DISABLE").is_err()
 }
 
 /// An empty paragraph is sized by its paragraph mark unless this is set,
