@@ -9235,6 +9235,14 @@ thread_local! {
     static OVERHANG_CACHE: std::cell::RefCell<
         std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The 16384-per-em advance probe backing the master-unit break test.
+    /// Separate from ADVANCE_CACHE so render positions keep the shipped
+    /// 2048-probe values byte-for-byte while the BREAK test gets advances
+    /// precise enough to round to the correct 1/8pt bucket (the 2048 probe's
+    /// +-1/4096 em error misplaces a display-size glyph's bucket routinely).
+    static PRECISE_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
     static ADVANCE_CACHE: std::cell::RefCell<
         std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -9405,6 +9413,139 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         }
         value
     })
+}
+
+/// A glyph advance in EM units from a 16384-per-em GDI probe -- the
+/// break-test twin of `runtime_advance_em`, eight times finer. 16384 exceeds
+/// every common unitsPerEm (1000 CFF, 2000, 2048), so the integer GDI width
+/// recovers the design advance exactly instead of to the render probe's
+/// 1/2048.
+#[cfg(windows)]
+fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    const PRECISE_PROBE_EM: i32 = 16384;
+    let dc = probe_dc();
+    let weight = if bold { 700 } else { 400 };
+    let key = (family.to_string(), weight, italic);
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    PRECISE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let per_font = cache.entry(key).or_default();
+        if let Some(hit) = per_font.get(&ch) {
+            return *hit;
+        }
+        let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+        let value = unsafe {
+            let font = CreateFontW(
+                -PRECISE_PROBE_EM,
+                0,
+                0,
+                0,
+                weight,
+                u32::from(italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let mut abc = ABC::default();
+                let code = ch as u32;
+                let ok = GetCharABCWidthsW(dc, code, code, &mut abc).as_bool();
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                if ok {
+                    Some(
+                        (abc.abcA + abc.abcB as i32 + abc.abcC) as f32
+                            / PRECISE_PROBE_EM as f32,
+                    )
+                } else {
+                    None
+                }
+            }
+        };
+        per_font.insert(ch, value);
+        if let Ok(want) = std::env::var("OXI_ADV_DEBUG") {
+            if face.contains(&want) {
+                eprintln!("PRC {face} '{ch}' {value:?}");
+            }
+        }
+        value
+    })
+}
+
+/// PowerPoint's break test measures in master units unless this is set.
+fn masterunit_on() -> bool {
+    std::env::var("OXI_MASTERUNIT_DISABLE").is_err()
+}
+
+/// The room a candidate line claims, in MASTER UNITS (1/8 pt -- the
+/// PowerPoint-97 1/576-inch unit, still governing text measurement).
+///
+/// DERIVED 2026-08-21 (wrapfit COM sweeps, rounds 1-3): each glyph's design
+/// advance at the font size is rounded to the nearest master unit and the
+/// line fits iff the SUM, exact in master units, is <= the effective box
+/// width (inclusive; the width side is EMU-precise, not quantised). The
+/// brackets exclude round-of-sum, floor, ceil, every px-grid quantum, and
+/// any trailing-ink term (Segoe Script 't', ink +0.22 em past its advance,
+/// thresholds exactly like '.'). The rule reproduces d09 s13 "Happy Holi!":
+/// master sum 546.5pt over a 546.4128pt box breaks, while the float sum
+/// 546.399pt would fit.
+///
+/// None when any glyph's advance is unknown -- the caller falls back to the
+/// legacy pixel test. That includes any non-BMP character
+/// (`GetCharABCWidthsW` is a UCS-2 API; asked about U+1F60A it measures some
+/// other char's glyph and poisons the sum -- the first mu1 gate run lost
+/// -0.08 on each of the d11/d24/d35 emoji charwrap slides this way) and any
+/// text the family lacks a glyph for, where GDI would silently measure a
+/// font-link fallback with the base font's metrics (the d19 s39 icon-row
+/// non-determinism lesson -- see runtime_dx_px).
+#[cfg(windows)]
+fn master_units(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> Option<i64> {
+    if text.chars().any(|c| c as u32 > 0xFFFF) {
+        return None;
+    }
+    if !font_has_all_glyphs(family, bold, italic, text) {
+        return None;
+    }
+    let mut sum: i64 = 0;
+    for ch in text.chars() {
+        let em = font_adv::hmtx_advance_em(family, ch)
+            .or_else(|| precise_advance_em(family, bold, italic, ch))?;
+        sum += f64::from(em * fs * 8.0).round() as i64;
+    }
+    Some(sum)
+}
+
+/// One fit test for every break site: master units when derivable, the
+/// legacy pixel measure otherwise.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn fits_line(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    width_pt: f32,
+    width_px: i32,
+    scale: f64,
+) -> bool {
+    if masterunit_on() {
+        if let Some(mu) = master_units(text, fs, family, bold, italic) {
+            return mu as f64 / 8.0 <= f64::from(width_pt) + 1e-6;
+        }
+    }
+    measure_wrap(dc, text, fs, family, bold, italic, scale) <= width_px
 }
 
 /// True when `family` itself contains a glyph for every char of `text`.
@@ -9724,6 +9865,7 @@ fn gdi_wrap_lines(
     let first_px = (first_width_pt as f64 * scale).round().max(1.0) as i32;
     let rest_px = (rest_width_pt as f64 * scale).round().max(1.0) as i32;
     let mut width_px = first_px;
+    let mut width_pt = first_width_pt;
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut current_w = 0i32;
@@ -9744,28 +9886,7 @@ fn gdi_wrap_lines(
             let mut candidate = current.clone();
             candidate.push_str(word);
             let trimmed = candidate.trim_end();
-            // The design-advance width is what PowerPoint breaks against; GDI's
-            // hinted width runs ~1.6% long and breaks a word early.
-            let w = if advance_exact_on() {
-                // Both design-advance sources belong to the same change, so
-                // the opt-out must disable BOTH -- otherwise the "off" arm is
-                // not the pre-change build and the A/B is not a real
-                // before-vs-after (it showed up as 6 decks differing).
-                runtime_width_px(dc, trimmed, fs, family, bold, italic, scale)
-                    .or_else(|| font_adv::text_hmtx_px(trimmed, fs, family, scale))
-                    .unwrap_or_else(|| gdi_measure_text_px(dc, trimmed))
-            } else {
-                gdi_measure_text_px(dc, trimmed)
-            };
-            // Opt-in probe (0 by default): see trailing_overhang_px for why
-            // the trailing-ink term is falsified as a default.
-            let ovh = trailing_overhang_px(trimmed, fs, family, bold, italic, scale);
-            if std::env::var("OXI_WRAP_DEBUG").is_ok() && w <= width_px && w + ovh > width_px {
-                eprintln!(
-                    "FLIP fam={family} fs={fs} scale={scale:.4} w={w} ovh={ovh} box={width_px} text={trimmed:?}"
-                );
-            }
-            w + ovh <= width_px
+            fits_line(dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale)
         } else {
             current_w + gdi_measure_text_px(dc, word) <= width_px
         };
@@ -9775,6 +9896,7 @@ fn gdi_wrap_lines(
             // Every line after the first is judged against the continuation
             // width, which a hanging indent or a bullet makes narrower.
             width_px = rest_px;
+            width_pt = rest_width_pt;
         }
         // A single "word" wider than the line has to break INSIDE itself --
         // splitting on spaces alone leaves it as one overflowing line. d11 and
@@ -9786,34 +9908,33 @@ fn gdi_wrap_lines(
             let mut rest = word;
             loop {
                 let trimmed = rest.trim_end();
-                if trimmed.is_empty() || measure_wrap(dc, trimmed, fs, family, bold, italic, scale)
-                    <= width_px
+                if trimmed.is_empty()
+                    || fits_line(dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale)
                 {
                     break;
                 }
                 // Longest prefix that fits, never empty so the loop ends.
-                let mut cut = 0usize;
                 let mut last_ok = 0usize;
                 for (i, ch) in rest.char_indices() {
                     let end = i + ch.len_utf8();
-                    if measure_wrap(dc, rest[..end].trim_end(), fs, family, bold, italic, scale)
-                        <= width_px
-                    {
+                    if fits_line(
+                        dc, rest[..end].trim_end(), fs, family, bold, italic,
+                        width_pt, width_px, scale,
+                    ) {
                         last_ok = end;
                     } else {
                         break;
                     }
-                    cut = end;
                 }
                 let take = if last_ok > 0 {
                     last_ok
                 } else {
                     rest.char_indices().nth(1).map(|(i, _)| i).unwrap_or(rest.len())
                 };
-                let _ = cut;
                 lines.push(rest[..take].to_string());
                 rest = &rest[take..];
                 width_px = rest_px;
+                width_pt = rest_width_pt;
             }
             current.push_str(rest);
             current_w += gdi_measure_text_px(dc, rest);

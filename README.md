@@ -98,7 +98,7 @@ The blind sets are the published claim; the development corpus is how regression
 - **SSIM regression sentinel** — 238 documents pixel-compared against stored Word renders; a change that improves one document by regressing another has to justify the trade.
 - **Adversarial probe harness** — 95 synthetic documents stressing under-tested layout paths, each gated against real Word ground truth.
 - **Feature-injection perturbation harness** — individual OOXML features injected one at a time into a clean base document and pixel-verified against Word.
-- **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.951), plus 146 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes).
+- **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.956), plus 149 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes).
 - **Spreadsheet oracles** — the formula engine recalculates 285 real .xlsx workbooks and diffs against Excel's own cached results; the browser VBA host is derived and verified against real Excel COM behaviour (82 scripted A/B comparisons in `tools/measure_vba_*_com.ps1`).
 - **Unit / integration suite** — `cargo test`.
 
