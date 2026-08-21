@@ -1663,6 +1663,15 @@ pub struct TableStyle {
     /// Inside vertical border, including `style="none"` when suppressed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inside_vertical_border: Option<BorderDef>,
+    /// S1191 (2026-08-21): the table's OUTER top / bottom edges, kept apart from
+    /// `border_width`/`border_style`, which collapse all four edges into one
+    /// value. The row-0 pad and the advance BELOW the table each need their own
+    /// edge: a table can be `top single sz4` with `bottom single sz24`, and the
+    /// lumped pair reports 0.5 for both (it takes the first edge that declares).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_border: Option<BorderDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom_border: Option<BorderDef>,
     /// Border color (hex), e.g. "000000"
     #[serde(default)]
     pub border_color: Option<String>,

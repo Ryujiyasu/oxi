@@ -8705,6 +8705,15 @@ fn parse_table(
                     style.has_inside_v = tbl_style.has_inside_v;
                     style.inside_vertical_border = tbl_style.inside_vertical_border.clone();
                 }
+                // S1191: the outer edges inherit from the table style the same
+                // way (0009d767's tblBorders states only top/left/bottom/right,
+                // and its `TableGrid` style supplies the rest).
+                if style.top_border.is_none() {
+                    style.top_border = tbl_style.top_border.clone();
+                }
+                if style.bottom_border.is_none() {
+                    style.bottom_border = tbl_style.bottom_border.clone();
+                }
             }
         }
     }
@@ -9153,7 +9162,11 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 style.border_style = Some(v);
                             }
                         }
-                        if local == "insideH" || local == "insideV" {
+                        // S1191: keep the OUTER top/bottom edges too — the lumped
+                        // border_width/_style cannot tell a sz4 top from a sz24
+                        // bottom, and the row-0 pad and the below-table advance
+                        // each need their own edge.
+                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom") {
                             let border = BorderDef {
                                 style: if is_none {
                                     "none".to_string()
@@ -9166,10 +9179,11 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 color: border_color_val.clone(),
                                 space: 0.0,
                             };
-                            if local == "insideH" {
-                                style.inside_horizontal_border = Some(border);
-                            } else {
-                                style.inside_vertical_border = Some(border);
+                            match local.as_str() {
+                                "insideH" => style.inside_horizontal_border = Some(border),
+                                "insideV" => style.inside_vertical_border = Some(border),
+                                "top" => style.top_border = Some(border),
+                                _ => style.bottom_border = Some(border),
                             }
                         }
                     }

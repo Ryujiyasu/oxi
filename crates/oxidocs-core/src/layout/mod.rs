@@ -25583,14 +25583,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// The drawn width of the rule at the TOP edge of `row_idx`.
     fn s1188_edge_bw(&self, table: &Table, row_idx: usize) -> f32 {
         if row_idx == 0 {
-            // Row 0's rule is the table's OUTER top, not insideH.
-            let outer = if table.style.border {
-                self.s1188_drawn(
+            // Row 0's rule is the table's OUTER top, not insideH — and its own
+            // edge when declared (S1191), not the lumped four-edge value.
+            let outer = match table.style.top_border.as_ref() {
+                Some(d) => self.s1188_drawn(&d.style, d.width),
+                None if table.style.border => self.s1188_drawn(
                     table.style.border_style.as_deref().unwrap_or("single"),
                     table.style.border_width.unwrap_or(0.5),
-                )
-            } else {
-                0.0
+                ),
+                None => 0.0,
             };
             let declared = self.s1188_side(table.rows.first(), false, None);
             return outer.max(declared);
@@ -25614,6 +25615,63 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 
     fn s1188_on(&self) -> bool {
         std::env::var("OXI_S1188").is_ok() || self.s1189_on()
+    }
+
+    /// S1191 (2026-08-21, opt-in `OXI_S1191`; also on under `OXI_S1189`): the
+    /// table's BOTTOM edge advances the flow below the table by its DRAWN width.
+    ///
+    /// DERIVED (`tools/metrics/_pb_tblfoot_gen.py`, 10 arms, one per page — only
+    /// the BOTTOM edge varies, and the following paragraph's spacing-before is
+    /// swept separately). Word, last row's text top -> next paragraph's text top,
+    /// against the no-bottom-border baseline 12.24:
+    ///     nil        12.24   (+0.00)
+    ///     single sz4 12.72   (+0.48)   sz8 13.20 (+0.96)
+    ///     single sz12 13.80  (+1.56)   sz24 15.24 (+3.00)
+    ///     double sz4 13.80   (+1.56 = 3 x 0.5)
+    ///     double sz8 15.24   (+3.00 = 3 x 1.0)
+    /// i.e. exactly the S1187/S1188 drawn width, and the paragraph's own
+    /// spacing-before adds on top linearly (before=200 -> +10.08, 400 -> +20.04).
+    /// Oxi charged ZERO for the bottom edge in every arm (12.21 throughout), the
+    /// −0.48..−3.03 deficit this closes.
+    fn s1191_foot_bw(&self, table: &Table) -> f32 {
+        // S1191: the table's OWN bottom edge when it declares one — the lumped
+        // border_width/_style cannot distinguish it (a `bottom nil` table still
+        // reports 0.5 from its top/left/right, which charged 0.47 where Word
+        // charges 0.00, and a `bottom sz24` reported 0.5 instead of 3.0).
+        let outer = match table.style.bottom_border.as_ref() {
+            Some(d) => self.s1188_drawn(&d.style, d.width),
+            None if table.style.border => self.s1188_drawn(
+                table.style.border_style.as_deref().unwrap_or("single"),
+                table.style.border_width.unwrap_or(0.5),
+            ),
+            None => 0.0,
+        };
+        let Some(row) = table.rows.last() else {
+            return outer;
+        };
+        // A cell that declares its own bottom replaces the table's outer edge for
+        // its column; the drawn rule is the widest across the row (the S1188
+        // `onecell` finding — one cell's declaration governs the whole row).
+        let mut best = 0.0f32;
+        for c in &row.cells {
+            let w = match c.borders.as_ref().and_then(|b| b.bottom.as_ref()) {
+                Some(d) => self.s1188_drawn(&d.style, d.width),
+                None => outer,
+            };
+            best = best.max(w);
+        }
+        best
+    }
+
+    /// ★LATIN SCOPE (`!doc_body_has_real_cjk`), the S815/S870/S890/S1030
+    /// precedent. Ungated, S1191 costs the JP corpus **−0.7149 SSIM** (45 docs
+    /// worse / 37 better over the 238 word_png bases) while JP pagination stays
+    /// 93→93 — the JP table stack carries its own calibrated row/foot overhead
+    /// (S200/S661/S682b's render-only pluses), so a second foot advance
+    /// double-counts there. Latin docs have no such compensator.
+    fn s1191_on(&self) -> bool {
+        !self.doc_body_has_real_cjk
+            && (std::env::var("OXI_S1191").is_ok() || self.s1189_on())
     }
 
     /// S1189 (2026-08-21, opt-in `OXI_S1189`): the CO-GATED PAIR — the S1188
@@ -37704,6 +37762,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     s728_capture_done = true;
                 }
+            }
+        }
+
+        // S1191: the table's bottom rule is drawn BELOW the last row's box, and
+        // Word starts the following block under it (see s1191_foot_bw).
+        if self.s1191_on() {
+            let foot = self.s1191_foot_bw(table);
+            if foot > 0.0 {
+                cursor.advance(foot);
             }
         }
 
