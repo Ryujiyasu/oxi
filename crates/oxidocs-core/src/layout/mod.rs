@@ -25613,7 +25613,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     }
 
     fn s1188_on(&self) -> bool {
-        std::env::var("OXI_S1188").is_ok()
+        std::env::var("OXI_S1188").is_ok() || self.s1189_on()
+    }
+
+    /// S1189 (2026-08-21, opt-in `OXI_S1189`): the CO-GATED PAIR — the S1188
+    /// edge rule together with the S922 correction below. Neither works alone,
+    /// and the reason is arithmetic, not luck.
+    ///
+    /// technical__0009d767 interior row pitch (Word 20.88, cellMar 3.6+3.6):
+    ///     off    21.00 = content 21.00 + rule 0.00     mean |pitch err| 0.170
+    ///     S1188  21.50 = content 21.00 + rule 0.50     mean 0.586
+    ///     S922   20.40 = content 20.40 + rule 0.00     mean 0.608
+    ///     BOTH   20.90 = content 20.40 + rule 0.50     mean 0.034   <- Word
+    /// Word's own decomposition is content 20.40 + rule 0.48, so each flag
+    /// fixes one term and each alone makes the TOTAL worse. S865's blanket
+    /// zeroing of the border pad was the compensating balance holding the
+    /// pre-existing content error in place; with the pair, row 0 lands 21.90
+    /// against Word's 21.96 and every interior row 20.90 against 20.88.
+    fn s1189_on(&self) -> bool {
+        std::env::var("OXI_S1189").is_ok()
     }
 
     fn rowbox2_border_pad(&self, table: &Table, cell: &TableCell) -> f32 {
@@ -26237,7 +26255,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // independently measured supplemental value exists. Generated
                 // table coverage alone is not evidence for changing the basis
                 // (uklocalspending's calibrated cells must remain on hhea).
+                // S1189 (2026-08-21): S922's supplement carve-out is WRONG for
+                // MULTIPLE spacing. DERIVED (`_pb_narrowline_gen.py`, 10 arms,
+                // body/cell x Arial/Arial Narrow x auto/line=276 x 10pt/12pt):
+                // Word's cell line under `line=276 auto` is the face's hhea
+                // natural times the multiple, exactly as in body text —
+                //   Arial Narrow 10pt: Word 13.200, hhea 11.4746 x 1.15 = 13.196
+                //   Arial        10pt: Word 13.200, hhea 11.4990 x 1.15 = 13.224
+                // Nine of the ten arms already matched; the ONLY miss was
+                // `cell + Arial Narrow + explicit multiple + 10pt`, where the
+                // GDI supplement (Arial_Narrow @13ppem -> h=16px = 12.00pt)
+                // replaced the 11.4746 hhea and produced 12.00 x 1.15 = 13.80,
+                // i.e. +0.60/line. That is 0009d767's whole content-height
+                // error. The conjunction is why it hid: Arial has no
+                // supplement at 13ppem, and Arial Narrow at 12pt (16ppem) has
+                // no entry, so both of those arms were already correct.
                 && (is_single
+                    || self.s1189_on()
                     || !self.registry.has_gdi_height_supplement(&metrics.family, ppem)
                     || std::env::var("OXI_S922_DISABLE").is_ok())
                 {
