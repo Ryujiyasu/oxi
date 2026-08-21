@@ -348,6 +348,11 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
 #[derive(Debug, Clone, Default)]
 struct Theme {
     colours: Vec<String>,
+    /// The faces the theme's major and minor schemes name for this script.
+    /// A font that says `<scheme val="minor"/>` wears one of these and its
+    /// own `<name>` counts for nothing.
+    major_face: Option<String>,
+    minor_face: Option<String>,
 }
 
 impl Theme {
@@ -361,21 +366,56 @@ impl Theme {
     }
 }
 
+/// The script whose face a theme font resolves to. Excel picks it by the
+/// language it is running as; measured against a Japanese Excel, which is
+/// what the corpus is compared to.
+const THEME_SCRIPT: &str = "Jpan";
+
 fn parse_theme_xml(xml: &str) -> Theme {
     let mut reader = Reader::from_str(xml);
     let mut theme = Theme::default();
     let mut in_scheme = false;
+    // Which of the two font schemes is being read, and how good the face
+    // held for each is: the entry for this script beats the East Asian
+    // fallback, which beats the Latin one.
+    let mut in_font_scheme: Option<bool> = None;
+    let mut face_rank = [0u8; 2];
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                if local_name(e.name().as_ref()) == "clrScheme" {
-                    in_scheme = true;
-                }
-            }
-            Ok(Event::End(e)) => {
-                if local_name(e.name().as_ref()) == "clrScheme" {
-                    break;
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref()).as_str() {
+                "clrScheme" => in_scheme = true,
+                "majorFont" => in_font_scheme = Some(true),
+                "minorFont" => in_font_scheme = Some(false),
+                _ => {}
+            },
+            Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
+                // The colour scheme comes first; reading on gathers the
+                // fonts that follow it.
+                "clrScheme" => in_scheme = false,
+                "majorFont" | "minorFont" => in_font_scheme = None,
+                "theme" | "themeElements" => break,
+                _ => {}
+            },
+            Ok(Event::Empty(e)) if in_font_scheme.is_some() => {
+                let major = in_font_scheme == Some(true);
+                let name = local_name(e.name().as_ref());
+                // Rank: the script's own entry, then <a:ea>, then <a:latin>.
+                let rank = match name.as_str() {
+                    "font" if get_attr(&e, "script").as_deref() == Some(THEME_SCRIPT) => 3,
+                    "ea" => 2,
+                    "latin" => 1,
+                    _ => 0,
+                };
+                let face = get_attr(&e, "typeface").filter(|face| !face.is_empty());
+                let held = &mut face_rank[usize::from(major)];
+                if let (Some(face), true) = (face, rank > *held) {
+                    *held = rank;
+                    if major {
+                        theme.major_face = Some(face);
+                    } else {
+                        theme.minor_face = Some(face);
+                    }
                 }
             }
             Ok(Event::Empty(e)) if in_scheme => {
@@ -485,6 +525,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     let mut section = Section::None;
     let mut in_font = false;
     let mut current_font = FontInfo::default();
+    let mut current_font_scheme: Option<String> = None;
     let mut in_fill = false;
     let mut current_fill = FillInfo::default();
     let mut in_border = false;
@@ -620,6 +661,9 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "name" | "rFont" if in_font => {
                         current_font.name = get_attr(&e, "val");
                     }
+                    "scheme" if in_font => {
+                        current_font_scheme = get_attr(&e, "val");
+                    }
                     "color" if in_font => {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
@@ -695,6 +739,19 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         section = Section::None;
                     }
                     "font" if in_font => {
+                        // A font that names a theme scheme wears the face
+                        // that scheme states, and its own <name> counts for
+                        // nothing: openpyxl writes Calibri with
+                        // `scheme="minor"` and Excel opens the workbook in
+                        // the theme's ＭＳ Ｐゴシック, rows and all.
+                        let face = match current_font_scheme.take().as_deref() {
+                            Some("major") => theme.major_face.clone(),
+                            Some("minor") => theme.minor_face.clone(),
+                            _ => None,
+                        };
+                        if let Some(face) = face {
+                            current_font.name = Some(face);
+                        }
                         ss.fonts.push(std::mem::take(&mut current_font));
                         in_font = false;
                     }
