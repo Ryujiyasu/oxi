@@ -55,6 +55,14 @@ ARMS = [
     ("dashed4", "dashed", 4),
     ("thick4", "thick", 4),
     ("triple4", "triple", 4),
+    # trHeight interaction: does the DRAWN width still ride on top of an
+    # atLeast/exact row height, and does the multiplier apply there too?
+    ("d4_atl400", "double", 4, 400, "atLeast"),
+    ("s4_atl400", "single", 4, 400, "atLeast"),
+    ("d4_atl200", "double", 4, 200, "atLeast"),
+    ("s4_atl200", "single", 4, 200, "atLeast"),
+    ("d4_exact400", "double", 4, 400, "exact"),
+    ("s4_exact400", "single", 4, 400, "exact"),
 ]
 N_ROWS = 4
 
@@ -69,7 +77,7 @@ def txt(s, sz=20):
             '<w:t xml:space="preserve">%s</w:t></w:r>' % (sz, sz, s))
 
 
-def tbl(style, sz):
+def tbl(style, sz, trh=None, trh_rule="atLeast"):
     if style is None:
         borders = ""
     else:
@@ -78,8 +86,10 @@ def tbl(style, sz):
                    + "".join(edge % k for k in ("top", "left", "bottom", "right",
                                                 "insideH", "insideV"))
                    + "</w:tblBorders>")
+    trpr = ("" if trh is None else
+            '<w:trPr><w:trHeight w:val="%d" w:hRule="%s"/></w:trPr>' % (trh, trh_rule))
     rows = "".join(
-        '<w:tr><w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>'
+        '<w:tr>' + trpr + '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>'
         '<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
         + txt("R%d" % k) + "</w:p></w:tc>"
         '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>'
@@ -99,13 +109,15 @@ SECT = ('<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
 
 def build():
     body = []
-    for i, (name, style, sz) in enumerate(ARMS):
+    for i, arm in enumerate(ARMS):
+        name, style, sz = arm[0], arm[1], arm[2]
+        trh, trh_rule = (arm[3], arm[4]) if len(arm) > 3 else (None, "atLeast")
         # ★One arm per PAGE. Without the break an arm that straddles a page
         # boundary reports a ~9400pt advance and a nonsense pitch list, and a
         # 6pt border is thick enough to shift the arms after it.
         brk = ('<w:pPr><w:pageBreakBefore/></w:pPr>' if i else "")
         body.append("<w:p>" + brk + txt(mark(i, "A")) + "</w:p>")
-        body.append(tbl(style, sz))
+        body.append(tbl(style, sz, trh, trh_rule))
         body.append("<w:p>" + txt(mark(i, "B")) + "</w:p>")
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
            '<w:document %s><w:body>%s%s</w:body></w:document>'
@@ -186,7 +198,8 @@ def summarize(rows, tag):
     rows.sort()
     print("--- %s ---" % tag)
     res = {}
-    for i, (name, _s, _z) in enumerate(ARMS):
+    for i, arm in enumerate(ARMS):
+        name = arm[0]
         ya = [r[0] for r in rows if r[1] == "T" and mark(i, "A") in r[2]]
         yb = [r[0] for r in rows if r[1] == "T" and mark(i, "B") in r[2]]
         if not ya or not yb:
@@ -212,7 +225,8 @@ if __name__ == "__main__":
     o = summarize(rows_oxi(p), "OXI") if "--oxi" in sys.argv else None
     if w and o:
         print("--- DIFF (oxi - word) ---")
-        for name, _s, _z in ARMS:
+        for arm in ARMS:
+            name = arm[0]
             if name in w and name in o:
                 print("  %-9s d_advance %+7.2f   pitch_w %s  pitch_o %s"
                       % (name, o[name][0] - w[name][0], w[name][1], o[name][1]))

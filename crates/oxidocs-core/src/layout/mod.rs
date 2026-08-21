@@ -25400,6 +25400,115 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// ROWBOX2: the border width that pads the cell content top (generalized
     /// Round30 — fires additively with explicit cellMar, and for cell-level
     /// tcBorders too). 0.0 when the experiment is off or the row is unbordered.
+    /// S1187 (2026-08-21, HELD OPT-IN — `OXI_S1187_CELL` / `OXI_S1187_TBL`,
+    /// both default OFF, so the shipped tree is byte-identical): the DRAWN
+    /// extent of a border, which is what Word charges to the row box. `w:sz` is
+    /// the width of ONE line; a compound style draws several with gaps between.
+    ///
+    /// ★HELD because the Phase-1 gate blocks it, not because the rule is wrong.
+    /// The Word truth below is solid, and the two scopes have OPPOSITE signs on
+    /// the corpus (EN 248 pagination, per-doc):
+    ///        doc                off        cell        TBL      cell+TBL
+    ///   00501ca3           PASS 1.0000  FAIL .9963  PASS 1.0000  FAIL .9963
+    ///   forms__000ee7c0    pcd -1       pcd -1      pcd -1       pcd  0
+    ///   0056b52f              .9849        .9868       .9868       .9868
+    /// The target (forms) needs BOTH scopes — its row doubles are cell-declared
+    /// and the 1.91pt at the table foot is the outer one — but the cell scope
+    /// costs 00501ca3 one paragraph across a page boundary (1 of 272). Root
+    /// cause: Oxi fires the cell multiplier 190x on 00501ca3 where Word draws
+    /// only ~5 doubles per page, i.e. Oxi does not model Word's BORDER CONFLICT
+    /// RESOLUTION at a shared edge (that table declares `double` on cell tops
+    /// AND `insideH single sz6` at table level; Word resolves most shared edges
+    /// to the single). That resolution is the missing derivation, and it is the
+    /// same gap S865's `thick_fixed` carve-out stands in for. Deriving it is
+    /// the next step; until then neither scope ships.
+    /// ★TBL-alone scores well above (0056b52f up, 00501ca3 untouched) but must
+    /// NOT be shipped as a shortcut: `table.style.border_*` is the OUTER
+    /// border, so multiplying it charges interior rows for a rule Word does not
+    /// draw there. Scoring better by a mechanism known to be wrong is the
+    /// EXCEPTION-stacking the methodology forbids.
+    ///
+    /// DERIVED (`tools/metrics/_pb_tblborder_gen.py`, 12 arms, one per page, on
+    /// a 4-row fixed-layout table whose bare row pitch is 12.207):
+    ///   single sz 4/8/12/24/48 -> pitch +0.51 / 0.99 / 1.47 / 3.03 / 6.03  = 1x
+    ///   dashed sz4, thick sz4  -> +0.51                                    = 1x
+    ///   double sz 4/8/12       -> +1.47 / 3.03 / 4.47                      = 3x
+    ///   triple sz4             -> +2.55                                    = 5x
+    /// The advance BELOW the table tracks the same width. This is the rule the
+    /// FOOTER stack already applies (S868b `eff_bw`: "double = 3x sz/8 per
+    /// side"); the body row path never had it, so `forms__000ee7c0` lost 0.97pt
+    /// at each of its two double-bordered rows and 1.91pt under the table's
+    /// outer double — 8.2pt by the page foot, which is why Oxi kept the
+    /// trailing empty paragraph that Word pushes to page 2.
+    ///
+    /// ★Only `double` and `triple` are MEASURED. Word's other compound styles
+    /// (thinThickSmallGap, thickThinSmallGap, dashDotStroked, …) certainly draw
+    /// wider than one line too, but no probe covers them, so they stay at 1x
+    /// rather than being guessed — `reference__0035761e` (thinThick/thickThin
+    /// sz36) and the four `tokumei_08_*` (dashDotStroked sz24) are therefore
+    /// byte-identical, which also keeps the S865 note's tokumei reading intact.
+    ///
+    /// ★★SCOPE: applied ONLY to a border a CELL declares (tcBorders), never to
+    /// the table-level fallback. A `tcBorders` entry IS the rule at that edge,
+    /// so its drawn width is the row's. The table-level fallback is NOT: the
+    /// row-pad paths hand back `table.style.border_*`, which is the OUTER
+    /// border, for interior rows too — so multiplying it charges an interior
+    /// row for a rule Word never draws there.
+    ///   technical__00501ca3 is the proof: every table is outer `double sz4`
+    ///   with `insideH single sz6`, and Word draws exactly that (page-8 rule
+    ///   pairs 0.96 apart at 72.00 / 100.82 / 483.67 / 512.47 / 631.42 = the
+    ///   outer doubles; lone 0.48 rules at 118.10 / 552.79 / 569.11 / 592.06 /
+    ///   608.38 = the interior singles). An ungated multiplier gave EVERY row
+    ///   1.5 and pushed '(Added 2002) (Amended 2010)' off page 8 (PASS→FAIL,
+    ///   1 of 272 paragraphs). The docs that improve — forms__000ee7c0,
+    ///   roudoujoken, tsuuchisho — carry their doubles ONLY in tcBorders
+    ///   (tblBorders-double = 0 in all three).
+    /// The outer-vs-insideH resolution is a SEPARATE, larger fix: it is also
+    /// what S865's `thick_fixed` carve-out is standing in for (0009d767 =
+    /// outer `single sz12` + `TableGrid` style `insideH single sz4`, so the
+    /// fallback over-charged every interior row by 1.0 = the +16.5pt S865
+    /// suppresses). Doing it properly retires S865 rather than patching it.
+    fn s1187_eff_bw(&self, style: &str, width: f32) -> f32 {
+        // Cell-level scope, independently switchable from the table-level one
+        // (`OXI_S1187_TBL`) so the two can be A/B'd separately: they turn out
+        // to have OPPOSITE signs on the corpus — see the ship note.
+        if std::env::var("OXI_S1187_CELL").is_err() {
+            return width;
+        }
+        let mult = match style {
+            "double" => 3.0,
+            "triple" => 5.0,
+            _ => 1.0,
+        };
+        if mult > 1.0 && std::env::var("OXI_DBG_S1187").is_ok() {
+            eprintln!("[S1187] cell style={} w={:.2} -> {:.2}", style, width, width * mult);
+        }
+        width * mult
+    }
+
+    /// S1187 at a TABLE-level border. Held behind `OXI_S1187_TBL` — see the
+    /// SCOPE note on `s1187_eff_bw`: `table.style.border_*` is the OUTER
+    /// border, so multiplying it charges interior rows for a rule Word does
+    /// not draw there (technical__00501ca3 = outer double sz4 + insideH single
+    /// sz6). The flag exists so the two scopes can be A/B'd without a rebuild.
+    fn s1187_tbl_bw(&self, style: Option<&str>, width: f32) -> f32 {
+        if std::env::var("OXI_S1187_TBL").is_err() {
+            return width;
+        }
+        let w = {
+            let mult = match style {
+                Some("double") => 3.0,
+                Some("triple") => 5.0,
+                _ => 1.0,
+            };
+            width * mult
+        };
+        if w != width && std::env::var("OXI_DBG_S1187").is_ok() {
+            eprintln!("[S1187] TABLE style={:?} w={:.2} -> {:.2}", style, width, w);
+        }
+        w
+    }
+
     fn rowbox2_border_pad(&self, table: &Table, cell: &TableCell) -> f32 {
         if !self.rowbox2_pad_on() {
             return 0.0;
@@ -25432,12 +25541,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // row) while Oxi charged 1.5 → +1.25 per gene pair → ~3 rows/page →
             // the +1 cascade from wp3 and a phantom near-empty page.
             let width = table.style.border_width.unwrap_or(0.5);
+            // S1187: remember the CELL-DECLARED style, if the cell declares one.
+            // The table-level fallback keeps its raw width (see s1187_eff_bw's
+            // SCOPE note — it is the OUTER border and cannot speak for an
+            // interior row). Every predicate below (S865's `> 1.0`) keeps
+            // testing the RAW one-line width it was derived on.
+            let mut declared: Option<String> = None;
             let width = if std::env::var("OXI_S1030_DISABLE").is_err() {
                 cell.borders
                     .as_ref()
                     .and_then(|b| b.top.as_ref())
                     .filter(|d| d.style != "none" && d.width > 0.0)
-                    .map_or(width, |d| d.width)
+                    .map_or(width, |d| {
+                        declared = Some(d.style.clone());
+                        d.width
+                    })
             } else {
                 width
             };
@@ -25455,7 +25573,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
                 && width > 1.0
                 && table.style.layout.as_deref() == Some("fixed");
-            return if thick_fixed { 0.0 } else { width };
+            return if thick_fixed {
+                0.0
+            } else {
+                match declared.as_deref() {
+                    Some(s) => self.s1187_eff_bw(s, width),
+                    None => self.s1187_tbl_bw(table.style.border_style.as_deref(), width),
+                }
+            };
         }
         if let Some(b) = &cell.borders {
             // S911: exclude the S482 explicit-nil sentinel ({style:"none"}) —
@@ -25463,7 +25588,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let real = |d: &Option<BorderDef>| {
                 d.as_ref()
                     .filter(|x| x.style != "none" || std::env::var("OXI_S911_DISABLE").is_ok())
-                    .map(|x| x.width)
+                    .map(|x| self.s1187_eff_bw(&x.style, x.width))
             };
             let (t, bo) = (real(&b.top), real(&b.bottom));
             if t.is_some() || bo.is_some() {
@@ -25503,6 +25628,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             return 0.0;
         }
         // widest horizontal tcBorder on a row's cells (side: false=top, true=bottom)
+        // S1187: compare DRAWN extents — a double sz4 rule is wider than a
+        // single sz8 one even though its `w:sz` is half.
         let horiz = |row: &TableRow, bottom: bool| -> f32 {
             row.cells
                 .iter()
@@ -25514,7 +25641,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         b.top.as_ref()
                     }
                 })
-                .map(|d| d.width)
+                .map(|d| self.s1187_eff_bw(&d.style, d.width))
                 .fold(0.0f32, f32::max)
         };
         let Some(this) = table.rows.get(row_idx) else {
@@ -25566,10 +25693,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             && !table.style.has_inside_h
             && row_idx > 0
         {
+            // S1187: `real` yields the DRAWN extent, so a double rule between
+            // two rows charges 3x its w:sz like Word draws it.
             let real = |d: &Option<BorderDef>| {
                 d.as_ref()
                     .filter(|x| x.style != "none" && x.width > 0.0)
-                    .map(|x| x.width)
+                    .map(|x| self.s1187_eff_bw(&x.style, x.width))
             };
             let horiz = |row: &TableRow, bottom: bool| -> f32 {
                 row.cells
@@ -25624,6 +25753,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // so the siblings stay aligned = the S911-v2 contract); fall back
             // to the table width when the row declares none (inheritance).
             let width = table.style.border_width.unwrap_or(0.5);
+            // S1187: remember the style of the CELL-DECLARED winner. The
+            // table-level fallback keeps its raw width (see s1187_eff_bw's
+            // SCOPE note). S865's `> 1.0` test keeps reading the RAW one-line
+            // width it was derived on.
+            let mut declared_style: Option<String> = None;
             let width = if std::env::var("OXI_S1030_DISABLE").is_err() {
                 let declared = table.rows.get(row_idx).map_or(0.0, |r| {
                     r.cells
@@ -25631,12 +25765,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .filter_map(|c| c.borders.as_ref())
                         .filter_map(|b| b.top.as_ref())
                         .filter(|d| d.style != "none" && d.width > 0.0)
-                        .map(|d| d.width)
-                        .fold(0.0f32, f32::max)
+                        .max_by(|a, b| {
+                            self.s1187_eff_bw(&a.style, a.width)
+                                .total_cmp(&self.s1187_eff_bw(&b.style, b.width))
+                        })
+                        .map_or(0.0, |d| {
+                            declared_style = Some(d.style.clone());
+                            d.width
+                        })
                 });
                 if declared > 0.0 {
                     declared
                 } else {
+                    declared_style = None;
                     width
                 }
             } else {
@@ -25645,7 +25786,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let thick_fixed = std::env::var("OXI_S865_DISABLE").is_err()
                 && width > 1.0
                 && table.style.layout.as_deref() == Some("fixed");
-            return if thick_fixed { 0.0 } else { width };
+            return if thick_fixed {
+                0.0
+            } else {
+                match declared_style.as_deref() {
+                    Some(s) => self.s1187_eff_bw(s, width),
+                    None => self.s1187_tbl_bw(table.style.border_style.as_deref(), width),
+                }
+            };
         }
         self.rowbox2_border_pad(table, cell)
     }
@@ -25718,7 +25866,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             return 0.0;
         }
         if table.style.border || table.style.has_inside_h {
-            return table.style.border_width.unwrap_or(0.5);
+            // S1187 MEASURED (_pb_tblborder_gen trHeight arms, atLeast 400tw =
+            // 20.0pt over a 12.207 natural line): the atLeast row box is trH +
+            // the DRAWN border width — single sz4 -> pitch 20.52 = 20.0 + 0.52,
+            // double sz4 -> 21.48 = 20.0 + 1.48 (= 3x). A non-binding atLeast
+            // (200tw) falls back to natural + the same width (12.72 / 13.68),
+            // and an EXACT trHeight ignores the border altogether (both styles
+            // measure 20.04) — which is what the `exact` arm of this function's
+            // callers already does.
+            // ★This arm is the TABLE-level border, so it stays at the raw width
+            // per s1187_eff_bw's SCOPE note; the cell-level arms below carry
+            // the multiplier.
+            return self.s1187_tbl_bw(
+                table.style.border_style.as_deref(),
+                table.style.border_width.unwrap_or(0.5),
+            );
         }
         // S1016 (opt-out OXI_S1016_DISABLE): for the sparse-mirrored 3-col
         // atLeast table, the row's atLeast contribution is only its REAL
@@ -25735,7 +25897,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .filter_map(|cell| cell.borders.as_ref())
                 .filter_map(|b| b.top.as_ref())
                 .filter(|d| d.style != "none")
-                .map(|d| d.width)
+                .map(|d| self.s1187_eff_bw(&d.style, d.width))
                 .fold(0.0f32, f32::max);
         }
         let mut w: f32 = 0.0;
@@ -25744,9 +25906,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             if let Some(b) = &cell.borders {
                 if b.top.is_some() || b.bottom.is_some() {
                     any = true;
-                    w = w
-                        .max(b.top.as_ref().map(|d| d.width).unwrap_or(0.0))
-                        .max(b.bottom.as_ref().map(|d| d.width).unwrap_or(0.0));
+                    // S1187: compare DRAWN extents, not raw w:sz.
+                    let eff = |d: &Option<BorderDef>| {
+                        d.as_ref()
+                            .map(|x| self.s1187_eff_bw(&x.style, x.width))
+                            .unwrap_or(0.0)
+                    };
+                    w = w.max(eff(&b.top)).max(eff(&b.bottom));
                 }
             }
         }
