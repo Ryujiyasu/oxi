@@ -25468,6 +25468,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// outer `single sz12` + `TableGrid` style `insideH single sz4`, so the
     /// fallback over-charged every interior row by 1.0 = the +16.5pt S865
     /// suppresses). Doing it properly retires S865 rather than patching it.
+    /// ★That fix is now DERIVED and implemented as S1188 below.
     fn s1187_eff_bw(&self, style: &str, width: f32) -> f32 {
         // Cell-level scope, independently switchable from the table-level one
         // (`OXI_S1187_TBL`) so the two can be A/B'd separately: they turn out
@@ -25509,9 +25510,125 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         w
     }
 
+    /// S1188 (2026-08-21, opt-in `OXI_S1188`): Word's BORDER CONFLICT
+    /// RESOLUTION at a shared horizontal edge, and with it the width that pads
+    /// a row's content top.
+    ///
+    /// DERIVED (`tools/metrics/_pb_bconflict_gen.py`, 13 arms, one per page, a
+    /// 4-row 2-col fixed table with `insideH` declared on the table and
+    /// `top`/`bottom` optionally declared on the cells; bare row 12.207):
+    ///
+    ///   edge_width = MAX over { cells of the row ABOVE : their `bottom`,
+    ///                           cells of THIS row     : their `top` }
+    ///   where a cell that declares nothing inherits the table's `insideH`,
+    ///   an explicit `nil` contributes 0, and each contribution is the DRAWN
+    ///   extent (S1187: double = 3x w:sz/8, triple = 5x).
+    ///
+    /// Evidence, row-2 box against the 12.96 baseline (insideH single sz6):
+    ///   insideH .75 + cell top double sz4 (1.5) -> 13.68, drawn as 2 lines
+    ///   insideH .75 + cell bottom double sz4    -> 13.68  (either side wins)
+    ///   insideH .75 + cell top nil              -> 12.96  (other side inherits)
+    ///   insideH .75 + BOTH sides nil            -> rule GONE, rows merge 25.08
+    ///   insideH single sz12 (1.5) + cell top single sz6 (.75) -> 13.68 (table wins)
+    ///   insideH single sz24 (3.0) + cell top single sz4       -> 15.24 (table wins)
+    ///   insideH double sz4 (1.5)  + cell top single sz6       -> 13.68, 2 lines
+    /// ★`onecell_top_d4`: only the FIRST cell declares the double, and the
+    /// WHOLE row's box still grows to 13.68 — the pad is a ROW quantity, which
+    /// is why taking a max across the row's cells (not a per-cell value) is
+    /// correct.
+    ///
+    /// This subsumes S865 / S911 / S1030 / S1016, which are each a partial
+    /// reading of it: S1030 = "a declared cell border replaces the table's",
+    /// S911 = "nil contributes 0", S865 = the +16.5pt that appears when the
+    /// OUTER width is charged to interior rows (0009d767 = outer single sz12 +
+    /// TableGrid insideH sz4; Word's truth there is row 0 = 1.44 and every
+    /// interior rule = 0.48, exactly what this rule predicts).
+    fn s1188_drawn(&self, style: &str, width: f32) -> f32 {
+        if style == "none" || style == "nil" {
+            return 0.0;
+        }
+        width
+            * match style {
+                "double" => 3.0,
+                "triple" => 5.0,
+                _ => 1.0,
+            }
+    }
+
+    /// Widest effective contribution from one side of an edge: for every cell
+    /// in `row`, its own declaration if it has one, else `inherit`.
+    fn s1188_side(
+        &self,
+        row: Option<&TableRow>,
+        bottom: bool,
+        inherit: Option<&BorderDef>,
+    ) -> f32 {
+        let Some(row) = row else { return 0.0 };
+        let inherited = inherit.map_or(0.0, |d| self.s1188_drawn(&d.style, d.width));
+        let mut best = 0.0f32;
+        for c in &row.cells {
+            let own = c
+                .borders
+                .as_ref()
+                .and_then(|b| if bottom { b.bottom.as_ref() } else { b.top.as_ref() });
+            let w = match own {
+                Some(d) => self.s1188_drawn(&d.style, d.width),
+                None => inherited,
+            };
+            best = best.max(w);
+        }
+        best
+    }
+
+    /// The drawn width of the rule at the TOP edge of `row_idx`.
+    fn s1188_edge_bw(&self, table: &Table, row_idx: usize) -> f32 {
+        if row_idx == 0 {
+            // Row 0's rule is the table's OUTER top, not insideH.
+            let outer = if table.style.border {
+                self.s1188_drawn(
+                    table.style.border_style.as_deref().unwrap_or("single"),
+                    table.style.border_width.unwrap_or(0.5),
+                )
+            } else {
+                0.0
+            };
+            let declared = self.s1188_side(table.rows.first(), false, None);
+            return outer.max(declared);
+        }
+        let ih = table
+            .style
+            .inside_horizontal_border
+            .as_ref()
+            .filter(|d| d.style != "none");
+        let above = self.s1188_side(table.rows.get(row_idx - 1), true, ih);
+        let own = self.s1188_side(table.rows.get(row_idx), false, ih);
+        above.max(own)
+    }
+
+    /// Index of `row` inside `table.rows`, by identity. Returns None for a row
+    /// that is not one of this table's (a nested table's, or a synthesized one),
+    /// in which case the caller keeps its legacy path.
+    fn s1188_row_idx(&self, table: &Table, row: &TableRow) -> Option<usize> {
+        table.rows.iter().position(|r| std::ptr::eq(r, row))
+    }
+
+    fn s1188_on(&self) -> bool {
+        std::env::var("OXI_S1188").is_ok()
+    }
+
     fn rowbox2_border_pad(&self, table: &Table, cell: &TableCell) -> f32 {
         if !self.rowbox2_pad_on() {
             return 0.0;
+        }
+        if self.s1188_on() {
+            // The cell's row, by identity — the pad is a ROW quantity.
+            if let Some(idx) = table
+                .rows
+                .iter()
+                .position(|r| r.cells.iter().any(|c| std::ptr::eq(c, cell)))
+            {
+                return self.s1188_edge_bw(table, idx);
+            }
         }
         if table.style.border || table.style.has_inside_h {
             // S911 (2026-07-17, opt-out OXI_S911_DISABLE): a cell-level EXPLICIT
@@ -25665,6 +25782,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     fn rowbox2_border_pad_row(&self, table: &Table, row_idx: usize, cell: &TableCell) -> f32 {
         if !self.rowbox2_pad_on() {
             return 0.0;
+        }
+        if self.s1188_on() {
+            return self.s1188_edge_bw(table, row_idx);
         }
         if !self.doc_body_has_real_cjk
             && std::env::var("OXI_S870_DISABLE").is_err()
@@ -25864,6 +25984,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     fn rowbox2_trh_bw(&self, table: &Table, row: &TableRow) -> f32 {
         if !self.rowbox2_trh() {
             return 0.0;
+        }
+        if self.s1188_on() {
+            // Same edge width feeds the atLeast border-box term: MEASURED
+            // (_pb_tblborder_gen trHeight arms) atLeast = trH + drawn width,
+            // exact = trH with no border at all.
+            if let Some(idx) = self.s1188_row_idx(table, row) {
+                return self.s1188_edge_bw(table, idx);
+            }
         }
         if table.style.border || table.style.has_inside_h {
             // S1187 MEASURED (_pb_tblborder_gen trHeight arms, atLeast 400tw =
