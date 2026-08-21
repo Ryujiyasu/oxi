@@ -366,26 +366,159 @@ fn row_pixels(
     (measured + thick as f32).min(CEILING_PX)
 }
 
-/// Counts the lines a cell's text wraps into, through DirectWrite's
-/// GDI-compatible layout. Neither engine reproduces Excel exactly: GDI's own
-/// DrawText refuses to break inside a katakana run, which Excel does freely,
-/// and DirectWrite's compatible advances drift a pixel on some glyphs (an
-/// 8pt fullwidth step measures 10.95px against GDI's 11). DirectWrite errs
-/// by a line on boundary-tight cells; GDI errs on every katakana paragraph.
+/// Characters that may not start a line: the closing half of a pair, the
+/// small kana, the sound mark, and the punctuation that ends a phrase.
+const NEVER_STARTS: &str = "、。，．・：；？！゛゜ゝゞヽヾー々〆\u{3005}\
+    ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ）］｝〉》」』】〕〙〗”’";
+/// Characters that may not end one: the opening half of a pair.
+const NEVER_ENDS: &str = "（［｛〈《「『【〔〘〖“‘￥＄";
+
+/// Where Excel is willing to end a line. Measured from its own PDF: a line
+/// that would start with a forbidden character does not hang it past the
+/// edge — the break moves back a character at a time until it is allowed, so
+/// the line simply holds fewer glyphs.
+fn may_break(before: char, after: char) -> bool {
+    if before == ' ' || before == '\u{3000}' {
+        return true;
+    }
+    if NEVER_STARTS.contains(after) || NEVER_ENDS.contains(before) {
+        return false;
+    }
+    // A Latin word travels whole; Japanese breaks wherever it likes.
+    let word = |letter: char| {
+        letter.is_ascii_alphanumeric() || matches!(letter, '\'' | '-' | '/' | '.' | ',')
+    };
+    !(word(before) && word(after))
+}
+
+/// How many lines one paragraph takes in a box this wide, given what each
+/// character advances. The line holds characters until the next would not
+/// fit, then gives them back one at a time until the break is one Excel
+/// would make.
+fn count_lines(letters: &[char], advances: &[i32], width: f32) -> u32 {
+    if letters.is_empty() {
+        return 1;
+    }
+    let box_px = width.max(1.0) as i32;
+    let mut lines = 0u32;
+    let mut start = 0usize;
+    while start < letters.len() {
+        let mut take = 0usize;
+        let mut run = 0i32;
+        while start + take < letters.len() {
+            let next = run + advances[start + take];
+            if take > 0 && next > box_px {
+                break;
+            }
+            run = next;
+            take += 1;
+        }
+        while start + take < letters.len()
+            && take > 1
+            && !may_break(letters[start + take - 1], letters[start + take])
+        {
+            take -= 1;
+        }
+        lines += 1;
+        start += take.max(1);
+    }
+    lines.max(1)
+}
+
+/// Counts the lines a cell's text wraps into, measuring the way Excel does:
+/// each character advances what the font gives it on its own, and the line
+/// is the sum of those. A text engine will not do: DirectWrite's advances
+/// run a fraction under GDI's, and GDI's own run measurement compresses
+/// neighbouring Japanese punctuation, which Excel's PDF shows it does not —
+/// 49ac46's D16 measures 589px as a run and 592px character by character,
+/// and Excel wraps it as 592.
+/// A face at a size, in the weight and slant it is asked for.
+#[cfg(windows)]
+type FontKey = (String, u32, bool, bool);
+
+/// What every character measured so far advances, per font.
+#[cfg(windows)]
+type AdvanceCache =
+    std::collections::HashMap<FontKey, std::collections::HashMap<char, i32>>;
+
 #[cfg(windows)]
 struct LineCounter {
-    factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    /// One character's advance, kept per font so a sheet of one typeface
+    /// asks the device about each character once.
+    advances: std::cell::RefCell<AdvanceCache>,
 }
 
 #[cfg(windows)]
 impl LineCounter {
     fn new() -> Option<Self> {
-        use windows::Win32::Graphics::DirectWrite::*;
         unsafe {
-            DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)
-                .ok()
-                .map(|factory| Self { factory })
+            let dc = windows::Win32::Graphics::Gdi::GetDC(None);
+            if dc.is_invalid() {
+                return None;
+            }
+            Some(Self {
+                dc,
+                advances: std::cell::RefCell::new(std::collections::HashMap::new()),
+            })
         }
+    }
+
+    /// What each of these characters advances, in whole pixels.
+    fn advances_of(
+        &self,
+        face: &str,
+        points: f32,
+        bold: bool,
+        italic: bool,
+        letters: &[char],
+    ) -> Option<Vec<i32>> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::SIZE;
+        use windows::Win32::Graphics::Gdi::*;
+        let pixels = (points * 96.0 / 72.0).round();
+        let key = (face.to_string(), pixels as u32, bold, italic);
+        let mut held = self.advances.borrow_mut();
+        let known = held.entry(key).or_default();
+        let wanted: Vec<char> = letters
+            .iter()
+            .copied()
+            .filter(|letter| !known.contains_key(letter))
+            .collect();
+        if !wanted.is_empty() {
+            unsafe {
+                let name: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+                let font = CreateFontW(
+                    -(pixels as i32),
+                    0,
+                    0,
+                    0,
+                    if bold { 700 } else { 400 },
+                    u32::from(italic),
+                    0,
+                    0,
+                    DEFAULT_CHARSET.0 as u32,
+                    OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32,
+                    ANTIALIASED_QUALITY.0 as u32,
+                    (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                    PCWSTR(name.as_ptr()),
+                );
+                if font.is_invalid() {
+                    return None;
+                }
+                let previous = SelectObject(self.dc, font);
+                for letter in wanted {
+                    let one: Vec<u16> = letter.to_string().encode_utf16().collect();
+                    let mut size = SIZE::default();
+                    let ok = GetTextExtentPoint32W(self.dc, &one, &mut size).as_bool();
+                    known.insert(letter, if ok { size.cx } else { 0 });
+                }
+                SelectObject(self.dc, previous);
+                let _ = DeleteObject(font);
+            }
+        }
+        Some(letters.iter().map(|letter| known[letter]).collect())
     }
 
     fn lines(
@@ -397,49 +530,22 @@ impl LineCounter {
         text: &str,
         width: f32,
     ) -> Option<u32> {
-        use windows::core::{HSTRING, PCWSTR};
-        use windows::Win32::Graphics::DirectWrite::*;
+        // Each paragraph is broken on its own.
+        let mut total = 0u32;
+        for paragraph in text.split('\n') {
+            let letters: Vec<char> = paragraph.chars().collect();
+            let advances = self.advances_of(face, points, bold, italic, &letters)?;
+            total += count_lines(&letters, &advances, width);
+        }
+        Some(total.max(1))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for LineCounter {
+    fn drop(&mut self) {
         unsafe {
-            let face = HSTRING::from(face);
-            let format = self
-                .factory
-                .CreateTextFormat(
-                    PCWSTR(face.as_ptr()),
-                    None,
-                    if bold {
-                        DWRITE_FONT_WEIGHT_BOLD
-                    } else {
-                        DWRITE_FONT_WEIGHT_NORMAL
-                    },
-                    if italic {
-                        DWRITE_FONT_STYLE_ITALIC
-                    } else {
-                        DWRITE_FONT_STYLE_NORMAL
-                    },
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    // The whole pixel GDI instantiates the font at — an 8pt
-                    // face is a ppem-11 font to Excel.
-                    (points * 96.0 / 72.0).round(),
-                    &HSTRING::from("ja-JP"),
-                )
-                .ok()?;
-            format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP).ok()?;
-            let body = HSTRING::from(text);
-            let layout = self
-                .factory
-                .CreateGdiCompatibleTextLayout(
-                    body.as_wide(),
-                    &format,
-                    width.max(1.0),
-                    100_000.0,
-                    1.0,
-                    None,
-                    false,
-                )
-                .ok()?;
-            let mut metrics = DWRITE_TEXT_METRICS::default();
-            layout.GetMetrics(&mut metrics).ok()?;
-            Some(metrics.lineCount)
+            windows::Win32::Graphics::Gdi::ReleaseDC(None, self.dc);
         }
     }
 }
