@@ -448,8 +448,19 @@ fn may_break(before: char, after: char) -> bool {
     if before == ' ' || before == '\u{3000}' || before == '\t' {
         return true;
     }
+    // A line may also end where a space begins — the space stays with the
+    // line it ends and the next one starts past it, which is what Excel
+    // draws: "The quick" then "brown fox", not "The" then "quick brown".
+    if after == ' ' || after == '\u{3000}' || after == '\t' {
+        return true;
+    }
     if NEVER_STARTS.contains(after) || NEVER_ENDS.contains(before) {
         return false;
+    }
+    // A hyphen ends a line the way a space does, but only inside a word:
+    // Excel breaks a long web address after one and leaves a minus alone.
+    if before == '-' && !after.is_ascii_digit() {
+        return true;
     }
     // Anything that is not written on the em travels as one run to the next
     // space — a Latin word, and a web address with it. Excel puts a 94
@@ -600,6 +611,11 @@ fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
         }
         if take <= 1 && fill > 1 {
             take = fill;
+        }
+        // The spaces at a break belong to the line they end. Excel starts the
+        // next line at the first character past them, however many there are.
+        while start + take < letters.len() && letters[start + take] == ' ' {
+            take += 1;
         }
         start += take.max(1);
         if start < letters.len() {
@@ -2042,6 +2058,25 @@ mod windows_draw {
 #[cfg(test)]
 mod tests {
     use super::{column_pixels, stacked_text};
+
+    /// Where a line of text is allowed to end. Read back out of Excel's own
+    /// picture, character by character, over six samples in three faces and
+    /// three column widths: a space ends the line it follows *and* the line
+    /// it precedes, a hyphen inside a word ends a line, and a minus sign in
+    /// front of a number does not.
+    #[test]
+    fn a_line_ends_at_a_space_or_a_hyphen() {
+        assert!(super::may_break(' ', 'q'));
+        assert!(super::may_break('k', ' '));
+        assert!(super::may_break('-', 'a'));
+        assert!(!super::may_break('-', '5'));
+        assert!(!super::may_break('c', 'k'));
+        // The kinsoku rules still hold: a line does not start with a full
+        // stop, nor end with an opening bracket.
+        assert!(!super::may_break('あ', '。'));
+        assert!(!super::may_break('「', 'あ'));
+        assert!(super::may_break('あ', 'い'));
+    }
 
     /// What a cell is drawn as, line by line. A cell that does not wrap keeps
     /// its own breaks and nothing else; an empty stretch between two breaks is

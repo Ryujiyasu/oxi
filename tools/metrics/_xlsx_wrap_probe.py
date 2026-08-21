@@ -155,19 +155,30 @@ def ours(sheet_path):
 
     environment = dict(os.environ, OXI_XLSX_DUMP_COLUMNS="1", OXI_XLSX_DUMP_LINES="1")
     done = subprocess.run([str(RENDERER), str(sheet_path), str(SCRATCH / "wrap.oxi.png"), "96"],
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=300, env=environment)
+                          capture_output=True, timeout=300, env=environment)
+    # The renderer writes UTF-8 whatever the console's code page says, so its
+    # output is decoded here rather than by the pipe.
+    out = done.stdout.decode("utf-8", "replace")
+    err = done.stderr.decode("utf-8", "replace")
     widths, drawn = {}, {}
-    for line in done.stdout.splitlines():
+    for line in out.splitlines():
         parts = line.split()
         if len(parts) == 4 and parts[0] == "column":
             widths[int(parts[1])] = int(float(parts[3]))
-    for line in done.stderr.splitlines():
+    for line in err.splitlines():
         found = re.match(r'drawn row (\d+) col (\d+) lines \[(.*)\]$', line)
         if found:
             held = re.findall(r'"((?:[^"\\]|\\.)*)"', found.group(3))
+            # Rust's debug format escapes only the quote, the backslash and
+            # the control characters; decoding as unicode_escape would mangle
+            # every Japanese character in the line.
+            def plain(piece):
+                return (piece.replace('\\"', '"')
+                             .replace("\\n", chr(10))
+                             .replace("\\\\", "\\"))
+
             drawn[(int(found.group(1)), int(found.group(2)))] = [
-                piece.encode().decode("unicode_escape") for piece in held
+                plain(piece) for piece in held
             ]
     return widths, drawn
 
@@ -225,8 +236,14 @@ def main():
                 if at_char >= len(text):
                     break
             excel_lines = [text[a:b] for a, b in zip([0] + breaks, breaks)]
-            mine = drawn.get((row, column + 1), [])
-            agree = "" if mine == excel_lines else "   <<< Oxi: " + " | ".join(mine)
+            mine = drawn.get((row, column), [])
+            # A space at a break draws nothing wherever it is counted, so the
+            # two are compared by what they put on the page.
+            def plainly(lines):
+                return [line.strip() for line in lines]
+
+            agree = ("" if plainly(mine) == plainly(excel_lines)
+                     else "   <<< Oxi: " + " | ".join(mine))
             print(f"{face:<14}{points:>5.1f}{right - left:>7}  "
                   f"{' | '.join(excel_lines)}{agree}")
             # What the column's usable width must be for those breaks: every
