@@ -25905,7 +25905,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             return 0.0;
         }
         if self.s1188_on() {
-            return self.s1188_edge_bw(table, row_idx);
+            let v = self.s1188_edge_bw(table, row_idx);
+            if std::env::var("OXI_DBG_S1188").is_ok() {
+                eprintln!("[S1188/pad] row={} new={:.2}", row_idx, v);
+            }
+            return v;
         }
         if !self.doc_body_has_real_cjk
             && std::env::var("OXI_S870_DISABLE").is_err()
@@ -26107,6 +26111,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             return 0.0;
         }
         if self.s1188_on() {
+            if std::env::var("OXI_DBG_S1188").is_ok() {
+                if let Some(ix) = self.s1188_row_idx(table, row) {
+                    let legacy = if table.style.border || table.style.has_inside_h {
+                        table.style.border_width.unwrap_or(0.5)
+                    } else {
+                        -1.0
+                    };
+                    eprintln!("[S1188/trh] row={} new={:.2} legacy={:.2} trH={:?} rule={:?}",
+                        ix, self.s1188_edge_bw(table, ix), legacy,
+                        row.height, row.height_rule.as_deref());
+                }
+            }
             // Same edge width feeds the atLeast border-box term: MEASURED
             // (_pb_tblborder_gen trHeight arms) atLeast = trH + drawn width,
             // exact = trH with no border at all.
