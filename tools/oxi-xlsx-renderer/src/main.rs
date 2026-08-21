@@ -117,6 +117,254 @@ fn default_row_points(sheet: &Sheet) -> f32 {
     }
 }
 
+/// The height of one row, in 96-dpi pixels. A row that pins its height
+/// (customHeight) gets the stated number, +0.05pt of grace, floored to the
+/// pixel — 14.93 draws 19px and 14.95 draws 20px. Any other row is measured
+/// afresh: the stored ht is only a cache from the machine that wrote the
+/// file, and Excel derives the height from the row's own content — the
+/// tallest of `lines × the cell font's default height` across the cells,
+/// floored at the sheet default. An empty cell still counts one line of its
+/// font, which is how a tall-styled empty cell props a row open.
+#[allow(clippy::too_many_arguments)]
+fn row_pixels(
+    held: Option<&Row>,
+    default_px: f32,
+    columns: &[f32],
+    first_column: u32,
+    scale: f32,
+    counter: Option<&LineCounter>,
+    merged: &std::collections::HashMap<(u32, u32), Merged>,
+) -> f32 {
+    // Excel will not draw a row taller than 409.5pt, however much its
+    // content asks for — three corpus rows carrying 85 embedded lines all
+    // sit at exactly these 546 pixels.
+    const CEILING_PX: f32 = 546.0;
+    let Some(row) = held else { return default_px };
+    if row.custom_height {
+        if let Some(ht) = row.height {
+            return (((ht + 0.05) / 0.75).floor()).min(CEILING_PX);
+        }
+    }
+    // The row's base: its own format's font when it wears one (that is how
+    // a row sinks to 17px under a sheet whose untouched rows get 25 — no
+    // cell needs to say anything), otherwise the sheet default. Cells only
+    // ever RAISE a row above its base, never pull it below.
+    let base = match &row.style_font {
+        Some((face, size)) => match row_defaults::font_default_row_px(face, *size) {
+            Some(px) => px as f32,
+            None => {
+                return match row.height {
+                    Some(ht) => (((ht + 0.05) / 0.75).floor()).min(CEILING_PX),
+                    None => default_px,
+                }
+            }
+        },
+        None => default_px,
+    };
+    let mut raise: f32 = 0.0;
+    for cell in &row.cells {
+        let face = cell.style.font_name.as_deref().unwrap_or("Calibri");
+        let size = cell.style.font_size.unwrap_or(11.0);
+        let Some(font_px) = row_defaults::font_default_row_px(face, size) else {
+            // A font the table has never measured: trust the cached height
+            // the way the pre-derivation renderer did.
+            return match row.height {
+                Some(ht) => ((ht + 0.05) / 0.75).floor(),
+                None => default_px,
+            };
+        };
+        let text = cell_text(&cell.value, &cell.style).replace("\r\n", "\n");
+        let text = text.as_str();
+        match merged.get(&(row.index, cell.col)) {
+            // A cell whose merge crosses rows holds no single row open:
+            // an 18pt two-row title leaves both its rows at the default.
+            Some(Merged::Anchor { rows, .. }) if *rows > 0 => continue,
+            Some(Merged::Covered) => continue,
+            // A one-row merge does not grow its row line by line (measured:
+            // one and three wrapped lines sit in the same box); close to one
+            // line of its font, and it never pulls the row down.
+            Some(Merged::Anchor { .. }) => {
+                raise = raise.max(font_px as f32);
+                continue;
+            }
+            None => {}
+        }
+        // A cell that does not wrap is one line however many breaks it
+        // holds: Excel shows "あ\n\nあ" on a single line and leaves the row
+        // at one line's height. Only a wrapping cell spends its newlines,
+        // and it spends every one of them — a trailing break makes an
+        // empty line that counts like any other.
+        if text.is_empty() || !cell.style.wrap_text {
+            raise = raise.max(font_px as f32);
+            continue;
+        }
+        let lines = {
+            let column = cell.col.saturating_sub(first_column) as usize;
+            let width = match (columns.get(column), columns.get(column + 1)) {
+                (Some(left), Some(right)) => (right - left) / scale,
+                _ => 0.0,
+            };
+            // Excel wraps within the column minus its 5px gutter — the same
+            // gutter the column width model carries. Measured by sweeping a
+            // column under あx10 of 游ゴシック 11: ten 15px advances fit at
+            // 155px and wrap at 154.
+            let width = width - COLUMN_GUTTER;
+            counter
+                .and_then(|counter| {
+                    counter.lines(
+                        face,
+                        size,
+                        cell.style.bold,
+                        cell.style.italic,
+                        text,
+                        width,
+                    )
+                })
+                .unwrap_or_else(|| text.matches('\n').count() as u32 + 1)
+        };
+        if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
+            let column = cell.col.saturating_sub(first_column) as usize;
+            let box_px = match (columns.get(column), columns.get(column + 1)) {
+                (Some(left), Some(right)) => (right - left) / scale,
+                _ => 0.0,
+            };
+            eprintln!(
+                "row {} col {} font {} {} wrap {} column {:.0}px chars {} lines {}",
+                row.index, cell.col, face, size, cell.style.wrap_text, box_px,
+                text.chars().count(), lines
+            );
+            if cell.style.wrap_text {
+                for (index, para) in text.split('\n').enumerate() {
+                    let count = counter.and_then(|counter| {
+                        counter.lines(
+                            face,
+                            size,
+                            cell.style.bold,
+                            cell.style.italic,
+                            para,
+                            box_px - COLUMN_GUTTER,
+                        )
+                    });
+                    eprintln!(
+                        "    para {} chars {} lines {:?} {:?}",
+                        index,
+                        para.chars().count(),
+                        count,
+                        para.chars().take(30).collect::<String>()
+                    );
+                }
+            }
+        }
+        let contribution = (lines * font_px as u32) as f32;
+        raise = raise.max(contribution);
+    }
+    // A thick rule along an edge is drawn in room the fitter keeps for it:
+    // a pixel per edge, and only on a height Excel works out. A pinned row
+    // measures the same with the rule as without.
+    let thick = u32::from(row.thick_top) + u32::from(row.thick_bottom);
+    (base.max(raise) + thick as f32).min(CEILING_PX)
+}
+
+/// Counts the lines a cell's text wraps into, through DirectWrite's
+/// GDI-compatible layout. Neither engine reproduces Excel exactly: GDI's own
+/// DrawText refuses to break inside a katakana run, which Excel does freely,
+/// and DirectWrite's compatible advances drift a pixel on some glyphs (an
+/// 8pt fullwidth step measures 10.95px against GDI's 11). DirectWrite errs
+/// by a line on boundary-tight cells; GDI errs on every katakana paragraph.
+#[cfg(windows)]
+struct LineCounter {
+    factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+}
+
+#[cfg(windows)]
+impl LineCounter {
+    fn new() -> Option<Self> {
+        use windows::Win32::Graphics::DirectWrite::*;
+        unsafe {
+            DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)
+                .ok()
+                .map(|factory| Self { factory })
+        }
+    }
+
+    fn lines(
+        &self,
+        face: &str,
+        points: f32,
+        bold: bool,
+        italic: bool,
+        text: &str,
+        width: f32,
+    ) -> Option<u32> {
+        use windows::core::{HSTRING, PCWSTR};
+        use windows::Win32::Graphics::DirectWrite::*;
+        unsafe {
+            let face = HSTRING::from(face);
+            let format = self
+                .factory
+                .CreateTextFormat(
+                    PCWSTR(face.as_ptr()),
+                    None,
+                    if bold {
+                        DWRITE_FONT_WEIGHT_BOLD
+                    } else {
+                        DWRITE_FONT_WEIGHT_NORMAL
+                    },
+                    if italic {
+                        DWRITE_FONT_STYLE_ITALIC
+                    } else {
+                        DWRITE_FONT_STYLE_NORMAL
+                    },
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    // The whole pixel GDI instantiates the font at — an 8pt
+                    // face is a ppem-11 font to Excel.
+                    (points * 96.0 / 72.0).round(),
+                    &HSTRING::from("ja-JP"),
+                )
+                .ok()?;
+            format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP).ok()?;
+            let body = HSTRING::from(text);
+            let layout = self
+                .factory
+                .CreateGdiCompatibleTextLayout(
+                    body.as_wide(),
+                    &format,
+                    width.max(1.0),
+                    100_000.0,
+                    1.0,
+                    None,
+                    false,
+                )
+                .ok()?;
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut metrics).ok()?;
+            Some(metrics.lineCount)
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct LineCounter;
+
+#[cfg(not(windows))]
+impl LineCounter {
+    fn new() -> Option<Self> {
+        None
+    }
+
+    fn lines(
+        &self,
+        _face: &str,
+        _points: f32,
+        _bold: bool,
+        _italic: bool,
+        _text: &str,
+        _width: f32,
+    ) -> Option<u32> {
+        None
+    }
+}
+
 /// The pre-derivation reading of the stated default, kept for sheets whose
 /// fonts the table does not know: rounded UP to the next 0.75, which matched
 /// Excel on most Excel-authored files because their stated number was already
@@ -160,18 +408,26 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
         columns.push(columns.last().unwrap() + width);
     }
 
-    let default_points = default_row_points(sheet);
+    let default_px = default_row_points(sheet) / 0.75;
+    let counter = LineCounter::new();
+    let merged = merges(sheet);
     let mut rows = vec![0.0];
     for index in first_row..=last_row {
         let held = sheet.rows.iter().find(|row| row.index == index);
         let hidden = held.is_some_and(|row| row.hidden);
-        let points = held.and_then(|row| row.height).unwrap_or(default_points);
         let height = if hidden {
             0.0
         } else {
-            // A height in points becomes whole pixels by truncation: 20.1pt
-            // is 26.8px and Excel draws 26.
-            (points * scale * 96.0 / 72.0).trunc()
+            let px = row_pixels(
+                held,
+                default_px,
+                &columns,
+                first_column,
+                scale,
+                counter.as_ref(),
+                &merged,
+            );
+            (px * scale).trunc()
         };
         rows.push(rows.last().unwrap() + height);
     }
@@ -223,6 +479,13 @@ fn main() {
     if width == 0 || height == 0 {
         eprintln!("the sheet has nothing in it to draw");
         std::process::exit(1);
+    }
+
+    // Row-by-row geometry, for holding the model against Excel's answers.
+    if std::env::var("OXI_XLSX_DUMP_ROWS").is_ok() {
+        for (step, pair) in layout.rows.windows(2).enumerate() {
+            println!("row {} px {}", layout.first_row as usize + step, pair[1] - pair[0]);
+        }
     }
 
     let canvas = draw(sheet, &layout, width, height, scale);

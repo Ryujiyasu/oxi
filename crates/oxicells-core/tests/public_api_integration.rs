@@ -181,6 +181,10 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
             index,
             cells,
             height: None,
+            custom_height: false,
+            style_font: None,
+            thick_top: false,
+            thick_bottom: false,
             hidden: false,
         })
         .collect();

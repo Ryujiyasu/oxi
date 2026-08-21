@@ -167,6 +167,10 @@ mod tests {
                 index: idx + 1, // 1-based
                 cells,
                 height: None,
+                custom_height: false,
+                style_font: None,
+                thick_top: false,
+                thick_bottom: false,
                 hidden: false,
             })
             .collect();

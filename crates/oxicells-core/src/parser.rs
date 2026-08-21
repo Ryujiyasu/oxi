@@ -801,6 +801,20 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
     }
 }
 
+/// The font a row's own format puts on it, when the row carries one
+/// (`s=` with customFormat="1").
+fn row_style_font(
+    e: &quick_xml::events::BytesStart,
+    stylesheet: &StyleSheet,
+) -> Option<(String, f32)> {
+    if !is_true(get_attr(e, "customFormat").as_deref()) {
+        return None;
+    }
+    let si = get_attr(e, "s")?.parse::<usize>().ok()?;
+    let style = resolve_cell_style(si, stylesheet);
+    Some((style.font_name?, style.font_size?))
+}
+
 /// Parse a single worksheet XML into a Sheet.
 /// Where a relationship target lands, given the part that names it. Targets
 /// are written relative to the naming part's own folder, so `../tables/t.xml`
@@ -920,6 +934,10 @@ fn parse_worksheet(
     // State tracking
     let mut current_row_index: u32 = 0;
     let mut current_row_height: Option<f32> = None;
+    let mut current_row_custom = false;
+    let mut current_row_font: Option<(String, f32)> = None;
+    let mut current_row_thick_top = false;
+    let mut current_row_thick_bottom = false;
     let mut current_row_hidden = false;
     let mut current_cells: Vec<Cell> = Vec::new();
     let mut in_row = false;
@@ -988,12 +1006,19 @@ fn parse_worksheet(
                         current_row_index = row_num;
 
                         // A row states its height whenever it is not the
-                        // default one, whether a person set it or Excel worked
-                        // it out from what the row holds. customHeight only
-                        // says which of the two it was, so it does not decide
-                        // whether the height counts.
+                        // default one. customHeight says whether that number
+                        // is pinned; without it the number is only a cache
+                        // from the machine that wrote the file, and Excel
+                        // works the height out again from the row's content.
                         current_row_height =
                             get_attr(&e, "ht").and_then(|v| v.parse::<f32>().ok());
+                        current_row_custom =
+                            is_true(get_attr(&e, "customHeight").as_deref());
+                        current_row_font = row_style_font(&e, stylesheet);
+                        current_row_thick_top =
+                            is_true(get_attr(&e, "thickTop").as_deref());
+                        current_row_thick_bottom =
+                            is_true(get_attr(&e, "thickBot").as_deref());
                         current_row_hidden = is_true(get_attr(&e, "hidden").as_deref());
                     }
                     "c" if in_row => {
@@ -1050,9 +1075,16 @@ fn parse_worksheet(
                             index: current_row_index,
                             cells: std::mem::take(&mut current_cells),
                             height: current_row_height,
+                            custom_height: current_row_custom,
+                            style_font: current_row_font.take(),
+                            thick_top: current_row_thick_top,
+                            thick_bottom: current_row_thick_bottom,
                             hidden: current_row_hidden,
                         });
                         current_row_height = None;
+                        current_row_custom = false;
+                        current_row_thick_top = false;
+                        current_row_thick_bottom = false;
                         current_row_hidden = false;
                     }
                     "c" => {
@@ -1256,15 +1288,16 @@ fn parse_worksheet(
                             .and_then(|v| v.parse::<u32>().ok())
                             .unwrap_or(current_row_index + 1);
                         current_row_index = row_num;
-                        let mut rh: Option<f32> = None;
-                        let custom_height = get_attr(&e, "customHeight");
-                        if custom_height.as_deref() == Some("1") || custom_height.as_deref() == Some("true") {
-                            rh = get_attr(&e, "ht").and_then(|v| v.parse::<f32>().ok());
-                        }
                         rows.push(Row {
                             index: row_num,
                             cells: Vec::new(),
-                            height: rh,
+                            height: get_attr(&e, "ht")
+                                .and_then(|v| v.parse::<f32>().ok()),
+                            custom_height:
+                                is_true(get_attr(&e, "customHeight").as_deref()),
+                            style_font: row_style_font(&e, stylesheet),
+                            thick_top: is_true(get_attr(&e, "thickTop").as_deref()),
+                            thick_bottom: is_true(get_attr(&e, "thickBot").as_deref()),
                             hidden: is_true(get_attr(&e, "hidden").as_deref()),
                         });
                     }

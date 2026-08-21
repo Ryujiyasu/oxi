@@ -39,7 +39,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         .push(cell(0, CellValue::Empty, Some(formula)));
     let rows: Vec<Row> = rows_map
         .into_iter()
-        .map(|(index, cells)| Row { index, cells, height: None, hidden: false })
+        .map(|(index, cells)| Row { index, cells, height: None, custom_height: false, style_font: None, thick_top: false, thick_bottom: false, hidden: false })
         .collect();
     let mut sheet = Sheet {
         name: "S".into(),

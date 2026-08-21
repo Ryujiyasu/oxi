@@ -91,6 +91,23 @@ pub struct Row {
     pub index: u32,
     pub cells: Vec<Cell>,
     pub height: Option<f32>,
+    /// True when the row's height is pinned (customHeight="1"). Without the
+    /// pin the stored height is only a cache from the machine that wrote the
+    /// file — Excel recomputes the height from the row's content on open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom_height: bool,
+    /// The font of the row's own format (`s=` with customFormat="1"). The
+    /// row wears it across all its columns, and its default height becomes
+    /// the row's base — which is how a row sinks below the sheet default
+    /// without any cell saying a word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_font: Option<(String, f32)>,
+    /// The row says a thick rule runs along its top or bottom edge. Excel
+    /// keeps a pixel of room for each when it works a row's height out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub thick_top: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub thick_bottom: bool,
     /// A hidden row keeps everything it holds; only the display is affected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,

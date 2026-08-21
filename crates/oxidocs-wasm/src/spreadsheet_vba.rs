@@ -422,6 +422,8 @@ impl<'a> WorkbookHost<'a> {
             col_widths: Vec::new(),
             default_col_width: template.default_col_width,
             default_row_height: template.default_row_height,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -2021,6 +2023,10 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    custom_height: false,
+                    style_font: None,
+                    thick_top: false,
+                    thick_bottom: false,
                     hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
@@ -2064,6 +2070,10 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    custom_height: false,
+                    style_font: None,
+                    thick_top: false,
+                    thick_bottom: false,
                     hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
@@ -2163,6 +2173,10 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    custom_height: false,
+                    style_font: None,
+                    thick_top: false,
+                    thick_bottom: false,
                     hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
@@ -2340,6 +2354,10 @@ impl<'a> WorkbookHost<'a> {
                     index: row_index,
                     cells: Vec::new(),
                     height: None,
+                    custom_height: false,
+                    style_font: None,
+                    thick_top: false,
+                    thick_bottom: false,
                     hidden: false,
                 });
             }
@@ -2523,6 +2541,10 @@ impl<'a> WorkbookHost<'a> {
                             index,
                             cells: Vec::new(),
                             height: None,
+                            custom_height: false,
+                            style_font: None,
+                            thick_top: false,
+                            thick_bottom: false,
                             hidden: false,
                         });
                         worksheet.rows.sort_by_key(|row| row.index);
@@ -2753,6 +2775,10 @@ impl<'a> WorkbookHost<'a> {
                             index: address.row,
                             cells: Vec::new(),
                             height: None,
+                            custom_height: false,
+                            style_font: None,
+                            thick_top: false,
+                            thick_bottom: false,
                             hidden: false,
                         });
                         sheet.rows.sort_by_key(|row| row.index);
@@ -2906,6 +2932,10 @@ impl<'a> WorkbookHost<'a> {
                     index: address.row,
                     cells: Vec::new(),
                     height: None,
+                    custom_height: false,
+                    style_font: None,
+                    thick_top: false,
+                    thick_bottom: false,
                     hidden: false,
                 });
                 sheet.rows.sort_by_key(|row| row.index);
@@ -3019,6 +3049,10 @@ impl<'a> WorkbookHost<'a> {
                                 index,
                                 cells: Vec::new(),
                                 height: None,
+                                custom_height: false,
+                                style_font: None,
+                                thick_top: false,
+                                thick_bottom: false,
                                 hidden: true,
                             });
                             sheet.rows.sort_by_key(|row| row.index);
@@ -3175,6 +3209,10 @@ impl<'a> WorkbookHost<'a> {
                     index: row,
                     cells: Vec::new(),
                     height: None,
+                    custom_height: false,
+                    style_font: None,
+                    thick_top: false,
+                    thick_bottom: false,
                     hidden: true,
                 });
                 worksheet.rows.sort_by_key(|row| row.index);
@@ -5818,6 +5856,8 @@ mod tests {
                 col_widths: Vec::new(),
                 default_col_width: 8.43,
                 default_row_height: 15.0,
+                default_row_custom: false,
+                default_font_candidates: vec![],
                 merge_cells: Vec::new(),
                 hidden_cols: Vec::new(),
                 auto_filter: None,
@@ -6032,6 +6072,8 @@ mod tests {
             col_widths: Vec::new(),
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -6083,6 +6125,8 @@ mod tests {
             col_widths: Vec::new(),
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -6235,6 +6279,10 @@ mod tests {
         workbook.sheets[0].rows.push(Row {
             index: 1,
             height: None,
+            custom_height: false,
+            style_font: None,
+            thick_top: false,
+            thick_bottom: false,
             hidden: false,
             cells: vec![
                 Cell {
@@ -7271,6 +7319,10 @@ mod tests {
             .map(|row| Row {
                 index: row,
                 height: None,
+                custom_height: false,
+                style_font: None,
+                thick_top: false,
+                thick_bottom: false,
                 hidden: false,
                 cells: (0..4)
                     .map(|column| Cell {
@@ -8924,6 +8976,8 @@ mod tests {
             col_widths: Vec::new(),
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -9166,6 +9220,8 @@ mod tests {
             col_widths: Vec::new(),
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -9209,6 +9265,8 @@ mod tests {
             col_widths: Vec::new(),
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -9324,6 +9382,8 @@ mod tests {
             col_widths: Vec::new(),
             default_col_width: 8.43,
             default_row_height: 15.0,
+            default_row_custom: false,
+            default_font_candidates: vec![],
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,

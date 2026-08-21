@@ -50,6 +50,10 @@ fn a_sheet_a_run_added_is_saved() {
         added.rows.push(Row {
             index: 1,
             height: None,
+            custom_height: false,
+            style_font: None,
+            thick_top: false,
+            thick_bottom: false,
             hidden: false,
             cells: vec![Cell {
                 col: 0,
