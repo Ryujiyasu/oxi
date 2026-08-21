@@ -9546,8 +9546,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // Word than Oxi placed. Suppressed at a fresh region top, where
                     // a body paragraph's space_before drops too.
                     let s965 = std::env::var("OXI_S965_DISABLE").is_err();
+                    // S1183 (2026-08-21, opt-out OXI_S1183_DISABLE): HTML
+                    // autospacing on an IMAGE host resolves to the derived flat
+                    // amounts — 6.75 for a LIST host, 14.0 (S901) for a plain
+                    // one — and auto OVERRIDES the explicit w:before (S675).
+                    // DERIVED (_pb_imgnum 20-arm matrix): numaut_img36/60 =
+                    // img + 6.75 at any size/multiplier; aut_img36 = img + 14.6
+                    // (14.0 within the COM quantum); Oxi applied the explicit
+                    // 5pt + nothing. Same-list consecutive image hosts keep the
+                    // full 6.75 (measured) — the S931 text suppression does NOT
+                    // extend to images, and this arm already resets
+                    // prev_autospacing_numid below. The after side mirrors the
+                    // S675/S901 text rule. Latin scope (matrix measured on
+                    // Latin; JP byte-identical by construction).
+                    let s1183 = s965
+                        && !self.doc_body_has_real_cjk
+                        && std::env::var("OXI_S1183_DISABLE").is_err();
+                    let s1183_host = img.host_paragraph.as_deref().map(|h| &h.style);
+                    let s1183_sb = match (s1183, s1183_host) {
+                        (true, Some(st)) if st.before_autospacing => {
+                            Some(if st.num_id.is_some() { 6.75 } else { 14.0 })
+                        }
+                        _ => None,
+                    };
+                    let s1183_sa = match (s1183, s1183_host) {
+                        (true, Some(st)) if st.after_autospacing => Some(14.0),
+                        _ => None,
+                    };
                     let mut img_before = if s965 {
-                        prev_space_after.max(img.paragraph_space_before)
+                        prev_space_after.max(s1183_sb.unwrap_or(img.paragraph_space_before))
                     } else {
                         0.0
                     };
@@ -9646,7 +9673,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else if s965 {
                         // S965: the image paragraph's OWN after is what the next
                         // paragraph collapses against — not the one before it.
-                        prev_space_after = img.paragraph_space_after;
+                        // S1183: an after-autospacing host hands the flat auto
+                        // amount to that collapse instead of its explicit after.
+                        prev_space_after = s1183_sa.unwrap_or(img.paragraph_space_after);
                     }
                 }
                 Block::UnsupportedElement(_) => {
