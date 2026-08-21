@@ -25733,6 +25733,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// zeroing of the border pad was the compensating balance holding the
     /// pre-existing content error in place; with the pair, row 0 lands 21.90
     /// against Word's 21.96 and every interior row 20.90 against 20.88.
+    /// HELD OPT-IN pending the `technical__00501ca3` cell-wrap defect below.
+    /// The rule itself is settled; EN 248 would go PASS 224 → 223 on that one
+    /// doc (1 paragraph of 272), and `OXI_DBG_ROWADV` proves the loss is NOT
+    /// this rule's doing — cursor and rendered height stay locked together, and
+    /// the ladder says Word builds that page-8 table in rows of
+    /// 28.80/40.32/16.32/22.95/16.32/23.04 where Oxi builds
+    /// 28.80/40.30/30.10/16.55/16.30/16.55: a row-boundary/cell-wrap difference
+    /// that the −2.0pt-per-table deficit used to mask.
+    /// What it buys once that is fixed: 00501ca3's own table geometry sum_d
+    /// −2.0 → **0.00** and its page-8 tail error 4.2 → 0.8; `0009d767` mean
+    /// pitch error 0.170 → 0.034; `0056b52f` 0.9849 → 0.9868; SSIM `7ead52b6`
+    /// **+0.0282** with no regression; JP 96 unchanged.
     fn s1189_on(&self) -> bool {
         std::env::var("OXI_S1189").is_ok()
     }
