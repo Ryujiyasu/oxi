@@ -39293,6 +39293,152 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         }
     }
 
+    /// S1192 (2026-08-22, opt-in `OXI_S1192`): the minimum this row must be
+    /// because it is the LAST row of a vMerge span whose merged cell holds more
+    /// than the span's earlier rows provide.
+    ///
+    /// DERIVED (`tools/metrics/_pb_vmergedist_gen.py`, 8 arms — a 2- or 3-row
+    /// span whose merged cell carries N single-line paragraphs while every other
+    /// cell carries one). Word's row pitches:
+    ///     span 2, merged 1 or 2 lines -> [12.72, 12.72]
+    ///     span 2, merged 3 lines      -> [12.72, 24.36]
+    ///     span 2, merged 4 lines      -> [12.72, 36.60]
+    ///     span 3, merged 1 or 3 lines -> [12.72, 12.72, 12.72]
+    ///     span 3, merged 5 lines      -> [12.72, 12.72, 36.12]
+    ///     span 3, merged 7 lines      -> [12.72, 12.72, 60.48]
+    /// i.e. every row keeps its OWN natural height and the LAST row of the span
+    /// absorbs the whole remainder. The totals check out exactly: span2_m4 =
+    /// 49.32 = 4 x 12.21 + one 0.48 rule; span3_m7 = 85.92 = 7 x 12.21 + 0.48.
+    ///
+    /// Oxi grows the span not at all — `estimate_table_row_natural_h` skips
+    /// EVERY vMerge cell, restart included, so the merged content contributes to
+    /// no row. On the probe the merged cell's later lines are drawn straight
+    /// through the table's bottom edge and collide with the following paragraph
+    /// (span2_m4: table bottom 110.12, merged lines at 109.62 and 121.83).
+    /// That is also technical__00501ca3's page-8 table, the last thing standing
+    /// between S1189 and the Phase-1 gate: Word 16.32 + 22.95 there, Oxi
+    /// 30.10 + 16.55.
+    ///
+    /// Measured by re-running this same estimator over a one-cell synthetic row
+    /// holding the restart cell, so the merged content goes through exactly the
+    /// machinery a normal cell would.
+    ///
+    /// ★NOT YET EFFECTIVE. This is wired into `estimate_table_row_natural_h`
+    /// only, and with `OXI_S1192=1` the probe renders IDENTICALLY — because the
+    /// emit pass does not use this estimator for the row it draws. That
+    /// function's own header says so ("Mirrors the inlined logic at the top of
+    /// the table row-loop"), i.e. the height that reaches the page is computed
+    /// inline there. Finishing this means applying the same max at that inline
+    /// site (and checking the pre-pass/emit pair stays consistent, since the
+    /// two must agree for pagination). Left opt-in and inert until then.
+    #[allow(clippy::too_many_arguments)]
+    fn s1192_vmerge_last_row_min(
+        &self,
+        table: &Table,
+        row_idx: usize,
+        col_widths: &[f32],
+        default_pad_l: f32,
+        default_pad_r: f32,
+        default_pad_t: f32,
+        default_pad_b: f32,
+        table_grid_pitch: Option<f32>,
+        grid_char_pitch: Option<f32>,
+        grid_char_cw_ratio: Option<f32>,
+    ) -> f32 {
+        if std::env::var("OXI_S1192").is_err() {
+            return 0.0;
+        }
+        let is_cont = |c: &TableCell| {
+            matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
+        };
+        let Some(row) = table.rows.get(row_idx) else {
+            return 0.0;
+        };
+        let mut need: f32 = 0.0;
+        let mut grid_idx = row.grid_before as usize;
+        for (ci, cell) in row.cells.iter().enumerate() {
+            let span_cols = cell.grid_span.max(1) as usize;
+            let here = grid_idx;
+            grid_idx += span_cols;
+            if !is_cont(cell) {
+                continue;
+            }
+            // LAST row of the span? (the next row's same cell is not a continue)
+            let next_is_cont = table
+                .rows
+                .get(row_idx + 1)
+                .and_then(|r| r.cells.get(ci))
+                .map_or(false, is_cont);
+            if next_is_cont {
+                continue;
+            }
+            // Walk back to the restart row.
+            let mut start = row_idx;
+            while start > 0
+                && table
+                    .rows
+                    .get(start)
+                    .and_then(|r| r.cells.get(ci))
+                    .map_or(false, is_cont)
+            {
+                start -= 1;
+            }
+            if start == row_idx {
+                continue;
+            }
+            let Some(restart) = table.rows.get(start).and_then(|r| r.cells.get(ci)) else {
+                continue;
+            };
+            if here + span_cols > col_widths.len() {
+                continue;
+            }
+            // Height of the merged content, measured as a lone cell.
+            let mut probe = restart.clone();
+            probe.v_merge = None;
+            let probe_row = TableRow {
+                cells: vec![probe],
+                height: None,
+                height_rule: None,
+                header: false,
+                cant_split: false,
+                grid_before: 0,
+                cell_margins_override: row.cell_margins_override.clone(),
+            };
+            let merged_h = self.estimate_table_row_natural_h(
+                &probe_row,
+                &col_widths[here..here + span_cols],
+                default_pad_l,
+                default_pad_r,
+                default_pad_t,
+                default_pad_b,
+                table,
+                table_grid_pitch,
+                grid_char_pitch,
+                grid_char_cw_ratio,
+            );
+            // What the span's EARLIER rows already provide.
+            let mut earlier = 0.0f32;
+            for r in start..row_idx {
+                if let Some(rr) = table.rows.get(r) {
+                    earlier += self.estimate_table_row_natural_h(
+                        rr,
+                        col_widths,
+                        default_pad_l,
+                        default_pad_r,
+                        default_pad_t,
+                        default_pad_b,
+                        table,
+                        table_grid_pitch,
+                        grid_char_pitch,
+                        grid_char_cw_ratio,
+                    );
+                }
+            }
+            need = need.max(merged_h - earlier);
+        }
+        need.max(0.0)
+    }
+
     fn estimate_table_row_natural_h(
         &self,
         row: &TableRow,
@@ -39568,6 +39714,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             cell_content_h += pad_b;
             row_height = row_height.max(cell_content_h);
             grid_idx += span;
+        }
+        // S1192: the LAST row of a vMerge span must also cover whatever the
+        // merged cell still needs. `s1188_row_idx` is pointer identity, so the
+        // synthetic one-cell row the helper measures with is NOT found here and
+        // the recursion terminates at depth 1; an earlier span row that is not
+        // its span's last returns 0 immediately.
+        if let Some(ix) = self.s1188_row_idx(table, row) {
+            row_height = row_height.max(self.s1192_vmerge_last_row_min(
+                table,
+                ix,
+                col_widths,
+                default_pad_l,
+                default_pad_r,
+                default_pad_t,
+                default_pad_b,
+                table_grid_pitch,
+                grid_char_pitch,
+                grid_char_cw_ratio,
+            ));
         }
         row_height
     }
