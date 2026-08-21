@@ -80,6 +80,47 @@ def tables():
     return out
 
 
+def word_rules():
+    """All horizontal rules, as page*10000 + y0, merged into logical edges."""
+    import fitz
+    doc = fitz.open(PDF)
+    out = []
+    for pi in range(doc.page_count):
+        ys = sorted({round(d["rect"].y0, 2) for d in doc[pi].get_drawings()
+                     if d["rect"].height < 8 and d["rect"].width > 20})
+        m = []
+        for y in ys:
+            if not m or y - m[-1] > 1.6:
+                m.append(y)
+        out += [pi * 10000 + y for y in m]
+    return sorted(out)
+
+
+def oxi_rules(flag):
+    exe = REPO / "tools" / "oxi-gdi-renderer" / "target" / "release" / "oxi-gdi-renderer.exe"
+    tmp = Path(tempfile.mkdtemp())
+    dump = tmp / "d.json"
+    env = dict(os.environ)
+    env.pop("OXI_S1191", None)
+    if flag:
+        k, _, v = flag.partition("=")
+        env[k] = v or "1"
+    subprocess.run([str(exe), str(DOCX), str(tmp / "p"), "110", "--dump-layout=%s" % dump],
+                   check=True, capture_output=True, env=env)
+    import json
+    d = json.load(open(dump, encoding="utf-8"))
+    out = []
+    for pi, pg in enumerate(d["pages"]):
+        ys = sorted({round(e["y"], 2) for e in pg["elements"]
+                     if e["type"] == "border" and (e.get("w") or 0) > 20})
+        m = []
+        for y in ys:
+            if not m or y - m[-1] > 1.6:
+                m.append(y)
+        out += [pi * 10000 + y for y in m]
+    return sorted(out)
+
+
 def word_map():
     if not PDF.exists() or "--reexport" in sys.argv:
         import win32com.client as win32
@@ -135,8 +176,12 @@ def oxi_map(flag):
 W = word_map()
 A = oxi_map(None)
 B = oxi_map(FLAG) if FLAG else None
-print("%-4s %-9s %-9s %-9s  %-16s %s" % ("tbl", "word_gap", "oxi_off", "oxi_flag",
-                                         "tbl_bottom", "lastrow cell bottoms"))
+WR, AR = word_rules(), oxi_rules(None)
+# ★Decompose the gap: (last row text -> the table's bottom rule) + (rule -> next
+# paragraph). The first term is the last row's box remainder, the second is the
+# foot charge S1191 models. A per-table error can live in either.
+print("%-4s %-8s %-8s %-8s | %-8s %-8s | %-8s %-8s  %s"
+      % ("tbl", "W_gap", "O_gap", "O_flag", "W_rem", "O_rem", "W_foot", "O_foot", "bottom"))
 for i, last, after, bot, decls in tables():
     kl, ka = norm(last), norm(after)
     if len(kl) < 6 or len(ka) < 6 or kl not in W or ka not in W:
@@ -154,6 +199,20 @@ for i, last, after, bot, decls in tables():
     gb = gap(B) if B else None
     if gw is None or ga is None or gw > 400:
         continue
-    print("%-4d %-9.2f %-9s %-9s  %-16s %s"
-          % (i, gw, "%.2f" % ga if ga is not None else "-",
-             "%.2f" % gb if gb is not None else "-", str(bot), str(decls)[:60]))
+    def split(m, rules):
+        """(last row text -> bottom rule, bottom rule -> next paragraph)."""
+        yl = min(m[kl])
+        nxt = [y for y in m[ka] if y > yl]
+        if not nxt:
+            return (None, None)
+        yn = min(nxt)
+        between = [r for r in rules if yl < r < yn]
+        if not between:
+            return (None, None)
+        r = between[-1]
+        return (r - yl, yn - r)
+    wr_, wf = split(W, WR)
+    ar_, af = split(A, AR)
+    f = lambda v: "%.2f" % v if v is not None else "-"
+    print("%-4d %-8.2f %-8s %-8s | %-8s %-8s | %-8s %-8s  %s"
+          % (i, gw, f(ga), f(gb), f(wr_), f(ar_), f(wf), f(af), str(bot)))

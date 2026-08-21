@@ -25633,6 +25633,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// spacing-before adds on top linearly (before=200 -> +10.08, 400 -> +20.04).
     /// Oxi charged ZERO for the bottom edge in every arm (12.21 throughout), the
     /// −0.48..−3.03 deficit this closes.
+    ///
+    /// ★★CORRECTION from the per-table audit (`tools/metrics/_tblfoot_audit.py`
+    /// on forms__0020466f, the doc this regresses). Splitting the measured gap
+    /// into (last row's text -> the bottom rule) and (rule -> next paragraph):
+    ///     tbl  W_rem   O_rem   d       W_foot  O_foot  d
+    ///      1   92.53   90.60   −1.93    0.71    0.75   +0.04
+    ///      2  104.78  105.05   +0.27    5.99    6.00   +0.01
+    ///      3   87.71   86.87   −0.84    0.74    0.75   +0.01
+    ///      7  300.38  300.67   +0.29    3.25    3.32   +0.07
+    ///     16   54.01   54.03   +0.02   19.81   18.79   −1.02
+    /// The FOOT term is ALREADY right in these real tables (|d| <= 0.07) — the
+    /// row box evidently carries the bottom border through the ROWBOX2
+    /// cursor-real path here, exactly as that path's own note warns ("the
+    /// border-box is already IN row_height"). So this unconditional advance
+    /// DOUBLE-CHARGES them, and only tbl16 (foot −1.02) wants it. The synthetic
+    /// probe never saw it because its table sets `tblCellMar top/bottom = 0` and
+    /// takes a different row-box path.
+    /// The real deficit in that document is the LAST ROW's box (−1.93 / −0.84),
+    /// not the foot. Before this can ship it needs a predicate for "the row box
+    /// has NOT already absorbed the bottom rule"; forms__000ee7c0 (pcd −1 -> 0)
+    /// is the case where it genuinely had not.
     fn s1191_foot_bw(&self, table: &Table) -> f32 {
         // S1191: the table's OWN bottom edge when it declares one — the lumped
         // border_width/_style cannot distinguish it (a `bottom nil` table still
