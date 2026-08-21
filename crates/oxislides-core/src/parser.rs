@@ -1090,6 +1090,8 @@ fn parse_slide(
     let mut tbl_cur_row: Vec<TableCell> = Vec::new();
     let mut in_tbl_cell = false;
     let mut tbl_cur_cell_paragraphs: Vec<SlideParagraph> = Vec::new();
+    let mut tc_grid_span: u32 = 1;
+    let mut tc_h_merge = false;
     // a:tcPr — the cell's own fill, per-side borders, margins and anchor. The
     // corpus states all of them explicitly (an INVISIBLE edge is written as a
     // solidFill with <a:alpha val="0"/>, not as an absent element), so none of
@@ -1301,6 +1303,18 @@ fn parse_slide(
                     "tc" if in_tbl_row => {
                         in_tbl_cell = true;
                         tbl_cur_cell_paragraphs.clear();
+                        // `gridSpan` / `hMerge` live on a:tc itself. Both halves
+                        // matter: the spanning cell needs the width of all the
+                        // columns it covers, and each continuation cell still
+                        // occupies a grid slot that must not be painted again.
+                        tc_grid_span = get_attr(&e, "gridSpan")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(1)
+                            .max(1);
+                        tc_h_merge = matches!(
+                            get_attr(&e, "hMerge").as_deref(),
+                            Some("1") | Some("true")
+                        );
                     }
                     "tcPr" if in_tbl_cell => {
                         in_tc_pr = true;
@@ -1900,6 +1914,14 @@ fn parse_slide(
                             mar_t: default_t_ins(),
                             mar_b: default_b_ins(),
                             anchor: None,
+                            grid_span: get_attr(&e, "gridSpan")
+                                .and_then(|v| v.parse::<u32>().ok())
+                                .unwrap_or(1)
+                                .max(1),
+                            h_merge: matches!(
+                                get_attr(&e, "hMerge").as_deref(),
+                                Some("1") | Some("true")
+                            ),
                         });
                     }
                     "ln" if in_sp_pr => {
@@ -2581,6 +2603,8 @@ fn parse_slide(
                             mar_t: tc_mar.2,
                             mar_b: tc_mar.3,
                             anchor: tc_anchor.take(),
+                            grid_span: std::mem::replace(&mut tc_grid_span, 1),
+                            h_merge: std::mem::take(&mut tc_h_merge),
                         });
                         tc_mar = (default_l_ins(), default_r_ins(), default_t_ins(), default_b_ins());
                     }

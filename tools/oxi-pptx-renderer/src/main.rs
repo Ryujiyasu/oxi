@@ -539,7 +539,14 @@ fn shape_json(sh: &Shape) -> Value {
                     .iter()
                     .map(|row| {
                         row.iter()
-                            .map(|cell| paragraphs_json(&cell.paragraphs))
+                            .map(|cell| {
+                                let mut v = paragraphs_json(&cell.paragraphs);
+                                if let Some(o) = v.as_object_mut() {
+                                    o.insert("grid_span".into(), json!(cell.grid_span));
+                                    o.insert("h_merge".into(), json!(cell.h_merge));
+                                }
+                                v
+                            })
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>(),
@@ -1899,6 +1906,37 @@ fn openpath_on() -> bool {
     std::env::var("OXI_OPENPATH_DISABLE").is_err()
 }
 
+/// A cell spans the columns its `gridSpan` claims unless this is set, which
+/// restores giving every cell exactly one column.
+fn hmerge_on() -> bool {
+    std::env::var("OXI_HMERGE_DISABLE").is_err()
+}
+
+/// The width one cell occupies, in points: its own column plus the ones its
+/// `gridSpan` swallows.
+///
+/// d35 / d24 / d11 slide 29 share a Gantt template whose "Week 1" and "Week 2"
+/// headers each span seven columns; without this they were drawn in a single
+/// narrow column, which is also what made wrapping break them into "Wee / k 1".
+fn cell_width_pt(
+    table: &oxislides_core::ir::Table,
+    col: usize,
+    cell: &oxislides_core::ir::TableCell,
+) -> f32 {
+    let span = if hmerge_on() {
+        (cell.grid_span.max(1) as usize).min(table.col_widths.len().saturating_sub(col).max(1))
+    } else {
+        1
+    };
+    table
+        .col_widths
+        .iter()
+        .skip(col)
+        .take(span)
+        .copied()
+        .sum::<f32>()
+}
+
 /// A table cell wraps its text only when this is set.
 ///
 /// HELD OPT-IN (2026-08-21) because it needs horizontal cell merging first.
@@ -2770,11 +2808,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 // the row has to hold all of them.
                                                 let mut n = 1usize;
                                                 if cellwrap_on() {
-                                                    let inner = table
-                                                        .col_widths
-                                                        .get(c)
-                                                        .copied()
-                                                        .unwrap_or(0.0)
+                                                    let inner = cell_width_pt(table, c, cell)
                                                         - cell.mar_l
                                                         - cell.mar_r;
                                                     let body: String = p
@@ -2821,9 +2855,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 .round() as i32;
                             let mut cx = x;
                             for (c, cell) in row.iter().enumerate() {
-                                let pw = (table.col_widths.get(c).copied().unwrap_or(0.0) as f64
-                                    * scale)
+                                let pw = (cell_width_pt(table, c, cell) as f64 * scale)
                                     .round() as i32;
+                                // A continuation of the cell to its left owns no
+                                // ink of its own: painting it would lay a second
+                                // fill and a second set of rules over the spanning
+                                // cell. It must not advance the cursor either --
+                                // its column is already inside the spanning cell's
+                                // width, and advancing again pushed d35 s29's
+                                // "Week 2" six columns past its place, off the
+                                // table.
+                                if hmerge_on() && cell.h_merge {
+                                    continue;
+                                }
                                 let cell_rect = RECT {
                                     left: cx,
                                     top: cy,

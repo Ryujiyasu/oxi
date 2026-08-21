@@ -736,6 +736,18 @@ pub struct TableCell {
     /// `a:tcPr/@anchor` — vertical text anchor, as on a shape body.
     #[serde(default)]
     pub anchor: Option<String>,
+    /// `a:tc/@gridSpan` — how many grid columns this cell occupies. The cells
+    /// it swallows still exist in the row as `h_merge` continuations.
+    #[serde(default = "default_grid_span")]
+    pub grid_span: u32,
+    /// `a:tc/@hMerge` — this cell is the continuation of the spanning cell to
+    /// its left and is not drawn in its own right.
+    #[serde(default)]
+    pub h_merge: bool,
+}
+
+pub fn default_grid_span() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
