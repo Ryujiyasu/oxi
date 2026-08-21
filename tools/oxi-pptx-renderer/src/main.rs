@@ -414,6 +414,32 @@ fn paragraph_family(
     ph_levels: &[MasterStyleLevel],
     master: &[MasterStyleLevel],
 ) -> String {
+    let chosen = paragraph_family_inner(pres, sh, para, ph_levels, master);
+    if let Ok(want) = std::env::var("OXI_FAM_DEBUG") {
+        let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+        if text.contains(&want) {
+            let fams = |ls: &[MasterStyleLevel]| -> Vec<Option<String>> {
+                ls.iter().map(|l| l.font_family.clone()).collect()
+            };
+            eprintln!(
+                "FAM ph_type={:?} lvl={} ph_levels={:?} master={:?} -> {chosen}",
+                sh.ph_type,
+                para.lvl,
+                fams(ph_levels),
+                fams(master),
+            );
+        }
+    }
+    chosen
+}
+
+fn paragraph_family_inner(
+    pres: &Presentation,
+    sh: &Shape,
+    para: &oxislides_core::ir::SlideParagraph,
+    ph_levels: &[MasterStyleLevel],
+    master: &[MasterStyleLevel],
+) -> String {
     if let Some(f) = para.runs.iter().find_map(|r| r.font_family.clone()) {
         return f;
     }
@@ -1873,6 +1899,20 @@ fn openpath_on() -> bool {
     std::env::var("OXI_OPENPATH_DISABLE").is_err()
 }
 
+/// A table cell wraps its text only when this is set.
+///
+/// HELD OPT-IN (2026-08-21) because it needs horizontal cell merging first.
+/// The IR has no `gridSpan`, so a header cell that PowerPoint spans across
+/// fourteen columns is modelled as ONE column wide, and wrapping it there
+/// breaks "Week 1" into "Wee / k 1" — d35 s29 −0.0914, d24 s29 −0.0547,
+/// d11 s29 −0.0440 on the same Gantt template. Net over the five table decks
+/// was −0.000955, 0 improved / 4 regressed, and even the target slide
+/// (d25 s7) lost 0.0028. Wrapping is right; wrapping to the wrong width is
+/// not. Turn this on again once a spanned cell knows its real width.
+fn cellwrap_on() -> bool {
+    std::env::var("OXI_CELLWRAP_ENABLE").is_ok()
+}
+
 /// An empty paragraph is sized by its paragraph mark unless this is set,
 /// which restores the pre-S-EMPTYPARA fallback to the inherited level default.
 fn emptypara_on() -> bool {
@@ -2719,12 +2759,52 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // guess into the row height grew rows that should
                                 // not move -- four decks lost 0.003 to 0.006 each.
                                 let mut need = 0.0f32;
-                                for cell in row {
+                                for (c, cell) in row.iter().enumerate() {
                                     let mut text = 0.0f32;
                                     let mut sized = true;
                                     for p in &cell.paragraphs {
                                         match p.runs.iter().find_map(|r| r.font_size) {
-                                            Some(fs) => text += fs * 1.2,
+                                            Some(fs) => {
+                                                // A wrapped paragraph is as many
+                                                // lines as the column forces, and
+                                                // the row has to hold all of them.
+                                                let mut n = 1usize;
+                                                if cellwrap_on() {
+                                                    let inner = table
+                                                        .col_widths
+                                                        .get(c)
+                                                        .copied()
+                                                        .unwrap_or(0.0)
+                                                        - cell.mar_l
+                                                        - cell.mar_r;
+                                                    let body: String = p
+                                                        .runs
+                                                        .iter()
+                                                        .map(|r| r.text.as_str())
+                                                        .collect();
+                                                    if inner > 0.0 && !body.trim().is_empty() {
+                                                        let family = effective_family(
+                                                            mem_dc,
+                                                            &paragraph_family(
+                                                                pres,
+                                                                sh,
+                                                                p,
+                                                                &sh.ph_levels[..],
+                                                                &[],
+                                                            ),
+                                                        );
+                                                        let bold =
+                                                            p.runs.iter().any(|r| r.bold);
+                                                        n = gdi_wrap_lines(
+                                                            mem_dc, &body, inner, inner,
+                                                            scale, fs, &family, bold, false,
+                                                        )
+                                                        .len()
+                                                        .max(1);
+                                                    }
+                                                }
+                                                text += fs * 1.2 * n as f32;
+                                            }
                                             None => sized = false,
                                         }
                                     }
@@ -2845,6 +2925,55 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     );
                                     let color = p.runs.iter().find_map(|r| r.color.clone());
                                     let bold = p.runs.iter().any(|r| r.bold);
+                                    if cellwrap_on() {
+                                        // A cell wraps its text like any other
+                                        // text frame; this path used to draw the
+                                        // paragraph as ONE line, so d25 slide 7's
+                                        // 54-character body ran 297pt across a
+                                        // 213.6pt column and over its neighbour.
+                                        let inner_pt =
+                                            (right - left).max(1) as f64 / scale;
+                                        let lines = gdi_wrap_lines(
+                                            mem_dc,
+                                            &text,
+                                            inner_pt as f32,
+                                            inner_pt as f32,
+                                            scale,
+                                            fs,
+                                            &family,
+                                            bold,
+                                            false,
+                                        );
+                                        for line in &lines {
+                                            let lw = measure_text_width(
+                                                mem_dc, line, fs, &family, bold, scale,
+                                            );
+                                            let lx = match p.alignment {
+                                                Some(SlideAlignment::Center) => {
+                                                    left
+                                                        + (((right - left) as f64 - lw) / 2.0)
+                                                            .round()
+                                                            as i32
+                                                }
+                                                Some(SlideAlignment::Right) => {
+                                                    right - lw.round() as i32
+                                                }
+                                                _ => left,
+                                            };
+                                            draw_text_line(
+                                                mem_dc,
+                                                lx,
+                                                cursor_y,
+                                                line,
+                                                fs,
+                                                &family,
+                                                color.as_deref(),
+                                                scale,
+                                            );
+                                            cursor_y += advance.round() as i32;
+                                        }
+                                        continue;
+                                    }
                                     let w = measure_text_width(
                                         mem_dc, &text, fs, &family, bold, scale,
                                     );
@@ -9980,6 +10109,15 @@ fn gdi_wrap_lines(
     }
     if lines.is_empty() {
         lines.push(String::new());
+    }
+    if let Ok(want) = std::env::var("OXI_LINE_DEBUG") {
+        if text.contains(&want) {
+            eprintln!(
+                "LINE fam={family:?} fs={fs} bold={bold} first={first_width_pt} rest={rest_width_pt} \
+                 scale={scale:.4} mu={:?} lines={lines:?}",
+                master_units(text, fs, family, bold, italic),
+            );
+        }
     }
     lines
 }
