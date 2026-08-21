@@ -9209,11 +9209,31 @@ fn runstyle_on() -> bool {
 #[cfg(windows)]
 const ADVANCE_PROBE_EM: i32 = 2048;
 
+/// GDI reports character advances as integers scaled to the probe size, so the
+/// probe size IS the measurement resolution.
+///
+/// 2048 is exact for the common 2048-unit TrueType em -- Lobster's advances land
+/// on whole units there -- and only quantises a 1000-unit CFF em, so probing
+/// finer is opt-in until a corpus measurement says it is worth the cache churn:
+/// on d09 it moved the deck +0.0001 with the per-slide signs mixed.
+#[cfg(windows)]
+fn advance_probe_em() -> i32 {
+    if std::env::var("OXI_ADVPREC_ENABLE").is_ok() {
+        16384
+    } else {
+        ADVANCE_PROBE_EM
+    }
+}
+
 #[cfg(windows)]
 thread_local! {
     /// (family, weight, italic) -> char -> advance in EM units.
     static BASELINE_CACHE: std::cell::RefCell<
         std::collections::HashMap<String, Option<f32>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// (family, weight, italic) -> char -> ink reach past the advance, EM units.
+    static OVERHANG_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
     static ADVANCE_CACHE: std::cell::RefCell<
         std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
@@ -9249,6 +9269,71 @@ fn probe_dc() -> windows::Win32::Graphics::Gdi::HDC {
     })
 }
 
+/// How far a glyph's ink reaches past its advance, in EM units, never negative.
+///
+/// A script face joins its letters by drawing outside the advance box: Lobster's
+/// `o` overhangs by 0.123 em. Whether the BREAK test counts any of that is the
+/// open question `trailing_overhang_px` documents -- the full ABC-C term is
+/// falsified, so this feeds only the opt-in probe and the OXI_ADV_DEBUG dump.
+#[cfg(windows)]
+fn runtime_overhang_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let dc = probe_dc();
+    let weight = if bold { 700 } else { 400 };
+    let key = (family.to_string(), weight, italic);
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    OVERHANG_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let per_font = cache.entry(key).or_default();
+        if let Some(hit) = per_font.get(&ch) {
+            return *hit;
+        }
+        let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+        let value = unsafe {
+            let probe_em = advance_probe_em();
+            let font = CreateFontW(
+                -probe_em,
+                0,
+                0,
+                0,
+                weight,
+                u32::from(italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                None
+            } else {
+                let old = SelectObject(dc, font);
+                let mut abc = ABC::default();
+                let code = ch as u32;
+                let ok = GetCharABCWidthsW(dc, code, code, &mut abc).as_bool();
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                if ok {
+                    Some((-abc.abcC).max(0) as f32 / probe_em as f32)
+                } else {
+                    None
+                }
+            }
+        };
+        per_font.insert(ch, value);
+        if let Ok(want) = std::env::var("OXI_ADV_DEBUG") {
+            if face.contains(&want) {
+                eprintln!("OVH {face} '{ch}' {value:?}");
+            }
+        }
+        value
+    })
+}
+
 /// The design advance of `ch` in EM units, read from the font GDI actually
 /// resolved for `family` (including a privately loaded embedded one).
 ///
@@ -9279,8 +9364,9 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         }
         let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
         let value = unsafe {
+            let probe_em = advance_probe_em();
             let font = CreateFontW(
-                -ADVANCE_PROBE_EM,
+                -probe_em,
                 0,
                 0,
                 0,
@@ -9305,13 +9391,18 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
                 SelectObject(dc, old);
                 let _ = DeleteObject(font);
                 if ok {
-                    Some((abc.abcA + abc.abcB as i32 + abc.abcC) as f32 / ADVANCE_PROBE_EM as f32)
+                    Some((abc.abcA + abc.abcB as i32 + abc.abcC) as f32 / probe_em as f32)
                 } else {
                     None
                 }
             }
         };
         per_font.insert(ch, value);
+        if let Ok(want) = std::env::var("OXI_ADV_DEBUG") {
+            if face.contains(&want) {
+                eprintln!("ADV {face} '{ch}' {value:?}");
+            }
+        }
         value
     })
 }
@@ -9531,13 +9622,48 @@ fn measure_wrap(
     italic: bool,
     scale: f64,
 ) -> i32 {
-    if advance_exact_on() {
+    let width = if advance_exact_on() {
         runtime_width_px(dc, text, fs, family, bold, italic, scale)
             .or_else(|| font_adv::text_hmtx_px(text, fs, family, scale))
             .unwrap_or_else(|| gdi_measure_text_px(dc, text))
     } else {
         gdi_measure_text_px(dc, text)
+    };
+    width + trailing_overhang_px(text, fs, family, bold, italic, scale)
+}
+
+/// The room the last glyph on a candidate line needs beyond its advance.
+///
+/// FALSIFIED as a default (2026-08-21) and held opt-in: adding the full GDI
+/// ABC-C overhang flipped 20 knife-edge lines across six dev decks and the
+/// corpus said 1 improved / 4 regressed -- PowerPoint keeps lines this term
+/// breaks (d20 "Table Of Contents", d34 Pacifico at 0.002pt slack). Yet the
+/// pure design-advance sum is not PowerPoint's test either: it breaks four
+/// lines that float-fit with 0.01-0.10pt to spare (d09 "Happy Holi!", d20
+/// "About Us" / "Who we are?" / "Our Projects"), and coarse per-glyph
+/// quantisation (96dpi int / 1/16px) contradicts the Pacifico keeps outright
+/// (`tools/metrics/analyze_pptx_wrapfit.py` scores every hypothesis against
+/// all twenty cases). Whatever PowerPoint adds is far smaller than the ABC-C
+/// ink reach; pinning it needs a width-sweep repro against PowerPoint COM.
+#[cfg(windows)]
+fn trailing_overhang_px(
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+) -> i32 {
+    if std::env::var("OXI_TRAILINK_ENABLE").is_err() {
+        return 0;
     }
+    let Some(last) = text.chars().rev().find(|c| !c.is_whitespace()) else {
+        return 0;
+    };
+    let Some(em) = runtime_overhang_em(family, bold, italic, last) else {
+        return 0;
+    };
+    (f64::from(em * fs) * scale).round() as i32
 }
 
 /// A word wider than its line breaks inside itself unless this is set.
@@ -9631,7 +9757,15 @@ fn gdi_wrap_lines(
             } else {
                 gdi_measure_text_px(dc, trimmed)
             };
-            w <= width_px
+            // Opt-in probe (0 by default): see trailing_overhang_px for why
+            // the trailing-ink term is falsified as a default.
+            let ovh = trailing_overhang_px(trimmed, fs, family, bold, italic, scale);
+            if std::env::var("OXI_WRAP_DEBUG").is_ok() && w <= width_px && w + ovh > width_px {
+                eprintln!(
+                    "FLIP fam={family} fs={fs} scale={scale:.4} w={w} ovh={ovh} box={width_px} text={trimmed:?}"
+                );
+            }
+            w + ovh <= width_px
         } else {
             current_w + gdi_measure_text_px(dc, word) <= width_px
         };
