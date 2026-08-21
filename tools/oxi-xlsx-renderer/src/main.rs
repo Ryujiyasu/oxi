@@ -33,9 +33,14 @@ fn column_pixels(width: f32, digit: f32) -> f32 {
 /// which is what a workbook that names no font gets.
 const FALLBACK_DIGIT_WIDTH: f32 = 7.0;
 const DEFAULT_ROW_POINTS: f32 = 18.75;
-/// Excel's own default column width for a sheet that states none, as a plain
-/// count of digits.
-const DEFAULT_CHARACTERS: f32 = 8.43;
+/// Excel's own default column width for a sheet that states none: eight
+/// digits of the standard font and eight pixels. Measured across digits of
+/// 6, 7, 8, 9, 10 and 12 pixels — 56, 64, 72, 80, 88 and 104. The 8.43
+/// characters Excel reports is that width read back through the padding, not
+/// the number it starts from, and reading it forwards is a pixel out on a
+/// wide digit.
+const DEFAULT_DIGITS: f32 = 8.0;
+const DEFAULT_PADDING: f32 = 8.0;
 /// The gutter Excel keeps either side of a cell's text, in pixels. A width the
 /// sheet states already has it folded in; a default width does not.
 const COLUMN_GUTTER: f32 = 5.0;
@@ -634,7 +639,7 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32, plain: &CellStyle) -> G
                 None if sheet.default_col_width > 0.0 => {
                     column_pixels(sheet.default_col_width, digit_width) * scale
                 }
-                None => (DEFAULT_CHARACTERS * digit_width + COLUMN_GUTTER).trunc() * scale,
+                None => (DEFAULT_DIGITS * digit_width + DEFAULT_PADDING).trunc() * scale,
             }
         };
         columns.push(columns.last().unwrap() + width);
@@ -733,6 +738,15 @@ fn main() {
     if std::env::var("OXI_XLSX_DUMP_ROWS").is_ok() {
         for (step, pair) in layout.rows.windows(2).enumerate() {
             println!("row {} px {}", layout.first_row as usize + step, pair[1] - pair[0]);
+        }
+    }
+    if std::env::var("OXI_XLSX_DUMP_COLUMNS").is_ok() {
+        for (step, pair) in layout.columns.windows(2).enumerate() {
+            println!(
+                "column {} px {}",
+                layout.first_column as usize + step,
+                pair[1] - pair[0]
+            );
         }
     }
 
