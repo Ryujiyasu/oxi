@@ -2020,6 +2020,13 @@ fn cell_width_pt(
         .sum::<f32>()
 }
 
+/// A centred or bottom-anchored cell is positioned by the height of its
+/// WRAPPED text unless this is set, which restores counting one line per
+/// paragraph.
+fn cellblock_on() -> bool {
+    std::env::var("OXI_CELLBLOCK_DISABLE").is_err()
+}
+
 /// A table cell wraps its text unless this is set, which restores drawing each
 /// paragraph as one line however wide the column is.
 ///
@@ -3019,8 +3026,49 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         .unwrap_or(18.0);
                                     (fs, fs as f64 * scale * 1.2)
                                 };
-                                let total: f64 =
-                                    cell.paragraphs.iter().map(|p| line_h(p).1).sum();
+                                // The block a centred or bottom-anchored cell is
+                                // positioned by is as tall as the WRAPPED text,
+                                // not as the paragraph count: since cells wrap,
+                                // counting one line per paragraph makes the
+                                // block look short and pushes the text down by
+                                // half of every line it forgot.
+                                let cell_inner_pt = (right - left).max(1) as f64 / scale;
+                                let total: f64 = cell
+                                    .paragraphs
+                                    .iter()
+                                    .map(|p| {
+                                        let (fs, adv) = line_h(p);
+                                        let mut n = 1usize;
+                                        if cellwrap_on() && cellblock_on() {
+                                            let body: String =
+                                                p.runs.iter().map(|r| r.text.as_str()).collect();
+                                            if !body.trim().is_empty() {
+                                                let family = effective_family(
+                                                    mem_dc,
+                                                    &paragraph_family(
+                                                        pres, sh, p, &sh.ph_levels[..], &[],
+                                                    ),
+                                                );
+                                                let bold = p.runs.iter().any(|r| r.bold);
+                                                n = gdi_wrap_lines(
+                                                    mem_dc,
+                                                    &body,
+                                                    cell_inner_pt as f32,
+                                                    cell_inner_pt as f32,
+                                                    scale,
+                                                    fs,
+                                                    &family,
+                                                    bold,
+                                                    false,
+                                                    Some((&p.runs[..], 0)),
+                                                )
+                                                .len()
+                                                .max(1);
+                                            }
+                                        }
+                                        adv * n as f64
+                                    })
+                                    .sum();
                                 let inner_top = cy + (cell.mar_t as f64 * scale).round() as i32;
                                 let inner_bot = cy + ph - (cell.mar_b as f64 * scale).round() as i32;
                                 let mut cursor_y = match cell.anchor.as_deref() {
