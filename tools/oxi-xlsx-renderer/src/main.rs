@@ -79,6 +79,39 @@ fn stated_extent() -> Option<(u32, u32, u32, u32)> {
     }
 }
 
+/// Has an empty cell been dressed in anything Excel would remember?
+///
+/// The range Excel hands over counts an empty cell that was given a face or
+/// something to show, and passes over one that carries no more than an
+/// alignment. `20211210_mousikomi` writes 35 such cells across seven columns
+/// — the workbook's own font, no fill, no border, `vertical="center"` — and
+/// Excel's range stops seven columns short of them; `h2daa202601s` does the
+/// same over sixteen rows, its style even saying `applyFill="1"` over a fill
+/// of `patternType="none"`. A cell wearing a face of its own is remembered,
+/// though: `fies_t2`'s first column and `zuhyo`'s first two are empty cells in
+/// a font that is not the workbook's, and Excel keeps every one of them.
+fn dressed(style: &CellStyle, normal: Option<&(String, f32)>) -> bool {
+    let named = style.font_name.as_deref();
+    let sized = style.font_size;
+    let own_face = match normal {
+        Some((face, size)) => {
+            named.is_some_and(|name| name != face) || sized.is_some_and(|points| points != *size)
+        }
+        None => named.is_some() || sized.is_some(),
+    };
+    own_face
+        || style.bold
+        || style.italic
+        || style.underline
+        || style.font_color.is_some()
+        || style.bg_color.is_some()
+        || style.number_format.is_some()
+        || style.border_top.is_some()
+        || style.border_bottom.is_some()
+        || style.border_left.is_some()
+        || style.border_right.is_some()
+}
+
 fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
     if let Some(stated) = stated_extent() {
         return stated;
@@ -104,7 +137,7 @@ fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
             // cells in ＭＳ 明朝 11 with a text format, and Excel's own range
             // starts at the row below it.
             let empty = matches!(cell.value, CellValue::Empty) && cell.formula.is_none();
-            if empty && cell.style == CellStyle::default() {
+            if empty && !dressed(&cell.style, sheet.normal_font.as_ref()) {
                 continue;
             }
             first_row = first_row.min(row.index);
