@@ -1915,17 +1915,39 @@ mod windows_draw {
                     let line_px = (line_px * scale).round() as i32;
                     let block = line_px * lines.len() as i32;
                     let slack = (box_.bottom - box_.top) - block;
+                    // A merged block carries a pixel of leading under its
+                    // text that a plain cell does not, so its text sits a
+                    // pixel higher: measured over thirteen row heights and
+                    // eight fonts by _xlsx_valign_pixels.py, which is what
+                    // put the `h2daa*kre` family a pixel low. A single line
+                    // keeps it when centred but not when sat on the bottom,
+                    // and several lines with no room to spare lose it again.
+                    let merged_block = spans_columns > 0 || spans_rows > 0;
+                    let one_line = lines.len() == 1;
                     let top = box_.top
                         + match cell.style.vertical_align.as_deref() {
                             Some("top") => 0,
-                            // The odd pixel goes above the text.
-                            Some("center") | Some("centre") => (slack as f32 / 2.0).floor() as i32,
-                            _ => slack,
+                            Some("center") | Some("centre") => {
+                                // Several lines with no room to spare lose
+                                // the pixel again, and are centred as a plain
+                                // cell's would be.
+                                let leading =
+                                    i32::from(merged_block && (one_line || slack > 0));
+                                ((slack - leading) as f32 / 2.0).floor() as i32
+                            }
+                            // Sat on the bottom, only a block of several
+                            // lines gives the pixel up.
+                            _ => slack - i32::from(merged_block && !one_line),
                         };
 
                     // Nothing is drawn outside the cell, or outside the room
                     // the text was given to run on into.
-                    let clip = CreateRectRgn(area.left, box_.top, area.right, box_.bottom);
+                    // Text too tall for its row is cut off a pixel below the
+                    // row's top edge, not at it: measured on the tight rows
+                    // of _xlsx_valign_pixels.py, where Excel and the renderer
+                    // agree on the foot of the ink and differ by that pixel
+                    // at the head of it.
+                    let clip = CreateRectRgn(area.left, box_.top + 1, area.right, box_.bottom);
                     SelectClipRgn(dc, clip);
                     SetTextAlign(dc, TA_BASELINE | TA_LEFT);
                     let mut at = top + (baseline * scale).round() as i32;
