@@ -425,11 +425,14 @@ impl<'a> WorkbookHost<'a> {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
             declared_range: None,
             tables: Vec::new(),
+            drawings: Vec::new(),
+            comments: Vec::new(),
             unsupported_elements: Vec::new(),
         };
         self.workbook.sheets.insert(at, sheet);

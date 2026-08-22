@@ -907,6 +907,53 @@ pub(crate) fn anchored_box(
     Some(windows::Win32::Foundation::RECT { left, top, right, bottom })
 }
 
+/// How wide the box is before its edges are put on whole pixels.
+///
+/// A shape's anchors carry EMU, and a box that starts 134.4 pixels into one
+/// column and ends 65.6 into another is 0.8 of a pixel narrower or wider than
+/// the rectangle it is drawn in. Excel breaks a line when the run is longer
+/// than that unrounded room and not before: `_xlsx_shape_room.py` sweeps a box
+/// a quarter of a pixel at a time and the turn is exactly at
+/// `room = run` — which is what puts `sanko_tool`'s last character on a line
+/// of its own here and not there.
+#[cfg(windows)]
+pub(crate) fn drawing_room(
+    drawn: &oxicells_core::ir::Drawing,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<f32> {
+    anchored_room(&drawn.from, drawn.to.as_ref(), drawn.extent, layout, scale)
+}
+
+#[cfg(windows)]
+pub(crate) fn anchored_room(
+    from: &oxicells_core::ir::Anchor,
+    to: Option<&oxicells_core::ir::Anchor>,
+    extent: Option<(i64, i64)>,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<f32> {
+    let at = |anchor: &oxicells_core::ir::Anchor| -> Option<f32> {
+        let left = match anchor.col.checked_sub(layout.first_column) {
+            Some(column) => match layout.columns.get(column as usize) {
+                Some(edge) => *edge,
+                None => *layout
+                    .after_columns
+                    .get(column as usize - layout.columns.len())?,
+            },
+            None => *layout.before_columns.get(anchor.col as usize)?,
+        };
+        Some(left + anchor.col_off as f32 / EMU * scale)
+    };
+    let left = at(from)?;
+    let right = match (to, extent) {
+        (Some(to), _) => at(to).unwrap_or(*layout.columns.last().unwrap_or(&0.0)),
+        (None, Some((cx, _))) => left + cx as f32 / EMU * scale,
+        (None, None) => return None,
+    };
+    Some(right - left)
+}
+
 /// The face Excel draws when the workbook asks for one this machine has not.
 ///
 /// Not the name, and not the PANOSE the file carries: `_xlsx_missing_face_map.py`
@@ -1185,11 +1232,51 @@ pub(crate) fn wrapped_lines(
     text: &str,
     width: Option<f32>,
 ) -> Vec<String> {
+    broken_lines(face, points, bold, italic, text, width, false)
+}
+
+/// The same, for a shape, which breaks its lines where its own run of glyphs
+/// runs out of room.
+///
+/// A cell measures a break in whole-pixel advances; a shape sets its text by
+/// the font's own at the exact em (`shape_run`), and a break has to be
+/// measured in the advances the text is actually set in. The two part company
+/// by a fraction of a pixel a character, which over `sanko_tool`'s
+/// thirty-three-character line is enough to push its last letter onto a line
+/// of its own — and a block one line too tall hangs its first line above a
+/// middle-anchored box. `_xlsx_shape_advance.py` walks that very line a
+/// character at a time and finds the shape's own advances land on Excel's ink
+/// at all twenty-six lengths, so they are what a shape's break is measured in.
+pub(crate) fn wrapped_shape_lines(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+    width: Option<f32>,
+) -> Vec<String> {
+    broken_lines(face, points, bold, italic, text, width, true)
+}
+
+fn broken_lines(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+    width: Option<f32>,
+    shape: bool,
+) -> Vec<String> {
     let mut held = Vec::new();
     for paragraph in text.split('\n') {
         let letters: Vec<char> = paragraph.chars().collect();
+        let stepped = if shape {
+            shape_run(face, points, bold, italic, paragraph)
+        } else {
+            advances(face, points, bold, italic, paragraph)
+        };
         let breaks = match width {
-            Some(width) => advances(face, points, bold, italic, paragraph)
+            Some(width) => stepped
                 .map(|advances| line_breaks(&letters, &advances, width))
                 .unwrap_or_default(),
             None => Vec::new(),
@@ -2142,6 +2229,9 @@ mod windows_draw {
         dc: HDC,
         shape: &oxicells_core::ir::Shape,
         box_: RECT,
+        // The box's width before its edges were rounded, which is what a line
+        // is broken against (see `drawing_room`).
+        room: Option<f32>,
         scale: f32,
         normal: Option<&(String, f32)>,
     ) {
@@ -2305,7 +2395,7 @@ mod windows_draw {
         // the geometry catches up.
         if let Some(said) = &shape.text {
             if std::env::var("OXI_XLSX_SHAPE_TEXT").is_ok() {
-                says(dc, said, box_, scale, normal, false);
+                says(dc, said, box_, room, scale, normal, false);
             }
         }
     }
@@ -2828,9 +2918,9 @@ mod windows_draw {
                 right: box_.left + ((frame.x + frame.w) * across as f64).round() as i32,
                 bottom: box_.top + ((frame.y + frame.h) * down as f64).round() as i32,
             };
-            shape(dc, held, over, scale, normal);
+            shape(dc, held, over, None, scale, normal);
             if let Some(said) = &held.text {
-                says(dc, said, over, scale, normal, false);
+                says(dc, said, over, None, scale, normal, false);
             }
         }
     }
@@ -2920,6 +3010,10 @@ mod windows_draw {
         dc: HDC,
         said: &oxicells_core::ir::ShapeText,
         box_: RECT,
+        // The box's width before its edges were put on whole pixels, when the
+        // caller knows it: a line breaks against this, not against the drawn
+        // rectangle (see `drawing_room`).
+        exact: Option<f32>,
         scale: f32,
         normal: Option<&(String, f32)>,
         // A note is laid out by the engine that lays out cells, not the one
@@ -2938,7 +3032,10 @@ mod windows_draw {
         if area.right <= area.left {
             return;
         }
-        let room = (area.right - area.left) as f32 / scale;
+        let room = match exact {
+            Some(exact) => exact / scale - (inset(said.insets.0) + inset(said.insets.2)) as f32 / scale,
+            None => (area.right - area.left) as f32 / scale,
+        };
 
         // Every line, with the paragraph it belongs to, so the block can be
         // measured before any of it is written.
@@ -2956,14 +3053,25 @@ mod windows_draw {
                     .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string()),
                 paragraph.charset,
             );
-            let broken = super::wrapped_lines(
-                &face,
-                paragraph.size,
-                paragraph.bold,
-                paragraph.italic,
-                &paragraph.text,
-                said.wrap.then_some(room),
-            );
+            let broken = if note {
+                super::wrapped_lines(
+                    &face,
+                    paragraph.size,
+                    paragraph.bold,
+                    paragraph.italic,
+                    &paragraph.text,
+                    said.wrap.then_some(room),
+                )
+            } else {
+                super::wrapped_shape_lines(
+                    &face,
+                    paragraph.size,
+                    paragraph.bold,
+                    paragraph.italic,
+                    &paragraph.text,
+                    said.wrap.then_some(room),
+                )
+            };
             // The glyphs sit in the middle of the pitch, not against its top:
             // a Japanese face's extra three tenths of leading falls half above
             // the letters and half below, which is what puts `002`'s panel
@@ -4052,14 +4160,19 @@ mod windows_draw {
                         other => format!("{other:?}"),
                     };
                     eprintln!(
-                        "drawing {},{} to {},{}  {what}",
-                        box_.left, box_.top, box_.right, box_.bottom
+                        "drawing {},{} to {},{} room {:?}  {what}",
+                        box_.left,
+                        box_.top,
+                        box_.right,
+                        box_.bottom,
+                        super::drawing_room(drawn, layout, scale)
                     );
                 }
                 match &drawn.kind {
                     DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
                     DrawingKind::Shape(held) => {
-                        shape(dc, held, box_, scale, sheet.normal_font.as_ref())
+                        shape(dc, held, box_, super::drawing_room(drawn, layout, scale), scale,
+                              sheet.normal_font.as_ref())
                     }
                     DrawingKind::Chart(held) => {
                         graph(dc, held, box_, scale, sheet.normal_font.as_ref())
@@ -4152,7 +4265,7 @@ mod windows_draw {
                 // A note shows what fits in its box and no more.
                 let clip = CreateRectRgn(box_.left, box_.top, box_.right, box_.bottom);
                 SelectClipRgn(dc, clip);
-                says(dc, &note.text, box_, scale, sheet.normal_font.as_ref(), true);
+                says(dc, &note.text, box_, None, scale, sheet.normal_font.as_ref(), true);
                 SelectClipRgn(dc, None);
                 let _ = DeleteObject(clip);
             }
