@@ -247,6 +247,24 @@ fn default_true() -> bool {
     true
 }
 
+/// One end's decoration, from `a:ln/a:headEnd` or `a:ln/a:tailEnd`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LineEnd {
+    /// `@type`: "oval", "triangle", "stealth", "arrow", "diamond". A `none`
+    /// type is not stored -- an undecorated end is simply `None`.
+    pub kind: String,
+    /// `@w` and `@len`, each "sm" | "med" | "lg", both defaulting to "med".
+    /// They size the decoration across and along the line respectively.
+    #[serde(default = "default_end_size")]
+    pub w: String,
+    #[serde(default = "default_end_size")]
+    pub len: String,
+}
+
+fn default_end_size() -> String {
+    "med".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
     pub x: f32,      // position in points
@@ -294,6 +312,13 @@ pub struct Shape {
     /// (or "solid") is an unbroken line.
     #[serde(default)]
     pub border_dash: Option<String>,
+    /// `a:ln/a:headEnd` and `a:ln/a:tailEnd` — the decorations at the two ends
+    /// of the stroke. The dev corpus states them on straight connectors: 277
+    /// oval, 78 triangle and 4 stealth ends over 31 slides in 10 decks.
+    #[serde(default)]
+    pub head_end: Option<LineEnd>,
+    #[serde(default)]
+    pub tail_end: Option<LineEnd>,
     /// Text-area insets from a:bodyPr (lIns/rIns/tIns/bIns) in points.
     /// A placeholder with no bodyPr inset uses 7.2 / 7.2 / 3.6 / 3.6; a textbox
     /// carries its own insets (e.g. lIns=914400 EMU = 72pt). The left text

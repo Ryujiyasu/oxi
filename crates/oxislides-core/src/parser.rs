@@ -17,7 +17,7 @@ use crate::ir::{
     default_chart_hole_size, default_chart_size_represents,
     default_chart_updown_gap,
     default_chart_type, default_l_ins, default_r_ins, default_t_ins, Chart, ChartSeries,
-    CellBorder, CustomGeometry, EmbeddedFont, GeomCmd, GeomPath,
+    CellBorder, CustomGeometry, EmbeddedFont, GeomCmd, GeomPath, LineEnd,
     MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
     SlideParagraph,
@@ -396,6 +396,19 @@ fn parse_alignment_attr(a: &str) -> SlideAlignment {
         "just" => SlideAlignment::Justify,
         _ => SlideAlignment::Left,
     }
+}
+
+/// An `a:headEnd` / `a:tailEnd` element. `type="none"` and a missing `@type`
+/// both mean "no decoration", which is `None` rather than a stored token --
+/// the corpus states `type="none"` explicitly on every table-cell border, so
+/// keeping those would triple the field's occupancy for nothing.
+fn parse_line_end(e: &quick_xml::events::BytesStart) -> Option<LineEnd> {
+    let kind = get_attr(e, "type").filter(|t| t != "none")?;
+    Some(LineEnd {
+        kind,
+        w: get_attr(e, "w").unwrap_or_else(|| "med".to_string()),
+        len: get_attr(e, "len").unwrap_or_else(|| "med".to_string()),
+    })
 }
 
 /// Follow one relationship of `rel_type` out of `rels` and return the target
@@ -987,6 +1000,8 @@ fn parse_slide(
     let mut shape_border_color: Option<String> = None;
     let mut shape_border_width: Option<f32> = None;
     let mut shape_border_dash: Option<String> = None;
+    let mut shape_head_end: Option<LineEnd> = None;
+    let mut shape_tail_end: Option<LineEnd> = None;
     let mut shape_text_warp: Option<String> = None;
     // Placeholder identity (p:ph type/idx from nvPr) and whether spPr had an
     // explicit xfrm. Spec #3: a placeholder without an explicit xfrm inherits
@@ -1523,6 +1538,8 @@ fn parse_slide(
                     "ln" if in_sp_pr => {
                         in_ln = true;
                         shape_border_dash = None;
+                        shape_head_end = None;
+                        shape_tail_end = None;
                         // Width attribute in EMU; 12700 EMU = 1pt
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
@@ -1534,6 +1551,18 @@ fn parse_slide(
                     // arm as well -- both are routed here.
                     "prstDash" if in_ln => {
                         shape_border_dash = get_attr(&e, "val").filter(|v| v != "solid");
+                    }
+                    // Likewise `a:headEnd` / `a:tailEnd`: attribute-only, so
+                    // the Empty arm is the one that fires in practice. The
+                    // `in_ln` guard keeps table-cell borders (a:lnL/lnR/lnT/
+                    // lnB, which state type="none" ends of their own) out.
+                    "headEnd" | "tailEnd" if in_ln => {
+                        let end = parse_line_end(&e);
+                        if name == "headEnd" {
+                            shape_head_end = end;
+                        } else {
+                            shape_tail_end = end;
+                        }
                     }
                     "off" if in_grp_xfrm => {
                         if let Some(x) = get_attr(&e, "x") {
@@ -1960,6 +1989,8 @@ fn parse_slide(
                     "ln" if in_sp_pr => {
                         // Empty <a:ln/> — no border content, just attributes
                         shape_border_dash = None;
+                        shape_head_end = None;
+                        shape_tail_end = None;
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
                                 shape_border_width = Some(v / 12700.0);
@@ -1971,6 +2002,15 @@ fn parse_slide(
                     // above exists only for symmetry.
                     "prstDash" if in_ln => {
                         shape_border_dash = get_attr(&e, "val").filter(|v| v != "solid");
+                    }
+                    // Same for the two line ends -- attribute-only elements.
+                    "headEnd" | "tailEnd" if in_ln => {
+                        let end = parse_line_end(&e);
+                        if name == "headEnd" {
+                            shape_head_end = end;
+                        } else {
+                            shape_tail_end = end;
+                        }
                     }
                     "xfrm" if in_shape => {
                         shape_has_xfrm = true;
@@ -2565,6 +2605,8 @@ fn parse_slide(
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
                             border_dash: shape_border_dash.take(),
+                            head_end: shape_head_end.take(),
+                            tail_end: shape_tail_end.take(),
                             l_ins: shape_l_ins,
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
@@ -2732,6 +2774,8 @@ fn parse_slide(
                             border_color: shape_border_color.take(),
                             border_width: shape_border_width.take(),
                             border_dash: shape_border_dash.take(),
+                            head_end: shape_head_end.take(),
+                            tail_end: shape_tail_end.take(),
                             l_ins: shape_l_ins,
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
@@ -3511,6 +3555,11 @@ fn parse_inherited_shapes(
                                         // corpus states prstDash on top-level
                                         // shapes and connectors only.
                                         border_dash: None,
+                                        // A group member's ln is not walked
+                                        // yet; the corpus states line ends on
+                                        // top-level connectors only.
+                                        head_end: None,
+                                        tail_end: None,
                                         l_ins: default_l_ins(),
                                         r_ins: default_r_ins(),
                                         t_ins: default_t_ins(),
@@ -5197,6 +5246,78 @@ mod tests {
             resolve_slide_relative_path("ppt/slides/_rels/slide1.xml.rels", "/ppt/media/img.png"),
             "ppt/media/img.png"
         );
+    }
+
+    /// A one-entry archive, enough for `parse_slide` to run: every part it
+    /// cannot find (rels, media) is optional.
+    fn archive_of(name: &str, body: &str) -> OoxmlArchive {
+        use std::io::{Cursor, Write};
+        let mut out = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(Cursor::new(&mut out));
+            w.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(body.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        OoxmlArchive::new(&out).unwrap()
+    }
+
+    fn slide_with(ln_body: &str) -> Slide {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+ <p:cSld><p:spTree>
+  <p:cxnSp>
+   <p:nvCxnSpPr><p:cNvPr id="2" name="c"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+   <p:spPr>
+    <a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="0"/></a:xfrm>
+    <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+    <a:ln w="19050">{ln_body}</a:ln>
+   </p:spPr>
+  </p:cxnSp>
+ </p:spTree></p:cSld>
+</p:sld>"#
+        );
+        let mut ar = archive_of("ppt/slides/slide1.xml", &xml);
+        parse_slide(
+            &xml,
+            0,
+            &mut ar,
+            "ppt/slides/_rels/slide1.xml.rels",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("slide must parse")
+    }
+
+    #[test]
+    fn line_ends_are_read_in_both_element_forms() {
+        // `a:headEnd` / `a:tailEnd` carry nothing but attributes, so quick-xml
+        // hands them to the EMPTY arm; a handler written only on the Start arm
+        // is silently inert. Both forms are stated here so neither arm can be
+        // dropped without a test going red.
+        let s = slide_with(
+            r#"<a:headEnd type="oval" w="lg" len="sm"/>
+               <a:tailEnd type="triangle"></a:tailEnd>"#,
+        );
+        let sh = &s.shapes[0];
+        let h = sh.head_end.as_ref().expect("headEnd (empty form)");
+        assert_eq!((h.kind.as_str(), h.w.as_str(), h.len.as_str()), ("oval", "lg", "sm"));
+        let t = sh.tail_end.as_ref().expect("tailEnd (start/end form)");
+        // Absent @w / @len mean "med", not "missing".
+        assert_eq!((t.kind.as_str(), t.w.as_str(), t.len.as_str()), ("triangle", "med", "med"));
+    }
+
+    #[test]
+    fn line_end_type_none_is_no_decoration() {
+        // Every table-cell border in the corpus states type="none"; storing
+        // those would mean drawing nothing 1410 times.
+        let s = slide_with(r#"<a:headEnd type="none" w="sm" len="sm"/><a:tailEnd/>"#);
+        assert!(s.shapes[0].head_end.is_none());
+        assert!(s.shapes[0].tail_end.is_none());
     }
 
     #[test]

@@ -25,7 +25,7 @@ mod emoji;
 mod font_adv;
 
 use oxislides_core::ir::{
-    GeomCmd, MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment,
+    GeomCmd, LineEnd, MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment,
     SlideBackgroundImage, SlideBullet, SlideGradient,
 };
 use serde_json::{json, Value};
@@ -613,6 +613,9 @@ fn shape_json(sh: &Shape) -> Value {
         "fill_alpha": sh.fill_alpha,
         "border_color": sh.border_color,
         "border_width": sh.border_width,
+        "border_dash": sh.border_dash,
+        "head_end": sh.head_end.as_ref().map(|e| json!([e.kind, e.w, e.len])),
+        "tail_end": sh.tail_end.as_ref().map(|e| json!([e.kind, e.w, e.len])),
         "text_warp": sh.text_warp,
         "anchor": sh.anchor,
         "l_ins": sh.l_ins,
@@ -2427,6 +2430,132 @@ unsafe fn paint_bg_gradient(
     SelectObject(dc, old_pen);
 }
 
+/// `a:headEnd` / `a:tailEnd` decorations are drawn unless this is set.
+fn line_ends_on() -> bool {
+    std::env::var("OXI_LINEEND_DISABLE").is_err()
+}
+
+/// How many line widths the `@w` / `@len` size tokens are worth.
+fn line_end_factor(tok: &str) -> f64 {
+    match tok {
+        "sm" => 2.0,
+        "lg" => 5.0,
+        _ => 3.0,
+    }
+}
+
+/// The width the size tokens actually scale: the line's own, but never under
+/// **2.00pt**.
+///
+/// Read off PowerPoint's own PDF, which carries each head as a real filled
+/// path, so these are exact rather than pixel estimates. Above the floor the
+/// factor is plain: a `med` triangle is 9.000pt across on a 3.00pt line and
+/// 22.500pt on a 7.50pt one. Below it the factor alone is wrong: a `sm`
+/// triangle on a 1.50pt line is 4.000pt across, not 3.000, and a `med` oval on
+/// a 0.75pt line is 6.000pt, not 2.250 -- both land exactly on their factor
+/// times 2.00.
+///
+/// `gen_pptx_lineend.py` sweeps 5 line widths x 5 (w, len) pairs x 5 types and
+/// `read_pptx_lineend_probe.py` reads the result: for oval, triangle, stealth
+/// and diamond all 100 measurements are the predicted size to three decimals,
+/// and the 0.75pt and 1.50pt rows are IDENTICAL while 3.00 / 4.50 / 6.00 scale
+/// linearly -- flat below the floor, proportional above it. `w` and `len` act
+/// on the two axes independently (a `sm`/`lg` head is 4.000 across by 10.000
+/// along). Four dev decks agree.
+fn line_end_unit(lw_pt: f64) -> f64 {
+    lw_pt.max(2.0)
+}
+
+/// Draw one line-end decoration.
+///
+/// `(ex, ey)` is the decorated end in device pixels and `(bx, by)` any point
+/// behind it along the line; together they fix the direction the decoration
+/// points. `lw_pt` is the stroke width in POINTS -- the floor in
+/// `line_end_unit` is a point value, so it cannot be applied after scaling.
+#[cfg(windows)]
+unsafe fn draw_line_end(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    end: &LineEnd,
+    ex: i32,
+    ey: i32,
+    bx: i32,
+    by: i32,
+    lw_pt: f64,
+    scale: f64,
+    rgb: (u8, u8, u8),
+) {
+    use windows::Win32::Foundation::{COLORREF, POINT};
+    use windows::Win32::Graphics::Gdi::*;
+
+    let (dx, dy) = ((ex - bx) as f64, (ey - by) as f64);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 0.5 || lw_pt <= 0.0 {
+        return;
+    }
+    // u runs along the line towards the decorated end, v across it.
+    let (ux, uy) = (dx / len, dy / len);
+    let (vx, vy) = (-uy, ux);
+    let unit = line_end_unit(lw_pt) * scale;
+    let across = line_end_factor(&end.w) * unit;
+    let along = line_end_factor(&end.len) * unit;
+    let at = |u: f64, v: f64| POINT {
+        x: (ex as f64 + u * ux + v * vx).round() as i32,
+        y: (ey as f64 + u * uy + v * vy).round() as i32,
+    };
+
+    // Each kind's outline in (along, across), origin at the declared endpoint,
+    // as PowerPoint's PDF draws it. The oval is CENTRED on the end -- d35's
+    // circles have their centres exactly on the connector's endpoints and
+    // reach half a diameter past. The pointed kinds put their TIP on the end
+    // and their back a whole `along` behind it (d15's triangle: tip 36.780 =
+    // the declared endpoint, back 40.780 = 4.000 later, base spanning 4.000).
+    let pts: Vec<POINT> = match end.kind.as_str() {
+        "oval" => (0..48)
+            .map(|i| {
+                let t = f64::from(i) * std::f64::consts::TAU / 48.0;
+                at(along / 2.0 * t.cos(), across / 2.0 * t.sin())
+            })
+            .collect(),
+        "triangle" => vec![
+            at(0.0, 0.0),
+            at(-along, across / 2.0),
+            at(-along, -across / 2.0),
+        ],
+        // The notch reaches two thirds of the way back: d32's stealth head is
+        // tip 1198.730, back corners 1185.230 (13.500 = 3 x 4.50 behind) and
+        // notch vertex 1189.730, i.e. 9.000 back of 13.500.
+        "stealth" => vec![
+            at(0.0, 0.0),
+            at(-along, across / 2.0),
+            at(-along * 2.0 / 3.0, 0.0),
+            at(-along, -across / 2.0),
+        ],
+        // Centred like the oval, not tip-on-end like the pointed kinds: in the
+        // repro every diamond reaches exactly half its length past the end.
+        "diamond" => vec![
+            at(along / 2.0, 0.0),
+            at(0.0, across / 2.0),
+            at(-along / 2.0, 0.0),
+            at(0.0, -across / 2.0),
+        ],
+        // "arrow" is an open V that PowerPoint STROKES rather than fills, so it
+        // does not follow the law above and needs its own derivation. No
+        // dev-corpus line asks for one; leaving it undrawn beats drawing it
+        // wrong.
+        _ => return,
+    };
+
+    let brush = CreateSolidBrush(COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
+    let pen = CreatePen(PS_SOLID, 1, COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
+    let old_b = SelectObject(dc, brush);
+    let old_p = SelectObject(dc, pen);
+    let _ = Polygon(dc, &pts);
+    SelectObject(dc, old_p);
+    SelectObject(dc, old_b);
+    let _ = DeleteObject(pen);
+    let _ = DeleteObject(brush);
+}
+
 #[cfg(windows)]
 fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u32) {
     use windows::Win32::Foundation::*;
@@ -2533,6 +2662,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let _ = LineTo(mem_dc, bx, by);
                         SelectObject(mem_dc, old_pen);
                         let _ = DeleteObject(pen);
+                        if line_ends_on() {
+                            let lw = f64::from(bw);
+                            if let Some(h) = sh.head_end.as_ref() {
+                                draw_line_end(mem_dc, h, ax, ay, bx, by, lw, scale, col);
+                            }
+                            if let Some(t) = sh.tail_end.as_ref() {
+                                draw_line_end(mem_dc, t, bx, by, ax, ay, lw, scale, col);
+                            }
+                        }
                     }
                     continue;
                 }
