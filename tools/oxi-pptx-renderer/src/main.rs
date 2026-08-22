@@ -88,6 +88,10 @@ fn main() {
         if n > 0 {
             eprintln!("Installed {}/{} embedded fonts", n, pres.embedded_fonts.len());
         }
+        let cloud = install_cloud_fonts();
+        if cloud > 0 {
+            eprintln!("Installed {cloud} cloud-cache fonts");
+        }
     }
 
     if let Some(path) = dump_layout {
@@ -1317,6 +1321,218 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             for (w, it) in [(400, false), (400, true), (700, false), (700, true)] {
                 debug_face(name, w, it);
             }
+        }
+    }
+    loaded
+}
+
+/// The Office cloud-font cache -- the third place a font can live, after the
+/// system fonts and the deck's own embedded parts.
+///
+/// `%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts\<package>\<id>.ttf`. Office
+/// downloads these ON DEMAND, so the set grows over time, and GDI never sees any
+/// of them: `CreateFontW("IBM Plex Sans")` silently serves a substitute. On the
+/// dev corpus that is 2330 runs on d06, 2452 on d16, 2408 on d24, 2368 on d19
+/// and 2439 on d35 -- whole decks drawn in the wrong face while PowerPoint's own
+/// export names the real one.
+///
+/// ★The DIRECTORY IS NOT THE FAMILY: `CloudFonts\IBM Plex Sans\` holds both
+/// `IBM Plex Sans` and `IBM Plex Sans Condensed`. It names the download package.
+/// The family has to come out of each file's own name table.
+#[cfg(windows)]
+fn cloud_font_root() -> Option<std::path::PathBuf> {
+    let local = std::env::var_os("LOCALAPPDATA")?;
+    let root = std::path::Path::new(&local)
+        .join("Microsoft")
+        .join("FontCache")
+        .join("4")
+        .join("CloudFonts");
+    root.is_dir().then_some(root)
+}
+
+/// The typographic family of an sfnt blob: name ID 16, else name ID 1.
+///
+/// ID 16 is the one that groups the weights (`IBM Plex Sans` for both the
+/// regular and the bold file); ID 1 splits them on faces that have no ID 16.
+#[cfg(windows)]
+fn sfnt_family(data: &[u8]) -> Option<String> {
+    const SFNT: [[u8; 4]; 3] = [[0x00, 0x01, 0x00, 0x00], *b"OTTO", *b"true"];
+    let magic = data.get(0..4)?;
+    if !SFNT.iter().any(|tag| tag.as_slice() == magic) {
+        return None;
+    }
+    let tables = u16::from_be_bytes([data[4], data[5]]) as usize;
+    let mut name_off = None;
+    for index in 0..tables {
+        let rec = 12 + 16 * index;
+        if data.get(rec..rec + 4)? == b"name" {
+            name_off = Some(u32::from_be_bytes([
+                data[rec + 8],
+                data[rec + 9],
+                data[rec + 10],
+                data[rec + 11],
+            ]) as usize);
+            break;
+        }
+    }
+    let base = name_off?;
+    let count = u16::from_be_bytes([*data.get(base + 2)?, *data.get(base + 3)?]) as usize;
+    let strings =
+        base + u16::from_be_bytes([*data.get(base + 4)?, *data.get(base + 5)?]) as usize;
+    let mut fallback: Option<String> = None;
+    for index in 0..count {
+        let rec = base + 6 + 12 * index;
+        let field = |at: usize| -> Option<u16> {
+            Some(u16::from_be_bytes([
+                *data.get(rec + at)?,
+                *data.get(rec + at + 1)?,
+            ]))
+        };
+        let platform = field(0)?;
+        let name_id = field(6)?;
+        if name_id != 1 && name_id != 16 {
+            continue;
+        }
+        let len = field(8)? as usize;
+        let off = field(10)? as usize;
+        let raw = data.get(strings + off..strings + off + len)?;
+        let text = if platform == 3 {
+            let units: Vec<u16> = raw
+                .chunks_exact(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&units).ok()?
+        } else {
+            raw.iter().map(|byte| *byte as char).collect()
+        };
+        if name_id == 16 {
+            return Some(text);
+        }
+        fallback.get_or_insert(text);
+    }
+    fallback
+}
+
+/// What GDI hands back when asked for this family by name.
+#[cfg(windows)]
+fn gdi_face_for(family: &str) -> String {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let probe = probe_dc();
+    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -64,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return String::new();
+        }
+        let old = SelectObject(probe, font);
+        let mut name = [0u16; 64];
+        let got = GetTextFaceW(probe, Some(&mut name));
+        SelectObject(probe, old);
+        let _ = DeleteObject(font);
+        if got > 0 {
+            String::from_utf16_lossy(&name[..(got as usize).saturating_sub(1)])
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// Register the cloud-cache files for the families GDI cannot already serve.
+///
+/// Two passes on purpose: the first decides which families are missing, the
+/// second registers every FILE of those families. Deciding per file would
+/// register the regular, make the family resolvable, and then skip the bold --
+/// the same defect the embedded-font rename exists to avoid (d04's Roboto Slab,
+/// 2026-08-17).
+///
+/// Called AFTER `install_embedded_fonts` so a deck's own part always wins: by
+/// then GDI serves that family and the cache file for it is skipped.
+///
+/// `FR_PRIVATE` keeps the registration inside this process -- nothing is
+/// installed on the machine and it dies with the process.
+#[cfg(windows)]
+fn install_cloud_fonts() -> usize {
+    use std::collections::BTreeSet;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Graphics::Gdi::{AddFontResourceExW, FR_PRIVATE};
+
+    if std::env::var("OXI_CLOUDFONT_DISABLE").is_ok() {
+        return 0;
+    }
+    let Some(root) = cloud_font_root() else {
+        return 0;
+    };
+    let mut files: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let extension = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if extension != "ttf" && extension != "otf" {
+                continue;
+            }
+            let Ok(blob) = std::fs::read(&path) else {
+                continue;
+            };
+            if let Some(family) = sfnt_family(&blob) {
+                files.push((path, family));
+            }
+        }
+    }
+    files.sort();
+    let mut missing: BTreeSet<String> = BTreeSet::new();
+    let mut checked: BTreeSet<String> = BTreeSet::new();
+    for (_path, family) in &files {
+        if !checked.insert(family.clone()) {
+            continue;
+        }
+        if !gdi_face_for(family).eq_ignore_ascii_case(family) {
+            missing.insert(family.clone());
+        }
+    }
+    let mut loaded = 0;
+    for (path, family) in &files {
+        if !missing.contains(family) {
+            continue;
+        }
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let added =
+            unsafe { AddFontResourceExW(windows::core::PCWSTR(wide.as_ptr()), FR_PRIVATE, None) };
+        if added > 0 {
+            loaded += 1;
+        } else {
+            eprintln!("  cloud font '{}' failed to register", path.display());
         }
     }
     loaded
