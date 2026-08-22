@@ -3543,13 +3543,33 @@ mod windows_draw {
                         };
 
                     // Nothing is drawn outside the cell, or outside the room
-                    // the text was given to run on into.
-                    // Text too tall for its row is cut off a pixel below the
-                    // row's top edge, not at it: measured on the tight rows
-                    // of _xlsx_valign_pixels.py, where Excel and the renderer
-                    // agree on the foot of the ink and differ by that pixel
-                    // at the head of it.
-                    let clip = CreateRectRgn(area.left, box_.top + 1, area.right, box_.bottom);
+                    // the text was given to run on into. The head of the ink
+                    // is cut a pixel below the row's top edge, not at it, at
+                    // every row height there is: measured on both ends by
+                    // _xlsx_bleed_threshold.py.
+                    //
+                    // The foot is not cut at all when the row can hold the
+                    // face's ascent and three pixels more. ＭＳ Ｐゴシック at
+                    // 11 point runs its last scanline into the row below in a
+                    // 16-pixel row and is cut dead at the edge in a 15-pixel
+                    // one; the turn is the device's ascent plus three in all
+                    // fourteen faces, sizes and weights swept. Only a plain
+                    // cell does it — one line, no wrapping, no merge — which
+                    // is the same family that runs its text on over an empty
+                    // neighbour sideways. Cutting the foot at the row's edge
+                    // is what left the tight rows of _xlsx_valign_pixels.py
+                    // reading a pixel short of Excel.
+                    let spills = one_line
+                        && !cell.style.wrap_text
+                        && !merged_block
+                        && super::held(|counter| {
+                            counter.shape_of(name, points, bold, cell.style.italic)
+                        })
+                        .is_some_and(|(ascent, _, _)| {
+                            (box_.bottom - box_.top) as f32 / scale >= ascent + 3.0
+                        });
+                    let cut = if spills { height as i32 } else { box_.bottom };
+                    let clip = CreateRectRgn(area.left, box_.top + 1, area.right, cut);
                     SelectClipRgn(dc, clip);
                     SetTextAlign(dc, TA_BASELINE | TA_LEFT);
                     let mut at = top + (baseline * scale).round() as i32;
