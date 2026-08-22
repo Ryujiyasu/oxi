@@ -16696,10 +16696,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // natural_lh 13.6 → 754.7 leniency wrongly kept it on page 33, the
             // compensating S559 error behind the cap-3.1+ぶら下げ −1 at para306. Exact
             // (S548b) and empty (S562b) lines already use the full box.
+            // S1194 (2026-08-22, opt-in `OXI_S1194`): S603 says "a TYPED docGrid
+            // line" and its whole argument is about the GRID LEADING (cell −
+            // natural_lh) hanging into the bottom margin — but the condition
+            // never tests for a grid. `!doc_grid_no_type` is satisfied by a
+            // document with NO docGrid at all, so the rule also fires on no-grid
+            // Latin, where there is no leading to hang and the derived capacity
+            // is S779/S827's hhea line. 00501ca3 p8 pi=134 «(Added 2002)
+            // (Amended 2010)» is the last line before a table in a no-grid
+            // Latin doc: S603 forces the 12.000 box against a 720.000 bottom at
+            // cursor 708.110 and pushes a line Word keeps (hhea 11.499 → −0.391).
+            let s1194_grid_scope =
+                std::env::var("OXI_S1194").is_err() || page.grid_line_pitch.is_some();
             let s603_typed_fullbox = next_block_is_table
                 && line_idx + 1 == lines.len()
                 && std::env::var("OXI_S603_DISABLE").is_err()
                 && !page.doc_grid_no_type
+                && s1194_grid_scope
                 && !s548b_exact_full
                 && !s562b_empty_full;
             // S605 (2026-06-18, default ON, opt-out OXI_S605_DISABLE): the FIRST line
@@ -16913,7 +16926,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // Set when the max-chain below actually selects the centered box,
             // so S1154 can withdraw the half-twip tolerance in exactly that case.
             let mut centered_box_is_threshold = false;
+            let mut brk_branch = "else";
             let break_threshold = if s1113_pre_mult {
+                brk_branch = "s1113_pre_mult";
                 // auto carries a factor, atLeast/exact carry a length: only the
                 // former inflates the box, so only the former is divided out.
                 let factor = match para.style.line_spacing_rule.as_deref() {
@@ -16922,6 +16937,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 };
                 (effective_lh / factor).max(0.0)
             } else if s736_empty_tol {
+                brk_branch = "s736_empty_tol";
                 if std::env::var("OXI_S1041_DISABLE").is_err() {
                     (effective_lh - s736_tol).max(0.0)
                 } else {
@@ -16933,6 +16949,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // leading overhang would land inside footer text; Word breaks).
                 || footer_tight
             {
+                brk_branch = if s548b_exact_full { "s548b" }
+                    else if s562b_empty_full { "s562b" }
+                    else if s603_typed_fullbox { "s603" }
+                    else if s605_line0_2 { "s605" }
+                    else if s_tgfull { "s_tgfull" }
+                    else if s651_multicell_head { "s651" }
+                    else { "footer_tight" };
                 effective_lh
             } else {
                 // S688 PROBE/SCAFFOLD (2026-06-28, default 0 = byte-identical, opt-in
@@ -17101,7 +17124,30 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 } else {
                     0.0
                 };
-                let v = (ink_lh + tgink_k)
+                // S1194 (2026-08-22, opt-in `OXI_S1194`): S827's hhea line is the
+                // page-bottom capacity ITSELF, not a floor under the ink box.
+                // The derivation it cites (`_pb_latinbot_gen` TNR 12pt, and
+                // `_pb_latinbot_cal` Calibri 11pt at 2tw, which separates the
+                // full-box model from the baseline+typo_desc one and picks the
+                // box) reads "keep iff line_top + hhea <= content_bottom" —
+                // an equality, in both directions. Entering it as `.max()`
+                // only ever makes Oxi STRICTER, which was the direction nyserda
+                // needed; where the ink box is the WIDER of the two the floor is
+                // inert and Oxi stays stricter than Word. Times New Roman is
+                // that case: word_asc+word_desc = 1.200em against hhea 1.14990em,
+                // so at 10pt Oxi reserves 12.000 where Word reserves 11.499 and
+                // rejects a last line Word keeps by 0.11pt (00501ca3 p8 pi=134
+                // «(Added 2002) (Amended 2010)»: cursor_y 708.110, cbot 720.000).
+                // Same shape as S576 on the CJK side — the spacing box is not
+                // the capacity.
+                let s1194_hhea =
+                    std::env::var("OXI_S1194").is_ok() && s779_latin && !no_type_multiple_ink;
+                let base = if s1194_hhea && s779_floor > 0.0 {
+                    s779_floor
+                } else {
+                    ink_lh + tgink_k
+                };
+                let v = base
                     .max(atleast_floor)
                     .max(s739_centered)
                     .max(s779_floor)
@@ -17587,11 +17633,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .take(15)
                     .collect();
                 eprintln!(
-                    "[BR_DUMP] pi={} line0 cursor_y={:.3} eff_lh={:.3} nat_lh={:.3} ink_lh={:.3} brk_thr={:.3} eff_bot={:.3} over={:.3} brk={} text={:?}",
+                    "[BR_DUMP] pi={} line0 cursor_y={:.3} eff_lh={:.3} nat_lh={:.3} ink_lh={:.3} brk_thr={:.3} eff_bot={:.3} over={:.3} brk={} s779={} s779h={:.3} text={:?}",
                     pi_str, cursor.cursor_y, effective_lh, natural_lh, ink_lh, break_threshold,
                     effective_break_bottom, cursor.cursor_y + break_threshold - effective_break_bottom,
-                    needs_page_break, txt
+                    needs_page_break, s779_latin,
+                    s779_win_heights.get(line_idx).copied().unwrap_or(-1.0), txt
                 );
+                eprintln!("[BR_DUMP2] branch={} s693_nonlast={}", brk_branch, s693_nonlast);
             }
 
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
@@ -25745,8 +25793,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// −2.0 → **0.00** and its page-8 tail error 4.2 → 0.8; `0009d767` mean
     /// pitch error 0.170 → 0.034; `0056b52f` 0.9849 → 0.9868; SSIM `7ead52b6`
     /// **+0.0282** with no regression; JP 96 unchanged.
+    ///
+    /// SHIPPED default-ON 2026-08-22 (opt-out `OXI_S1189_DISABLE`) once S1193
+    /// removed the `technical__00501ca3` blocker named above — that PASS->FAIL
+    /// was a font-size defect (a heading style with no `w:sz` anywhere resolved
+    /// to 11pt where Word uses the document default 10pt), not this rule's
+    /// doing. GATED on the shipped binary: EN 248 PASS 224 -> 224 with
+    /// `technical__0056b52f` 0.9849 -> 0.9868 and no doc regressed; the golden
+    /// Phase-1 census (98 docs) unchanged; the SSIM sentinel over all 158
+    /// table-bearing golden docs = 156 byte-identical, `7ead52b6` +0.0282,
+    /// `15076df` +0.0000, zero regressions. (The 80 table-free golden docs
+    /// cannot change: every S1188/S922 call site is table-cell scoped.)
     fn s1189_on(&self) -> bool {
-        std::env::var("OXI_S1189").is_ok()
+        std::env::var("OXI_S1189_DISABLE").is_err()
     }
 
     fn rowbox2_border_pad(&self, table: &Table, cell: &TableCell) -> f32 {
