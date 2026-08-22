@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """What the corpus asks for, feature by feature, against what the renderer draws.
 
+The `drawn sheet` column is how many workbooks carry the feature on the
+sheet the gate compares — conditional formatting is in 16 workbooks and
+on the drawn sheet of 2, which is the number that decides what to build.
+
 A gate can only find what the corpus exposes, and only where somebody thinks
 to look. This lists every part, element and attribute in the 285 workbooks
 that changes what a sheet looks like, with how many workbooks ask for it — so
@@ -26,7 +30,9 @@ LOOKS = [
     ("shrink to fit", "styles", r'shrinkToFit="1"', "drawn"),
     ("indent", "styles", r'indent="[1-9]', "drawn"),
     ("stacked text (rotation 255)", "styles", r'textRotation="255"', "drawn"),
-    ("turned text (other rotations)", "styles", r'textRotation="(?!255)\d', "NOT DRAWN"),
+    # `textRotation="0"` is no rotation at all and says nothing about the
+    # sheet; only 1..180 turn the text.
+    ("turned text (1 to 180 degrees)", "styles", r'textRotation="(?!0"|255)\d', "NOT DRAWN"),
     ("distributed alignment", "styles", r'horizontal="distributed"', "drawn"),
     ("centre across the selection", "styles", r'horizontal="centerContinuous"', "drawn"),
     ("justified alignment", "styles", r'horizontal="justify"', "as distributed"),
@@ -37,7 +43,7 @@ LOOKS = [
     ("pattern fills (not solid)", "styles",
      r'patternType="(?!solid|none)[a-zA-Z0-9]+"', "NOT DRAWN"),
     ("gradient fills", "styles", r"<gradientFill", "NOT DRAWN"),
-    ("diagonal borders", "styles", r"<diagonal (?!/)", "NOT DRAWN"),
+    ("diagonal borders", "styles", r"<diagonal (?!/)", "drawn"),
     ("number formats", "styles", r"<numFmt ", "drawn"),
     # What hangs over the grid
     ("drawings", "sheet", r"<drawing ", "pictures, lines, boxes, diamonds"),
@@ -72,6 +78,8 @@ LOOKS = [
 def main():
     books = collections.Counter()
     uses = collections.Counter()
+    # How many carry it on the sheet the gate actually draws.
+    drawn = collections.Counter()
     total = 0
     for path in sorted(CORPUS.glob("*.xlsx")):
         try:
@@ -90,11 +98,15 @@ def main():
                     bodies[kind] = read("xl/styles.xml")
                 elif kind == "shared":
                     bodies[kind] = read("xl/sharedStrings.xml")
-                else:
+                elif kind == "sheet":
                     bodies[kind] = "\n".join(
                         read(name) for name in names
                         if name.startswith("xl/worksheets/sheet")
                     )
+                else:
+                    # What the gate sees is one sheet, and a feature on the
+                    # ninth sheet of a workbook is one nothing measures.
+                    bodies[kind] = read("xl/worksheets/sheet1.xml")
             return bodies[kind]
 
         def read(name):
@@ -108,13 +120,17 @@ def main():
             if found:
                 books[name] += 1
                 uses[name] += found
+            if where == "sheet" and re.search(pattern, body("drawn")):
+                drawn[name] += 1
 
     print(f"{total} workbooks\n")
-    print(f"{'feature':<34}{'books':>6}{'uses':>8}   what the renderer does")
-    for name, _where, _pattern, doing in LOOKS:
+    print(f"{'feature':<34}{'books':>6}{'uses':>8}{'drawn sheet':>12}"
+          f"   what the renderer does")
+    for name, where, _pattern, doing in LOOKS:
         if not books[name]:
             continue
-        print(f"{name:<34}{books[name]:>6}{uses[name]:>8}   {doing}")
+        seen = str(drawn[name]) if where == "sheet" else ""
+        print(f"{name:<34}{books[name]:>6}{uses[name]:>8}{seen:>12}   {doing}")
     print("\nnot found in the corpus at all:")
     for name, _where, _pattern, _doing in LOOKS:
         if not books[name]:

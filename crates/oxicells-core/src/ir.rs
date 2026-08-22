@@ -419,4 +419,13 @@ pub struct CellStyle {
     pub border_bottom: Option<BorderLine>,
     pub border_left: Option<BorderLine>,
     pub border_right: Option<BorderLine>,
+    /// The rule drawn corner to corner, which a Japanese form uses to strike
+    /// a cell out. The border says how it is drawn; the two flags say which
+    /// way, and a cell can carry both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_diagonal: Option<BorderLine>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub diagonal_up: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub diagonal_down: bool,
 }

@@ -2402,6 +2402,29 @@ mod windows_draw {
                         let _ = DeleteObject(ink);
                     }
 
+                    // A rule corner to corner, which a Japanese form draws to
+                    // strike a cell out. Both ways at once make a cross.
+                    if let Some(line) = &cell.style.border_diagonal {
+                        let rule = super::rule_for(&line.style);
+                        let width = (1 + rule.before + rule.after).max(1);
+                        let pen = CreatePen(
+                            PS_SOLID,
+                            width,
+                            colour(line.color.as_deref(), 0x0000_0000),
+                        );
+                        let held = SelectObject(dc, pen);
+                        if cell.style.diagonal_down {
+                            let _ = MoveToEx(dc, box_.left, box_.top, None);
+                            let _ = LineTo(dc, box_.right, box_.bottom);
+                        }
+                        if cell.style.diagonal_up {
+                            let _ = MoveToEx(dc, box_.left, box_.bottom, None);
+                            let _ = LineTo(dc, box_.right, box_.top);
+                        }
+                        SelectObject(dc, held);
+                        let _ = DeleteObject(pen);
+                    }
+
                     // A carriage return would otherwise be drawn as a glyph.
                     let filtered = super::has_filter_button(sheet, row.index, cell.col);
                     if filtered {

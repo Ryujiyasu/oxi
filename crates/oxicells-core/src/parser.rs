@@ -309,6 +309,9 @@ struct BorderInfo {
     right: Option<BorderLine>,
     top: Option<BorderLine>,
     bottom: Option<BorderLine>,
+    diagonal: Option<BorderLine>,
+    up: bool,
+    down: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -618,6 +621,10 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "border" if section == Section::Borders => {
                         in_border = true;
                         current_border = BorderInfo::default();
+                        // Which way the corner-to-corner rule runs is stated
+                        // on the border itself, and a cell can carry both.
+                        current_border.up = is_true(get_attr(&e, "diagonalUp").as_deref());
+                        current_border.down = is_true(get_attr(&e, "diagonalDown").as_deref());
                     }
                     "xf" if section == Section::CellXfs
                         || section == Section::CellStyleXfs =>
@@ -685,6 +692,11 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     }
                     "bottom" if in_border => {
                         current_border.bottom = border_line(&e);
+                    }
+                    // A diagonal that states a colour has a child, so it
+                    // arrives here and not among the self-closing sides.
+                    "diagonal" if in_border => {
+                        current_border.diagonal = border_line(&e);
                     }
 
                     // Font color
@@ -766,6 +778,9 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     }
                     "bottom" if in_border => {
                         current_border.bottom = border_line(&e);
+                    }
+                    "diagonal" if in_border => {
+                        current_border.diagonal = border_line(&e);
                     }
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
@@ -971,6 +986,9 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         border_bottom: border.bottom.clone(),
         border_left: border.left.clone(),
         border_right: border.right.clone(),
+        border_diagonal: border.diagonal.clone(),
+        diagonal_up: border.up,
+        diagonal_down: border.down,
     }
 }
 
@@ -3019,6 +3037,49 @@ mod tests {
         assert_eq!(resolve_cell_style(0, &sheet).indent, 0);
         assert_eq!(resolve_cell_style(1, &sheet).indent, 2);
         assert_eq!(resolve_cell_style(2, &sheet).indent, 3);
+    }
+
+    #[test]
+    fn a_diagonal_is_read_whether_or_not_it_states_a_colour() {
+        // A `<diagonal/>` that names a colour has a child and so arrives as a
+        // different event than one that closes itself. Both spellings rule
+        // the cell corner to corner, so both are pinned here.
+        let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <borders count="3">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border diagonalUp="1">
+      <left/><right/><top/><bottom/>
+      <diagonal style="thin"><color indexed="64"/></diagonal>
+    </border>
+    <border diagonalDown="1">
+      <left/><right/><top/><bottom/><diagonal style="medium"/>
+    </border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="2" xfId="0" applyBorder="1"/>
+  </cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+
+        let plain = resolve_cell_style(0, &sheet);
+        assert!(plain.border_diagonal.is_none());
+
+        let up = resolve_cell_style(1, &sheet);
+        assert_eq!(up.border_diagonal.as_ref().map(|l| l.style.as_str()), Some("thin"));
+        assert!(up.diagonal_up);
+        assert!(!up.diagonal_down);
+
+        let down = resolve_cell_style(2, &sheet);
+        assert_eq!(down.border_diagonal.as_ref().map(|l| l.style.as_str()), Some("medium"));
+        assert!(down.diagonal_down);
+        assert!(!down.diagonal_up);
     }
 
     #[test]
