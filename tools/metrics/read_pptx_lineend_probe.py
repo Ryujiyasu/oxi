@@ -41,6 +41,33 @@ def path_points(d: dict) -> list[tuple[float, float]]:
     return out
 
 
+def read_caps(pdf, rows: list) -> None:
+    """What `a:ln@cap` becomes in the PDF's graphics state.
+
+    The cap cannot be read from the path's geometry — a stroked line's bbox is
+    the same whatever its ends look like — so it has to come from the stroke
+    state. PDF's `J` is 0 butt, 1 round, 2 projecting square.
+    """
+    if not rows:
+        return
+    page = pdf[rows[0]["slide"] - 1]
+    scale = page.rect.width / (13.333 * 72)
+    strokes = [d for d in page.get_drawings() if d["type"] == "s"]
+    print(f'{"cap":10s} {"lw":>5s}  PDF lineCap')
+    for row in rows:
+        hit = next((d for d in strokes
+                    if abs(d["rect"].y0 / scale - row["y_pt"]) < 1
+                    and abs(d["rect"].x0 / scale - row["x0_pt"]) < 1), None)
+        if hit is None:
+            print(f'{row["cap"]:10s} {row["line_pt"]:5.2f}  (no stroke found)')
+            continue
+        j = hit.get("lineCap")
+        j = j[0] if isinstance(j, (tuple, list)) else j
+        name = {0: "butt/flat", 1: "round", 2: "projecting square"}.get(j, "?")
+        print(f'{row["cap"]:10s} {row["line_pt"]:5.2f}  J={j} {name}')
+    print()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--floor", type=float, default=2.0)
@@ -48,9 +75,12 @@ def main() -> None:
 
     manifest = json.loads(PROBE.with_suffix(".json").read_text(encoding="utf-8"))
     pdf = pymupdf.open(PROBE.with_suffix(".pdf"))
+    read_caps(pdf, [r for r in manifest if r.get("cap")])
     by_slide: dict[int, list] = {}
     scale = None
     for row in manifest:
+        if row.get("cap"):
+            continue
         s = row["slide"]
         if s not in by_slide:
             page = pdf[s - 1]

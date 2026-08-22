@@ -30,6 +30,9 @@ OUT = Path(sys.argv[1] if len(sys.argv) > 1
 TYPES = ['oval', 'triangle', 'stealth', 'arrow', 'diamond']
 WIDTHS_PT = [0.75, 1.5, 3.0, 4.5, 6.0]
 TOKENS = [('sm', 'sm'), ('med', 'med'), ('lg', 'lg'), ('sm', 'lg'), ('lg', 'sm')]
+# A sixth slide for `a:ln@cap`, which decides where an undecorated stroke stops.
+# The corpus says "flat" 1326 times and "rnd" 31, so both have to be right.
+CAPS = [None, 'flat', 'rnd', 'sq']
 
 prs = Presentation()
 prs.slide_width = Inches(13.333)
@@ -70,6 +73,28 @@ for si, kind in enumerate(TYPES, start=1):
                 el.set('w', w_tok)
                 el.set('len', len_tok)
                 ln.append(el)
+
+cap_slide = prs.slides.add_slide(blank)
+cap_si = len(TYPES) + 1
+for row, cap in enumerate(CAPS):
+    for col, w_pt in enumerate(WIDTHS_PT):
+        x_in = 0.30 + col * 2.60
+        y_in = 0.80 + row * 1.30
+        manifest.append({
+            'slide': cap_si, 'type': 'none', 'w_tok': 'med', 'len_tok': 'med',
+            'cap': cap or '(absent)', 'line_pt': w_pt,
+            'x0_pt': x_in * 72, 'x1_pt': (x_in + 2.00) * 72, 'y_pt': y_in * 72,
+        })
+        cxn = cap_slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT, Inches(x_in), Inches(y_in),
+            Inches(x_in + 2.00), Inches(y_in))
+        cxn._element.spPr.find(qn('a:prstGeom')).set('prst', 'straightConnector1')
+        cxn.line.width = Pt(w_pt)
+        cxn.line.color.rgb = RGBColor(0x00, 0x00, 0x00)
+        ln = cxn.line._get_or_add_ln()
+        # Undecorated on purpose: a head would cover the very ink under test.
+        if cap:
+            ln.set('cap', cap)
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 prs.save(str(OUT))

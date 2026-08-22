@@ -319,6 +319,12 @@ pub struct Shape {
     pub head_end: Option<LineEnd>,
     #[serde(default)]
     pub tail_end: Option<LineEnd>,
+    /// `a:ln/@cap` — "flat" (the schema default), "rnd" or "sq". It only shows
+    /// on an OPEN path, so it decides where a connector's stroke stops: 1326 of
+    /// the corpus's connectors say flat and 31 say rnd, the widest of those at
+    /// 2.00pt, so neither answer can be assumed for the other.
+    #[serde(default)]
+    pub line_cap: Option<String>,
     /// Text-area insets from a:bodyPr (lIns/rIns/tIns/bIns) in points.
     /// A placeholder with no bodyPr inset uses 7.2 / 7.2 / 3.6 / 3.6; a textbox
     /// carries its own insets (e.g. lIns=914400 EMU = 72pt). The left text

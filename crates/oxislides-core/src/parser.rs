@@ -1002,6 +1002,7 @@ fn parse_slide(
     let mut shape_border_dash: Option<String> = None;
     let mut shape_head_end: Option<LineEnd> = None;
     let mut shape_tail_end: Option<LineEnd> = None;
+    let mut shape_line_cap: Option<String> = None;
     let mut shape_text_warp: Option<String> = None;
     // Placeholder identity (p:ph type/idx from nvPr) and whether spPr had an
     // explicit xfrm. Spec #3: a placeholder without an explicit xfrm inherits
@@ -1540,6 +1541,7 @@ fn parse_slide(
                         shape_border_dash = None;
                         shape_head_end = None;
                         shape_tail_end = None;
+                        shape_line_cap = get_attr(&e, "cap");
                         // Width attribute in EMU; 12700 EMU = 1pt
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
@@ -1991,6 +1993,7 @@ fn parse_slide(
                         shape_border_dash = None;
                         shape_head_end = None;
                         shape_tail_end = None;
+                        shape_line_cap = get_attr(&e, "cap");
                         if let Some(w) = get_attr(&e, "w") {
                             if let Ok(v) = w.parse::<f32>() {
                                 shape_border_width = Some(v / 12700.0);
@@ -2607,6 +2610,7 @@ fn parse_slide(
                             border_dash: shape_border_dash.take(),
                             head_end: shape_head_end.take(),
                             tail_end: shape_tail_end.take(),
+                            line_cap: shape_line_cap.take(),
                             l_ins: shape_l_ins,
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
@@ -2776,6 +2780,7 @@ fn parse_slide(
                             border_dash: shape_border_dash.take(),
                             head_end: shape_head_end.take(),
                             tail_end: shape_tail_end.take(),
+                            line_cap: shape_line_cap.take(),
                             l_ins: shape_l_ins,
                             r_ins: shape_r_ins,
                             t_ins: shape_t_ins,
@@ -3562,6 +3567,7 @@ fn parse_inherited_shapes(
                                         // 22 of them on d02 slide 22.
                                         head_end: None,
                                         tail_end: None,
+                                        line_cap: None,
                                         l_ins: default_l_ins(),
                                         r_ins: default_r_ins(),
                                         t_ins: default_t_ins(),

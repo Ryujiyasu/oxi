@@ -892,6 +892,7 @@ unsafe fn draw_custom_geometry_gdi(
             colorref(c.0, c.1, c.2),
             sh.border_dash.as_deref(),
             border_w as f64 * scale,
+            None,
         ))
     } else {
         None
@@ -1957,24 +1958,74 @@ fn dash_pattern(preset: &str) -> Option<&'static [u32]> {
     })
 }
 
+/// An open path's stroke ends where `a:ln@cap` says unless this is set, which
+/// restores GDI's default round cap everywhere.
+fn line_cap_on() -> bool {
+    std::env::var("OXI_LINECAP_DISABLE").is_err()
+}
+
 /// A pen for a shape outline: broken when the shape declares a `prstDash`.
 ///
 /// `CreatePen`'s PS_DASH is cosmetic — it is ignored for any pen wider than one
 /// pixel, which is most of them — so a wide dashed line needs a GEOMETRIC pen
 /// with an explicit user style in device units.
+///
+/// `cap` is the open path's `a:ln@cap`, and `None` means the caller is stroking
+/// a CLOSED outline where the cap cannot show and the legacy pen is kept as it
+/// was. It matters because `CreatePen(PS_SOLID)` gives GDI's ROUND cap, which
+/// overhangs the endpoint by half the line width, while PowerPoint's flat one
+/// does not reach the endpoint at all: d15's 1.5pt connector runs its stem from
+/// 39.786 with the tip of its head at 36.780.
+///
+/// PowerPoint honours the attribute exactly, and the repro's cap slide reads it
+/// straight out of the PDF's stroke state: absent and "flat" both come out
+/// `J=0` (butt), "rnd" `J=1`, "sq" `J=2`, at every line width. So neither
+/// answer can be assumed for the other — the corpus's connectors say flat 1326
+/// times and "rnd" 31 times, the widest of those 2.00pt, which is 2px of
+/// overhang at 150 DPI.
 #[cfg(windows)]
 fn outline_pen(
     width_px: i32,
     color: u32,
     dash: Option<&str>,
     width_dev: f64,
+    cap: Option<&str>,
 ) -> windows::Win32::Graphics::Gdi::HPEN {
     use windows::Win32::Foundation::COLORREF;
     use windows::Win32::Graphics::Gdi::*;
 
+    // "flat" is the schema default, and it is also what a closed outline's
+    // pen has always used, so an absent `cap` maps to it either way.
+    let end_cap = match cap.filter(|_| line_cap_on()) {
+        Some("rnd") => PS_ENDCAP_ROUND,
+        Some("sq") => PS_ENDCAP_SQUARE,
+        _ => PS_ENDCAP_FLAT,
+    };
     let pattern = dash.filter(|_| prstdash_on()).and_then(dash_pattern);
     let Some(pattern) = pattern else {
-        return unsafe { CreatePen(PS_SOLID, width_px, COLORREF(color)) };
+        // A round cap IS GDI's default for a wide PS_SOLID pen, so leaving the
+        // legacy pen alone is both cheaper and byte-identical.
+        if cap.is_none() || !line_cap_on() || end_cap == PS_ENDCAP_ROUND {
+            return unsafe { CreatePen(PS_SOLID, width_px, COLORREF(color)) };
+        }
+        let brush = LOGBRUSH {
+            lbStyle: BS_SOLID,
+            lbColor: COLORREF(color),
+            lbHatch: 0,
+        };
+        return unsafe {
+            let pen = ExtCreatePen(
+                PS_GEOMETRIC | PS_SOLID | end_cap | PS_JOIN_MITER,
+                width_px.max(1) as u32,
+                &brush,
+                None,
+            );
+            if pen.is_invalid() {
+                CreatePen(PS_SOLID, width_px, COLORREF(color))
+            } else {
+                pen
+            }
+        };
     };
     // The run lengths are multiples of the TRUE line width, not of the pen's
     // rounded integer width: a 0.75pt line at this scale is 4.7 device units,
@@ -1995,7 +2046,7 @@ fn outline_pen(
     };
     unsafe {
         let pen = ExtCreatePen(
-            PS_GEOMETRIC | PS_USERSTYLE | PS_ENDCAP_FLAT | PS_JOIN_MITER,
+            PS_GEOMETRIC | PS_USERSTYLE | end_cap | PS_JOIN_MITER,
             width_px.max(1) as u32,
             &brush,
             Some(&style),
@@ -2656,6 +2707,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             colorref(col.0, col.1, col.2),
                             sh.border_dash.as_deref(),
                             bw as f64 * scale,
+                            Some(sh.line_cap.as_deref().unwrap_or("flat")),
                         );
                         let old_pen = SelectObject(mem_dc, pen);
                         let _ = MoveToEx(mem_dc, ax, ay, None);
@@ -2763,6 +2815,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         colorref(col.0, col.1, col.2),
                         sh.border_dash.as_deref(),
                         border_w as f64 * scale,
+                        None,
                     );
                     let old_pen = SelectObject(mem_dc, pen);
                     let old_brush = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
