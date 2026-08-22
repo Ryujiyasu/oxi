@@ -38478,6 +38478,83 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && !is_nested
                     && s1126_dxa
                     && !self.doc_body_has_real_cjk;
+                // S1196 (2026-08-23, default ON, opt-out `OXI_S1196_DISABLE`):
+                // HOW FAR an auto-layout table may overflow the text area before
+                // Word takes width off it, and that within that cap Word keeps the
+                // declared grid untouched.
+                //
+                // DERIVED (`tools/metrics/_pb_tblcap.py` + `_pb_tblcap2.py`, 23
+                // arms). The cap is read in ONE arm per configuration by feeding a
+                // grid 2000tw too wide: Word clamps to exactly the cap, so
+                // `sum(Columns.Width)` IS the cap and no bisection is needed.
+                //
+                //   inset_x = max(cellMar_x, border_x / 2)   <- the S1173 cell-width
+                //                                               form, same shape
+                //   no `w:tblInd` declared:
+                //       cap = available + inset_R
+                //   `w:tblInd` declared (0 or non-zero):
+                //       cap = available - tblInd + inset_L + inset_R
+                //
+                // The asymmetric arms are what separate the two: with no tblInd,
+                // (marL 108, marR 0) caps at +5 and (marL 0, marR 108) at +108 —
+                // the tolerance follows the RIGHT margin alone, because the table's
+                // left rule sits ON the margin. Declare a tblInd and the table is
+                // placed by its CONTENT, so both insets hang outside: (0,108) and
+                // (108,0) both cap at +113 = 5 + 108. The `max(mar, bw/2)` floor
+                // shows up as the 5tw (= half of a w:sz=4 rule) that a zero margin
+                // still gets.
+                //
+                // The old readings were partial views of this: `available + one
+                // inset` is the no-tblInd case with symmetric margins, which is why
+                // the s1126 probe could not tell inset_L from inset_R.
+                //
+                // WORD RENDER-TRUTH on the corpus: 34140b's two `tblW=auto` CJK
+                // tables both sit inside the cap and Word keeps their full grid —
+                // p2 (tblInd 0 via style a1) nominal 9498 vs cap 9514, p5 (tblInd
+                // 392) nominal 9122 vs cap 9122, an exact equality. Oxi dumped the
+                // whole excess on the last column instead (60.25->50.25 and
+                // 52.10->41.30), which is what made the derived S1173 cell budget
+                // over-wrap those cells and cost the doc its PASS.
+                let s1196 = std::env::var("OXI_S1196_DISABLE").is_err();
+                let first_cell = table.rows.first().and_then(|r| r.cells.first());
+                let last_cell = table.rows.first().and_then(|r| r.cells.last());
+                let tbl_pad = |right: bool| -> f32 {
+                    table
+                        .style
+                        .default_cell_margins
+                        .as_ref()
+                        .and_then(|m| if right { m.right } else { m.left })
+                        .unwrap_or(5.4)
+                };
+                let inset_l = first_cell
+                    .map(|c| {
+                        let pad = c.margins.as_ref().and_then(|m| m.left)
+                            .unwrap_or_else(|| tbl_pad(false));
+                        self.celllaw_inset(table, c, pad, false)
+                    })
+                    .unwrap_or(5.4);
+                let inset_r = last_cell
+                    .map(|c| {
+                        let pad = c.margins.as_ref().and_then(|m| m.right)
+                            .unwrap_or_else(|| tbl_pad(true));
+                        self.celllaw_inset(table, c, pad, true)
+                    })
+                    .unwrap_or(5.4);
+                let tolerance = if !s1196 {
+                    0.0
+                } else if table.style.indent.is_some() {
+                    inset_l + inset_r
+                } else {
+                    inset_r
+                };
+                let cap = available + tolerance;
+                // Within the cap Word does not redistribute at all — it keeps the
+                // declared grid. (Without this the last-column clamp would also
+                // GROW the last column into leftover slack.)
+                if s1196 && total <= cap + 0.01 {
+                    return grid_cols;
+                }
+                let first_cell_inset: f32 = inset_l;
                 if s1126 {
                     let mins = self.column_content_mins_brk(table, true);
                     if mins.len() == table_grid_columns.len() {
@@ -38488,21 +38565,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         // leaves the table 185tw too wide. The corpus specimen
                         // (per-cell tcMar 108, no tblCellMar) is unchanged — its
                         // per-cell value equals the default this used to assume.
-                        let inset = table
-                            .rows
-                            .first()
-                            .and_then(|r| r.cells.first())
-                            .and_then(|c| c.margins.as_ref())
-                            .and_then(|m| m.left)
-                            .or_else(|| {
-                                table
-                                    .style
-                                    .default_cell_margins
-                                    .as_ref()
-                                    .and_then(|m| m.left)
-                            })
-                            .unwrap_or(5.4);
-                        let usable = available + inset;
+                        let usable = if s1196 { cap } else { available + first_cell_inset };
                         let mut w: Vec<f32> = table_grid_columns
                             .iter()
                             .zip(&mins)
@@ -38538,9 +38601,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 if std::env::var("OXI_S1003").is_ok() && !is_nested {
                     return self.waterfill_autofit_columns(table, available);
                 }
+                let legacy_available = if s1196 { cap } else { available };
                 let mut cols = table_grid_columns.clone();
                 let prefix_sum: f32 = cols[..cols.len() - 1].iter().sum();
-                let last = (available - prefix_sum).max(0.0);
+                let last = (legacy_available - prefix_sum).max(0.0);
                 *cols.last_mut().unwrap() = last;
                 return cols;
             }
