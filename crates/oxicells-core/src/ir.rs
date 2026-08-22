@@ -195,6 +195,10 @@ pub struct Table {
     /// The banded rows' fill, which is the accent under a tint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub band: Option<String>,
+    /// The rule Excel draws along every row of a `TableStyleMedium` table: the
+    /// accent again, under a lighter tint than the banding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 /// A stretch of a cell's text that is dressed differently from the rest of it.

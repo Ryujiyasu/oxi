@@ -2970,6 +2970,64 @@ mod windows_draw {
                 }
             }
 
+            // A table is ruled along every one of its rows, over the fills
+            // and under whatever hangs above the grid.
+            for table in &sheet.tables {
+                let Some(shade) = table.rule.as_deref() else {
+                    continue;
+                };
+                let ink = CreateSolidBrush(colour(Some(shade), 0x0000_0000));
+                let left = layout
+                    .columns
+                    .get(table.start_col.saturating_sub(layout.first_column) as usize);
+                let right = layout
+                    .columns
+                    .get((table.end_col + 1).saturating_sub(layout.first_column) as usize);
+                let _ = (left, right);
+                for row in table.start_row..=table.end_row + 1 {
+                    let at = row.checked_sub(layout.first_row).unwrap_or(0) as usize;
+                    let Some(top) = layout.rows.get(at) else { continue };
+                    for column in table.start_col..=table.end_col {
+                        // A cell that rules itself keeps its own rule: the
+                        // table's is the ground the cell's format is laid on,
+                        // and `procurement_contractor_list` fills and rules
+                        // every cell of its table by hand.
+                        let ruled = |row: u32| {
+                            sheet
+                                .rows
+                                .iter()
+                                .find(|held| held.index == row)
+                                .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+                                .is_some_and(|cell| {
+                                    cell.style.border_bottom.is_some()
+                                        || cell.style.border_top.is_some()
+                                })
+                        };
+                        if ruled(row) || (row > 0 && ruled(row - 1)) {
+                            continue;
+                        }
+                        let (Some(left), Some(right)) = (
+                            layout
+                                .columns
+                                .get(column.saturating_sub(layout.first_column) as usize),
+                            layout
+                                .columns
+                                .get((column + 1).saturating_sub(layout.first_column) as usize),
+                        ) else {
+                            continue;
+                        };
+                        let edge = RECT {
+                            left: *left as i32,
+                            top: *top as i32,
+                            right: *right as i32,
+                            bottom: *top as i32 + 1,
+                        };
+                        FillRect(dc, &edge, ink);
+                    }
+                }
+                let _ = DeleteObject(ink);
+            }
+
             // A note the sheet keeps pinned open sits above everything.
             for note in &sheet.comments {
                 let extent = (

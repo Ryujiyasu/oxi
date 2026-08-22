@@ -1821,6 +1821,15 @@ fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
         theme.colour(4 + ((number - 2) % 6) as usize).map(str::to_string)
     });
     let band = accent.as_deref().map(|colour| tinted(colour, 0.8));
+    // A Medium table is ruled along every row in the accent under a lighter
+    // tint: `doi-list` wears TableStyleMedium7 over accent6 4EA72E, and Excel
+    // draws its rules 8ED973 — which is that colour with its lightness moved
+    // to `0.6 L + 0.4`, the tint below. The Light and Dark styles rule
+    // themselves differently and are left alone until they are measured.
+    let rule = accent
+        .as_deref()
+        .filter(|_| style.as_deref().is_some_and(|name| name.starts_with("TableStyleMedium")))
+        .map(|colour| tinted(colour, 0.4));
     Some(crate::ir::Table {
         start_row,
         start_col,
@@ -1831,6 +1840,7 @@ fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
         banded_rows,
         accent,
         band,
+        rule,
     })
 }
 
