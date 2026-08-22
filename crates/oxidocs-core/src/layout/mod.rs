@@ -33484,27 +33484,58 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // 0.5em from EACH opening bracket. A line-final
                                                 // closing mark is taken whatever the shortfall --
                                                 // it hangs -- so it short-circuits the pool.
+                                                // S1198 (2026-08-23, opt-out
+                                                // `OXI_S1198_DISABLE`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): the COMBINATION rule for
+                                                // a line that carries both classes of 約物.
+                                                //
+                                                // `_cw_yaku_class.py` swept one class at a time and
+                                                // left the mixture undetermined; the implementation
+                                                // guessed "0.5em if any type A, plus 0.5em per
+                                                // opening bracket, uncapped". `_cw_yaku_mix.py`
+                                                // (new) alternates the classes down a 30-character
+                                                // line so one width sweep reports every (nA, nB)
+                                                // combination, in BOTH orders. 8 arms x 3 counts,
+                                                // all 24 land on:
+                                                //
+                                                //   last 約物 is type A -> 0.50em, whatever nA/nB
+                                                //   last 約物 is type B -> min(1.00em,
+                                                //                             0.5em*nB + 0.5em*[nA>0])
+                                                //
+                                                // i.e. the pool is CAPPED at one em, and a trailing
+                                                // type-A mark collapses it to half an em. The
+                                                // uncapped additive form was over by up to 0.5em on
+                                                // six of the eight arms.
+                                                //
+                                                // ★ENVELOPE: measured at jc=both, compat 11, with
+                                                // compressPunctuation -- which is where the corpus
+                                                // specimens live. The cached artifacts behind the
+                                                // ORIGINAL per-class table were built WITHOUT
+                                                // compressPunctuation, and re-running the tool at
+                                                // its own defaults (compat 15) silently measures a
+                                                // different engine, so the arms are rebuilt here.
+                                                let s1198 =
+                                                    std::env::var("OXI_S1198_DISABLE").is_err();
                                                 let yaku = if s1174_yakucomp {
                                                     let mut has_a = false;
                                                     let mut b = 0.0f32;
+                                                    let mut last_a = false;
+                                                    let mut saw_mark = false;
                                                     for (i, c) in current_line_chars
                                                         .iter()
                                                         .chain(buf_chars.iter())
                                                         .enumerate()
                                                     {
                                                         if kinsoku::cell_yaku_type_b(c.ch) {
-                                                            // S1197 (opt-in `OXI_S1197`): a LINE-INITIAL
-                                                            // opening bracket has nothing left to give.
-                                                            // S757 established the principle for the
-                                                            // NPERIOD cup: JIS X 4051 line-start
-                                                            // processing has ALREADY removed its left
-                                                            // aki, so promoting it again is space that
-                                                            // does not exist. The type-B additivity was
-                                                            // derived (`_cw_yaku_class.py`, 5 classes x
-                                                            // 801 widths) on brackets sitting INSIDE the
-                                                            // line; the probe never put one at the start,
-                                                            // because a line-start bracket cannot be
-                                                            // reached by the same sweep.
+                                                            saw_mark = true;
+                                                            last_a = false;
+                                                            // S1197 (opt-in `OXI_S1197`): a
+                                                            // LINE-INITIAL opening bracket has
+                                                            // nothing left to give -- JIS X 4051
+                                                            // line-start processing already removed
+                                                            // its left aki (the S757 principle).
+                                                            // Held opt-in: S1198 subsumes the cases
+                                                            // it was written for.
                                                             if i == 0
                                                                 && std::env::var("OXI_S1197").is_ok()
                                                             {
@@ -33513,9 +33544,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             b += 0.5 * c.natural_advance;
                                                         } else if kinsoku::cell_yaku_type_a(c.ch) {
                                                             has_a = true;
+                                                            saw_mark = true;
+                                                            last_a = true;
                                                         }
                                                     }
-                                                    (if has_a { 0.5 * font_size } else { 0.0 }) + b
+                                                    if s1198 {
+                                                        if !saw_mark {
+                                                            0.0
+                                                        } else if last_a {
+                                                            0.5 * font_size
+                                                        } else {
+                                                            (b + if has_a { 0.5 * font_size } else { 0.0 })
+                                                                .min(font_size)
+                                                        }
+                                                    } else {
+                                                        (if has_a { 0.5 * font_size } else { 0.0 }) + b
+                                                    }
                                                 } else {
                                                     0.0
                                                 };
