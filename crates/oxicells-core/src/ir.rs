@@ -293,6 +293,48 @@ pub struct Shape {
     pub flip_h: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip_v: bool,
+    /// What the shape says, when it says anything. 198 of the corpus's 2202
+    /// shapes hold text, and they are the large ones: a banner across the top
+    /// of a sheet, a heading over a table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<ShapeText>,
+}
+
+/// The text a shape holds, and how it sits in the shape's box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShapeText {
+    pub paragraphs: Vec<ShapeParagraph>,
+    /// "t", "ctr" or "b" — where the block of lines sits in the box. Excel
+    /// leaves a shape's text at the top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// Left, top, right and bottom, in EMU. Excel's defaults are 91440 and
+    /// 45720 — a tenth and a twentieth of an inch.
+    pub insets: (i64, i64, i64, i64),
+    /// True when a line too long for the box breaks rather than running on.
+    pub wrap: bool,
+}
+
+/// One paragraph of a shape's text, dressed the way its first run is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShapeParagraph {
+    pub text: String,
+    /// "l", "ctr", "r" or "just".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    /// Points. A run states hundredths of one.
+    pub size: f32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// The line pitch the paragraph pins, in points, when it pins one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_pitch: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

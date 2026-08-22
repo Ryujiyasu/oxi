@@ -47,6 +47,12 @@ pub(crate) struct Geometry {
     columns: Vec<f32>,
     /// Top edge of each row, and the sheet's full height.
     rows: Vec<f32>,
+    /// Left edge of each column before the drawn range, as an offset back
+    /// from its left edge — negative, and only needed by what hangs over the
+    /// grid rather than sits in it.
+    before_columns: Vec<f32>,
+    /// The same for the rows above the range, indexed from row 1.
+    before_rows: Vec<f32>,
     first_column: u32,
     first_row: u32,
 }
@@ -666,6 +672,71 @@ pub(crate) fn centred_across(row: &Row, cell: &Cell, spans_columns: u32) -> (u32
 /// EMU to a pixel at 96 dpi: 914400 to the inch.
 const EMU: f32 = 9525.0;
 
+/// How far apart Excel sets the lines of a shape's text.
+///
+/// Not the line box a cell uses: measured on `_xlsx_shape_text.py` over ten
+/// faces and sixteen sizes, a shape's pitch is the **font's own** line height
+/// — its unrounded `tmHeight`, scaled to the size — and a Japanese face gets
+/// **1.3** of it where a Latin one gets all of it and no more. メイリオ 20pt
+/// comes out at 40px of line height and 52px of pitch; Calibri 18pt at 29 and
+/// 29. The pitch follows the face, not the letters: メイリオ set with `Hxpq`
+/// spaces its lines exactly as it does with 国国国国.
+#[cfg(windows)]
+pub(crate) fn shape_line(face: &str, points: f32, bold: bool, italic: bool) -> Option<(f32, f32)> {
+    use std::sync::Mutex;
+    use windows::Win32::Graphics::Gdi::*;
+
+    // The font's line height per em, and whether it is an East Asian face.
+    static KNOWN: Mutex<Option<std::collections::HashMap<(String, bool, bool), (f32, bool)>>> =
+        Mutex::new(None);
+    const MEASURED_AT: i32 = 2048;
+
+    let key = (face.to_string(), bold, italic);
+    let mut held = KNOWN.lock().ok()?;
+    let known = held.get_or_insert_with(std::collections::HashMap::new);
+    let (per_em, japanese) = match known.get(&key) {
+        Some(found) => *found,
+        None => unsafe {
+            let named: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+            let screen = GetDC(None);
+            let font = CreateFontW(
+                -MEASURED_AT,
+                0,
+                0,
+                0,
+                if bold { 700 } else { 400 },
+                u32::from(italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                DEFAULT_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(named.as_ptr()),
+            );
+            let previous = SelectObject(screen, font);
+            let mut metrics = TEXTMETRICW::default();
+            let asked = GetTextMetricsW(screen, &mut metrics).as_bool();
+            SelectObject(screen, previous);
+            let _ = DeleteObject(font);
+            ReleaseDC(None, screen);
+            if !asked {
+                return None;
+            }
+            let found = (
+                metrics.tmHeight as f32 / MEASURED_AT as f32,
+                metrics.tmCharSet == SHIFTJIS_CHARSET.0 as u8,
+            );
+            known.insert(key, found);
+            found
+        },
+    };
+    let em = points * 96.0 / 72.0;
+    let natural = per_em * em;
+    Some((natural * if japanese { 1.3 } else { 1.0 }, natural))
+}
+
 /// Where a drawing lands on the sheet, in the picture's own pixels.
 ///
 /// A drawing hangs from a cell and an offset into it, so its place follows
@@ -679,11 +750,16 @@ pub(crate) fn drawing_box(
 ) -> Option<windows::Win32::Foundation::RECT> {
     let at = |anchor: &oxicells_core::ir::Anchor| -> Option<(i32, i32)> {
         // The drawing part counts both from zero; the layout counts columns
-        // from zero and rows from one, the way the sheet states them.
-        let column = anchor.col.checked_sub(layout.first_column)? as usize;
-        let row = (anchor.row + 1).checked_sub(layout.first_row)? as usize;
-        let left = *layout.columns.get(column)?;
-        let top = *layout.rows.get(row)?;
+        // from zero and rows from one, the way the sheet states them. A cell
+        // before the range has its own place, back from the left edge.
+        let left = match anchor.col.checked_sub(layout.first_column) {
+            Some(column) => *layout.columns.get(column as usize)?,
+            None => *layout.before_columns.get(anchor.col as usize)?,
+        };
+        let top = match (anchor.row + 1).checked_sub(layout.first_row) {
+            Some(row) => *layout.rows.get(row as usize)?,
+            None => *layout.before_rows.get(anchor.row as usize)?,
+        };
         Some((
             (left + anchor.col_off as f32 / EMU * scale).round() as i32,
             (top + anchor.row_off as f32 / EMU * scale).round() as i32,
@@ -1117,31 +1193,43 @@ fn fallback_row_points(sheet: &Sheet) -> f32 {
 fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
     let (first_row, first_column, last_row, last_column) = used_extent(sheet);
 
-    let mut columns = vec![0.0];
-    for column in first_column..=last_column {
+    let column_width = |column: u32| -> f32 {
+        if sheet.hidden_cols.contains(&column) {
+            return 0.0;
+        }
         let stated = sheet
             .col_widths
             .get(column as usize)
             .copied()
             .filter(|width| *width > 0.0);
-        let hidden = sheet.hidden_cols.contains(&column);
-        let width = if hidden {
-            0.0
-        } else {
-            match stated {
-                // A stated width already carries the gutter either side of the
-                // cell's text.
-                Some(width) => column_pixels(width, digit_width) * scale,
-                // A default the sheet states is measured the same way. Excel's
-                // own default, for a sheet that states none, is a plain count
-                // of characters, so there the gutter is added here instead.
-                None if sheet.default_col_width > 0.0 => {
-                    column_pixels(sheet.default_col_width, digit_width) * scale
-                }
-                None => (DEFAULT_DIGITS * digit_width + DEFAULT_PADDING).trunc() * scale,
+        match stated {
+            // A stated width already carries the gutter either side of the
+            // cell's text.
+            Some(width) => column_pixels(width, digit_width) * scale,
+            // A default the sheet states is measured the same way. Excel's
+            // own default, for a sheet that states none, is a plain count
+            // of characters, so there the gutter is added here instead.
+            None if sheet.default_col_width > 0.0 => {
+                column_pixels(sheet.default_col_width, digit_width) * scale
             }
-        };
-        columns.push(columns.last().unwrap() + width);
+            None => (DEFAULT_DIGITS * digit_width + DEFAULT_PADDING).trunc() * scale,
+        }
+    };
+
+    let mut columns = vec![0.0];
+    for column in first_column..=last_column {
+        columns.push(columns.last().unwrap() + column_width(column));
+    }
+
+    // Where the columns before the range sit, as offsets back from its left
+    // edge: a drawing can hang from a cell outside the picture and still
+    // reach into it, which is how `002` lays a banner across the top of a
+    // sheet whose used range starts two columns in.
+    let mut before_columns = vec![0.0; first_column as usize];
+    let mut back = 0.0;
+    for column in (0..first_column).rev() {
+        back -= column_width(column);
+        before_columns[column as usize] = back;
     }
 
     let default_px = default_row_points(sheet) / 0.75;
@@ -1155,10 +1243,10 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
     let counter = LineCounter::new();
     let merged = merges(sheet);
     let mut rows = vec![0.0];
-    for index in first_row..=last_row {
+    let row_height = |index: u32, columns: &[f32]| -> f32 {
         let held = sheet.rows.iter().find(|row| row.index == index);
         let hidden = held.is_some_and(|row| row.hidden);
-        let height = if hidden {
+        if hidden {
             0.0
         } else {
             // The stretches of columns a merge swallows in this row.
@@ -1180,13 +1268,24 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
                 &merged,
             );
             (px * scale).trunc()
-        };
-        rows.push(rows.last().unwrap() + height);
+        }
+    };
+    for index in first_row..=last_row {
+        rows.push(rows.last().unwrap() + row_height(index, &columns));
+    }
+    // The rows above the range, the same way round as the columns before it.
+    let mut before_rows = vec![0.0; first_row.saturating_sub(1) as usize];
+    let mut back = 0.0;
+    for index in (1..first_row).rev() {
+        back -= row_height(index, &columns);
+        before_rows[(index - 1) as usize] = back;
     }
 
     Geometry {
         columns,
         rows,
+        before_columns,
+        before_rows,
         first_column,
         first_row,
     }
@@ -1680,7 +1779,13 @@ mod windows_draw {
     /// The corpus's 2245 shapes are 1641 lines, 453 rectangles and 82 rounded
     /// ones; the rest — braces, arrows, flowchart boxes — are left undrawn
     /// rather than drawn as something they are not.
-    unsafe fn shape(dc: HDC, shape: &oxicells_core::ir::Shape, box_: RECT, scale: f32) {
+    unsafe fn shape(
+        dc: HDC,
+        shape: &oxicells_core::ir::Shape,
+        box_: RECT,
+        scale: f32,
+        normal: Option<&(String, f32)>,
+    ) {
         let rule = shape.line.as_ref().map(|line| {
             let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
             let broken = matches!(line.dash.as_deref(), Some(kind) if kind != "solid");
@@ -1759,6 +1864,155 @@ mod windows_draw {
             SelectObject(dc, held);
             let _ = DeleteObject(pen);
         }
+
+        // What a shape says is drawn only when asked for: the lines land where
+        // Excel puts them (see `shape_line`), and on the one workbook whose
+        // shapes carry most of its words it is worth +0.034 — but across the
+        // corpus it comes out flat, because a shape that says something is
+        // usually a shape this does not draw properly yet. A flowchart's
+        // decision boxes, a dashed frame, a connector between two of them: the
+        // text lands on top of geometry that is still missing or misplaced,
+        // and the pair reads worse than the missing text alone. Draw it when
+        // the geometry catches up.
+        if let Some(said) = &shape.text {
+            if std::env::var("OXI_XLSX_SHAPE_TEXT").is_ok() {
+                says(dc, said, box_, scale, normal);
+            }
+        }
+    }
+
+    /// Write what a shape says inside it.
+    ///
+    /// The text sits in the shape's box less the insets the body states —
+    /// Excel's own are a tenth of an inch either side and a twentieth above
+    /// and below — wrapped in what is left, and the block of lines is put
+    /// against the top, the middle or the foot by the body's anchor.
+    unsafe fn says(
+        dc: HDC,
+        said: &oxicells_core::ir::ShapeText,
+        box_: RECT,
+        scale: f32,
+        normal: Option<&(String, f32)>,
+    ) {
+        let inset = |emu: i64| (emu as f32 / super::EMU * scale).round() as i32;
+        let area = RECT {
+            left: box_.left + inset(said.insets.0),
+            top: box_.top + inset(said.insets.1),
+            right: box_.right - inset(said.insets.2),
+            bottom: box_.bottom - inset(said.insets.3),
+        };
+        if area.right <= area.left {
+            return;
+        }
+        let room = (area.right - area.left) as f32 / scale;
+
+        // Every line, with the paragraph it belongs to, so the block can be
+        // measured before any of it is written.
+        let mut lines: Vec<(usize, String)> = Vec::new();
+        let mut pitch: Vec<f32> = Vec::new();
+        let mut leading: Vec<i32> = Vec::new();
+        for (index, paragraph) in said.paragraphs.iter().enumerate() {
+            let face = paragraph
+                .face
+                .clone()
+                .or_else(|| normal.map(|(face, _)| face.clone()))
+                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string());
+            let broken = super::wrapped_lines(
+                &face,
+                paragraph.size,
+                paragraph.bold,
+                paragraph.italic,
+                &paragraph.text,
+                said.wrap.then_some(room),
+            );
+            // The glyphs sit in the middle of the pitch, not against its top:
+            // a Japanese face's extra three tenths of leading falls half above
+            // the letters and half below, which is what puts `002`'s panel
+            // four pixels down from its inset.
+            let measured = super::shape_line(&face, paragraph.size, paragraph.bold, paragraph.italic);
+            let (tall, natural) = match (paragraph.line_pitch, measured) {
+                (Some(points), found) => (
+                    points * 96.0 / 72.0,
+                    found.map_or(points * 96.0 / 72.0, |(_, natural)| natural),
+                ),
+                (None, Some((tall, natural))) => (tall, natural),
+                (None, None) => {
+                    let em = paragraph.size * 96.0 / 72.0;
+                    (em * 1.3, em)
+                }
+            };
+            for line in broken {
+                lines.push((index, line));
+                pitch.push(tall * scale);
+                leading.push((((tall - natural) / 2.0) * scale).round().max(0.0) as i32);
+            }
+        }
+        if lines.is_empty() {
+            return;
+        }
+
+        let block: i32 = pitch.iter().sum::<f32>().round() as i32;
+        let slack = (area.bottom - area.top) - block;
+        // The pitch is kept as it is measured and rounded only where a line
+        // lands, so a block of many lines does not drift from Excel's.
+        let mut at = (area.top
+            + match said.anchor.as_deref() {
+                Some("ctr") => (slack as f32 / 2.0).floor() as i32,
+                Some("b") => slack,
+                _ => 0,
+            }) as f32;
+
+        // A line of a shape's text is placed by its top, not its baseline.
+        // Nothing follows this on the sheet, so the alignment stays as it is
+        // left.
+        SetTextAlign(dc, TA_TOP | TA_LEFT);
+        for (step, (index, line)) in lines.iter().enumerate() {
+            let paragraph = &said.paragraphs[*index];
+            let face = paragraph
+                .face
+                .clone()
+                .or_else(|| normal.map(|(face, _)| face.clone()))
+                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string());
+            let pixels = -((paragraph.size * scale * 96.0 / 72.0).round() as i32);
+            let named = wide(&face);
+            let font = CreateFontW(
+                pixels,
+                0,
+                0,
+                0,
+                if paragraph.bold { 700 } else { 400 },
+                u32::from(paragraph.italic),
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                PCWSTR(named.as_ptr()),
+            );
+            let held = SelectObject(dc, font);
+            SetTextColor(dc, colour(paragraph.color.as_deref(), 0x0000_0000));
+            let letters = wide(line);
+            let letters = &letters[..letters.len() - 1];
+            if !letters.is_empty() {
+                let mut measured = SIZE::default();
+                let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
+                let left = match paragraph.align.as_deref() {
+                    Some("ctr") => {
+                        area.left + ((area.right - area.left - measured.cx) as f32 / 2.0).round()
+                            as i32
+                    }
+                    Some("r") => area.right - measured.cx,
+                    _ => area.left,
+                };
+                let _ = TextOutW(dc, left, at.round() as i32 + leading[step], letters);
+            }
+            at += pitch[step];
+            SelectObject(dc, held);
+            let _ = DeleteObject(font);
+        }
+        SetTextColor(dc, COLORREF(0x0000_0000));
     }
 
     /// Lay a picture into the box its anchors give it.
@@ -2507,7 +2761,9 @@ mod windows_draw {
                 };
                 match &drawn.kind {
                     DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
-                    DrawingKind::Shape(shape) => self::shape(dc, shape, box_, scale),
+                    DrawingKind::Shape(held) => {
+                        shape(dc, held, box_, scale, sheet.normal_font.as_ref())
+                    }
                     _ => {}
                 }
             }

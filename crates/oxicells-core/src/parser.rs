@@ -1014,13 +1014,16 @@ fn part_beside(from: &str, target: &str) -> String {
 /// are common in the corpus, and an absolute one is read as a one-cell anchor
 /// at the top-left, which is where its offsets are measured from anyway.
 fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Option<String>)> {
-    use crate::ir::{Anchor, Drawing, DrawingKind, Shape, ShapeLine};
+    use crate::ir::{
+        Anchor, Drawing, DrawingKind, Shape, ShapeLine, ShapeParagraph, ShapeText,
+    };
 
     /// Which part of the shape a colour being read belongs to.
     #[derive(Clone, Copy, PartialEq)]
     enum Paints {
         Fill,
         Line,
+        Text,
     }
 
     let mut reader = Reader::from_str(xml);
@@ -1032,13 +1035,15 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut to: Option<Anchor> = None;
     let mut extent: Option<(i64, i64)> = None;
     let mut kind: Option<DrawingKind> = None;
-    let mut shape = Shape {
+    let blank_shape = Shape {
         geometry: String::new(),
         fill: None,
         line: None,
         flip_h: false,
         flip_v: false,
+        text: None,
     };
+    let mut shape = blank_shape.clone();
     let mut line_width: i64 = 9525;
     let mut dash: Option<String> = None;
     let mut embed: Option<String> = None;
@@ -1059,6 +1064,18 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let (mut fill_stated, mut line_stated) = (false, false);
     let mut paints: Option<Paints> = None;
     let mut colour: Option<(String, Vec<(String, f32)>)> = None;
+    // What the shape says: the body's own settings, the paragraph being read,
+    // and whether a run's text is what the reader is collecting.
+    let mut said = ShapeText {
+        paragraphs: Vec::new(),
+        anchor: None,
+        insets: (91440, 45720, 91440, 45720),
+        wrap: true,
+    };
+    let mut paragraph: Option<ShapeParagraph> = None;
+    let mut in_run_props = false;
+    let mut in_text = false;
+    let mut text = String::new();
 
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -1077,17 +1094,18 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     kind = None;
                     embed = None;
                     depth_in_shape = 0;
-                    shape = Shape {
-                        geometry: String::new(),
-                        fill: None,
-                        line: None,
-                        flip_h: false,
-                        flip_v: false,
-                    };
+                    shape = blank_shape.clone();
                     line_width = 9525;
                     dash = None;
                     fill_stated = false;
                     line_stated = false;
+                    said = ShapeText {
+                        paragraphs: Vec::new(),
+                        anchor: None,
+                        insets: (91440, 45720, 91440, 45720),
+                        wrap: true,
+                    };
+                    paragraph = None;
                 }
                 "from" => corner = Some(true),
                 "to" => {
@@ -1159,6 +1177,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 }
                 "fillRef" if in_style && !fill_stated => paints = Some(Paints::Fill),
                 "lnRef" if in_style && !line_stated => paints = Some(Paints::Line),
+                "solidFill" if in_run_props => paints = Some(Paints::Text),
                 "srgbClr" | "schemeClr" | "sysClr" if paints.is_some() => {
                     let named = match name.as_str() {
                         "sysClr" => get_attr(e, "lastClr"),
@@ -1174,6 +1193,79 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     ) {
                         mods.push((name.clone(), value / 100_000.0));
                     }
+                }
+                // What the shape says, and how it is laid in its box.
+                "bodyPr" => {
+                    let emu = |name: &str, fallback: i64| {
+                        get_attr(e, name).and_then(|v| v.parse().ok()).unwrap_or(fallback)
+                    };
+                    said.insets = (
+                        emu("lIns", 91440),
+                        emu("tIns", 45720),
+                        emu("rIns", 91440),
+                        emu("bIns", 45720),
+                    );
+                    said.anchor = get_attr(e, "anchor");
+                    said.wrap = get_attr(e, "wrap").as_deref() != Some("none");
+                }
+                "p" => {
+                    paragraph = Some(ShapeParagraph {
+                        text: String::new(),
+                        align: None,
+                        size: 18.0,
+                        bold: false,
+                        italic: false,
+                        face: None,
+                        color: None,
+                        line_pitch: None,
+                    });
+                }
+                "pPr" if paragraph.is_some() => {
+                    if let (Some(held), Some(align)) = (paragraph.as_mut(), get_attr(e, "algn")) {
+                        held.align = Some(align);
+                    }
+                }
+                // A paragraph can pin its line pitch outright.
+                "spcPts" => {
+                    if let (Some(held), Some(points)) = (
+                        paragraph.as_mut(),
+                        get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()),
+                    ) {
+                        if held.line_pitch.is_none() && points > 0.0 {
+                            held.line_pitch = Some(points / 100.0);
+                        }
+                    }
+                }
+                // Only the first run of a paragraph dresses it: the corpus
+                // dresses every run of a shape's paragraph alike.
+                "rPr" => {
+                    in_run_props = true;
+                    if let Some(held) = paragraph.as_mut() {
+                        if held.text.is_empty() {
+                            if let Some(size) = get_attr(e, "sz").and_then(|v| v.parse::<f32>().ok())
+                            {
+                                held.size = size / 100.0;
+                            }
+                            held.bold = is_true(get_attr(e, "b").as_deref());
+                            held.italic = is_true(get_attr(e, "i").as_deref());
+                        }
+                    }
+                }
+                // The East Asian face wins over the Latin one for the sheets
+                // this is measured against.
+                "latin" | "ea" if in_run_props => {
+                    if let Some(held) = paragraph.as_mut() {
+                        if held.text.is_empty() {
+                            let face = get_attr(e, "typeface").filter(|face| !face.is_empty());
+                            if face.is_some() && (name == "ea" || held.face.is_none()) {
+                                held.face = face;
+                            }
+                        }
+                    }
+                }
+                "t" => {
+                    in_text = true;
+                    text.clear();
                 }
                 // The picture's own part is named by a relationship.
                 "blip" if embed.is_none() => {
@@ -1198,14 +1290,25 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 dash: dash.clone(),
                             })
                         }
+                        Paints::Text => {
+                            if let Some(held) = paragraph.as_mut() {
+                                if held.text.is_empty() {
+                                    held.color = Some(painted);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         match &event {
             Ok(Event::Text(e)) => {
-                if let Ok(text) = e.unescape() {
-                    number.push_str(&text);
+                if let Ok(held) = e.unescape() {
+                    if in_text {
+                        text.push_str(&held);
+                    } else {
+                        number.push_str(&held);
+                    }
                 }
             }
             Ok(Event::End(e)) => {
@@ -1236,7 +1339,45 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                         dash: dash.clone(),
                                     })
                                 }
+                                Paints::Text => {
+                                    if let Some(held) = paragraph.as_mut() {
+                                        if held.text.is_empty() {
+                                            held.color = Some(painted);
+                                        }
+                                    }
+                                }
                             }
+                        }
+                    }
+                    "t" => {
+                        in_text = false;
+                        if let Some(held) = paragraph.as_mut() {
+                            held.text.push_str(&text);
+                        }
+                        text.clear();
+                    }
+                    "rPr" => in_run_props = false,
+                    "p" => {
+                        if let Some(held) = paragraph.take() {
+                            // A paragraph with nothing in it still spends a
+                            // line, but one that never held a run at all is
+                            // the empty `endParaRPr` Excel writes.
+                            if !held.text.is_empty() || !said.paragraphs.is_empty() {
+                                said.paragraphs.push(held);
+                            }
+                        }
+                    }
+                    "txBody" => {
+                        // A trailing empty paragraph is Excel's own marker.
+                        while said
+                            .paragraphs
+                            .last()
+                            .is_some_and(|last| last.text.is_empty())
+                        {
+                            said.paragraphs.pop();
+                        }
+                        if !said.paragraphs.is_empty() {
+                            shape.text = Some(said.clone());
                         }
                     }
                     "solidFill" | "fillRef" | "lnRef" => paints = None,
@@ -1309,15 +1450,31 @@ fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
             "tint" => channels
                 .iter_mut()
                 .for_each(|part| *part = *part * amount + (1.0 - amount)),
+            // Lightness is HSL's, and only it moves: the hue and the
+            // saturation stay where they are. Measured on `002`'s banner,
+            // whose fill is accent1 under `lumMod 20% lumOff 80%` — 5B9BD5
+            // becomes DEEBF7 exactly, where shifting the bytes by hand lands
+            // at CCEDFF.
             "lumMod" | "lumOff" => {
                 let high = channels[0].max(channels[1]).max(channels[2]);
                 let low = channels[0].min(channels[1]).min(channels[2]);
                 let lum = (high + low) / 2.0;
-                let wanted = if name == "lumMod" { lum * amount } else { lum + amount };
-                let moved = (wanted - lum).clamp(-1.0, 1.0);
-                channels
-                    .iter_mut()
-                    .for_each(|part| *part = (*part + moved).clamp(0.0, 1.0));
+                let span = high - low;
+                let wanted = if name == "lumMod" {
+                    lum * amount
+                } else {
+                    (lum + amount).min(1.0)
+                };
+                if span <= f32::EPSILON {
+                    channels = [wanted; 3];
+                } else {
+                    let sat = span / (1.0 - (2.0 * lum - 1.0).abs()).max(f32::EPSILON);
+                    let reach = (1.0 - (2.0 * wanted - 1.0).abs()) * sat.min(1.0);
+                    let scale = reach / span;
+                    for part in channels.iter_mut() {
+                        *part = (wanted + (*part - lum) * scale).clamp(0.0, 1.0);
+                    }
+                }
             }
             _ => {}
         }
@@ -2382,6 +2539,56 @@ mod tests {
         assert!(matches!(picture.kind, crate::ir::DrawingKind::Picture { .. }));
     }
 
+    /// A shape's own text, with the dressing of the run that starts each
+    /// paragraph and the insets its body states.
+    #[test]
+    fn a_shape_gives_up_what_it_says() {
+        let xml = r##"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:sp>
+      <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+      <xdr:txBody>
+        <a:bodyPr lIns="288000" tIns="72000" rIns="288000" bIns="72000" anchor="ctr"/>
+        <a:p>
+          <a:pPr algn="ctr"><a:lnSpc><a:spcPts val="3000"/></a:lnSpc></a:pPr>
+          <a:r>
+            <a:rPr sz="2000" b="1">
+              <a:solidFill><a:srgbClr val="203864"/></a:solidFill>
+              <a:latin typeface="Calibri"/><a:ea typeface="メイリオ"/>
+            </a:rPr>
+            <a:t>この計算書は、</a:t>
+          </a:r>
+          <a:r><a:rPr sz="2000" b="1"/><a:t>所得を計算するものです。</a:t></a:r>
+        </a:p>
+        <a:p><a:endParaRPr sz="2000"/></a:p>
+      </xdr:txBody>
+    </xdr:sp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        let crate::ir::DrawingKind::Shape(shape) = &found[0].0.kind else {
+            panic!("the anchor holds a shape");
+        };
+        let said = shape.text.as_ref().expect("the shape says something");
+        assert_eq!(said.anchor.as_deref(), Some("ctr"));
+        assert_eq!(said.insets, (288000, 72000, 288000, 72000));
+        assert_eq!(said.paragraphs.len(), 1, "the trailing empty one is a marker");
+        let first = &said.paragraphs[0];
+        assert_eq!(first.text, "この計算書は、所得を計算するものです。");
+        assert_eq!(first.align.as_deref(), Some("ctr"));
+        assert_eq!(first.size, 20.0);
+        assert!(first.bold);
+        assert_eq!(first.face.as_deref(), Some("メイリオ"), "the East Asian face wins");
+        assert_eq!(first.color.as_deref(), Some("203864"));
+        assert_eq!(first.line_pitch, Some(30.0));
+    }
+
     /// A shape can name a theme colour and shade it rather than state one.
     #[test]
     fn a_scheme_colour_is_resolved_and_shaded() {
@@ -2418,6 +2625,22 @@ mod tests {
             shape.line.as_ref().map(|line| line.color.as_str()),
             Some("223962"),
             "a 50% shade halves every channel"
+        );
+    }
+
+    /// How light a colour is moves through HSL, and Excel's own picture is
+    /// what says so: `002`'s banner is accent1 — 5B9BD5 in that workbook's
+    /// theme — under `lumMod 20% lumOff 80%`, and Excel paints it DEEBF7.
+    #[test]
+    fn lightness_is_moved_the_way_excel_moves_it() {
+        assert_eq!(
+            shaded("5B9BD5", &[("lumMod".into(), 0.2), ("lumOff".into(), 0.8)]),
+            "DEEBF7"
+        );
+        // tx1 at 65% with 35% added is the grey Excel rules a table with.
+        assert_eq!(
+            shaded("000000", &[("lumMod".into(), 0.65), ("lumOff".into(), 0.35)]),
+            "595959"
         );
     }
 
