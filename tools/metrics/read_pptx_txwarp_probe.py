@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Read the txwarp probe: what size did PowerPoint fit each shape's text at?
+"""Read the txwarp probe: how did PowerPoint fit each shape's text to its box?
 
-Rasterises PowerPoint's own PDF, measures each shape's ink inside its declared
-box, and compares against the face's glyph metrics so the fitting rule can be
-named (fit the ink WIDTH, the ink HEIGHT, or the line box).
+Rasterises PowerPoint's own PDF and measures each shape's ink against the box
+the shape declares: where the ink starts as a fraction of the box (dx/w, dy/h)
+and how much of the box it fills (w ratio, h ratio). Those four numbers say
+directly whether the text is fitted to the box's width, its height, or neither,
+without needing the face's own metrics as an intermediary.
 
 Usage: python tools/metrics/read_pptx_txwarp_probe.py
 """
@@ -21,36 +23,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 DIR = Path(r"pipeline_data\pptx_probes\txwarp").resolve()
-FONT_FILES = {
-    "Arial": r"C:\Windows\Fonts\arial.ttf",
-    "Segoe UI": r"C:\Windows\Fonts\segoeui.ttf",
-    "Comic Sans MS": r"C:\Windows\Fonts\comic.ttf",
-}
-
-
-def glyph_box(face: str, text: str):
-    """(ink width, ink height, yMin, yMax) of `text` in em, from the outlines."""
-    from fontTools.ttLib import TTFont
-    f = TTFont(FONT_FILES[face], lazy=True)
-    upm = f["head"].unitsPerEm
-    cmap = f.getBestCmap()
-    glyf = f["glyf"]
-    hmtx = f["hmtx"]
-    x = 0.0
-    x0 = y0 = None
-    x1 = y1 = None
-    for ch in text:
-        g = cmap[ord(ch)]
-        gl = glyf[g]
-        adv = hmtx[g][0]
-        if gl.numberOfContours != 0:
-            gx0, gx1 = x + gl.xMin, x + gl.xMax
-            x0 = gx0 if x0 is None else min(x0, gx0)
-            x1 = gx1 if x1 is None else max(x1, gx1)
-            y0 = gl.yMin if y0 is None else min(y0, gl.yMin)
-            y1 = gl.yMax if y1 is None else max(y1, gl.yMax)
-        x += adv
-    return ((x1 - x0) / upm, (y1 - y0) / upm, y0 / upm, y1 / upm)
 
 
 def main() -> None:
@@ -62,7 +34,7 @@ def main() -> None:
         rgb = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         pages[i + 1] = np.asarray(rgb.convert("L"))
     print(f"{'arm':14s} {'face':14s} {'box':>12s} {'ink w x h':>15s} "
-          f"{'S(w-fit)':>9s} {'S(h-fit)':>9s} {'base-top/S':>11s}")
+          f"{'dx/w':>7s} {'dy/h':>7s} {'w ratio':>8s} {'h ratio':>8s}")
     for row in manifest:
         im = pages[row["slide"]]
         h, w = im.shape
@@ -80,13 +52,13 @@ def main() -> None:
             continue
         iw = (xs.max() - xs.min() + 1) / sx
         ih = (ys.max() - ys.min() + 1) / sy
-        base = (ys.max() + y0) / sy
-        gw, gh, ymin, ymax = glyph_box(row["face"], row["text"])
-        s_w = iw / gw
-        s_h = ih / gh
+        ink_x = (xs.min() + x0) / sx
+        ink_y = (ys.min() + y0) / sy
         print(f"{row['label']:14s} {row['face']:14s} "
               f"{row['w']:5.0f}x{row['h']:<5.0f} {iw:7.1f} x {ih:5.1f} "
-              f"{s_w:9.1f} {s_h:9.1f} {(base - row['y']) / s_w:11.4f}")
+              f"{(ink_x - row['x']) / row['w']:7.3f} "
+              f"{(ink_y - row['y']) / row['h']:7.3f} "
+              f"{iw / row['w']:8.3f} {ih / row['h']:8.3f}")
 
 
 if __name__ == "__main__":
