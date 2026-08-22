@@ -1799,6 +1799,13 @@ fn fill_alpha_on() -> bool {
     std::env::var("OXI_FILLALPHA_DISABLE").is_err()
 }
 
+/// `<a:alpha>` on a RUN's own colour is composited unless this is set. Only
+/// the fitted-text path reads it; a run alpha outside WordArt does not occur
+/// in the dev corpus.
+fn txwarp_alpha_on() -> bool {
+    std::env::var("OXI_TXWARPALPHA_DISABLE").is_err()
+}
+
 /// `a:custGeom` outlines are drawn as their real path unless this is set, in
 /// which case the shape keeps its pre-S-CUSTGEOM bounding-box rendering.
 fn custgeom_on() -> bool {
@@ -10190,7 +10197,10 @@ fn draw_warped_text(
         if font.is_invalid() {
             return false;
         }
-        let old = SelectObject(dc, font);
+        // NOT selected into `dc` yet: the blend path needs it in a memory DC,
+        // and one GDI object cannot be selected into two DCs at once -- doing
+        // that left the memory DC with its default font and drew a translucent
+        // RECTANGLE instead of the numeral.
         // Place the ink's top-left on the shape's: the pen sits left of the ink
         // by its left bearing and above the baseline by the ink's top.
         let k = target_w_px / natural_w_px;
@@ -10203,8 +10213,6 @@ fn draw_warped_text(
             .or_else(|| sh.fill_color.clone());
         let rgb = color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
         let alpha = para.runs.iter().find_map(|r| r.color_alpha).unwrap_or(1.0);
-        let old_color = SetTextColor(dc, COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
-        let old_align = SetTextAlign(dc, TA_LEFT | TA_BASELINE);
         let wtext: Vec<u16> = text.encode_utf16().collect();
         let px = pen_x.round() as i32;
         let py = baseline.round() as i32;
@@ -10212,20 +10220,27 @@ fn draw_warped_text(
         // blended, and GDI's text has no alpha: draw it onto a COPY of the
         // destination and blend that back with a constant alpha, so the
         // gradient behind still shows through.
-        // HELD OPT-IN: blending the run's alpha measured 5 improved / 2
-        // regressed (d11 −0.0021, d35 −0.0009) against 7 improved / 0
-        // regressed without it, so the fit ships first and the translucency
-        // is a separate question.
-        if std::env::var("OXI_TXWARPALPHA_ENABLE").is_ok() && alpha < 0.999 {
-            let bx = (f64::from(sh.x) * scale).floor() as i32 - 4;
-            let by = (f64::from(sh.y) * scale).floor() as i32 - 4;
-            let bw = (f64::from(sh.width) * scale).ceil() as i32 + 8;
-            let bh = (f64::from(sh.height) * scale).ceil() as i32 + 8;
+        if txwarp_alpha_on() && alpha < 0.999 {
+            // Clamped to the surface: a shape at the very edge would otherwise
+            // copy from outside the bitmap and blend that garbage back in.
+            let mut clip = windows::Win32::Foundation::RECT::default();
+            let _ = GetClipBox(dc, &mut clip);
+            let bx = ((f64::from(sh.x) * scale).floor() as i32 - 4).max(clip.left);
+            let by = ((f64::from(sh.y) * scale).floor() as i32 - 4).max(clip.top);
+            let bw = ((f64::from(sh.x + sh.width) * scale).ceil() as i32 + 4)
+                .min(clip.right)
+                - bx;
+            let bh = ((f64::from(sh.y + sh.height) * scale).ceil() as i32 + 4)
+                .min(clip.bottom)
+                - by;
             let mem = CreateCompatibleDC(dc);
-            let bmp = CreateCompatibleBitmap(dc, bw, bh);
-            if !mem.0.is_null() && !bmp.is_invalid() {
+            let bmp = CreateCompatibleBitmap(dc, bw.max(1), bh.max(1));
+            if bw > 0 && bh > 0 && !mem.0.is_null() && !bmp.is_invalid() {
                 let old_bmp = SelectObject(mem, bmp);
                 let _ = BitBlt(mem, 0, 0, bw, bh, dc, bx, by, SRCCOPY);
+                // A fresh DC is OPAQUE over white: without this the text cell
+                // is painted white and swallows a white glyph whole.
+                SetBkMode(mem, TRANSPARENT);
                 let old_f = SelectObject(mem, font);
                 SetTextColor(mem, COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
                 let old_a = SetTextAlign(mem, TA_LEFT | TA_BASELINE);
@@ -10242,16 +10257,19 @@ fn draw_warped_text(
                 SelectObject(mem, old_bmp);
                 let _ = DeleteObject(bmp);
                 let _ = DeleteDC(mem);
-                SetTextAlign(dc, TEXT_ALIGN_OPTIONS(old_align));
-                SetTextColor(dc, old_color);
-                SelectObject(dc, old);
                 let _ = DeleteObject(font);
                 return true;
             }
             if !mem.0.is_null() {
                 let _ = DeleteDC(mem);
             }
+            if !bmp.is_invalid() {
+                let _ = DeleteObject(bmp);
+            }
         }
+        let old = SelectObject(dc, font);
+        let old_color = SetTextColor(dc, COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
+        let old_align = SetTextAlign(dc, TA_LEFT | TA_BASELINE);
         let _ = TextOutW(dc, px, py, &wtext);
         SetTextAlign(dc, TEXT_ALIGN_OPTIONS(old_align));
         SetTextColor(dc, old_color);
