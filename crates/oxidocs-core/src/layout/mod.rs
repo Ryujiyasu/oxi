@@ -36081,6 +36081,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     row_idx, row_height, max_actual_cell_h
                 );
             }
+            // S1192: the LAST row of a vMerge span must also cover whatever the
+            // merged cell still needs. Folded into `max_actual_cell_h` rather
+            // than into `row_height` directly, so the border fix-up right below
+            // carries this row's already-emitted rules down with it — the
+            // estimator hook alone changed nothing precisely because the emit
+            // pass computes its own height here.
+            if std::env::var("OXI_S1192").is_ok() {
+                max_actual_cell_h = max_actual_cell_h.max(self.s1192_vmerge_last_row_min(
+                    table,
+                    row_idx,
+                    &col_widths,
+                    default_pad_l,
+                    default_pad_r,
+                    default_pad_t,
+                    default_pad_b,
+                    table_grid_pitch,
+                    grid_char_pitch,
+                    grid_char_cw_ratio,
+                ));
+            }
             // If actual content exceeds estimated row_height, fix border elements
             if max_actual_cell_h > row_height + 0.01 {
                 let old_h = row_height;
@@ -39323,14 +39343,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// holding the restart cell, so the merged content goes through exactly the
     /// machinery a normal cell would.
     ///
-    /// ★NOT YET EFFECTIVE. This is wired into `estimate_table_row_natural_h`
-    /// only, and with `OXI_S1192=1` the probe renders IDENTICALLY — because the
-    /// emit pass does not use this estimator for the row it draws. That
-    /// function's own header says so ("Mirrors the inlined logic at the top of
-    /// the table row-loop"), i.e. the height that reaches the page is computed
-    /// inline there. Finishing this means applying the same max at that inline
-    /// site (and checking the pre-pass/emit pair stays consistent, since the
-    /// two must agree for pagination). Left opt-in and inert until then.
+    /// WIRED at BOTH sites: this estimator (for the pre-pass) and the emit
+    /// row-loop's own inline height (folded into `max_actual_cell_h`, so the
+    /// existing border fix-up carries the row's rules down with it). The
+    /// estimator hook ALONE changed nothing — the emit pass computes its own
+    /// height, exactly as that function's header warns ("Mirrors the inlined
+    /// logic at the top of the table row-loop").
+    ///
+    /// STATE (opt-in): the DISTRIBUTION is now Word's — the span grows and the
+    /// LAST row takes the remainder, and the merged text no longer spills
+    /// through the table's bottom edge. The MAGNITUDE is still short by about
+    /// 0.9pt per merged line, because measuring the restart cell through a
+    /// synthetic one-cell row yields ~11.42pt/line where the emit pass renders
+    /// ~12.21:
+    ///     arm        Word                       Oxi                    d
+    ///     span2_m3   [12.72, 24.36]             [12.70, 22.50]         −1.86
+    ///     span2_m4   [12.72, 36.60]             [12.70, 33.75]         −2.85
+    ///     span3_m5   [12.72, 12.72, 36.12]      [12.70, 12.71, 33.25]  −2.87
+    ///     span3_m7   [12.72, 12.72, 60.48]      [12.70, 12.71, 55.75]  −4.73
+    /// (1- and 2-line spans, where nothing overflows, are exact.) The remaining
+    /// gap is the measurement, not the rule: the synthetic row does not take
+    /// the emit-equivalent line-height path (the S218/S222 `_emit` variant).
+    /// Fix that before gating.
     #[allow(clippy::too_many_arguments)]
     fn s1192_vmerge_last_row_min(
         &self,
@@ -39354,6 +39388,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let Some(row) = table.rows.get(row_idx) else {
             return 0.0;
         };
+        if std::env::var("OXI_DBG_S1192").is_ok() {
+            eprintln!("[S1192] enter row={} ncells={} vm={:?}", row_idx, row.cells.len(),
+                row.cells.iter().map(|c| c.v_merge.clone()).collect::<Vec<_>>());
+        }
         let mut need: f32 = 0.0;
         let mut grid_idx = row.grid_before as usize;
         for (ci, cell) in row.cells.iter().enumerate() {
@@ -39433,6 +39471,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         grid_char_cw_ratio,
                     );
                 }
+            }
+            if std::env::var("OXI_DBG_S1192").is_ok() {
+                eprintln!("[S1192] row={} ci={} start={} merged_h={:.2} earlier={:.2} need={:.2}",
+                    row_idx, ci, start, merged_h, earlier, merged_h - earlier);
             }
             need = need.max(merged_h - earlier);
         }

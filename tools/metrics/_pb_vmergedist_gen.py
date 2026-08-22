@@ -181,7 +181,7 @@ def summarize(rows, tag):
             print("  %-10s MISSING" % name)
             continue
         a, b = min(a), min(b)
-        ys = sorted({round(y, 2) for y, k, t in rows if k == "B" and a < y < b})
+        ys = sorted({round(y, 2) for y, k, t in rows if k == "B" and a < y <= b + 0.5})
         m = []
         for y in ys:
             if not m or y - m[-1] > 1.6:
