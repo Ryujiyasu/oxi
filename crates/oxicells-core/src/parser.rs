@@ -1296,6 +1296,14 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         held.align = Some(align);
                     }
                 }
+                // A break inside a paragraph starts a line without starting a
+                // paragraph, which is how `sanko_tool` sets a heading over the
+                // text that follows it.
+                "br" => {
+                    if let Some(held) = paragraph.as_mut() {
+                        held.text.push('\n');
+                    }
+                }
                 // A paragraph can pin its line pitch outright.
                 "spcPts" => {
                     if let (Some(held), Some(points)) = (
@@ -2942,6 +2950,44 @@ mod tests {
         assert_eq!(first.face.as_deref(), Some("メイリオ"), "the East Asian face wins");
         assert_eq!(first.color.as_deref(), Some("203864"));
         assert_eq!(first.line_pitch, Some(30.0));
+    }
+
+    /// `<a:br/>` starts a line without starting a paragraph. Without it
+    /// `sanko_tool`'s heading ran into the sentence under it — one line where
+    /// Excel draws two.
+    #[test]
+    fn a_break_inside_a_paragraph_starts_a_line() {
+        let xml = r##"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:sp>
+      <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+      <xdr:txBody>
+        <a:bodyPr/>
+        <a:p>
+          <a:r><a:rPr sz="1200" u="sng"/><a:t>イメージ</a:t></a:r>
+          <a:br><a:rPr sz="1200"/></a:br>
+          <a:br><a:rPr sz="1200"/></a:br>
+          <a:r><a:rPr sz="1200"/><a:t>１．確認したい品目</a:t></a:r>
+        </a:p>
+        <a:p><a:r><a:rPr sz="1200"/><a:t>２．リンク係数</a:t></a:r></a:p>
+      </xdr:txBody>
+    </xdr:sp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        let crate::ir::DrawingKind::Shape(shape) = &found[0].0.kind else {
+            panic!("the anchor holds a shape");
+        };
+        let said = shape.text.as_ref().expect("the shape says something");
+        assert_eq!(said.paragraphs.len(), 2);
+        assert_eq!(said.paragraphs[0].text, "イメージ\n\n１．確認したい品目");
+        assert_eq!(said.paragraphs[1].text, "２．リンク係数");
     }
 
     /// A rule states its colour before it says how it is broken, so the dash

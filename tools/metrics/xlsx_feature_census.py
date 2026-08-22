@@ -40,14 +40,16 @@ LOOKS = [
     ("phonetic guides (ruby)", "shared", r"<rPh ", "text only, guides NOT DRAWN"),
     ("rich text runs", "shared", r"</r><r>", "drawn"),
     ("solid fills", "styles", r'patternType="solid"', "drawn"),
-    ("pattern fills (not solid)", "styles",
-     r'patternType="(?!solid|none)[a-zA-Z0-9]+"', "NOT DRAWN"),
+    # Counted by hand: Excel writes `<patternFill patternType="gray125"/>` as
+    # fill 1 of every workbook whether or not a cell asks for it, so counting
+    # the element says all 285 when the honest number is 2.
+    ("pattern fills (not solid)", "patterned cells", None, "NOT DRAWN"),
     ("gradient fills", "styles", r"<gradientFill", "NOT DRAWN"),
     ("diagonal borders", "styles", r"<diagonal (?!/)", "drawn"),
     ("number formats", "styles", r"<numFmt ", "drawn"),
     # What hangs over the grid
     ("drawings", "sheet", r"<drawing ", "pictures, lines, boxes, diamonds"),
-    ("charts", "parts", r"xl/charts/chart\d+\.xml", "NOT DRAWN"),
+    ("charts", "parts", r"xl/charts/chart\d+\.xml", "line charts drawn"),
     ("pictures", "parts", r"xl/media/", "drawn"),
     ("notes (comments)", "parts", r"xl/comments\d+\.xml", "drawn when pinned open"),
     ("threaded comments", "parts", r"xl/threadedComments/", "NOT DRAWN"),
@@ -73,6 +75,47 @@ LOOKS = [
     ("outline groups", "sheet", r'outlineLevel="[1-9]', "no gutter drawn"),
     ("cell errors", "sheet", r't="e"', "drawn as the error text"),
 ]
+
+
+def patterned_cells(names, read):
+    """How many cells wear a fill that is neither solid nor plain.
+
+    Follows the chain a cell actually walks — cell `s=` to `cellXfs` entry to
+    `fillId` to the fill's `patternType` — because a fill that is declared and
+    never named paints nothing.
+    """
+    styles = read("xl/styles.xml")
+    listed = re.search(r"<fills.*?</fills>", styles, re.S)
+    if not listed:
+        return 0
+    patterned = {
+        index
+        for index, fill in enumerate(
+            re.findall(r"<fill>.*?</fill>|<fill/>", listed.group(), re.S))
+        if (kind := re.search(r'patternType="([^"]+)"', fill))
+        and kind.group(1) not in ("solid", "none")
+    }
+    if not patterned:
+        return 0
+
+    body = re.search(r"<cellXfs.*?</cellXfs>", styles, re.S)
+    if not body:
+        return 0
+    wanted = {
+        str(index)
+        for index, xf in enumerate(
+            re.findall(r"<xf[^>]*/>|<xf[^>]*>.*?</xf>", body.group(), re.S))
+        if (fill_id := re.search(r'fillId="(\d+)"', xf))
+        and int(fill_id.group(1)) in patterned
+    }
+    if not wanted:
+        return 0
+
+    return sum(
+        style in wanted
+        for name in names if name.startswith("xl/worksheets/sheet")
+        for style in re.findall(r'<c [^>]*s="(\d+)"', read(name))
+    )
 
 
 def main():
@@ -116,6 +159,12 @@ def main():
                 return ""
 
         for name, where, pattern, _ in LOOKS:
+            if where == "patterned cells":
+                found = patterned_cells(names, read)
+                if found:
+                    books[name] += 1
+                    uses[name] += found
+                continue
             found = len(re.findall(pattern, body(where)))
             if found:
                 books[name] += 1
