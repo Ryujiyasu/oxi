@@ -2899,8 +2899,18 @@ fn parse_paragraph(
             // baseline.  Keeping this resolution at the style layer avoids a
             // family-specific layout exception (legal DefinedTerms is TNR, but
             // the rule is independent of the selected typeface).
+            // S1193 (2026-08-22, opt-out OXI_S1193_DISABLE): `based_on.is_none()`
+            // was a PROXY for "this style's chain declares no w:sz", and the proxy
+            // is wrong — a style with w:basedOn whose whole chain is silent about
+            // the size reaches the same application default. The chain is already
+            // flattened into `defined.paragraph.default_run_style` at stylesheet
+            // load (`resolve_style_inheritance`), so the `font_size.is_none()`
+            // test below IS the chain test; the extra guard only excluded the
+            // based-on half of the class and left it on the engine's 11pt
+            // fallback. Word gives them 10pt.
+            let s1193_chain = std::env::var("OXI_S1193_DISABLE").is_err();
             if std::env::var("OXI_S924_DISABLE").is_err()
-                && defined.based_on.is_none()
+                && (s1193_chain || defined.based_on.is_none())
                 && style
                     .default_run_style
                     .as_ref()
