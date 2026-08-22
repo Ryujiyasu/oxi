@@ -9417,7 +9417,6 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             } else {
                                 cursor.set(candidate_y_bottom + 1.5);
                             }
-
                         } else {
                             // Original behavior: floating tables don't advance text flow
                             // S772 (2026-07-10, opt-out OXI_S772_DISABLE): when a
@@ -35734,10 +35733,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // S1192b: remember what the merged cell needs. It deliberately
                 // does NOT grow its own row (the arm above excludes it, which is
                 // Word's behaviour); the span's last row pays instead.
-                if is_vmerge_restart && std::env::var("OXI_S1192").is_ok() {
+                if is_vmerge_restart && std::env::var("OXI_S1192_DISABLE").is_err() {
                     let need = pad_t + content_h + pad_b;
-                    s1192_pending.retain(|(c, _)| *c != cell_idx);
-                    s1192_pending.push((cell_idx, need));
+                    // S1192c (opt-in `OXI_S1192G`, UNVERIFIED): key the pending
+                    // need on the GRID COLUMN, not the cell's position in its
+                    // row. A row's cell list is not a column identity once
+                    // `gridSpan` or `gridBefore` are in play, and ed025's vMerge
+                    // tables have rows of 4/5/6 and 6/7/11/13 cells. A census of
+                    // the corpus says the shape is common — 44 of the 74 vMerge
+                    // tables mix a span/gridBefore with rows of differing cell
+                    // counts — but the grid key changed NOTHING on ed025, and it
+                    // has never been through a corpus gate. Verify before making
+                    // it the only path.
+                    let key = if std::env::var("OXI_S1192G").is_ok() {
+                        cell_start_grid
+                    } else {
+                        cell_idx
+                    };
+                    s1192_pending.retain(|(c, _)| *c != key);
+                    s1192_pending.push((key, need));
+                    if std::env::var("OXI_DBG_S1192").is_ok() {
+                        eprintln!("[S1192] REC row={} cell_idx={} grid={} need={:.2}",
+                            row_idx, cell_idx, cell_start_grid, need);
+                    }
                 }
 
                 // Apply vAlign offset
@@ -36253,17 +36271,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // carries this row's already-emitted rules down with it — the
             // estimator hook alone changed nothing precisely because the emit
             // pass computes its own height here.
-            if std::env::var("OXI_S1192").is_ok() {
+            if std::env::var("OXI_S1192_DISABLE").is_err() {
                 let is_cont = |c: &TableCell| {
                     matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
                 };
+                let bygrid = std::env::var("OXI_S1192G").is_ok();
                 for (ci, remaining) in s1192_pending.iter() {
-                    let here_cont = row.cells.get(*ci).map_or(false, is_cont);
+                    let here_cont = Self::s1192_cell_at(row, *ci, bygrid).map_or(false, is_cont);
                     let next_cont = table
                         .rows
                         .get(row_idx + 1)
-                        .and_then(|r| r.cells.get(*ci))
+                        .and_then(|r| Self::s1192_cell_at(r, *ci, bygrid))
                         .map_or(false, is_cont);
+                    if std::env::var("OXI_DBG_S1192").is_ok() {
+                        eprintln!("[S1192] FOLD row={} key={} rem={:.2} here={} next={}",
+                            row_idx, ci, remaining, here_cont, next_cont);
+                    }
                     if here_cont && !next_cont {
                         max_actual_cell_h = max_actual_cell_h.max(*remaining);
                     }
@@ -37955,12 +37978,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         .unwrap_or(false);
                 // S1192b: this row is now final — draw it down from every span
                 // it passes through, and forget spans that ended here.
-                if std::env::var("OXI_S1192").is_ok() && !s1192_pending.is_empty() {
+                if std::env::var("OXI_S1192_DISABLE").is_err() && !s1192_pending.is_empty() {
                     let is_cont = |c: &TableCell| {
                         matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
                     };
+                    let bygrid = std::env::var("OXI_S1192G").is_ok();
                     for (ci, remaining) in s1192_pending.iter_mut() {
-                        if row.cells.get(*ci).is_some() {
+                        if Self::s1192_cell_at(row, *ci, bygrid).is_some() {
                             *remaining -= row_height;
                         }
                     }
@@ -37968,8 +37992,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let next_cont = table
                             .rows
                             .get(row_idx + 1)
-                            .and_then(|r| r.cells.get(*ci))
+                            .and_then(|r| Self::s1192_cell_at(r, *ci, bygrid))
                             .map_or(false, is_cont);
+                        if std::env::var("OXI_DBG_S1192").is_ok() {
+                            eprintln!("[S1192] DRAW row={} key={} rh={:.2} rem_after={:.2} keep={}",
+                                row_idx, ci, row_height, remaining, next_cont && *remaining > 0.01);
+                        }
                         next_cont && *remaining > 0.01
                     });
                 }
@@ -39501,7 +39529,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         }
     }
 
-    /// S1192 (2026-08-22, opt-in `OXI_S1192`): the minimum this row must be
+    /// S1192 (2026-08-22, default ON, opt-out `OXI_S1192_DISABLE`): the
+    /// minimum this row must be
     /// because it is the LAST row of a vMerge span whose merged cell holds more
     /// than the span's earlier rows provide.
     ///
@@ -39560,6 +39589,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// excludes `is_vmerge_restart`, and the pre-pass estimator skips every
     /// vMerge cell, so the inflation arrives by a third route — find it before
     /// gating. The second half of the same rule.
+    /// S1192c: the cell occupying `key` in `row` — by GRID COLUMN when
+    /// `bygrid`, else by position in the row's cell list (the original,
+    /// kept so the two can be measured against each other).
+    fn s1192_cell_at(row: &TableRow, key: usize, bygrid: bool) -> Option<&TableCell> {
+        if !bygrid {
+            return row.cells.get(key);
+        }
+        let mut g = row.grid_before as usize;
+        for c in &row.cells {
+            let span = c.grid_span.max(1) as usize;
+            if g <= key && key < g + span {
+                return Some(c);
+            }
+            g += span;
+        }
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn s1192_vmerge_last_row_min(
         &self,
@@ -39574,7 +39621,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         grid_char_pitch: Option<f32>,
         grid_char_cw_ratio: Option<f32>,
     ) -> f32 {
-        if std::env::var("OXI_S1192").is_err() {
+        if std::env::var("OXI_S1192_DISABLE").is_ok() {
             return 0.0;
         }
         let is_cont = |c: &TableCell| {
