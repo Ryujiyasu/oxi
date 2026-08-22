@@ -1721,7 +1721,7 @@ mod windows_draw {
     use super::{alignment, cell_text, Align, Geometry, Merged};
     use oxicells_core::ir::{BorderLine, CellStyle, CellValue, DrawingKind, Sheet};
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
+    use windows::Win32::Foundation::{COLORREF, POINT, RECT, SIZE};
     use windows::Win32::Graphics::Gdi::*;
 
     fn wide(text: &str) -> Vec<u16> {
@@ -1889,6 +1889,40 @@ mod windows_draw {
                     }
                     SelectObject(dc, held);
                 }
+                if let Some(brush) = brush {
+                    let _ = DeleteObject(brush);
+                }
+            }
+            // A flowchart's decision is a diamond in its box, and Excel's
+            // `ellipse` is the box's inscribed one.
+            "flowChartDecision" | "diamond" | "ellipse" | "flowChartConnector" => {
+                let brush = shape
+                    .fill
+                    .as_deref()
+                    .map(|fill| CreateSolidBrush(colour(Some(fill), 0x00FF_FFFF)));
+                let held_brush =
+                    SelectObject(dc, brush.map_or(GetStockObject(NULL_BRUSH), |b| b.into()));
+                let pen = if rule.is_none() {
+                    Some(SelectObject(dc, GetStockObject(NULL_PEN)))
+                } else {
+                    None
+                };
+                if shape.geometry.starts_with("ellipse") || shape.geometry.ends_with("Connector") {
+                    let _ = Ellipse(dc, box_.left, box_.top, box_.right, box_.bottom);
+                } else {
+                    let middle = |low: i32, high: i32| low + (high - low) / 2;
+                    let points = [
+                        POINT { x: middle(box_.left, box_.right), y: box_.top },
+                        POINT { x: box_.right, y: middle(box_.top, box_.bottom) },
+                        POINT { x: middle(box_.left, box_.right), y: box_.bottom },
+                        POINT { x: box_.left, y: middle(box_.top, box_.bottom) },
+                    ];
+                    let _ = Polygon(dc, &points);
+                }
+                if let Some(pen) = pen {
+                    SelectObject(dc, pen);
+                }
+                SelectObject(dc, held_brush);
                 if let Some(brush) = brush {
                     let _ = DeleteObject(brush);
                 }

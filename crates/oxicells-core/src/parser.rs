@@ -1076,6 +1076,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut in_run_props = false;
     let mut in_text = false;
     let mut text = String::new();
+    // A group states where it sits and what its children's coordinates mean;
+    // a child inside one is placed by mapping its own box through that.
+    let mut group: Option<((i64, i64), (i64, i64), (i64, i64), (i64, i64))> = None;
+    let mut in_group_props = false;
+    let mut own_off: Option<(i64, i64)> = None;
+    let mut own_ext: Option<(i64, i64)> = None;
 
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -1106,6 +1112,9 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         wrap: true,
                     };
                     paragraph = None;
+                    group = None;
+                    own_off = None;
+                    own_ext = None;
                 }
                 "from" => corner = Some(true),
                 "to" => {
@@ -1113,29 +1122,64 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     to = Some(blank);
                 }
                 "col" | "colOff" | "row" | "rowOff" => number.clear(),
-                "ext" if depth_in_shape == 0 => {
+                "ext" => {
                     let cx = get_attr(e, "cx").and_then(|v| v.parse().ok()).unwrap_or(0);
                     let cy = get_attr(e, "cy").and_then(|v| v.parse().ok()).unwrap_or(0);
-                    extent = Some((cx, cy));
+                    if depth_in_shape == 0 && !in_group_props {
+                        extent = Some((cx, cy));
+                    } else if in_group_props {
+                        group.get_or_insert(((0, 0), (0, 0), (0, 0), (0, 0))).1 = (cx, cy);
+                    } else if in_sp_pr {
+                        own_ext = Some((cx, cy));
+                    }
                 }
-                "pic" => {
+                "pic" | "sp" | "cxnSp" => {
                     depth_in_shape += 1;
-                    kind = Some(DrawingKind::Picture { bytes: Vec::new() });
+                    // A child of a group starts its own shape; one that is
+                    // not carries the anchor's.
+                    if group.is_some() {
+                        shape = blank_shape.clone();
+                        said.paragraphs.clear();
+                        paragraph = None;
+                        fill_stated = false;
+                        line_stated = false;
+                        own_off = None;
+                        own_ext = None;
+                        embed = None;
+                    }
+                    if name == "pic" {
+                        kind = Some(DrawingKind::Picture { bytes: Vec::new() });
+                    } else if kind.is_none() || group.is_some() {
+                        kind = Some(DrawingKind::Shape(shape.clone()));
+                    }
                 }
                 "graphicFrame" => {
                     depth_in_shape += 1;
                     kind = Some(DrawingKind::Chart);
                 }
-                "sp" | "cxnSp" => {
-                    depth_in_shape += 1;
-                    if kind.is_none() {
-                        kind = Some(DrawingKind::Shape(shape.clone()));
-                    }
-                }
                 "grpSp" => {
                     depth_in_shape += 1;
                     if kind.is_none() {
                         kind = Some(DrawingKind::Other);
+                    }
+                }
+                "grpSpPr" => in_group_props = true,
+                "chOff" | "chExt" | "off" if in_group_props || in_sp_pr => {
+                    let x = get_attr(e, "x").or_else(|| get_attr(e, "cx"));
+                    let y = get_attr(e, "y").or_else(|| get_attr(e, "cy"));
+                    let pair = (
+                        x.and_then(|v| v.parse().ok()).unwrap_or(0),
+                        y.and_then(|v| v.parse().ok()).unwrap_or(0),
+                    );
+                    if in_group_props {
+                        let held = group.get_or_insert(((0, 0), (0, 0), (0, 0), (0, 0)));
+                        match name.as_str() {
+                            "off" => held.0 = pair,
+                            "chOff" => held.2 = pair,
+                            _ => held.3 = pair,
+                        }
+                    } else if name == "off" {
+                        own_off = Some(pair);
                     }
                 }
                 "spPr" => in_sp_pr = true,
@@ -1394,19 +1438,67 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     "spPr" => in_sp_pr = false,
                     "style" => in_style = false,
                     "extLst" => in_ext_lst = in_ext_lst.saturating_sub(1),
+                    "grpSpPr" => in_group_props = false,
                     "pic" | "sp" | "cxnSp" | "grpSp" | "graphicFrame" => {
                         depth_in_shape = depth_in_shape.saturating_sub(1);
+                        // A child of a group is placed by mapping its own box
+                        // through the group's transform, and hangs from the
+                        // anchor the group hangs from with the difference as
+                        // its offset. `002`'s callout is one of these.
+                        if let (Some((off, ext, ch_off, ch_ext)), Some(own), Some(size), true) =
+                            (group, own_off, own_ext, name != "grpSp")
+                        {
+                            let across = if ch_ext.0 != 0 {
+                                ext.0 as f64 / ch_ext.0 as f64
+                            } else {
+                                1.0
+                            };
+                            let down = if ch_ext.1 != 0 {
+                                ext.1 as f64 / ch_ext.1 as f64
+                            } else {
+                                1.0
+                            };
+                            let left = ((own.0 - ch_off.0) as f64 * across) as i64;
+                            let top = ((own.1 - ch_off.1) as f64 * down) as i64;
+                            let mut kind = kind.take().unwrap_or(DrawingKind::Other);
+                            if let DrawingKind::Shape(held) = &mut kind {
+                                *held = shape.clone();
+                            }
+                            let picture = matches!(kind, DrawingKind::Picture { .. });
+                            found.push((
+                                Drawing {
+                                    from: Anchor {
+                                        col: from.col,
+                                        col_off: from.col_off + left,
+                                        row: from.row,
+                                        row_off: from.row_off + top,
+                                    },
+                                    to: None,
+                                    extent: Some((
+                                        (size.0 as f64 * across) as i64,
+                                        (size.1 as f64 * down) as i64,
+                                    )),
+                                    kind,
+                                },
+                                if picture { embed.take() } else { None },
+                            ));
+                            let _ = (off, ch_off);
+                        }
                     }
                     "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
-                        let mut kind = kind.take().unwrap_or(DrawingKind::Other);
-                        if let DrawingKind::Shape(held) = &mut kind {
-                            *held = shape.clone();
+                        // A group's children have been pushed one by one; the
+                        // group itself draws nothing.
+                        if group.is_none() {
+                            let mut kind = kind.take().unwrap_or(DrawingKind::Other);
+                            if let DrawingKind::Shape(held) = &mut kind {
+                                *held = shape.clone();
+                            }
+                            let picture = matches!(kind, DrawingKind::Picture { .. });
+                            found.push((
+                                Drawing { from, to: to.take(), extent: extent.take(), kind },
+                                if picture { embed.take() } else { None },
+                            ));
                         }
-                        let picture = matches!(kind, DrawingKind::Picture { .. });
-                        found.push((
-                            Drawing { from, to: to.take(), extent: extent.take(), kind },
-                            if picture { embed.take() } else { None },
-                        ));
                         embed = None;
                     }
                     _ => {}
