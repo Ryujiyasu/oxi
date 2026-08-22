@@ -2809,6 +2809,19 @@ mod windows_draw {
         if across <= 0 || down <= 0 {
             return;
         }
+        // An enhanced metafile holds no pixels at all: it is a list of the
+        // drawing calls that made it, which Windows can play straight into
+        // the picture at whatever size the anchor gives it. Eight of the
+        // corpus's workbooks put a graph on the sheet that way. Its header
+        // record is a little-endian 1.
+        if bytes.starts_with(&[0x01, 0x00, 0x00, 0x00]) {
+            let held = SetEnhMetaFileBits(bytes);
+            if !held.is_invalid() {
+                let _ = PlayEnhMetaFile(dc, held, &box_);
+                let _ = DeleteEnhMetaFile(held);
+            }
+            return;
+        }
         let Ok(decoded) = image::load_from_memory(bytes) else {
             return;
         };
