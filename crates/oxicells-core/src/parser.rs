@@ -413,6 +413,10 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Theme {
     colours: Vec<String>,
+    /// The palette the workbook states in place of Excel's own, if it does.
+    /// It lives in the styles part rather than the theme, and is read before
+    /// the styles that use it.
+    indexed: Vec<String>,
     /// The faces the theme's major and minor schemes name for this script.
     /// A font that says `<scheme val="minor"/>` wears one of these and its
     /// own `<name>` counts for nothing.
@@ -554,11 +558,40 @@ fn tinted(hex: &str, tint: f32) -> String {
     format!("{:02X}{:02X}{:02X}", byte(red), byte(green), byte(blue))
 }
 
+/// The colours a workbook may name by number rather than by value.
+///
+/// Excel kept a palette of 56 from the days when a file could hold no more,
+/// and files still write `<color indexed="12"/>` for blue. A workbook may
+/// state its own in `<indexedColors>`, which is why `Theme` carries one.
+/// 64 and 65 are not in the palette at all: they mean the system's own
+/// foreground and background, which the caller decides.
+const PALETTE: [&str; 56] = [
+    "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+    "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+    "800000", "008000", "000080", "808000", "800080", "008080", "C0C0C0", "808080",
+    "9999FF", "993366", "FFFFCC", "CCFFFF", "660066", "FF8080", "0066CC", "CCCCFF",
+    "000080", "FF00FF", "FFFF00", "00FFFF", "800080", "800000", "008080", "0000FF",
+    "00CCFF", "CCFFFF", "CCFFCC", "FFFF99", "99CCFF", "FF99CC", "CC99FF", "FFCC99",
+    "3366FF", "33CCCC", "99CC00", "FFCC00", "FF9900", "FF6600", "666699", "969696",
+];
+
+/// The colour a number stands for, from the workbook's own palette where it
+/// states one and Excel's otherwise.
+fn indexed_colour(index: usize, theme: &Theme) -> Option<String> {
+    if let Some(own) = theme.indexed.get(index) {
+        return Some(own.clone());
+    }
+    PALETTE.get(index).map(|hex| hex.to_string())
+}
+
 fn parse_color_attr(e: &quick_xml::events::BytesStart, theme: &Theme) -> Option<String> {
     if let Some(rgb) = get_attr(e, "rgb") {
         // Strip leading alpha if 8-char hex
         let hex = if rgb.len() == 8 { &rgb[2..] } else { &rgb };
         return Some(hex.to_string());
+    }
+    if let Some(index) = get_attr(e, "indexed").and_then(|at| at.parse::<usize>().ok()) {
+        return indexed_colour(index, theme);
     }
     let index = get_attr(e, "theme")?.parse::<usize>().ok()?;
     let named = theme.colour(index)?;
@@ -570,6 +603,40 @@ fn parse_color_attr(e: &quick_xml::events::BytesStart, theme: &Theme) -> Option<
     } else {
         tinted(named, tint)
     })
+}
+
+/// The palette a workbook states in place of Excel's own, empty when it
+/// states none. `<rgbColor rgb="00RRGGBB"/>`, in order from index zero.
+fn indexed_palette(xml: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut inside = false;
+    let mut held = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                match local_name(e.name().as_ref()).as_str() {
+                    "indexedColors" => inside = true,
+                    "rgbColor" if inside => {
+                        if let Some(rgb) = get_attr(e, "rgb") {
+                            let hex = if rgb.len() == 8 { &rgb[2..] } else { &rgb };
+                            held.push(hex.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if local_name(e.name().as_ref()) == "indexedColors" {
+                    break;
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    held
 }
 
 fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
@@ -2448,12 +2515,18 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     // 2. Parse styles.xml (optional — some simple xlsx have none)
     // The theme has to be read first: a style may name one of its colours
     // rather than state one of its own.
-    let theme = match archive.try_read_part("xl/theme/theme1.xml")? {
+    let mut theme = match archive.try_read_part("xl/theme/theme1.xml")? {
         Some(xml) => parse_theme_xml(&xml),
         None => Theme::default(),
     };
     let stylesheet = match archive.try_read_part("xl/styles.xml")? {
-        Some(xml) => parse_styles_xml(&xml, &theme)?,
+        Some(xml) => {
+            // A hundred of the corpus's workbooks state a palette of their
+            // own, and it sits at the foot of the same part as the styles
+            // that name it — so it is read in a pass of its own first.
+            theme.indexed = indexed_palette(&xml);
+            parse_styles_xml(&xml, &theme)?
+        }
         None => StyleSheet::default(),
     };
 
@@ -2950,6 +3023,52 @@ mod tests {
         assert_eq!(first.face.as_deref(), Some("メイリオ"), "the East Asian face wins");
         assert_eq!(first.color.as_deref(), Some("203864"));
         assert_eq!(first.line_pitch, Some(30.0));
+    }
+
+    /// 162 of the corpus's workbooks name a colour by number rather than by
+    /// value, and a hundred of them state a palette of their own.
+    #[test]
+    fn a_colour_named_by_number_comes_from_the_palette() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><u/><sz val="11"/><color indexed="12"/><name val="Calibri"/></font>
+    <font><sz val="11"/><color indexed="64"/><name val="Calibri"/></font>
+  </fonts>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+  </cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+        // 12 is the blue Excel has kept since it had only 56 colours to keep.
+        assert_eq!(resolve_cell_style(1, &sheet).font_color.as_deref(), Some("0000FF"));
+        // 64 is the system's own foreground, which is not in the palette at
+        // all: the caller decides, as it did before any of this was read.
+        assert_eq!(resolve_cell_style(2, &sheet).font_color, None);
+
+        // A workbook that states its own palette is taken at its word.
+        let own = xml.replace(
+            "</styleSheet>",
+            "<colors><indexedColors>\
+             <rgbColor rgb=\"00000000\"/><rgbColor rgb=\"00FFFFFF\"/>\
+             <rgbColor rgb=\"00FF0000\"/><rgbColor rgb=\"0000FF00\"/>\
+             <rgbColor rgb=\"000000FF\"/><rgbColor rgb=\"00FFFF00\"/>\
+             <rgbColor rgb=\"00FF00FF\"/><rgbColor rgb=\"0000FFFF\"/>\
+             <rgbColor rgb=\"00000000\"/><rgbColor rgb=\"00FFFFFF\"/>\
+             <rgbColor rgb=\"00FF0000\"/><rgbColor rgb=\"0000FF00\"/>\
+             <rgbColor rgb=\"00123456\"/></indexedColors></colors></styleSheet>",
+        );
+        let mut theme = Theme::default();
+        theme.indexed = indexed_palette(&own);
+        assert_eq!(theme.indexed.len(), 13);
+        let sheet = parse_styles_xml(&own, &theme).unwrap();
+        assert_eq!(resolve_cell_style(1, &sheet).font_color.as_deref(), Some("123456"));
     }
 
     /// `<a:br/>` starts a line without starting a paragraph. Without it

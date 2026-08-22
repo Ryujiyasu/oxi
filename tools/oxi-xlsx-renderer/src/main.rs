@@ -2908,6 +2908,76 @@ mod windows_draw {
             SetBkMode(dc, TRANSPARENT);
 
             let merged = super::merges(sheet);
+
+            // Every cell's ground goes down before any of the text, because
+            // text that runs on past its own cell is drawn over whatever the
+            // cell it runs into is painted with. `data_B01`'s headings sit on
+            // a pale green band and spill into the next column, which is
+            // painted the same green: drawn cell by cell, that second fill
+            // took the spilled half of every heading out again.
+            for row in &sheet.rows {
+                if row.index < layout.first_row {
+                    continue;
+                }
+                let top_at = (row.index - layout.first_row) as usize;
+                let (Some(top), Some(bottom)) =
+                    (layout.rows.get(top_at), layout.rows.get(top_at + 1))
+                else {
+                    continue;
+                };
+                if bottom <= top {
+                    continue;
+                }
+                for cell in &row.cells {
+                    if cell.col < layout.first_column {
+                        continue;
+                    }
+                    let (spans_columns, spans_rows) =
+                        match merged.get(&(row.index, cell.col)) {
+                            Some(Merged::Covered) => continue,
+                            Some(Merged::Anchor { columns, rows }) => (*columns, *rows),
+                            None => (0, 0),
+                        };
+                    let left_at = (cell.col - layout.first_column) as usize;
+                    let (Some(left), Some(right)) = (
+                        layout.columns.get(left_at),
+                        layout.columns.get(left_at + 1 + spans_columns as usize),
+                    ) else {
+                        continue;
+                    };
+                    if right <= left {
+                        continue;
+                    }
+                    // A table's own dress goes down first; a cell that names a
+                    // fill of its own paints over it.
+                    let dress = super::dressed_by_table(sheet, row.index, cell.col);
+                    let Some(fill) = cell
+                        .style
+                        .bg_color
+                        .as_deref()
+                        .or_else(|| dress.as_ref().and_then(|d| d.fill.as_deref()))
+                    else {
+                        continue;
+                    };
+                    let bottom = layout
+                        .rows
+                        .get(top_at + 1 + spans_rows as usize)
+                        .unwrap_or(bottom);
+                    let brush = CreateSolidBrush(colour(Some(fill), 0xFFFFFF));
+                    FillRect(
+                        dc,
+                        &RECT {
+                            left: *left as i32,
+                            top: *top as i32,
+                            right: *right as i32,
+                            bottom: *bottom as i32,
+                        },
+                        brush,
+                    );
+                    let _ = DeleteObject(brush);
+                }
+            }
+
             for row in &sheet.rows {
                 if row.index < layout.first_row {
                     continue;
@@ -2954,19 +3024,9 @@ mod windows_draw {
                         bottom: *bottom as i32,
                     };
 
-                    // A table's own dress goes down first; a cell that names a
-                    // fill of its own paints over it.
+                    // The fill went down in the pass above; what a table
+                    // dresses this cell with is still needed for its text.
                     let dress = super::dressed_by_table(sheet, row.index, cell.col);
-                    let fill = cell
-                        .style
-                        .bg_color
-                        .as_deref()
-                        .or_else(|| dress.as_ref().and_then(|d| d.fill.as_deref()));
-                    if let Some(fill) = fill {
-                        let brush = CreateSolidBrush(colour(Some(fill), 0xFFFFFF));
-                        FillRect(dc, &box_, brush);
-                        let _ = DeleteObject(brush);
-                    }
 
                     // A rule sits ON the boundary, not inside the cell: the
                     // bottom of one row and the top of the next are the same
