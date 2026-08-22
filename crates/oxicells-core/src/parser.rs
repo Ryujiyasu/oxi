@@ -374,10 +374,14 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
         20 => Some("h:mm"),
         21 => Some("h:mm:ss"),
         22 => Some("m/d/yy h:mm"),
-        37 => Some("#,##0 ;(#,##0)"),
-        38 => Some("#,##0 ;[Red](#,##0)"),
-        39 => Some("#,##0.00;(#,##0.00)"),
-        40 => Some("#,##0.00;[Red](#,##0.00)"),
+        // Excel's own `NumberFormat` for these four, asked of a cell that
+        // wears one: the room after the number is the width of a bracket,
+        // not of a space, which is two pixels in ＭＳ 11 and shows up as a
+        // right-aligned number sitting two pixels off.
+        37 => Some("#,##0_);(#,##0)"),
+        38 => Some("#,##0_);[Red](#,##0)"),
+        39 => Some("#,##0.00_);(#,##0.00)"),
+        40 => Some("#,##0.00_);[Red](#,##0.00)"),
         // The Japanese locale fills in 27 to 36 and 50 to 58, which is what a
         // government workbook's dates are written with. The era forms — ggge,
         // 令和 — are given their Gregorian equivalent here, because the

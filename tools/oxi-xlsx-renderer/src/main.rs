@@ -377,6 +377,16 @@ fn row_pixels(
             raise = raise.max(letters as f32 * font_px as f32 + 2.0);
             continue;
         }
+        // A raised or lowered run reaches past the line its font would
+        // otherwise need, and Excel grows the row for it: `h2dee1989kre`
+        // row 5 is 游ゴシック 11, whose line is 25 pixels, and Excel fits it
+        // to 27 because one of its cells says `10³㎡`. Measured per face and
+        // size by _xlsx_raised_extra.py.
+        let font_px = if cell.runs.iter().any(|run| run.vert_align.is_some()) {
+            row_defaults::raised_row_px(face, size).unwrap_or(font_px).max(font_px)
+        } else {
+            font_px
+        };
         // A cell that does not wrap is one line however many breaks it
         // holds: Excel shows "あ\n\nあ" on a single line and leaves the row
         // at one line's height. Only a wrapping cell spends its newlines,
@@ -671,6 +681,60 @@ pub(crate) fn centred_across(row: &Row, cell: &Cell, spans_columns: u32) -> (u32
 /// and two that the small sizes show.
 /// EMU to a pixel at 96 dpi: 914400 to the inch.
 const EMU: f32 = 9525.0;
+
+/// The characters a number format reserves room for without showing them.
+///
+/// `_x` asks for the width of x and draws nothing there. The text a cell
+/// shows carries a space instead — that is what Excel's own `Range.Text`
+/// gives — so a line measured from the text is short by the difference
+/// between that space and the character it stands for. Excel's built-in
+/// format 38, which every accounting column in the corpus wears, ends
+/// `_)`: two pixels wider than the space in its place at ＭＳ 11, which is
+/// exactly how far the corpus's right-aligned numbers sat from Excel's.
+///
+/// Returns what is reserved before the number and after it.
+pub(crate) fn reserved_room(format: &str, negative: bool) -> (Vec<char>, Vec<char>) {
+    let sections: Vec<&str> = format.split(';').collect();
+    let section = match (negative, sections.len()) {
+        (true, 2..) => sections[1],
+        _ => sections[0],
+    };
+    let (mut before, mut after) = (Vec::new(), Vec::new());
+    let mut seen_digit = false;
+    let mut quoted = false;
+    let mut characters = section.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '0' | '#' | '?' | '.' | ',' => seen_digit = true,
+            '\\' => {
+                characters.next();
+            }
+            '_' => {
+                if let Some(held) = characters.next() {
+                    if seen_digit {
+                        after.push(held);
+                    } else {
+                        before.push(held);
+                    }
+                }
+            }
+            '*' => {
+                characters.next();
+            }
+            '[' => {
+                for held in characters.by_ref() {
+                    if held == ']' {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (before, after)
+}
 
 /// How far apart Excel sets the lines of a shape's text.
 ///
@@ -2613,6 +2677,22 @@ mod windows_draw {
                     // drawn one after another, each in its own font. Only a
                     // cell that fits on one line: a wrapped one is left to the
                     // plain path below, where the breaking is what matters.
+                    // Room a number format asks for and shows nothing in. The
+                    // text carries a space where the format says `_x`, so what
+                    // is missing is the difference between that space and x.
+                    let reserved = match (&cell.value, cell.style.number_format.as_deref()) {
+                        (CellValue::Number(value), Some(format)) if format.contains('_') => {
+                            let (before, after) = super::reserved_room(format, *value < 0.0);
+                            let blank = width_of(" ");
+                            let room = |held: Vec<char>| {
+                                held.iter()
+                                    .map(|letter| width_of(&letter.to_string()) - blank)
+                                    .sum::<i32>()
+                            };
+                            (room(before), room(after))
+                        }
+                        _ => (0, 0),
+                    };
                     let dressed_runs = !cell.runs.is_empty() && lines.len() == 1;
                     if dressed_runs {
                         let piece = |run: &oxicells_core::ir::TextRun| {
@@ -2780,10 +2860,10 @@ mod windows_draw {
                                 placed == Align::Spread && pieces.len() > 1 && room > width;
                             let middle = area.left + ((room - width) as f32 / 2.0).ceil() as i32;
                             let left = match placed {
-                                Align::Left => area.left,
-                                Align::Right => area.right - width,
+                                Align::Left => area.left + reserved.0,
+                                Align::Right => area.right - width - reserved.1,
                                 // The odd pixel goes to the left of the text.
-                                Align::Centre => middle,
+                                Align::Centre => middle + (reserved.0 - reserved.1) / 2,
                                 Align::Spread if room > width => middle,
                                 Align::Spread => area.left,
                             };

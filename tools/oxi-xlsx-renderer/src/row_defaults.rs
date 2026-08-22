@@ -420,3 +420,114 @@ fn found(face: &str, size: f32) -> Option<&'static (&'static str, u16, u16, u16)
 fn em_pixels(points: f32) -> i32 {
     (points * 96.0 / 72.0).round() as i32
 }
+
+/// The row a cell asks for when its text holds a raised or lowered run, in
+/// 96-dpi pixels.
+///
+/// A superscript reaches above the line its font would otherwise need, and
+/// Excel grows the row for it: 游ゴシック 11 asks for 25 pixels plainly and 27
+/// with a raised run, ＭＳ Ｐゴシック 11 for 15 and 21. Measured by
+/// `tools\metrics\_xlsx_raised_extra.py` on Excel's own AutoFit, in a
+/// workbook whose blank row is short enough not to hide the answer — ﻿    // 83 measurements.
+/// A face and size the sweep did not reach is left to its plain line.
+static RAISED_ROW_PX: &[(&str, u16, u16)] = &[
+    ("ＭＳ 明朝", 42, 20),
+    ("ＭＳ 明朝", 44, 21),
+    ("ＭＳ 明朝", 48, 22),
+    ("ＭＳ 明朝", 56, 27),
+    ("ＭＳ 明朝", 64, 29),
+    ("ＭＳ 明朝", 72, 33),
+    ("ＭＳ 明朝", 80, 37),
+    ("ＭＳ 明朝", 96, 44),
+    ("ＭＳ ゴシック", 42, 20),
+    ("ＭＳ ゴシック", 44, 21),
+    ("ＭＳ ゴシック", 48, 22),
+    ("ＭＳ ゴシック", 56, 27),
+    ("ＭＳ ゴシック", 64, 29),
+    ("ＭＳ ゴシック", 72, 33),
+    ("ＭＳ ゴシック", 80, 37),
+    ("ＭＳ ゴシック", 96, 44),
+    ("ＭＳ Ｐゴシック", 42, 20),
+    ("ＭＳ Ｐゴシック", 44, 21),
+    ("ＭＳ Ｐゴシック", 48, 22),
+    ("ＭＳ Ｐゴシック", 56, 27),
+    ("ＭＳ Ｐゴシック", 64, 29),
+    ("ＭＳ Ｐゴシック", 72, 33),
+    ("ＭＳ Ｐゴシック", 80, 37),
+    ("ＭＳ Ｐゴシック", 96, 44),
+    ("ＭＳ Ｐ明朝", 42, 20),
+    ("ＭＳ Ｐ明朝", 44, 21),
+    ("ＭＳ Ｐ明朝", 48, 22),
+    ("ＭＳ Ｐ明朝", 56, 27),
+    ("ＭＳ Ｐ明朝", 64, 29),
+    ("ＭＳ Ｐ明朝", 72, 33),
+    ("ＭＳ Ｐ明朝", 80, 37),
+    ("ＭＳ Ｐ明朝", 96, 44),
+    ("游ゴシック", 32, 20),
+    ("游ゴシック", 36, 23),
+    ("游ゴシック", 40, 24),
+    ("游ゴシック", 42, 25),
+    ("游ゴシック", 44, 27),
+    ("游ゴシック", 48, 29),
+    ("游ゴシック", 56, 35),
+    ("游ゴシック", 64, 37),
+    ("游ゴシック", 72, 44),
+    ("游ゴシック", 80, 48),
+    ("游ゴシック", 96, 58),
+    ("メイリオ", 32, 22),
+    ("メイリオ", 36, 22),
+    ("メイリオ", 40, 24),
+    ("メイリオ", 42, 25),
+    ("メイリオ", 44, 27),
+    ("メイリオ", 48, 29),
+    ("メイリオ", 56, 33),
+    ("メイリオ", 64, 36),
+    ("メイリオ", 72, 42),
+    ("メイリオ", 80, 47),
+    ("メイリオ", 96, 55),
+    ("Meiryo UI", 40, 21),
+    ("Meiryo UI", 42, 22),
+    ("Meiryo UI", 44, 23),
+    ("Meiryo UI", 48, 25),
+    ("Meiryo UI", 56, 29),
+    ("Meiryo UI", 64, 31),
+    ("Meiryo UI", 72, 36),
+    ("Meiryo UI", 80, 41),
+    ("Meiryo UI", 96, 48),
+    ("Calibri", 40, 20),
+    ("Calibri", 42, 22),
+    ("Calibri", 44, 23),
+    ("Calibri", 48, 24),
+    ("Calibri", 56, 28),
+    ("Calibri", 64, 31),
+    ("Calibri", 72, 35),
+    ("Calibri", 80, 39),
+    ("Calibri", 96, 48),
+    ("游ゴシック Light", 32, 20),
+    ("游ゴシック Light", 36, 23),
+    ("游ゴシック Light", 40, 24),
+    ("游ゴシック Light", 42, 25),
+    ("游ゴシック Light", 44, 26),
+    ("游ゴシック Light", 48, 29),
+    ("游ゴシック Light", 56, 35),
+    ("游ゴシック Light", 64, 37),
+    ("游ゴシック Light", 72, 44),
+    ("游ゴシック Light", 80, 48),
+    ("游ゴシック Light", 96, 58),
+];
+
+/// The row a raised or lowered run asks for, when the sweep has measured it.
+pub(crate) fn raised_row_px(face: &str, size: f32) -> Option<u16> {
+    let size_q = (size * 4.0).round() as u16;
+    if let Some((_, _, px)) = RAISED_ROW_PX
+        .iter()
+        .find(|(f, s, _)| *f == face && *s == size_q)
+    {
+        return Some(*px);
+    }
+    let em = em_pixels(size);
+    RAISED_ROW_PX
+        .iter()
+        .find(|(f, s, _)| *f == face && em_pixels(*s as f32 / 4.0) == em)
+        .map(|(_, _, px)| *px)
+}
