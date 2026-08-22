@@ -24,7 +24,7 @@ import pymupdf
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-PROBE = Path(r"pipeline_data\pptx_probe\probe_lineend.pptx")
+PROBE = Path(r"pipeline_data\pptx_probes\lineend\probe_lineend.pptx")
 FACTOR = {"sm": 2.0, "med": 3.0, "lg": 5.0}
 
 

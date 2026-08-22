@@ -29,7 +29,7 @@ import numpy as np
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-PROBE = Path(r"pipeline_data\pptx_probe\probe_lineend.pptx")
+PROBE = Path(r"pipeline_data\pptx_probes\lineend\probe_lineend.pptx")
 DPI = 600  # the heads are a few points across; measure them generously
 SLIDE_W_PT = 13.333 * 72  # the width gen_pptx_lineend.py gives the repro
 

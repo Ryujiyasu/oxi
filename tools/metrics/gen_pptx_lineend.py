@@ -26,7 +26,7 @@ from pptx.util import Inches, Pt
 from pptx.oxml.ns import qn
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1
-           else r'pipeline_data\pptx_probe\probe_lineend.pptx')
+           else r'pipeline_data\pptx_probes\lineend\probe_lineend.pptx')
 TYPES = ['oval', 'triangle', 'stealth', 'arrow', 'diamond']
 WIDTHS_PT = [0.75, 1.5, 3.0, 4.5, 6.0]
 TOKENS = [('sm', 'sm'), ('med', 'med'), ('lg', 'lg'), ('sm', 'lg'), ('lg', 'sm')]

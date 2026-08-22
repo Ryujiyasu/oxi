@@ -13,7 +13,7 @@ from pathlib import Path
 import win32com.client
 
 PROBE = Path(sys.argv[1] if len(sys.argv) > 1
-             else r'pipeline_data\pptx_probe\probe_lineend.pptx').resolve()
+             else r'pipeline_data\pptx_probes\lineend\probe_lineend.pptx').resolve()
 out = PROBE.with_suffix('.pdf')
 
 app = win32com.client.Dispatch('PowerPoint.Application')
