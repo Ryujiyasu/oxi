@@ -386,17 +386,44 @@ static FONT_DEFAULT_ROW_PX: &[(&str, u16, u16, u16)] = &[
     ("ＭＳ Ｐ明朝", 144, 56, 49),
 ];
 
+/// Where a bold face does not stand where its regular does.
+///
+/// Most do. Swept over nine faces at six sizes and nine row heights — 1674
+/// rows through `_xlsx_valign_pixels.py` — these two are the whole of the
+/// difference, and both show it only where the line is placed against the
+/// middle or the foot of its row: 游ゴシック's bold line box is a pixel
+/// shorter than its regular's, and Calibri's bold baseline sits a pixel
+/// higher in a box of the same height. A top-aligned bold cell is right
+/// either way, which `_xlsx_bold_baseline.py` confirms across sixty more.
+static FONT_BOLD_ROW_PX: &[(&str, u16, u16, u16)] = &[
+    ("Calibri", 40, 17, 13),
+    ("游ゴシック", 44, 24, 18),
+];
+
 /// The measured default row height for a font, in 96-dpi pixels.
 pub(crate) fn font_default_row_px(face: &str, size: f32) -> Option<u16> {
     found(face, size).map(|(_, _, px, _)| *px)
 }
 
-/// How far below the top of that height Excel puts the baseline of a line of
-/// this font. Measured the same way and for the same reason: the device's own
-/// descent accounts for two thirds of the table and nothing accounts for the
-/// rest, so the measurements stand as the data.
-pub(crate) fn font_baseline_px(face: &str, size: f32) -> Option<u16> {
-    found(face, size).map(|(_, _, _, baseline)| *baseline)
+/// The box a line of this font stands in, and how far down it the baseline
+/// sits.
+///
+/// How far below the top of the box Excel puts the baseline was measured the
+/// same way the heights were and for the same reason: the device's own descent
+/// accounts for two thirds of the table and nothing accounts for the rest, so
+/// the measurements stand as the data. The weight is taken into account here
+/// and not in the row height, which is not measured for it.
+pub(crate) fn font_line_box(face: &str, size: f32, bold: bool) -> Option<(u16, u16)> {
+    if bold {
+        let size_q = (size * 4.0).round() as u16;
+        if let Some((_, _, px, baseline)) = FONT_BOLD_ROW_PX
+            .iter()
+            .find(|(f, s, _, _)| *f == face && *s == size_q)
+        {
+            return Some((*px, *baseline));
+        }
+    }
+    found(face, size).map(|(_, _, px, baseline)| (*px, *baseline))
 }
 
 fn found(face: &str, size: f32) -> Option<&'static (&'static str, u16, u16, u16)> {

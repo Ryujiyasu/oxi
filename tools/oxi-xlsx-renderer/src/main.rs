@@ -967,11 +967,8 @@ pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32
 /// `None` when the platform cannot be asked, so the caller draws the way it
 /// did before.
 pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Option<(f32, f32)> {
-    match (
-        row_defaults::font_default_row_px(face, points),
-        row_defaults::font_baseline_px(face, points),
-    ) {
-        (Some(box_px), Some(baseline)) => Some((box_px as f32, baseline as f32)),
+    match row_defaults::font_line_box(face, points, bold) {
+        Some((box_px, baseline)) => Some((box_px as f32, baseline as f32)),
         // A face the table has never seen: the device's own line, with the
         // baseline where the descent puts it, which is where two thirds of the
         // measured table sits anyway.
