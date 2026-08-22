@@ -1410,7 +1410,13 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 }
                 // Only the first run of a paragraph dresses it: the corpus
                 // dresses every run of a shape's paragraph alike.
-                "rPr" => {
+                // An empty paragraph states its own size in `endParaRPr`
+                // rather than `rPr` — it has no run to dress — and Excel gives
+                // it a line of that size. Read as one and the same thing:
+                // measured on `_xlsx_shape_block.py`, where an empty paragraph
+                // between two blocks is worth exactly one line of the size it
+                // states, not of the size a paragraph defaults to.
+                "rPr" | "endParaRPr" => {
                     in_run_props = true;
                     if let Some(held) = paragraph.as_mut() {
                         if held.text.is_empty() {
@@ -1547,27 +1553,20 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         text.clear();
                     }
                     "lnSpc" => in_line_spacing = false,
-                    "rPr" => in_run_props = false,
+                    "rPr" | "endParaRPr" => in_run_props = false,
                     "p" => {
+                        // A paragraph with nothing in it still spends a line,
+                        // wherever it sits: `_xlsx_shape_block.py` anchors the
+                        // same four paragraphs to the top, the middle and the
+                        // foot of a box, and an empty one at the front, at the
+                        // back or in the middle moves the ink by exactly one
+                        // line every time. Both ends used to be dropped.
                         if let Some(held) = paragraph.take() {
-                            // A paragraph with nothing in it still spends a
-                            // line, but one that never held a run at all is
-                            // the empty `endParaRPr` Excel writes.
-                            if !held.text.is_empty() || !said.paragraphs.is_empty() {
-                                said.paragraphs.push(held);
-                            }
+                            said.paragraphs.push(held);
                         }
                     }
                     "txBody" => {
-                        // A trailing empty paragraph is Excel's own marker.
-                        while said
-                            .paragraphs
-                            .last()
-                            .is_some_and(|last| last.text.is_empty())
-                        {
-                            said.paragraphs.pop();
-                        }
-                        if !said.paragraphs.is_empty() {
+                        if said.paragraphs.iter().any(|held| !held.text.is_empty()) {
                             shape.text = Some(said.clone());
                         }
                     }
