@@ -21,7 +21,7 @@ use windows::Win32::System::Com::*;
 
 use crate::{
     alignment, cell_text, dressed_by_table, has_filter_button, merges, room_after, room_before,
-    rule_for, Align, Geometry, Merged, FILTER_BUTTON, FILTER_BUTTON_FOOT,
+    rule_for, Align, Broken, Geometry, Merged, FILTER_BUTTON, FILTER_BUTTON_FOOT,
 };
 
 fn shade(hex: Option<&str>, fallback: u32) -> D2D1_COLOR_F {
@@ -241,8 +241,8 @@ pub fn draw(
                         } else {
                             (cell_box.top, cell_box.bottom)
                         };
-                        match rule.dashes {
-                            None => {
+                        match rule.broken {
+                            Broken::Whole => {
                                 let edge = if horizontal {
                                     box_of(start, at, stop, at + 1.0)
                                 } else {
@@ -250,17 +250,17 @@ pub fn draw(
                                 };
                                 target.FillRectangle(&edge, &brush);
                             }
-                            Some((on, period)) => {
-                                let mut run = start;
-                                while run < stop {
-                                    let end = (run + on as f32).min(stop);
-                                    let piece = if horizontal {
-                                        box_of(run, at, end, at + 1.0)
+                            broken => {
+                                for along in start as i32..stop as i32 {
+                                    let (x, y) = if horizontal {
+                                        (along as f32, at)
                                     } else {
-                                        box_of(at, run, at + 1.0, end)
+                                        (at, along as f32)
                                     };
-                                    target.FillRectangle(&piece, &brush);
-                                    run += period as f32;
+                                    if broken.inked(x as i32, y as i32, along) {
+                                        target.FillRectangle(
+                                            &box_of(x, y, x + 1.0, y + 1.0), &brush);
+                                    }
                                 }
                             }
                         }

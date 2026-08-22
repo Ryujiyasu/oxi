@@ -426,6 +426,11 @@ fn row_pixels(
     // a pixel per edge, and only on a height Excel works out. A pinned row
     // measures the same with the rule as without.
     let thick = u32::from(row.thick_top) + u32::from(row.thick_bottom);
+    // ★A row's stored height is a cache, and Excel recomputes it. Both ways of
+    // trusting it were measured against the corpus and both are worse: taking
+    // it whenever it is stated gives 0.9625 of the rows, taking it as a floor
+    // under the computed height gives 0.9843, against 0.9995 for recomputing.
+    // Excel shrinks a row below its stored height as readily as it grows one.
     (measured + thick as f32).min(CEILING_PX)
 }
 
@@ -571,10 +576,11 @@ pub(crate) fn centred_across(row: &Row, cell: &Cell, spans_columns: u32) -> (u32
                 && matches!(other.value, CellValue::Empty)
         })
     };
-    let mut first = cell.col;
-    while first > 0 && joins(first - 1) {
-        first -= 1;
-    }
+    // Rightwards only. A heading is written in the leftmost cell of its
+    // group, and reaching left as well would take in the cells that belong to
+    // the heading before it: h2dee1989kre's 板ガラス and 安全ガラス then centre
+    // over ranges that overlap, and neither lands where Excel puts it.
+    let first = cell.col;
     let mut last = cell.col + spans_columns;
     while joins(last + 1) {
         last += 1;
@@ -1355,6 +1361,44 @@ pub(crate) fn room_after(
     room.min(wanted)
 }
 
+/// Which pixels of a broken rule Excel inks.
+///
+/// Measured by `tools\metrics\_xlsx_border_pattern.py` and
+/// `_xlsx_border_phase.py` on a grid of boxes at deliberately mixed odd and
+/// even boundaries — 912 pixels a style, no exception. The short patterns turn
+/// out to be halftones pinned to the picture: a hair rule is inked wherever
+/// `x + y` is even, so the pattern runs on through the cells and two cells
+/// sharing a boundary paint it the same way round. The long ones are counted
+/// along the rule instead, from the picture's edge, and a two-pixel rule
+/// carries the same phase on both of its rows.
+#[derive(Clone, Copy)]
+pub(crate) enum Broken {
+    /// Every pixel of the rule.
+    Whole,
+    /// Inked where the picture coordinates say so.
+    Halftone(fn(i32, i32) -> bool),
+    /// Inked by the distance along the rule, modulo a period.
+    Along { period: i32, inked: fn(i32) -> bool },
+}
+
+impl Broken {
+    /// Is the pixel at `(x, y)`, `along` pixels down the rule, inked?
+    pub(crate) fn inked(self, x: i32, y: i32, along: i32) -> bool {
+        match self {
+            Broken::Whole => true,
+            Broken::Halftone(pattern) => pattern(x, y),
+            Broken::Along { period, inked } => inked(along.rem_euclid(period)),
+        }
+    }
+}
+
+/// Which side of the dotted halftone a coordinate falls on: `0` and `3` of
+/// every four go together, `1` and `2` go together, and a pixel is inked where
+/// the two coordinates agree.
+fn dotted_half(coordinate: i32) -> i32 {
+    i32::from(matches!(coordinate.rem_euclid(4), 1 | 2))
+}
+
 /// How Excel draws one kind of rule, measured off a worksheet holding one of
 /// each: how far the ink reaches either side of the boundary, and which pixels
 /// along it are inked.
@@ -1364,21 +1408,37 @@ pub(crate) struct Rule {
     after: i32,
     /// The pixel at the boundary itself is skipped by a double rule.
     hollow: bool,
-    /// A run length and a period: `Some((3, 4))` inks three of every four.
-    dashes: Option<(i32, i32)>,
+    pub(crate) broken: Broken,
 }
 
 pub(crate) fn rule_for(kind: &str) -> Rule {
-    let solid = |before, after| Rule { before, after, hollow: false, dashes: None };
+    let solid = |before, after| Rule { before, after, hollow: false, broken: Broken::Whole };
+    let broken = |before, broken| Rule { before, after: 0, hollow: false, broken };
     match kind {
-        "medium" | "mediumDashed" | "mediumDashDot" | "mediumDashDotDot" => solid(1, 0),
+        "medium" => solid(1, 0),
         "thick" => solid(1, 1),
-        "double" => Rule { before: 1, after: 1, hollow: true, dashes: None },
-        "hair" => Rule { before: 0, after: 0, hollow: false, dashes: Some((1, 2)) },
-        "dotted" => Rule { before: 0, after: 0, hollow: false, dashes: Some((2, 4)) },
-        "dashed" | "dashDot" | "dashDotDot" | "slantDashDot" => {
-            Rule { before: 0, after: 0, hollow: false, dashes: Some((3, 4)) }
+        "double" => Rule { before: 1, after: 1, hollow: true, broken: Broken::Whole },
+        // A checkerboard.
+        "hair" => broken(0, Broken::Halftone(|x, y| (x + y) % 2 == 0)),
+        "dotted" => broken(0, Broken::Halftone(|x, y| dotted_half(x) == dotted_half(y))),
+        // Three of every four, on the diagonal like the shorter patterns.
+        "dashed" => broken(0, Broken::Halftone(|x, y| (x + y).rem_euclid(4) != 3)),
+        // Nine on, three off, and the dots are three long as well.
+        "mediumDashed" => broken(1, Broken::Along { period: 12, inked: |at| at < 9 }),
+        "dashDot" | "slantDashDot" => {
+            broken(0, Broken::Along { period: 18, inked: |at| at < 9 || (12..15).contains(&at) })
         }
+        "mediumDashDot" => {
+            broken(1, Broken::Along { period: 18, inked: |at| at < 9 || (12..15).contains(&at) })
+        }
+        "dashDotDot" => broken(0, Broken::Along {
+            period: 24,
+            inked: |at| at < 9 || (12..15).contains(&at) || (18..21).contains(&at),
+        }),
+        "mediumDashDotDot" => broken(1, Broken::Along {
+            period: 24,
+            inked: |at| at < 9 || (12..15).contains(&at) || (18..21).contains(&at),
+        }),
         // "thin" and anything unfamiliar: a single pixel on the boundary.
         _ => solid(0, 0),
     }
@@ -1587,7 +1647,8 @@ mod windows_draw {
                     for (line, horizontal, at) in edges {
                         let Some(line) = line else { continue };
                         let rule = super::rule_for(&line.style);
-                        let ink = CreateSolidBrush(colour(line.color.as_deref(), 0x000000));
+                        let shade = colour(line.color.as_deref(), 0x000000);
+                        let ink = CreateSolidBrush(shade);
                         for step in -rule.before..=rule.after {
                             if rule.hollow && step == 0 {
                                 continue;
@@ -1597,28 +1658,29 @@ mod windows_draw {
                             } else {
                                 RECT { left: at + step, right: at + step + 1, ..box_ }
                             };
-                            match rule.dashes {
-                                None => {
+                            match rule.broken {
+                                super::Broken::Whole => {
                                     FillRect(dc, &edge, ink);
                                 }
-                                Some((on, period)) => {
-                                    // A broken rule is inked run by run, so the
-                                    // gaps fall where Excel puts them.
+                                broken => {
+                                    // A broken rule is inked pixel by pixel
+                                    // against the picture, not run by run from
+                                    // the cell: that is what keeps the pattern
+                                    // in step across a whole ruled sheet.
                                     let (start, stop) = if horizontal {
                                         (edge.left, edge.right)
                                     } else {
                                         (edge.top, edge.bottom)
                                     };
-                                    let mut at_run = start;
-                                    while at_run < stop {
-                                        let run_end = (at_run + on).min(stop);
-                                        let piece = if horizontal {
-                                            RECT { left: at_run, right: run_end, ..edge }
+                                    for along in start..stop {
+                                        let (x, y) = if horizontal {
+                                            (along, edge.top)
                                         } else {
-                                            RECT { top: at_run, bottom: run_end, ..edge }
+                                            (edge.left, along)
                                         };
-                                        FillRect(dc, &piece, ink);
-                                        at_run += period;
+                                        if broken.inked(x, y, along) {
+                                            let _ = SetPixelV(dc, x, y, shade);
+                                        }
                                     }
                                 }
                             }
