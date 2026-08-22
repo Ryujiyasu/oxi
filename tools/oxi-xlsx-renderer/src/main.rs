@@ -19,6 +19,7 @@
 use oxicells_core::ir::{Cell, CellStyle, CellValue, Row, Sheet, Workbook};
 use oxicells_core::parser::parse_xlsx;
 
+mod graph;
 mod row_defaults;
 
 /// A stored column width already carries the gutter either side of a cell's
@@ -53,6 +54,14 @@ pub(crate) struct Geometry {
     before_columns: Vec<f32>,
     /// The same for the rows above the range, indexed from row 1.
     before_rows: Vec<f32>,
+    /// Left edge of each column past the drawn range, starting one column
+    /// beyond the range's own right edge. A drawing whose far corner hangs
+    /// out there has a real place, and clamping it to the edge of the picture
+    /// would squeeze everything inside it — a chart cut off by the edge would
+    /// be drawn whole in the room that is left instead of running past it.
+    after_columns: Vec<f32>,
+    /// The same for the rows below the range.
+    after_rows: Vec<f32>,
     first_column: u32,
     first_row: u32,
 }
@@ -829,11 +838,21 @@ pub(crate) fn anchored_box(
         // from zero and rows from one, the way the sheet states them. A cell
         // before the range has its own place, back from the left edge.
         let left = match anchor.col.checked_sub(layout.first_column) {
-            Some(column) => *layout.columns.get(column as usize)?,
+            Some(column) => match layout.columns.get(column as usize) {
+                Some(edge) => *edge,
+                // Past the right of the range, where the picture stops but
+                // the sheet does not.
+                None => *layout
+                    .after_columns
+                    .get(column as usize - layout.columns.len())?,
+            },
             None => *layout.before_columns.get(anchor.col as usize)?,
         };
         let top = match (anchor.row + 1).checked_sub(layout.first_row) {
-            Some(row) => *layout.rows.get(row as usize)?,
+            Some(row) => match layout.rows.get(row as usize) {
+                Some(edge) => *edge,
+                None => *layout.after_rows.get(row as usize - layout.rows.len())?,
+            },
             None => *layout.before_rows.get(anchor.row as usize)?,
         };
         Some((
@@ -1362,11 +1381,35 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
         before_rows[(index - 1) as usize] = back;
     }
 
+    // How far past the range anything hangs. Only what is asked for is
+    // measured: a sheet is a million rows wide of nothing much.
+    let (reach_column, reach_row) = sheet
+        .drawings
+        .iter()
+        .filter_map(|drawn| drawn.to.as_ref())
+        .fold((0, 0), |(column, row), anchor| {
+            (column.max(anchor.col), row.max(anchor.row + 1))
+        });
+    let mut after_columns = Vec::new();
+    let mut ahead = *columns.last().unwrap_or(&0.0);
+    for column in (last_column + 2)..=reach_column.min(last_column + 1024) {
+        ahead += column_width(column - 1);
+        after_columns.push(ahead);
+    }
+    let mut after_rows = Vec::new();
+    let mut below = *rows.last().unwrap_or(&0.0);
+    for index in (last_row + 2)..=reach_row.min(last_row + 4096) {
+        below += row_height(index - 1, &columns);
+        after_rows.push(below);
+    }
+
     Geometry {
         columns,
         rows,
         before_columns,
         before_rows,
+        after_columns,
+        after_rows,
         first_column,
         first_row,
     }
@@ -2030,6 +2073,584 @@ mod windows_draw {
                 says(dc, said, box_, scale, normal, false);
             }
         }
+    }
+
+    /// A pen that draws a rule of the width and pattern OOXML states.
+    ///
+    /// GDI's own dash styles are not OOXML's, and a cosmetic pen is a pixel
+    /// wide whatever it is told, so a broken rule wider than that is drawn
+    /// with a geometric pen whose pattern is spelled out in multiples of its
+    /// own width — the ratios OOXML's presets stand for.
+    unsafe fn ruling_pen(shade: COLORREF, width: i32, dash: Option<&str>) -> HPEN {
+        let pattern: &[u32] = match dash {
+            Some("dot") => &[1, 3],
+            Some("dash") => &[4, 3],
+            Some("lgDash") => &[8, 3],
+            Some("dashDot") => &[4, 3, 1, 3],
+            Some("lgDashDot") => &[8, 3, 1, 3],
+            Some("lgDashDotDot") => &[8, 3, 1, 3, 1, 3],
+            Some("sysDash") => &[3, 1],
+            Some("sysDot") => &[1, 1],
+            Some("sysDashDot") => &[3, 1, 1, 1],
+            Some("sysDashDotDot") => &[3, 1, 1, 1, 1, 1],
+            _ => &[],
+        };
+        if pattern.is_empty() {
+            return CreatePen(PS_SOLID, width, shade);
+        }
+        let brush = LOGBRUSH { lbStyle: BS_SOLID, lbColor: shade, lbHatch: 0 };
+        let runs: Vec<u32> = pattern
+            .iter()
+            .map(|part| (part * width.max(1) as u32).max(1))
+            .collect();
+        let held = ExtCreatePen(
+            PEN_STYLE(PS_GEOMETRIC.0 | PS_USERSTYLE.0 | PS_ENDCAP_FLAT.0),
+            width.max(1) as u32,
+            &brush,
+            Some(&runs),
+        );
+        if held.is_invalid() {
+            CreatePen(PS_SOLID, width, shade)
+        } else {
+            held
+        }
+    }
+
+    /// Draw a graph into the box its anchors give it.
+    ///
+    /// Only a line chart, and only one that pins its own plot rectangle: the
+    /// corpus's five charts are all of that kind, and where Excel places a
+    /// plot itself is a separate thing to work out. Everything plotted is in
+    /// the part — a chart caches the numbers beside the cells it read them
+    /// from — so the picture is drawn without going back to the sheet.
+    unsafe fn graph(
+        dc: HDC,
+        chart: &oxicells_core::ir::Chart,
+        box_: RECT,
+        scale: f32,
+        normal: Option<&(String, f32)>,
+    ) {
+        let (across, down) = (box_.right - box_.left, box_.bottom - box_.top);
+        if chart.kind != "line" || chart.series.is_empty() || across <= 0 || down <= 0 {
+            return;
+        }
+        let Some(frame) = chart.plot else { return };
+
+        // The chart's own ground, then the plot's.
+        if let Some(fill) = &chart.fill {
+            let brush = CreateSolidBrush(colour(Some(fill), 0x00FF_FFFF));
+            FillRect(dc, &box_, brush);
+            let _ = DeleteObject(brush);
+        }
+        // The fractions are cut, not rounded: measured against Excel's own
+        // picture, all four edges of `311e2f9c271e_zuhyo`'s plot land a pixel
+        // out when rounded and exactly when truncated.
+        let plot = RECT {
+            left: box_.left + (frame.x * across as f64) as i32,
+            top: box_.top + (frame.y * down as f64) as i32,
+            right: box_.left + ((frame.x + frame.w) * across as f64) as i32,
+            bottom: box_.top + ((frame.y + frame.h) * down as f64) as i32,
+        };
+        if plot.right <= plot.left || plot.bottom <= plot.top {
+            return;
+        }
+        if let Some(fill) = &chart.plot_fill {
+            let brush = CreateSolidBrush(colour(Some(fill), 0x00FF_FFFF));
+            FillRect(dc, &plot, brush);
+            let _ = DeleteObject(brush);
+        }
+
+        let up_axis = chart.value_axis.clone().unwrap_or_default();
+        let along_axis = chart.category_axis.clone().unwrap_or_default();
+        let numbers: Vec<f64> = chart
+            .series
+            .iter()
+            .flat_map(|series| series.values.iter().flatten().copied())
+            .collect();
+        let tall_points = (plot.bottom - plot.top) as f64 / scale as f64 * 72.0 / 96.0;
+        let label_size = if up_axis.size > 0.0 { up_axis.size } else { 10.0 };
+        let up = super::graph::scale(
+            &numbers,
+            (up_axis.min, up_axis.max, up_axis.major_unit),
+            tall_points,
+            label_size,
+        );
+
+        // Where each category stands. `midCat` puts the first point on the
+        // axis itself and the last against the far edge; anything else puts
+        // every point in the middle of a step.
+        let count = chart
+            .series
+            .iter()
+            .map(|series| series.values.len())
+            .max()
+            .unwrap_or(0)
+            .max(chart.categories.len());
+        let room = (plot.right - plot.left) as f64;
+        // `crossBetween` is stated on the value axis — it says where that
+        // axis crosses the other one — but what it decides is where the
+        // categories stand: `midCat` puts the first on the axis itself.
+        let mid_cat = up_axis
+            .cross_between
+            .as_deref()
+            .or(along_axis.cross_between.as_deref())
+            == Some("midCat");
+        let across_at = |index: usize| -> i32 {
+            let step = if mid_cat {
+                if count > 1 {
+                    room * index as f64 / (count - 1) as f64
+                } else {
+                    room / 2.0
+                }
+            } else {
+                room * (index as f64 + 0.5) / count.max(1) as f64
+            };
+            plot.left + step.round() as i32
+        };
+        let up_at = |value: f64| -> i32 {
+            plot.bottom - (up.at(value) * (plot.bottom - plot.top) as f64).round() as i32
+        };
+
+        // A gridline across the plot at every tick, when the axis wants one.
+        if let Some(line) = &up_axis.major_gridline {
+            let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
+            let pen = ruling_pen(colour(Some(&line.color), 0x00D9_D9D9), width, line.dash.as_deref());
+            let held = SelectObject(dc, pen);
+            for step in 0..=steps(&up) {
+                let at = up_at(up.low + step as f64 * up.unit);
+                let _ = MoveToEx(dc, plot.left, at, None);
+                let _ = LineTo(dc, plot.right, at);
+            }
+            SelectObject(dc, held);
+            let _ = DeleteObject(pen);
+        }
+
+        // Every series, in the order the chart states them.
+        for series in &chart.series {
+            let line = series.line.clone().unwrap_or(oxicells_core::ir::ShapeLine {
+                color: "000000".into(),
+                width: 9525,
+                dash: None,
+            });
+            let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
+            let pen = ruling_pen(
+                colour(Some(&line.color), 0x0000_0000),
+                width,
+                line.dash.as_deref(),
+            );
+            let held = SelectObject(dc, pen);
+            // A gap in the data breaks the line rather than being read as a
+            // zero, which is what `dispBlanksAs="gap"` asks for.
+            let mut drawing = false;
+            for (index, value) in series.values.iter().enumerate() {
+                match value {
+                    Some(value) => {
+                        let (x, y) = (across_at(index), up_at(*value));
+                        if drawing {
+                            let _ = LineTo(dc, x, y);
+                        } else {
+                            let _ = MoveToEx(dc, x, y, None);
+                            drawing = true;
+                        }
+                    }
+                    None => drawing = false,
+                }
+            }
+            SelectObject(dc, held);
+            let _ = DeleteObject(pen);
+
+            // What the series wears at every point, and what single points
+            // wear instead.
+            for (index, value) in series.values.iter().enumerate() {
+                let Some(value) = value else { continue };
+                let own = series
+                    .points
+                    .iter()
+                    .find(|point| point.index as usize == index)
+                    .and_then(|point| point.marker.as_ref());
+                let Some(marker) = own.or(series.marker.as_ref()) else {
+                    continue;
+                };
+                if marker.symbol.is_empty() || marker.symbol == "none" {
+                    continue;
+                }
+                mark(dc, marker, across_at(index), up_at(*value), scale);
+            }
+        }
+
+        // The axes, over the plot and under nothing.
+        let axis_pen = |line: &Option<oxicells_core::ir::ShapeLine>| {
+            let stated = line.clone().unwrap_or(oxicells_core::ir::ShapeLine {
+                color: "000000".into(),
+                width: 3175,
+                dash: None,
+            });
+            let width = ((stated.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
+            (
+                ruling_pen(colour(Some(&stated.color), 0x0000_0000), width, None),
+                width,
+            )
+        };
+        // Excel's tick marks are four pixels long at 96 dpi.
+        let tick = (4.0 * scale).round().max(1.0) as i32;
+        let foot = up_at(up.low.max(0.0).min(up.high));
+
+        let (pen, _) = axis_pen(&along_axis.line);
+        let mut held = SelectObject(dc, pen);
+        if !along_axis.deleted {
+            let _ = MoveToEx(dc, plot.left, foot, None);
+            let _ = LineTo(dc, plot.right, foot);
+            if along_axis.major_tick != "none" && !along_axis.major_tick.is_empty() {
+                for index in 0..count {
+                    // A tick stands between two categories when the points
+                    // do, and under the point itself when they do not.
+                    let at = if mid_cat {
+                        across_at(index)
+                    } else {
+                        plot.left + (room * index as f64 / count as f64).round() as i32
+                    };
+                    let (from, to) = match along_axis.major_tick.as_str() {
+                        "in" => (foot - tick, foot),
+                        "out" => (foot, foot + tick),
+                        _ => (foot - tick, foot + tick),
+                    };
+                    let _ = MoveToEx(dc, at, from, None);
+                    let _ = LineTo(dc, at, to);
+                }
+            }
+        }
+        SelectObject(dc, held);
+        let _ = DeleteObject(pen);
+
+        let (pen, _) = axis_pen(&up_axis.line);
+        held = SelectObject(dc, pen);
+        if !up_axis.deleted {
+            let _ = MoveToEx(dc, plot.left, plot.top, None);
+            let _ = LineTo(dc, plot.left, plot.bottom);
+            if up_axis.major_tick != "none" && !up_axis.major_tick.is_empty() {
+                for step in 0..=steps(&up) {
+                    let at = up_at(up.low + step as f64 * up.unit);
+                    let (from, to) = match up_axis.major_tick.as_str() {
+                        "in" => (plot.left, plot.left + tick),
+                        "out" => (plot.left - tick, plot.left),
+                        _ => (plot.left - tick, plot.left + tick),
+                    };
+                    let _ = MoveToEx(dc, from, at, None);
+                    let _ = LineTo(dc, to, at);
+                }
+            }
+        }
+        SelectObject(dc, held);
+        let _ = DeleteObject(pen);
+
+        // What the axes are labelled with. A value's label is set against the
+        // axis itself — the room between them is the glyph's own bearing —
+        // and a category's stands eight pixels below it. Measured off Excel's
+        // picture of `311e2f9c271e_zuhyo` and `744b4e4a4cfd_zuhyo`.
+        let gap = (8.0 * scale).round() as i32;
+        let face = |named: &Option<String>| {
+            named
+                .clone()
+                .or_else(|| normal.map(|(face, _)| face.clone()))
+                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string())
+        };
+        if !up_axis.deleted && up_axis.tick_labels != "none" {
+            let font = chart_font(&face(&up_axis.face), label_size, scale);
+            let held = SelectObject(dc, font);
+            SetTextAlign(dc, TA_TOP | TA_RIGHT);
+            for step in 0..=steps(&up) {
+                let value = up.low + step as f64 * up.unit;
+                let said = oxicells_core::format_number(
+                    value,
+                    up_axis.number_format.as_deref().unwrap_or("General"),
+                );
+                let letters = wide(said.trim());
+                let letters = &letters[..letters.len() - 1];
+                if letters.is_empty() {
+                    continue;
+                }
+                let mut measured = SIZE::default();
+                let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
+                let _ = TextOutW(dc, plot.left, up_at(value) - measured.cy / 2, letters);
+            }
+            SelectObject(dc, held);
+            let _ = DeleteObject(font);
+        }
+        if !along_axis.deleted && along_axis.tick_labels != "none" {
+            let size = if along_axis.size > 0.0 { along_axis.size } else { 10.0 };
+            let named = face(&along_axis.face);
+            let font = chart_font(&named, size, scale);
+            let held = SelectObject(dc, font);
+            SetTextAlign(dc, TA_TOP | TA_CENTER);
+            // A label wider than the step it stands under is broken to fit,
+            // which is what stacks `昭和51` as three lines under the first
+            // category of the corpus's charts.
+            let step = if count > 1 {
+                (room / if mid_cat { (count - 1) as f64 } else { count as f64 }) as f32
+            } else {
+                room as f32
+            };
+            let pitch = super::line_box(&named, size, false, false)
+                .map(|(tall, _)| tall * scale)
+                .unwrap_or(size * scale * 96.0 / 72.0 * 1.3);
+            for (index, said) in chart.categories.iter().enumerate() {
+                let mut at = foot + gap;
+                for line in super::wrapped_lines(&named, size, false, false, said, Some(step / scale))
+                {
+                    let letters = wide(&line);
+                    let letters = &letters[..letters.len() - 1];
+                    if !letters.is_empty() {
+                        let _ = TextOutW(dc, across_at(index), at, letters);
+                    }
+                    at += pitch.round() as i32;
+                }
+            }
+            SelectObject(dc, held);
+            let _ = DeleteObject(font);
+        }
+
+        // A number written beside the point it belongs to. Which side it is
+        // set against is `dLblPos`; how far it is then moved is a fraction of
+        // the chart's own box. Measured on `744b4e4a4cfd_zuhyo`'s one visible
+        // label: set to the right, it is level with its point and clear of it
+        // by the marker's own half-width and four points more.
+        SetTextAlign(dc, TA_TOP | TA_LEFT);
+        for series in &chart.series {
+            for label in &series.labels {
+                let Some(Some(value)) = series.values.get(label.index as usize) else {
+                    continue;
+                };
+                let said = label.text.clone().unwrap_or_else(|| {
+                    oxicells_core::format_number(
+                        *value,
+                        label.number_format.as_deref().unwrap_or("General"),
+                    )
+                });
+                let letters = wide(said.trim());
+                let letters = &letters[..letters.len() - 1];
+                if letters.is_empty() {
+                    continue;
+                }
+                let size = [label.size, series.label_size, 10.0]
+                    .into_iter()
+                    .find(|points| *points > 0.0)
+                    .unwrap_or(10.0);
+                let named = match (&label.face, &series.label_face) {
+                    (Some(own), _) => face(&Some(own.clone())),
+                    (None, held) => face(held),
+                };
+                let font = chart_font(&named, size, scale);
+                let held = SelectObject(dc, font);
+                let mut measured = SIZE::default();
+                let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
+
+                let (x, y) = (across_at(label.index as usize), up_at(*value));
+                // Half the mark the point wears, so the label clears it.
+                let worn = series
+                    .points
+                    .iter()
+                    .find(|point| point.index as usize == label.index as usize)
+                    .and_then(|point| point.marker.as_ref())
+                    .or(series.marker.as_ref())
+                    .filter(|marker| !marker.symbol.is_empty() && marker.symbol != "none")
+                    .map_or(0.0, |marker| marker.size as f32 * 96.0 / 72.0 / 2.0);
+                let clear = ((worn + 4.0 * 96.0 / 72.0) * scale).round() as i32;
+                let (mut left, mut top) = match label
+                    .position
+                    .as_deref()
+                    .or(series.label_pos.as_deref())
+                    .unwrap_or("t")
+                {
+                    "r" => (x + clear, y - measured.cy / 2),
+                    "l" => (x - clear - measured.cx, y - measured.cy / 2),
+                    "b" => (x - measured.cx / 2, y + clear),
+                    "ctr" => (x - measured.cx / 2, y - measured.cy / 2),
+                    _ => (x - measured.cx / 2, y - clear - measured.cy),
+                };
+                let nudge = label.offset.unwrap_or((0.0, 0.0));
+                left += (nudge.0 * across as f64).round() as i32;
+                top += (nudge.1 * down as f64).round() as i32;
+                let _ = TextOutW(dc, left, top, letters);
+                SelectObject(dc, held);
+                let _ = DeleteObject(font);
+            }
+        }
+
+        // The legend: a sample of each series' rule with its name beside it,
+        // one under the next down the box the chart gives them.
+        if let Some(legend) = &chart.legend {
+            if let Some(frame) = legend.frame {
+                let box_of = RECT {
+                    left: box_.left + (frame.x * across as f64).round() as i32,
+                    top: box_.top + (frame.y * down as f64).round() as i32,
+                    right: box_.left + ((frame.x + frame.w) * across as f64).round() as i32,
+                    bottom: box_.top + ((frame.y + frame.h) * down as f64).round() as i32,
+                };
+                let size = if legend.size > 0.0 { legend.size } else { 10.0 };
+                let named = face(&legend.face);
+                let font = chart_font(&named, size, scale);
+                let held = SelectObject(dc, font);
+                SetTextAlign(dc, TA_TOP | TA_LEFT);
+                let line_box = super::line_box(&named, size, false, false)
+                    .map(|(tall, _)| tall * scale)
+                    .unwrap_or(size * scale * 96.0 / 72.0 * 1.3);
+
+                // A sample of the rule is 26.75pt long whatever the chart's
+                // size, and what an entry says follows it with nothing
+                // between. What is left over in the box is split evenly: one
+                // share after each entry, and a leading share three and three
+                // quarter points wider before the first. Measured through
+                // `LegendEntry` in `_xlsx_chart_legend.py` — box widths of
+                // 151, 181 and 289 points all give back a 26.75pt sample.
+                let sample = (26.75 * scale * 96.0 / 72.0).round() as i32;
+                let mut said: Vec<(String, i32)> = Vec::new();
+                for series in &chart.series {
+                    let letters = wide(&series.name);
+                    let mut measured = SIZE::default();
+                    if letters.len() > 1 {
+                        let _ = GetTextExtentPoint32W(
+                            dc,
+                            &letters[..letters.len() - 1],
+                            &mut measured,
+                        );
+                    }
+                    said.push((series.name.clone(), measured.cx));
+                }
+                // As many entries to a row as their samples and names will
+                // fit, and the rows spread evenly down the box.
+                let room = box_of.right - box_of.left;
+                let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+                let mut used = 0;
+                for (index, (_, width)) in said.iter().enumerate() {
+                    let wanted = sample + width;
+                    if used + wanted > room && !rows.last().unwrap().is_empty() {
+                        rows.push(Vec::new());
+                        used = 0;
+                    }
+                    rows.last_mut().unwrap().push(index);
+                    used += wanted;
+                }
+                let pitch = (box_of.bottom - box_of.top) as f32 / rows.len() as f32;
+                let lead = (3.75 * scale * 96.0 / 72.0).round() as i32;
+                for (row, entries) in rows.iter().enumerate() {
+                    let middle =
+                        box_of.top + (pitch * (row as f32 + 0.5)).round() as i32;
+                    let taken: i32 = entries
+                        .iter()
+                        .map(|index| sample + said[*index].1)
+                        .sum::<i32>();
+                    let share = ((room - lead - taken) / (entries.len() as i32 + 1)).max(0);
+                    let mut at = box_of.left + share + lead;
+                    for index in entries {
+                        let series = &chart.series[*index];
+                        if let Some(line) = &series.line {
+                            let width = ((line.width as f32 / super::EMU) * scale)
+                                .round()
+                                .max(1.0) as i32;
+                            let pen = ruling_pen(
+                                colour(Some(&line.color), 0x0000_0000),
+                                width,
+                                line.dash.as_deref(),
+                            );
+                            let held = SelectObject(dc, pen);
+                            let _ = MoveToEx(dc, at, middle, None);
+                            let _ = LineTo(dc, at + sample, middle);
+                            SelectObject(dc, held);
+                            let _ = DeleteObject(pen);
+                        }
+                        let letters = wide(&said[*index].0);
+                        let letters = &letters[..letters.len() - 1];
+                        if !letters.is_empty() {
+                            let _ = TextOutW(
+                                dc,
+                                at + sample,
+                                middle - (line_box / 2.0).round() as i32,
+                                letters,
+                            );
+                        }
+                        at += sample + said[*index].1 + share;
+                    }
+                }
+                SelectObject(dc, held);
+                let _ = DeleteObject(font);
+            }
+        }
+        SetTextAlign(dc, TA_TOP | TA_LEFT);
+    }
+
+    /// How many ticks stand between the ends of a scale.
+    fn steps(scale: &super::graph::Scale) -> i32 {
+        if scale.unit <= 0.0 {
+            return 0;
+        }
+        (((scale.high - scale.low) / scale.unit).floor() as i32).clamp(0, 1000)
+    }
+
+    unsafe fn chart_font(face: &str, points: f32, scale: f32) -> HFONT {
+        let named = wide(face);
+        CreateFontW(
+            -((points * scale * 96.0 / 72.0).round() as i32),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(named.as_ptr()),
+        )
+    }
+
+    /// The mark a series wears at one of its points.
+    unsafe fn mark(
+        dc: HDC,
+        marker: &oxicells_core::ir::Marker,
+        x: i32,
+        y: i32,
+        scale: f32,
+    ) {
+        // A marker's size is stated in points across.
+        let half = ((marker.size.max(2) as f32 * scale * 96.0 / 72.0) / 2.0).round() as i32;
+        let brush = CreateSolidBrush(colour(marker.fill.as_deref(), 0x00FF_FFFF));
+        let pen = CreatePen(PS_SOLID, scale.round().max(1.0) as i32,
+            colour(marker.line.as_deref().or(marker.fill.as_deref()), 0x0000_0000));
+        let held_brush = SelectObject(dc, brush);
+        let held_pen = SelectObject(dc, pen);
+        match marker.symbol.as_str() {
+            "circle" | "dot" => {
+                let _ = Ellipse(dc, x - half, y - half, x + half, y + half);
+            }
+            "diamond" => {
+                let points = [
+                    POINT { x, y: y - half },
+                    POINT { x: x + half, y },
+                    POINT { x, y: y + half },
+                    POINT { x: x - half, y },
+                ];
+                let _ = Polygon(dc, &points);
+            }
+            "triangle" => {
+                let points = [
+                    POINT { x, y: y - half },
+                    POINT { x: x + half, y: y + half },
+                    POINT { x: x - half, y: y + half },
+                ];
+                let _ = Polygon(dc, &points);
+            }
+            // A square, and anything else Excel draws as one.
+            _ => {
+                let _ = Rectangle(dc, x - half, y - half, x + half, y + half);
+            }
+        }
+        SelectObject(dc, held_pen);
+        SelectObject(dc, held_brush);
+        let _ = DeleteObject(pen);
+        let _ = DeleteObject(brush);
     }
 
     /// Write what a shape says inside it.
@@ -2988,6 +3609,9 @@ mod windows_draw {
                     DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
                     DrawingKind::Shape(held) => {
                         shape(dc, held, box_, scale, sheet.normal_font.as_ref())
+                    }
+                    DrawingKind::Chart(held) => {
+                        graph(dc, held, box_, scale, sheet.normal_font.as_ref())
                     }
                     _ => {}
                 }

@@ -278,8 +278,8 @@ pub enum DrawingKind {
         #[serde(skip)]
         bytes: Vec<u8>,
     },
-    /// A chart, which is drawn from its own part and is not modelled yet.
-    Chart,
+    /// A chart, whose picture is drawn from a part of its own.
+    Chart(Chart),
     /// A shape Excel fills and rules. The corpus draws 2176 of its 2245
     /// shapes as a line, a rectangle or a rounded one.
     Shape(Shape),
@@ -364,6 +364,161 @@ pub struct ShapeParagraph {
     /// The line pitch the paragraph pins, in points, when it pins one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_pitch: Option<f32>,
+}
+
+/// A graph drawn over the grid, as its own part states it.
+///
+/// Everything the picture needs is in the file: a chart caches the values it
+/// plots beside the reference it plots them from, so nothing here waits on a
+/// formula.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Chart {
+    /// "line", "bar", "pie" — the first plot the chart holds.
+    pub kind: String,
+    /// The rectangle the axes enclose, as fractions of the chart's own box,
+    /// when the chart pins one. Left out, Excel places the plot itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot: Option<Frame>,
+    pub series: Vec<ChartSeries>,
+    /// What the category axis is labelled with, shared by every series.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_axis: Option<ChartAxis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_axis: Option<ChartAxis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend: Option<Legend>,
+    /// The chart's own background, and the plot rectangle's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plot_fill: Option<String>,
+}
+
+/// A box stated as fractions of its parent's width and height.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct Frame {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ChartSeries {
+    pub name: String,
+    /// One per category. A gap in the data is a `None`, and the line either
+    /// breaks across it or steps over it, as the chart says.
+    pub values: Vec<Option<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<ShapeLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<Marker>,
+    /// The points that dress differently from the rest of their series.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<ChartPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<DataLabel>,
+    /// How the series dresses its labels, where a label does not say for
+    /// itself: points, a face, and "t", "r", "b", "l" or "ctr" for the side
+    /// of the point the label is set against.
+    pub label_size: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_pos: Option<String>,
+}
+
+/// One point of a series, where it is drawn unlike its neighbours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ChartPoint {
+    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<Marker>,
+    /// How the line reaching this point is drawn, when the point restates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<ShapeLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Marker {
+    /// "circle", "diamond", "square", "none", …
+    pub symbol: String,
+    /// Points across, as the chart states it. Excel's own default is 7.
+    pub size: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+}
+
+/// A number written beside the point it belongs to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DataLabel {
+    pub index: u32,
+    /// How far the label is nudged from where it would otherwise sit, as
+    /// fractions of the chart's box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<(f64, f64)>,
+    /// What it says, when the label says something other than the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub size: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    /// Which side of the point the label is set against, when this one
+    /// differs from the rest of its series.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ChartAxis {
+    /// "b", "l", "r" or "t".
+    pub position: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major_unit: Option<f64>,
+    /// "in", "out", "cross" or "none".
+    pub major_tick: String,
+    /// "nextTo", "low", "high" or "none".
+    pub tick_labels: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<ShapeLine>,
+    /// A gridline drawn across the plot at every major tick, when the axis
+    /// asks for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major_gridline: Option<ShapeLine>,
+    /// Points.
+    pub size: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
+    /// An axis the chart states but does not show.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
+    /// "midCat" puts the first point on the axis itself; "between" puts it a
+    /// half-step in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_between: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Legend {
+    /// "r", "l", "t", "b" or "tr".
+    pub position: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<Frame>,
+    pub size: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

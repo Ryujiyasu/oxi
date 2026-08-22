@@ -52,7 +52,7 @@ fn main() {
             sheet.drawings.len(),
             count(|kind| matches!(kind, DrawingKind::Picture { .. })),
             count(|kind| matches!(kind, DrawingKind::Shape(_))),
-            count(|kind| matches!(kind, DrawingKind::Chart)),
+            count(|kind| matches!(kind, DrawingKind::Chart(_))),
         );
         for drawn in sheet.drawings.iter().take(3) {
             let what = match &drawn.kind {
@@ -63,6 +63,34 @@ fn main() {
                     shape.fill,
                     shape.line.as_ref().map(|line| &line.color)
                 ),
+                DrawingKind::Chart(chart) => {
+                    let mut said = format!(
+                        "{} chart, {} series over {} categories, plot {:?}",
+                        chart.kind,
+                        chart.series.len(),
+                        chart.categories.len(),
+                        chart.plot.map(|frame| (frame.x, frame.y, frame.w, frame.h)),
+                    );
+                    for series in &chart.series {
+                        said.push_str(&format!(
+                            "\n        {:<10} {:>3} points, ruled {:?} {:?}, {} marked, {} labelled",
+                            series.name,
+                            series.values.len(),
+                            series.line.as_ref().map(|line| &line.color),
+                            series.line.as_ref().and_then(|line| line.dash.as_deref()),
+                            series.points.len(),
+                            series.labels.len(),
+                        ));
+                    }
+                    if let Some(axis) = &chart.value_axis {
+                        said.push_str(&format!(
+                            "\n        value axis {:?}..{:?} by {:?}, ticks {}, {:?}",
+                            axis.min, axis.max, axis.major_unit, axis.major_tick,
+                            axis.number_format,
+                        ));
+                    }
+                    said
+                }
                 other => format!("{other:?}"),
             };
             println!(

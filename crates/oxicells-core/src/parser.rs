@@ -411,7 +411,7 @@ fn builtin_number_format(id: u32) -> Option<&'static str> {
 /// The colours a workbook's theme names, in the order the theme states them:
 /// dk1, lt1, dk2, lt2, accent1-6, hlink, folHlink.
 #[derive(Debug, Clone, Default)]
-struct Theme {
+pub(crate) struct Theme {
     colours: Vec<String>,
     /// The faces the theme's major and minor schemes name for this script.
     /// A font that says `<scheme val="minor"/>` wears one of these and its
@@ -1177,7 +1177,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 }
                 "graphicFrame" => {
                     depth_in_shape += 1;
-                    kind = Some(DrawingKind::Chart);
+                    kind = Some(DrawingKind::Chart(Default::default()));
+                }
+                // The frame holds no picture of its own: it names the part
+                // that does, the way a picture names its bytes.
+                "chart" if embed.is_none() => {
+                    embed = get_attr(e, "id");
                 }
                 "grpSp" => {
                     depth_in_shape += 1;
@@ -1515,10 +1520,13 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             if let DrawingKind::Shape(held) = &mut kind {
                                 *held = shape.clone();
                             }
-                            let picture = matches!(kind, DrawingKind::Picture { .. });
+                            let named = matches!(
+                                kind,
+                                DrawingKind::Picture { .. } | DrawingKind::Chart(_)
+                            );
                             found.push((
                                 Drawing { from, to: to.take(), extent: extent.take(), kind },
-                                if picture { embed.take() } else { None },
+                                if named { embed.take() } else { None },
                             ));
                         }
                         embed = None;
@@ -1717,7 +1725,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
 
 /// The theme slot a DrawingML colour names. `tx1` and `bg1` are the same two
 /// colours as `dk1` and `lt1` under other names.
-fn scheme_colour(name: &str, theme: &Theme) -> Option<String> {
+pub(crate) fn scheme_colour(name: &str, theme: &Theme) -> Option<String> {
     let slot = match name {
         "dk1" | "tx1" => 0,
         "lt1" | "bg1" => 1,
@@ -1739,7 +1747,7 @@ fn scheme_colour(name: &str, theme: &Theme) -> Option<String> {
 /// A colour with the modifiers DrawingML hangs off it: `shade` and `tint`
 /// move every channel toward black or white, `lumMod` and `lumOff` scale and
 /// raise how light it is.
-fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
+pub(crate) fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
     let Ok(value) = u32::from_str_radix(hex, 16) else {
         return hex.to_string();
     };
@@ -2531,18 +2539,33 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                                 Some(xml) => parse_relationships(&xml)?,
                                 None => Default::default(),
                             };
-                            for (mut drawn, embed) in parse_drawing_xml(&drawing_xml, &theme) {
-                                if let (
-                                    crate::ir::DrawingKind::Picture { bytes },
-                                    Some(embed),
-                                ) = (&mut drawn.kind, embed)
-                                {
-                                    if let Some(rel) = media.get(&embed) {
-                                        let image = part_beside(&part, &rel.target);
+                            for (mut drawn, named) in parse_drawing_xml(&drawing_xml, &theme) {
+                                let beside = named
+                                    .and_then(|named| media.get(&named))
+                                    .map(|rel| part_beside(&part, &rel.target));
+                                match (&mut drawn.kind, beside) {
+                                    (
+                                        crate::ir::DrawingKind::Picture { bytes },
+                                        Some(image),
+                                    ) => {
                                         if let Some(found) = archive.try_read_bytes(&image)? {
                                             *bytes = found;
                                         }
                                     }
+                                    (crate::ir::DrawingKind::Chart(chart), Some(graph)) => {
+                                        match archive
+                                            .try_read_part(&graph)?
+                                            .as_deref()
+                                            .and_then(|xml| {
+                                                crate::chart::parse_chart_xml(xml, &theme)
+                                            }) {
+                                            Some(read) => *chart = read,
+                                            // A chart nothing can draw is left
+                                            // out rather than half-drawn.
+                                            None => continue,
+                                        }
+                                    }
+                                    _ => {}
                                 }
                                 sheet.drawings.push(drawn);
                             }
