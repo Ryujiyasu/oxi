@@ -3533,6 +3533,28 @@ mod windows_draw {
                             (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
                             PCWSTR(turned.as_ptr()),
                         );
+                        // A letter or a digit is not turned at all: Excel
+                        // stacks `01糖尿病` as an upright 0 over an upright 1
+                        // over the kanji, and the turned face has no rotated
+                        // shape for them — drawn through it they come out on
+                        // their side. Only what the "@" face itself turns is
+                        // drawn through it.
+                        let plain = CreateFontW(
+                            pixels,
+                            0,
+                            0,
+                            0,
+                            if bold { 700 } else { 400 },
+                            u32::from(cell.style.italic),
+                            u32::from(cell.style.underline),
+                            0,
+                            DEFAULT_CHARSET.0 as u32,
+                            OUT_DEFAULT_PRECIS.0 as u32,
+                            CLIP_DEFAULT_PRECIS.0 as u32,
+                            CLEARTYPE_QUALITY.0 as u32,
+                            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                            PCWSTR(face.as_ptr()),
+                        );
                         let held = SelectObject(dc, font);
                         // A stacked character is centred in the whole cell,
                         // gutters and all: measured on data_B01, where the
@@ -3555,10 +3577,26 @@ mod windows_draw {
                             // the character, not on a baseline, so the line
                             // box's own padding is what puts it in place.
                             let down = top + step as i32 * line_px + (line_px - em).max(0);
-                            let _ = TextOutW(dc, left, down, letters);
+                            if line.chars().all(|letter| letter.is_ascii_graphic()) {
+                                SelectObject(dc, plain);
+                                SetTextAlign(dc, TA_TOP | TA_LEFT);
+                                let mut measured = SIZE::default();
+                                let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
+                                let _ = TextOutW(
+                                    dc,
+                                    left + ((em - measured.cx) as f32 / 2.0).round() as i32,
+                                    down,
+                                    letters,
+                                );
+                                SetTextAlign(dc, TA_BASELINE | TA_LEFT);
+                                SelectObject(dc, font);
+                            } else {
+                                let _ = TextOutW(dc, left, down, letters);
+                            }
                         }
                         SelectObject(dc, held);
                         let _ = DeleteObject(font);
+                        let _ = DeleteObject(plain);
                     }
                     for line in lines
                         .iter()
