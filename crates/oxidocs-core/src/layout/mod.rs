@@ -33100,6 +33100,33 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 }
                                             };
                                             let cw = cw + auto_space_extra;
+                                            // OXI_DUMP_GLYPHW=1: the cell breaker's per-CHARACTER
+                                            // budget, broken into the terms that build it. The
+                                            // archive's 04b88e note stalled at "Oxi has no
+                                            // per-glyph instrument, so this cannot be split
+                                            // further" -- a run-level width cannot say whether a
+                                            // 2pt difference is one wide glyph, a doubled letter
+                                            // space, or a CJK/Latin gap on the wrong side of a
+                                            // joint. Set OXI_DUMP_GLYPHW_TEXT to a substring to
+                                            // restrict the dump to the paragraph that contains it.
+                                            if std::env::var("OXI_DUMP_GLYPHW").is_ok() {
+                                                let want = std::env::var("OXI_DUMP_GLYPHW_TEXT")
+                                                    .unwrap_or_default();
+                                                let ptext: String = para
+                                                    .runs
+                                                    .iter()
+                                                    .flat_map(|r| r.text.chars())
+                                                    .collect();
+                                                if want.is_empty() || ptext.contains(&want) {
+                                                    eprintln!(
+                                        "[GLYPHW] ch={:?} fw={} base={:.3} cs={:.3} bal={:.3} aki={:.3} cw={:.3} line_x={:.3} buf_w={:.3} fs={:.2}",
+                                        ch, crate::font::is_fullwidth(ch),
+                                        cw - cs - balance_extra_cs - auto_space_extra,
+                                        cs, balance_extra_cs, auto_space_extra, cw,
+                                        line_x, buf_w, font_size
+                                    );
+                                                }
+                                            }
                                             let effective_wrap = if is_first_line {
                                                 first_line_wrap_w
                                             } else {
@@ -33460,11 +33487,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 let yaku = if s1174_yakucomp {
                                                     let mut has_a = false;
                                                     let mut b = 0.0f32;
-                                                    for c in current_line_chars
+                                                    for (i, c) in current_line_chars
                                                         .iter()
                                                         .chain(buf_chars.iter())
+                                                        .enumerate()
                                                     {
                                                         if kinsoku::cell_yaku_type_b(c.ch) {
+                                                            // S1197 (opt-in `OXI_S1197`): a LINE-INITIAL
+                                                            // opening bracket has nothing left to give.
+                                                            // S757 established the principle for the
+                                                            // NPERIOD cup: JIS X 4051 line-start
+                                                            // processing has ALREADY removed its left
+                                                            // aki, so promoting it again is space that
+                                                            // does not exist. The type-B additivity was
+                                                            // derived (`_cw_yaku_class.py`, 5 classes x
+                                                            // 801 widths) on brackets sitting INSIDE the
+                                                            // line; the probe never put one at the start,
+                                                            // because a line-start bracket cannot be
+                                                            // reached by the same sweep.
+                                                            if i == 0
+                                                                && std::env::var("OXI_S1197").is_ok()
+                                                            {
+                                                                continue;
+                                                            }
                                                             b += 0.5 * c.natural_advance;
                                                         } else if kinsoku::cell_yaku_type_a(c.ch) {
                                                             has_a = true;
@@ -33483,6 +33528,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         .ok()
                                                         .and_then(|v| v.parse::<f32>().ok())
                                                         .unwrap_or(1.0);
+                                                if std::env::var("OXI_DUMP_GLYPHW").is_ok() {
+                                                    let want = std::env::var("OXI_DUMP_GLYPHW_TEXT")
+                                                        .unwrap_or_default();
+                                                    let ptext: String = para
+                                                        .runs
+                                                        .iter()
+                                                        .flat_map(|r| r.text.chars())
+                                                        .collect();
+                                                    if want.is_empty() || ptext.contains(&want) {
+                                                        let head: String = current_line_chars
+                                                            .iter()
+                                                            .chain(buf_chars.iter())
+                                                            .map(|c| c.ch)
+                                                            .take(6)
+                                                            .collect();
+                                                        let bs: String = current_line_chars
+                                                            .iter()
+                                                            .chain(buf_chars.iter())
+                                                            .filter(|c| kinsoku::cell_yaku_type_b(c.ch))
+                                                            .map(|c| format!("{}:{:.2}", c.ch, c.natural_advance))
+                                                            .collect::<Vec<_>>()
+                                                            .join(",");
+                                                        eprintln!(
+                                            "[POOL] ch={:?} yaku={:.3} joints={:.3} spaces={:.3} pool={:.3} head={:?} typeB=[{}]",
+                                            ch, yaku, joints, spaces, pool, head, bs
+                                        );
+                                                    }
+                                                }
                                                 // ★Only where it was measured: the
                                                 // 250/250 hang was swept at jc=both. Do not
                                                 // extend an unconditional rule past its
