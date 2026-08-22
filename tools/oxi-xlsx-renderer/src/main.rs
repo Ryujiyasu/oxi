@@ -41,9 +41,6 @@ const DEFAULT_ROW_POINTS: f32 = 18.75;
 /// wide digit.
 const DEFAULT_DIGITS: f32 = 8.0;
 const DEFAULT_PADDING: f32 = 8.0;
-/// The gutter Excel keeps either side of a cell's text, in pixels. A width the
-/// sheet states already has it folded in; a default width does not.
-const COLUMN_GUTTER: f32 = 5.0;
 
 pub(crate) struct Geometry {
     /// Left edge of each column, and the sheet's full width.
@@ -666,6 +663,44 @@ pub(crate) fn centred_across(row: &Row, cell: &Cell, spans_columns: u32) -> (u32
 /// together up to an eight-pixel digit, seven to twelve, nine to sixteen,
 /// eleven beyond. The left keeps one more than the right, which is the three
 /// and two that the small sizes show.
+/// EMU to a pixel at 96 dpi: 914400 to the inch.
+const EMU: f32 = 9525.0;
+
+/// Where a drawing lands on the sheet, in the picture's own pixels.
+///
+/// A drawing hangs from a cell and an offset into it, so its place follows
+/// the columns and rows the renderer has already worked out. `None` when it
+/// hangs from a cell outside what is being drawn.
+#[cfg(windows)]
+pub(crate) fn drawing_box(
+    drawn: &oxicells_core::ir::Drawing,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<windows::Win32::Foundation::RECT> {
+    let at = |anchor: &oxicells_core::ir::Anchor| -> Option<(i32, i32)> {
+        // The drawing part counts both from zero; the layout counts columns
+        // from zero and rows from one, the way the sheet states them.
+        let column = anchor.col.checked_sub(layout.first_column)? as usize;
+        let row = (anchor.row + 1).checked_sub(layout.first_row)? as usize;
+        let left = *layout.columns.get(column)?;
+        let top = *layout.rows.get(row)?;
+        Some((
+            (left + anchor.col_off as f32 / EMU * scale).round() as i32,
+            (top + anchor.row_off as f32 / EMU * scale).round() as i32,
+        ))
+    };
+    let (left, top) = at(&drawn.from)?;
+    let (right, bottom) = match (&drawn.to, drawn.extent) {
+        (Some(to), _) => at(to)?,
+        (None, Some((cx, cy))) => (
+            left + (cx as f32 / EMU * scale).round() as i32,
+            top + (cy as f32 / EMU * scale).round() as i32,
+        ),
+        (None, None) => return None,
+    };
+    Some(windows::Win32::Foundation::RECT { left, top, right, bottom })
+}
+
 /// One level of indent, in 96-dpi pixels.
 ///
 /// Measured on `_xlsx_indent.py`: fifteen pixels a level, the same for every
@@ -1585,7 +1620,7 @@ mod dwrite_draw;
 #[cfg(windows)]
 mod windows_draw {
     use super::{alignment, cell_text, Align, Geometry, Merged};
-    use oxicells_core::ir::{BorderLine, CellStyle, CellValue, Sheet};
+    use oxicells_core::ir::{BorderLine, CellStyle, CellValue, DrawingKind, Sheet};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
     use windows::Win32::Graphics::Gdi::*;
@@ -1638,6 +1673,163 @@ mod windows_draw {
             let _ = DeleteDC(dc);
             measured.then_some(size.cx as f32)
         }
+    }
+
+    /// Draw a preset shape into the box its anchors give it.
+    ///
+    /// The corpus's 2245 shapes are 1641 lines, 453 rectangles and 82 rounded
+    /// ones; the rest — braces, arrows, flowchart boxes — are left undrawn
+    /// rather than drawn as something they are not.
+    unsafe fn shape(dc: HDC, shape: &oxicells_core::ir::Shape, box_: RECT, scale: f32) {
+        let rule = shape.line.as_ref().map(|line| {
+            let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
+            let broken = matches!(line.dash.as_deref(), Some(kind) if kind != "solid");
+            let style = if broken && width <= 1 { PS_DASH } else { PS_SOLID };
+            let pen = CreatePen(style, width, colour(Some(&line.color), 0x0000_0000));
+            (pen, width)
+        });
+        let held = rule.map(|(pen, _)| SelectObject(dc, pen));
+
+        match shape.geometry.as_str() {
+            // A line runs from one corner of its box to the other, and a
+            // flipped one from the corners the other way round.
+            "line" | "straightConnector1" => {
+                if rule.is_some() {
+                    let (from_x, to_x) = if shape.flip_h {
+                        (box_.right, box_.left)
+                    } else {
+                        (box_.left, box_.right)
+                    };
+                    let (from_y, to_y) = if shape.flip_v {
+                        (box_.bottom, box_.top)
+                    } else {
+                        (box_.top, box_.bottom)
+                    };
+                    let _ = MoveToEx(dc, from_x, from_y, None);
+                    let _ = LineTo(dc, to_x, to_y);
+                }
+            }
+            "rect" | "roundRect" => {
+                // A rounded rectangle's corner has a radius of a sixth of its
+                // shorter side, which is the adjustment OOXML leaves at its
+                // default. GDI asks for the whole ellipse, so twice that.
+                let round = if shape.geometry == "roundRect" {
+                    (box_.right - box_.left).min(box_.bottom - box_.top) / 3
+                } else {
+                    0
+                };
+                let brush = shape
+                    .fill
+                    .as_deref()
+                    .map(|fill| CreateSolidBrush(colour(Some(fill), 0x00FF_FFFF)));
+                if round == 0 {
+                    if let Some(brush) = brush {
+                        FillRect(dc, &box_, brush);
+                    }
+                    if rule.is_some() {
+                        let hollow = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        let _ = Rectangle(dc, box_.left, box_.top, box_.right, box_.bottom);
+                        SelectObject(dc, hollow);
+                    }
+                } else if brush.is_some() || rule.is_some() {
+                    // One call paints and rules a rounded box, so the fill
+                    // stops where the rule runs rather than under it.
+                    let held = SelectObject(dc, brush.map_or(GetStockObject(NULL_BRUSH), |b| b.into()));
+                    let pen = if rule.is_none() {
+                        Some(SelectObject(dc, GetStockObject(NULL_PEN)))
+                    } else {
+                        None
+                    };
+                    let _ = RoundRect(
+                        dc, box_.left, box_.top, box_.right, box_.bottom, round, round,
+                    );
+                    if let Some(pen) = pen {
+                        SelectObject(dc, pen);
+                    }
+                    SelectObject(dc, held);
+                }
+                if let Some(brush) = brush {
+                    let _ = DeleteObject(brush);
+                }
+            }
+            _ => {}
+        }
+
+        if let (Some((pen, _)), Some(held)) = (rule, held) {
+            SelectObject(dc, held);
+            let _ = DeleteObject(pen);
+        }
+    }
+
+    /// Lay a picture into the box its anchors give it.
+    ///
+    /// The bytes are whatever the file holds — PNG, JPEG, GIF, EMF — and only
+    /// what the image crate can decode is drawn; an EMF is left out rather
+    /// than drawn wrong. GDI does the scaling, over the alpha the picture
+    /// carries, which is how a logo with a transparent corner lands on the
+    /// sheet's white rather than on a grey box.
+    unsafe fn picture(dc: HDC, bytes: &[u8], box_: RECT) {
+        let (across, down) = (box_.right - box_.left, box_.bottom - box_.top);
+        if across <= 0 || down <= 0 {
+            return;
+        }
+        let Ok(decoded) = image::load_from_memory(bytes) else {
+            return;
+        };
+        let decoded = decoded.to_rgba8();
+        let (wide_px, tall_px) = (decoded.width() as i32, decoded.height() as i32);
+        if wide_px <= 0 || tall_px <= 0 {
+            return;
+        }
+        // GDI blends premultiplied BGRA, top row first when the height is
+        // stated negative.
+        let mut pixels = Vec::with_capacity((wide_px * tall_px * 4) as usize);
+        for shade in decoded.pixels() {
+            let [red, green, blue, alpha] = shade.0;
+            let mix = |part: u8| ((part as u16 * alpha as u16) / 255) as u8;
+            pixels.extend_from_slice(&[mix(blue), mix(green), mix(red), alpha]);
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: wide_px,
+                biHeight: -tall_px,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let held = CreateCompatibleDC(dc);
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let Ok(bitmap) = CreateDIBSection(held, &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            let _ = DeleteDC(held);
+            return;
+        };
+        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits as *mut u8, pixels.len());
+        let previous = SelectObject(held, bitmap);
+        let _ = AlphaBlend(
+            dc,
+            box_.left,
+            box_.top,
+            across,
+            down,
+            held,
+            0,
+            0,
+            wide_px,
+            tall_px,
+            BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            },
+        );
+        SelectObject(held, previous);
+        let _ = DeleteObject(bitmap);
+        let _ = DeleteDC(held);
     }
 
     pub fn draw(
@@ -2304,6 +2496,19 @@ mod windows_draw {
 
                     SelectObject(dc, previous_font);
                     let _ = DeleteObject(font);
+                }
+            }
+
+            // What hangs over the grid is drawn last, so it covers the cells
+            // it is laid over rather than the other way round.
+            for drawn in &sheet.drawings {
+                let Some(box_) = super::drawing_box(drawn, layout, scale) else {
+                    continue;
+                };
+                match &drawn.kind {
+                    DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
+                    DrawingKind::Shape(shape) => self::shape(dc, shape, box_, scale),
+                    _ => {}
                 }
             }
 

@@ -51,6 +51,9 @@ pub struct Sheet {
     /// The tables on the sheet, each dressed by a named style.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<Table>,
+    /// What is drawn over the grid rather than in it: pictures and shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drawings: Vec<Drawing>,
     /// The filter a sheet is under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_filter: Option<AutoFilter>,
@@ -227,6 +230,81 @@ pub struct BorderLine {
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
+}
+
+/// A corner of a drawing: the cell it hangs from, and how far into that cell
+/// it sits. The offsets are EMU — 914400 to the inch, so 9525 to a pixel at
+/// 96 dpi.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Anchor {
+    /// Zero-based, like `Cell::col`.
+    pub col: u32,
+    pub col_off: i64,
+    /// Zero-based, unlike `Row::index`, which is how the drawing part states it.
+    pub row: u32,
+    pub row_off: i64,
+}
+
+/// Something drawn over the grid rather than in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Drawing {
+    /// Where its top-left corner hangs.
+    pub from: Anchor,
+    /// Where its bottom-right corner hangs, when the anchor names a second
+    /// cell. A drawing anchored to one cell states its size instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Anchor>,
+    /// The size the anchor states outright, in EMU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent: Option<(i64, i64)>,
+    pub kind: DrawingKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DrawingKind {
+    /// A picture, holding the bytes of the part it names. They are left out of
+    /// the serialised form: what reads the IR back is an editor that has the
+    /// file beside it, and a base64 image in every sheet would dwarf the rest.
+    Picture {
+        #[serde(skip)]
+        bytes: Vec<u8>,
+    },
+    /// A chart, which is drawn from its own part and is not modelled yet.
+    Chart,
+    /// A shape Excel fills and rules. The corpus draws 2176 of its 2245
+    /// shapes as a line, a rectangle or a rounded one.
+    Shape(Shape),
+    /// Anything else the drawing part holds — a group, a text box.
+    Other,
+}
+
+/// A preset shape, with what it is painted and ruled with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shape {
+    /// The preset geometry OOXML names: "rect", "line", "roundRect", …
+    pub geometry: String,
+    /// Six hex digits, when the shape is filled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<ShapeLine>,
+    /// A shape whose box is flipped: a line drawn from the other corner.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip_h: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip_v: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShapeLine {
+    /// Six hex digits.
+    pub color: String,
+    /// Width in EMU. Excel draws a line of its own accord at 9525 — one pixel
+    /// at 96 dpi — when the shape states no width.
+    pub width: i64,
+    /// "dash", "dashDot", "sysDot" and the rest, when the rule is broken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

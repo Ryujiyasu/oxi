@@ -1007,6 +1007,329 @@ fn part_beside(from: &str, target: &str) -> String {
 }
 
 /// Reads one `xl/tables/*.xml` part into the range and dress it describes.
+/// What a sheet's drawing part holds, with each picture's relationship id.
+///
+/// The anchors come in three kinds: hung from two cells, hung from one with a
+/// size of its own, or placed at a fixed spot on the sheet. Only the first two
+/// are common in the corpus, and an absolute one is read as a one-cell anchor
+/// at the top-left, which is where its offsets are measured from anyway.
+fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Option<String>)> {
+    use crate::ir::{Anchor, Drawing, DrawingKind, Shape, ShapeLine};
+
+    /// Which part of the shape a colour being read belongs to.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Paints {
+        Fill,
+        Line,
+    }
+
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut found: Vec<(Drawing, Option<String>)> = Vec::new();
+
+    let blank = Anchor { col: 0, col_off: 0, row: 0, row_off: 0 };
+    let mut from = blank;
+    let mut to: Option<Anchor> = None;
+    let mut extent: Option<(i64, i64)> = None;
+    let mut kind: Option<DrawingKind> = None;
+    let mut shape = Shape {
+        geometry: String::new(),
+        fill: None,
+        line: None,
+        flip_h: false,
+        flip_v: false,
+    };
+    let mut line_width: i64 = 9525;
+    let mut dash: Option<String> = None;
+    let mut embed: Option<String> = None;
+    // Which corner the col/row elements belong to, and whether we are inside
+    // a shape — where `<ext>` is the shape's own size, not the anchor's.
+    let mut corner: Option<bool> = None;
+    let mut depth_in_shape = 0usize;
+    let mut number = String::new();
+    // Where a colour is being read from, and what is being read into.
+    let (mut in_sp_pr, mut in_ln, mut in_style) = (false, false, false);
+    // An extension list holds what a shape would be painted with if it were
+    // painted at all: Excel writes the fill a shape had before it was set to
+    // none into an `a14:hiddenFill`, and reading that paints white boxes over
+    // the sheet. Nothing inside one is a shape's own paint.
+    let mut in_ext_lst = 0usize;
+    // Whether the shape itself said what it is painted and ruled with, in
+    // which case its style's references are not consulted.
+    let (mut fill_stated, mut line_stated) = (false, false);
+    let mut paints: Option<Paints> = None;
+    let mut colour: Option<(String, Vec<(String, f32)>)> = None;
+
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        let (start, empty) = match &event {
+            Ok(Event::Start(e)) => (Some(e), false),
+            Ok(Event::Empty(e)) => (Some(e), true),
+            _ => (None, false),
+        };
+        if let Some(e) = start {
+            let name = local_name(e.name().as_ref());
+            match name.as_str() {
+                "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
+                    from = blank;
+                    to = None;
+                    extent = None;
+                    kind = None;
+                    embed = None;
+                    depth_in_shape = 0;
+                    shape = Shape {
+                        geometry: String::new(),
+                        fill: None,
+                        line: None,
+                        flip_h: false,
+                        flip_v: false,
+                    };
+                    line_width = 9525;
+                    dash = None;
+                    fill_stated = false;
+                    line_stated = false;
+                }
+                "from" => corner = Some(true),
+                "to" => {
+                    corner = Some(false);
+                    to = Some(blank);
+                }
+                "col" | "colOff" | "row" | "rowOff" => number.clear(),
+                "ext" if depth_in_shape == 0 => {
+                    let cx = get_attr(e, "cx").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let cy = get_attr(e, "cy").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    extent = Some((cx, cy));
+                }
+                "pic" => {
+                    depth_in_shape += 1;
+                    kind = Some(DrawingKind::Picture { bytes: Vec::new() });
+                }
+                "graphicFrame" => {
+                    depth_in_shape += 1;
+                    kind = Some(DrawingKind::Chart);
+                }
+                "sp" | "cxnSp" => {
+                    depth_in_shape += 1;
+                    if kind.is_none() {
+                        kind = Some(DrawingKind::Shape(shape.clone()));
+                    }
+                }
+                "grpSp" => {
+                    depth_in_shape += 1;
+                    if kind.is_none() {
+                        kind = Some(DrawingKind::Other);
+                    }
+                }
+                "spPr" => in_sp_pr = true,
+                "style" => in_style = true,
+                "extLst" => in_ext_lst += 1,
+                "ln" if in_sp_pr && in_ext_lst == 0 => {
+                    in_ln = true;
+                    line_width = get_attr(e, "w").and_then(|w| w.parse().ok()).unwrap_or(9525);
+                }
+                "xfrm" if in_sp_pr => {
+                    shape.flip_h = is_true(get_attr(e, "flipH").as_deref());
+                    shape.flip_v = is_true(get_attr(e, "flipV").as_deref());
+                }
+                "prstGeom" => {
+                    if let Some(preset) = get_attr(e, "prst") {
+                        shape.geometry = preset;
+                    }
+                }
+                "prstDash" if in_ln => dash = get_attr(e, "val"),
+                "noFill" if in_sp_pr && in_ext_lst == 0 => {
+                    if in_ln {
+                        line_stated = true;
+                        shape.line = None;
+                    } else {
+                        fill_stated = true;
+                        shape.fill = None;
+                    }
+                }
+                // A shape that states no fill or line of its own wears the
+                // one its style names, which is a theme colour.
+                "solidFill" if in_sp_pr && in_ext_lst == 0 => {
+                    if in_ln {
+                        line_stated = true;
+                        paints = Some(Paints::Line);
+                    } else {
+                        fill_stated = true;
+                        paints = Some(Paints::Fill);
+                    }
+                }
+                "fillRef" if in_style && !fill_stated => paints = Some(Paints::Fill),
+                "lnRef" if in_style && !line_stated => paints = Some(Paints::Line),
+                "srgbClr" | "schemeClr" | "sysClr" if paints.is_some() => {
+                    let named = match name.as_str() {
+                        "sysClr" => get_attr(e, "lastClr"),
+                        "srgbClr" => get_attr(e, "val"),
+                        _ => get_attr(e, "val").and_then(|val| scheme_colour(&val, theme)),
+                    };
+                    colour = named.map(|hex| (hex, Vec::new()));
+                }
+                "lumMod" | "lumOff" | "shade" | "tint" if colour.is_some() => {
+                    if let (Some((_, mods)), Some(value)) = (
+                        colour.as_mut(),
+                        get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()),
+                    ) {
+                        mods.push((name.clone(), value / 100_000.0));
+                    }
+                }
+                // The picture's own part is named by a relationship.
+                "blip" if embed.is_none() => {
+                    embed = e
+                        .attributes()
+                        .flatten()
+                        .find(|attr| local_name(attr.key.as_ref()) == "embed")
+                        .and_then(|attr| String::from_utf8(attr.value.to_vec()).ok());
+                }
+                _ => {}
+            }
+            // An element with no children ends where it starts.
+            if empty && matches!(name.as_str(), "srgbClr" | "schemeClr" | "sysClr") {
+                if let (Some((hex, mods)), Some(part)) = (colour.take(), paints) {
+                    let painted = shaded(&hex, &mods);
+                    match part {
+                        Paints::Fill => shape.fill = Some(painted),
+                        Paints::Line => {
+                            shape.line = Some(ShapeLine {
+                                color: painted,
+                                width: line_width,
+                                dash: dash.clone(),
+                            })
+                        }
+                    }
+                }
+            }
+        }
+        match &event {
+            Ok(Event::Text(e)) => {
+                if let Ok(text) = e.unescape() {
+                    number.push_str(&text);
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name = local_name(e.name().as_ref());
+                let value = || number.trim().parse::<i64>().unwrap_or(0);
+                match name.as_str() {
+                    "col" | "colOff" | "row" | "rowOff" => {
+                        if let Some(which) = corner {
+                            let corner = if which { &mut from } else { to.get_or_insert(blank) };
+                            match name.as_str() {
+                                "col" => corner.col = value().max(0) as u32,
+                                "colOff" => corner.col_off = value(),
+                                "row" => corner.row = value().max(0) as u32,
+                                _ => corner.row_off = value(),
+                            }
+                        }
+                    }
+                    "from" | "to" => corner = None,
+                    "srgbClr" | "schemeClr" | "sysClr" => {
+                        if let (Some((hex, mods)), Some(part)) = (colour.take(), paints) {
+                            let painted = shaded(&hex, &mods);
+                            match part {
+                                Paints::Fill => shape.fill = Some(painted),
+                                Paints::Line => {
+                                    shape.line = Some(ShapeLine {
+                                        color: painted,
+                                        width: line_width,
+                                        dash: dash.clone(),
+                                    })
+                                }
+                            }
+                        }
+                    }
+                    "solidFill" | "fillRef" | "lnRef" => paints = None,
+                    "ln" => in_ln = false,
+                    "spPr" => in_sp_pr = false,
+                    "style" => in_style = false,
+                    "extLst" => in_ext_lst = in_ext_lst.saturating_sub(1),
+                    "pic" | "sp" | "cxnSp" | "grpSp" | "graphicFrame" => {
+                        depth_in_shape = depth_in_shape.saturating_sub(1);
+                    }
+                    "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
+                        let mut kind = kind.take().unwrap_or(DrawingKind::Other);
+                        if let DrawingKind::Shape(held) = &mut kind {
+                            *held = shape.clone();
+                        }
+                        let picture = matches!(kind, DrawingKind::Picture { .. });
+                        found.push((
+                            Drawing { from, to: to.take(), extent: extent.take(), kind },
+                            if picture { embed.take() } else { None },
+                        ));
+                        embed = None;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    found
+}
+
+/// The theme slot a DrawingML colour names. `tx1` and `bg1` are the same two
+/// colours as `dk1` and `lt1` under other names.
+fn scheme_colour(name: &str, theme: &Theme) -> Option<String> {
+    let slot = match name {
+        "dk1" | "tx1" => 0,
+        "lt1" | "bg1" => 1,
+        "dk2" | "tx2" => 2,
+        "lt2" | "bg2" => 3,
+        "accent1" => 4,
+        "accent2" => 5,
+        "accent3" => 6,
+        "accent4" => 7,
+        "accent5" => 8,
+        "accent6" => 9,
+        "hlink" => 10,
+        "folHlink" => 11,
+        _ => return None,
+    };
+    theme.colours.get(slot).cloned()
+}
+
+/// A colour with the modifiers DrawingML hangs off it: `shade` and `tint`
+/// move every channel toward black or white, `lumMod` and `lumOff` scale and
+/// raise how light it is.
+fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
+    let Ok(value) = u32::from_str_radix(hex, 16) else {
+        return hex.to_string();
+    };
+    let mut channels = [
+        ((value >> 16) & 0xFF) as f32 / 255.0,
+        ((value >> 8) & 0xFF) as f32 / 255.0,
+        (value & 0xFF) as f32 / 255.0,
+    ];
+    for (name, amount) in mods {
+        match name.as_str() {
+            "shade" => channels.iter_mut().for_each(|part| *part *= amount),
+            "tint" => channels
+                .iter_mut()
+                .for_each(|part| *part = *part * amount + (1.0 - amount)),
+            "lumMod" | "lumOff" => {
+                let high = channels[0].max(channels[1]).max(channels[2]);
+                let low = channels[0].min(channels[1]).min(channels[2]);
+                let lum = (high + low) / 2.0;
+                let wanted = if name == "lumMod" { lum * amount } else { lum + amount };
+                let moved = (wanted - lum).clamp(-1.0, 1.0);
+                channels
+                    .iter_mut()
+                    .for_each(|part| *part = (*part + moved).clamp(0.0, 1.0));
+            }
+            _ => {}
+        }
+    }
+    format!(
+        "{:02X}{:02X}{:02X}",
+        (channels[0] * 255.0).round() as u8,
+        (channels[1] * 255.0).round() as u8,
+        (channels[2] * 255.0).round() as u8
+    )
+}
+
 fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
     let mut reader = Reader::from_str(xml);
     let mut range = None;
@@ -1520,6 +1843,7 @@ fn parse_worksheet(
 
     Ok(Sheet {
         tables: Vec::new(),
+        drawings: Vec::new(),
         name: sheet_name.to_string(),
         rows,
         col_count,
@@ -1695,13 +2019,44 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                     .unwrap_or_default();
                 if let Some(rels_xml) = archive.try_read_part(&rels_path)? {
                     for rel in parse_relationships(&rels_xml)?.values() {
-                        if !rel.rel_type.ends_with("/table") {
-                            continue;
+                        if rel.rel_type.ends_with("/table") {
+                            let part = part_beside(&sheet_path, &rel.target);
+                            if let Some(table_xml) = archive.try_read_part(&part)? {
+                                if let Some(table) = parse_table_xml(&table_xml, &theme) {
+                                    sheet.tables.push(table);
+                                }
+                            }
                         }
-                        let part = part_beside(&sheet_path, &rel.target);
-                        if let Some(table_xml) = archive.try_read_part(&part)? {
-                            if let Some(table) = parse_table_xml(&table_xml, &theme) {
-                                sheet.tables.push(table);
+                        // What is drawn over the grid lives in a part of its
+                        // own, and each picture inside names its bytes through
+                        // that part's own relationships.
+                        if rel.rel_type.ends_with("/drawing") {
+                            let part = part_beside(&sheet_path, &rel.target);
+                            let Some(drawing_xml) = archive.try_read_part(&part)? else {
+                                continue;
+                            };
+                            let inside = part
+                                .rsplit_once('/')
+                                .map(|(dir, file)| format!("{dir}/_rels/{file}.rels"))
+                                .unwrap_or_default();
+                            let media = match archive.try_read_part(&inside)? {
+                                Some(xml) => parse_relationships(&xml)?,
+                                None => Default::default(),
+                            };
+                            for (mut drawn, embed) in parse_drawing_xml(&drawing_xml, &theme) {
+                                if let (
+                                    crate::ir::DrawingKind::Picture { bytes },
+                                    Some(embed),
+                                ) = (&mut drawn.kind, embed)
+                                {
+                                    if let Some(rel) = media.get(&embed) {
+                                        let image = part_beside(&part, &rel.target);
+                                        if let Some(found) = archive.try_read_bytes(&image)? {
+                                            *bytes = found;
+                                        }
+                                    }
+                                }
+                                sheet.drawings.push(drawn);
                             }
                         }
                     }
@@ -1969,6 +2324,101 @@ mod tests {
         assert!(header.bold);
         assert_eq!(header.font_name.as_deref(), Some("ＭＳ Ｐゴシック"));
         assert_eq!(header.font_size, Some(9.0));
+    }
+
+    /// A drawing part states where a shape hangs, what it is painted with,
+    /// and — for a picture — which part holds its bytes.
+    #[test]
+    fn a_drawing_part_gives_up_its_anchors_and_its_paint() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>5</xdr:col><xdr:colOff>12699</xdr:colOff>
+      <xdr:row>8</xdr:row><xdr:rowOff>85725</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>7</xdr:col><xdr:colOff>590550</xdr:colOff>
+      <xdr:row>9</xdr:row><xdr:rowOff>123825</xdr:rowOff></xdr:to>
+    <xdr:sp macro="" textlink="">
+      <xdr:spPr>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+        <a:noFill/>
+        <a:ln w="28575"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>
+      </xdr:spPr>
+    </xdr:sp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+  <xdr:oneCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="952500" cy="476250"/>
+    <xdr:pic>
+      <xdr:blipFill><a:blip r:embed="rId7"/></xdr:blipFill>
+      <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        assert_eq!(found.len(), 2);
+
+        let (rectangle, embed) = &found[0];
+        assert_eq!(embed.as_deref(), None);
+        assert_eq!(rectangle.from.col, 5);
+        assert_eq!(rectangle.from.col_off, 12699);
+        assert_eq!(rectangle.to.map(|to| (to.col, to.row)), Some((7, 9)));
+        let crate::ir::DrawingKind::Shape(shape) = &rectangle.kind else {
+            panic!("the first anchor holds a shape");
+        };
+        assert_eq!(shape.geometry, "rect");
+        assert_eq!(shape.fill, None, "a:noFill leaves the shape unpainted");
+        let line = shape.line.as_ref().expect("the shape is ruled");
+        assert_eq!(line.color, "FF0000");
+        assert_eq!(line.width, 28575, "three pixels at 96 dpi");
+
+        let (picture, embed) = &found[1];
+        assert_eq!(embed.as_deref(), Some("rId7"));
+        assert_eq!(picture.extent, Some((952500, 476250)));
+        assert!(matches!(picture.kind, crate::ir::DrawingKind::Picture { .. }));
+    }
+
+    /// A shape can name a theme colour and shade it rather than state one.
+    #[test]
+    fn a_scheme_colour_is_resolved_and_shaded() {
+        let theme = Theme {
+            colours: vec![
+                "000000".into(), "FFFFFF".into(), "44546A".into(), "E7E6E6".into(),
+                "4472C4".into(),
+            ],
+            ..Theme::default()
+        };
+        let xml = r##"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:sp>
+      <xdr:spPr>
+        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+        <a:solidFill><a:schemeClr val="accent1"/></a:solidFill>
+        <a:ln><a:solidFill><a:schemeClr val="accent1"><a:shade val="50000"/></a:schemeClr></a:solidFill></a:ln>
+      </xdr:spPr>
+    </xdr:sp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &theme);
+        let crate::ir::DrawingKind::Shape(shape) = &found[0].0.kind else {
+            panic!("the anchor holds a shape");
+        };
+        assert_eq!(shape.fill.as_deref(), Some("4472C4"));
+        assert_eq!(
+            shape.line.as_ref().map(|line| line.color.as_str()),
+            Some("223962"),
+            "a 50% shade halves every channel"
+        );
     }
 
     /// An indent is a level, not a measurement, and it survives whichever way

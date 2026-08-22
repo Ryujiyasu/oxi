@@ -76,6 +76,15 @@ impl OoxmlArchive {
         }
     }
 
+    /// Try to read a binary part, returning None if not found
+    pub fn try_read_bytes(&mut self, name: &str) -> Result<Option<Vec<u8>>, OxiError> {
+        match self.read_binary_part(name) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(OxiError::MissingPart(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// List all file names in the archive
     pub fn file_names(&self) -> Vec<String> {
         (0..self.archive.len())

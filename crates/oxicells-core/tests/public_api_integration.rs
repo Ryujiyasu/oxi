@@ -203,6 +203,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         auto_filter: None,
         declared_range: None,
         tables: Vec::new(),
+            drawings: Vec::new(),
         unsupported_elements: vec![],
     }
 }

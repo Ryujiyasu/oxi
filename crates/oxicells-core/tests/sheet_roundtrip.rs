@@ -30,6 +30,7 @@ fn blank_sheet(name: &str) -> Sheet {
         auto_filter: None,
         declared_range: None,
         tables: Vec::new(),
+        drawings: Vec::new(),
         unsupported_elements: Vec::new(),
     }
 }
