@@ -2990,6 +2990,16 @@ mod windows_draw {
             // of its boxes at four fifths, which is 22 pixels a line where
             // Yu Gothic UI's own is 28.
             let tall = tall * paragraph.line_scale.unwrap_or(1.0);
+            // A paragraph that pins its pitch outright does NOT centre its
+            // glyphs in it the way this does. `_xlsx_shape_pitch.py` sweeps
+            // the pinned pitch from 15 to 33 point over eight faces: six of
+            // them put the baseline at `0.750 × pitch` with not a pixel of
+            // residual, while this moves it only half as fast. Left as it is
+            // because the other two — メイリオ at three sizes, 游ゴシック
+            // mildly — sit two to three pixels above that line, no design
+            // metric of theirs explains it, and the two corpus workbooks that
+            // pin a pitch are both メイリオ: shipping the law without its
+            // remainder costs them 0.002 each. The remainder is the work.
             for line in broken {
                 lines.push((index, line));
                 pitch.push(tall * scale);
