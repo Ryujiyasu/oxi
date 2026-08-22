@@ -1381,7 +1381,16 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         }
                     }
                     "solidFill" | "fillRef" | "lnRef" => paints = None,
-                    "ln" => in_ln = false,
+                    // A rule states its colour first and how it is broken
+                    // after, so the dash can only be put on the line once the
+                    // whole of `<a:ln>` has been read.
+                    "ln" => {
+                        in_ln = false;
+                        if let Some(line) = shape.line.as_mut() {
+                            line.width = line_width;
+                            line.dash = dash.take();
+                        }
+                    }
                     "spPr" => in_sp_pr = false,
                     "style" => in_style = false,
                     "extLst" => in_ext_lst = in_ext_lst.saturating_sub(1),
@@ -2532,6 +2541,7 @@ mod tests {
         let line = shape.line.as_ref().expect("the shape is ruled");
         assert_eq!(line.color, "FF0000");
         assert_eq!(line.width, 28575, "three pixels at 96 dpi");
+        assert_eq!(line.dash, None);
 
         let (picture, embed) = &found[1];
         assert_eq!(embed.as_deref(), Some("rId7"));
@@ -2587,6 +2597,41 @@ mod tests {
         assert_eq!(first.face.as_deref(), Some("メイリオ"), "the East Asian face wins");
         assert_eq!(first.color.as_deref(), Some("203864"));
         assert_eq!(first.line_pitch, Some(30.0));
+    }
+
+    /// A rule states its colour before it says how it is broken, so the dash
+    /// has to be put on the line at the end of `<a:ln>` rather than when the
+    /// colour is read — `glossary_05`'s dashed frame came out solid until it
+    /// was.
+    #[test]
+    fn a_dash_stated_after_the_colour_still_reaches_the_line() {
+        let xml = r##"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:sp>
+      <xdr:spPr>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+        <a:noFill/>
+        <a:ln w="19050">
+          <a:solidFill><a:srgbClr val="000000"/></a:solidFill>
+          <a:prstDash val="dash"/>
+        </a:ln>
+      </xdr:spPr>
+    </xdr:sp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &Theme::default());
+        let crate::ir::DrawingKind::Shape(shape) = &found[0].0.kind else {
+            panic!("the anchor holds a shape");
+        };
+        let line = shape.line.as_ref().expect("the shape is ruled");
+        assert_eq!(line.dash.as_deref(), Some("dash"));
+        assert_eq!(line.width, 19050);
     }
 
     /// A shape can name a theme colour and shade it rather than state one.

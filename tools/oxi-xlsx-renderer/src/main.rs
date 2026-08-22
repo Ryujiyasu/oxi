@@ -1788,9 +1788,45 @@ mod windows_draw {
     ) {
         let rule = shape.line.as_ref().map(|line| {
             let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
-            let broken = matches!(line.dash.as_deref(), Some(kind) if kind != "solid");
-            let style = if broken && width <= 1 { PS_DASH } else { PS_SOLID };
-            let pen = CreatePen(style, width, colour(Some(&line.color), 0x0000_0000));
+            let shade = colour(Some(&line.color), 0x0000_0000);
+            // A rule wider than a pixel can only be broken by a geometric
+            // pen, and the pattern is stated rather than left to GDI: OOXML's
+            // presets are runs of the line's own width — a `dash` is four on
+            // and three off, a `sysDot` one and one — which is not what any of
+            // GDI's own dash styles draw.
+            let pattern: &[u32] = match line.dash.as_deref() {
+                Some("dot") => &[1, 3],
+                Some("dash") => &[4, 3],
+                Some("lgDash") => &[8, 3],
+                Some("dashDot") => &[4, 3, 1, 3],
+                Some("lgDashDot") => &[8, 3, 1, 3],
+                Some("lgDashDotDot") => &[8, 3, 1, 3, 1, 3],
+                Some("sysDash") => &[3, 1],
+                Some("sysDot") => &[1, 1],
+                Some("sysDashDot") => &[3, 1, 1, 1],
+                Some("sysDashDotDot") => &[3, 1, 1, 1, 1, 1],
+                _ => &[],
+            };
+            let pen = if pattern.is_empty() {
+                CreatePen(PS_SOLID, width, shade)
+            } else {
+                let brush = LOGBRUSH { lbStyle: BS_SOLID, lbColor: shade, lbHatch: 0 };
+                let runs: Vec<u32> = pattern
+                    .iter()
+                    .map(|part| (part * width.max(1) as u32).max(1))
+                    .collect();
+                let held = ExtCreatePen(
+                    PEN_STYLE(PS_GEOMETRIC.0 | PS_USERSTYLE.0 | PS_ENDCAP_FLAT.0),
+                    width.max(1) as u32,
+                    &brush,
+                    Some(&runs),
+                );
+                if held.is_invalid() {
+                    CreatePen(PS_SOLID, width, shade)
+                } else {
+                    held
+                }
+            };
             (pen, width)
         });
         let held = rule.map(|(pen, _)| SelectObject(dc, pen));
@@ -2755,10 +2791,35 @@ mod windows_draw {
 
             // What hangs over the grid is drawn last, so it covers the cells
             // it is laid over rather than the other way round.
+            let telling = std::env::var("OXI_XLSX_DUMP_DRAWINGS").is_ok();
             for drawn in &sheet.drawings {
                 let Some(box_) = super::drawing_box(drawn, layout, scale) else {
+                    if telling {
+                        eprintln!("drawing off the picture: from {:?}", drawn.from);
+                    }
                     continue;
                 };
+                if telling {
+                    let what = match &drawn.kind {
+                        DrawingKind::Picture { bytes } => format!("picture {} bytes", bytes.len()),
+                        DrawingKind::Shape(shape) => format!(
+                            "{} fill {:?} line {:?} says {:?}",
+                            shape.geometry,
+                            shape.fill,
+                            shape.line.as_ref().map(|line| (&line.color, line.width, &line.dash)),
+                            shape.text.as_ref().map(|said| said
+                                .paragraphs
+                                .iter()
+                                .map(|held| held.text.chars().take(12).collect::<String>())
+                                .collect::<Vec<_>>()),
+                        ),
+                        other => format!("{other:?}"),
+                    };
+                    eprintln!(
+                        "drawing {},{} to {},{}  {what}",
+                        box_.left, box_.top, box_.right, box_.bottom
+                    );
+                }
                 match &drawn.kind {
                     DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
                     DrawingKind::Shape(held) => {
