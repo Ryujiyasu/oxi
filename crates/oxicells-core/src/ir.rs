@@ -267,6 +267,11 @@ pub struct Drawing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extent: Option<(i64, i64)>,
     pub kind: DrawingKind,
+    /// Where it sits as fractions of its parent's box, for a shape that hangs
+    /// on a chart rather than on the grid: a chart keeps the boxes it is
+    /// annotated with in a part of its own, anchored that way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<Frame>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -394,6 +399,11 @@ pub struct Chart {
     pub category_axis: Option<ChartAxis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend: Option<Legend>,
+    /// What the chart is annotated with: text boxes and rules kept in a part
+    /// of their own and placed as fractions of the chart's box. The corpus's
+    /// charts carry their footnotes there rather than in a cell.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shapes: Vec<Drawing>,
     /// The chart's own background, and the plot rectangle's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,

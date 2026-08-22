@@ -1118,6 +1118,9 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut found: Vec<(Drawing, Option<String>)> = Vec::new();
+    // Where a chart's own shape sits, as fractions of the chart's box.
+    let mut frame: Option<(f64, f64)> = None;
+    let mut frame_to: Option<(f64, f64)> = None;
 
     let blank = Anchor { col: 0, col_off: 0, row: 0, row_off: 0 };
     let mut from = blank;
@@ -1183,7 +1186,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
         if let Some(e) = start {
             let name = local_name(e.name().as_ref());
             match name.as_str() {
-                "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
+                "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor"
+                // A shape that hangs on a chart rather than on the grid
+                // is anchored by fractions of the chart's own box.
+                | "relSizeAnchor" | "absSizeAnchor" => {
+                    frame = None;
+                    frame_to = None;
                     from = blank;
                     to = None;
                     extent = None;
@@ -1212,6 +1220,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     to = Some(blank);
                 }
                 "col" | "colOff" | "row" | "rowOff" => number.clear(),
+                "x" | "y" if corner.is_some() => number.clear(),
                 "ext" => {
                     let cx = get_attr(e, "cx").and_then(|v| v.parse().ok()).unwrap_or(0);
                     let cy = get_attr(e, "cy").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -1488,6 +1497,19 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             }
                         }
                     }
+                    "x" | "y" if corner.is_some() => {
+                        let held = number.trim().parse::<f64>().unwrap_or(0.0);
+                        let corner = if corner == Some(true) {
+                            frame.get_or_insert((0.0, 0.0))
+                        } else {
+                            frame_to.get_or_insert((0.0, 0.0))
+                        };
+                        if name == "x" {
+                            corner.0 = held;
+                        } else {
+                            corner.1 = held;
+                        }
+                    }
                     "from" | "to" => corner = None,
                     "srgbClr" | "schemeClr" | "sysClr" => {
                         if let (Some((hex, mods)), Some(part)) = (colour.take(), paints) {
@@ -1598,13 +1620,15 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                         (size.1 as f64 * down) as i64,
                                     )),
                                     kind,
+                                    frame: None,
                                 },
                                 if picture { embed.take() } else { None },
                             ));
                             let _ = (off, ch_off);
                         }
                     }
-                    "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
+                    "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor"
+                    | "relSizeAnchor" | "absSizeAnchor" => {
                         // A group's children have been pushed one by one; the
                         // group itself draws nothing.
                         if group.is_none() {
@@ -1616,8 +1640,23 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 kind,
                                 DrawingKind::Picture { .. } | DrawingKind::Chart(_)
                             );
+                            let held = frame.take().map(|(x, y)| {
+                                let (to_x, to_y) = frame_to.take().unwrap_or((x, y));
+                                crate::ir::Frame {
+                                    x,
+                                    y,
+                                    w: (to_x - x).max(0.0),
+                                    h: (to_y - y).max(0.0),
+                                }
+                            });
                             found.push((
-                                Drawing { from, to: to.take(), extent: extent.take(), kind },
+                                Drawing {
+                                    from,
+                                    to: to.take(),
+                                    extent: extent.take(),
+                                    kind,
+                                    frame: held,
+                                },
                                 if named { embed.take() } else { None },
                             ));
                         }
@@ -2662,6 +2701,34 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                                             // A chart nothing can draw is left
                                             // out rather than half-drawn.
                                             None => continue,
+                                        }
+                                        // The boxes a chart is annotated with
+                                        // hang from a part of its own.
+                                        let beside = graph
+                                            .rsplit_once('/')
+                                            .map(|(dir, file)| {
+                                                format!("{dir}/_rels/{file}.rels")
+                                            })
+                                            .unwrap_or_default();
+                                        if let Some(xml) = archive.try_read_part(&beside)? {
+                                            for rel in parse_relationships(&xml)?.values() {
+                                                if !rel.rel_type.ends_with("/chartUserShapes") {
+                                                    continue;
+                                                }
+                                                let held = part_beside(&graph, &rel.target);
+                                                if let Some(body) =
+                                                    archive.try_read_part(&held)?
+                                                {
+                                                    chart.shapes.extend(
+                                                        parse_drawing_xml(&body, &theme)
+                                                            .into_iter()
+                                                            .map(|(drawn, _)| drawn)
+                                                            .filter(|drawn| {
+                                                                drawn.frame.is_some()
+                                                            }),
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                     _ => {}

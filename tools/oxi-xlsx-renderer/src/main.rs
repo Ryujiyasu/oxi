@@ -609,6 +609,36 @@ pub(crate) fn advances(
     })
 }
 
+/// Where each character of a shape's text lands, from the left of the line.
+///
+/// The advances are the font's own, scaled by the exact em rather than the
+/// whole-pixel one the device draws at, and accumulated before they are
+/// rounded — which is how Excel steps a shape's text.
+#[cfg(windows)]
+pub(crate) fn shape_run(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+) -> Option<Vec<i32>> {
+    held(|counter| {
+        let letters: Vec<char> = text.chars().collect();
+        let shares = counter.design_advances(face, bold, italic, &letters)?;
+        let em = points * 96.0 / 72.0;
+        let mut at = 0.0f32;
+        let mut held = Vec::with_capacity(shares.len());
+        let mut was = 0;
+        for share in shares {
+            at += share * em;
+            let now = at.round() as i32;
+            held.push(now - was);
+            was = now;
+        }
+        Some(held)
+    })
+}
+
 /// One counter for the life of the program, holding its device context and
 /// remembering every character it has measured. The renderer draws on one
 /// thread, so it lives there.
@@ -1073,6 +1103,13 @@ struct LineCounter {
     advances: std::cell::RefCell<AdvanceCache>,
     /// What the device says about each font as a whole.
     shapes: std::cell::RefCell<std::collections::HashMap<FontKey, LineShape>>,
+    /// What each character advances as a share of the em, measured once per
+    /// face at a size large enough that the device's own rounding is lost in
+    /// it. A shape's text is set by these rather than by the whole-pixel
+    /// advances a cell's is: see `design_advances`.
+    design: std::cell::RefCell<
+        std::collections::HashMap<(String, bool, bool), std::collections::HashMap<char, f32>>,
+    >,
 }
 
 #[cfg(windows)]
@@ -1087,6 +1124,7 @@ impl LineCounter {
                 dc,
                 advances: std::cell::RefCell::new(std::collections::HashMap::new()),
                 shapes: std::cell::RefCell::new(std::collections::HashMap::new()),
+                design: std::cell::RefCell::new(std::collections::HashMap::new()),
             })
         }
     }
@@ -1138,6 +1176,72 @@ impl LineCounter {
         };
         self.shapes.borrow_mut().insert(key, shape);
         Some(shape)
+    }
+
+    /// What each of these characters advances as a share of the em.
+    ///
+    /// A cell's text is set by whole-pixel advances, which is what Excel
+    /// measures a wrap against. A shape's is not: `311e2f9c271e_zuhyo`'s
+    /// footnote is ＭＳ 明朝 at 11 point, whose glyphs are 13 pixels of ink in
+    /// both pictures, but Excel steps 14.67 pixels a character where the
+    /// device's own advance at that size is 16 — three quarters of a pixel a
+    /// character, which is forty by the end of the line. So the shape is
+    /// measured once at a large size, where the device's rounding is a
+    /// thousandth of the answer, and the exact em does the rest.
+    fn design_advances(
+        &self,
+        face: &str,
+        bold: bool,
+        italic: bool,
+        letters: &[char],
+    ) -> Option<Vec<f32>> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::SIZE;
+        use windows::Win32::Graphics::Gdi::*;
+        /// Big enough that a whole-pixel advance is a rounding of a thousandth.
+        const EM: i32 = 2048;
+        let key = (face.to_string(), bold, italic);
+        let mut held = self.design.borrow_mut();
+        let known = held.entry(key).or_default();
+        let wanted: Vec<char> = letters
+            .iter()
+            .copied()
+            .filter(|letter| !known.contains_key(letter))
+            .collect();
+        if !wanted.is_empty() {
+            unsafe {
+                let name: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+                let font = CreateFontW(
+                    -EM,
+                    0,
+                    0,
+                    0,
+                    if bold { 700 } else { 400 },
+                    u32::from(italic),
+                    0,
+                    0,
+                    DEFAULT_CHARSET.0 as u32,
+                    OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32,
+                    ANTIALIASED_QUALITY.0 as u32,
+                    (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                    PCWSTR(name.as_ptr()),
+                );
+                if font.is_invalid() {
+                    return None;
+                }
+                let previous = SelectObject(self.dc, font);
+                for letter in wanted {
+                    let mut measured = SIZE::default();
+                    let one: Vec<u16> = letter.encode_utf16(&mut [0; 2]).to_vec();
+                    let ok = GetTextExtentPoint32W(self.dc, &one, &mut measured).as_bool();
+                    known.insert(letter, if ok { measured.cx as f32 / EM as f32 } else { 0.0 });
+                }
+                SelectObject(self.dc, previous);
+                let _ = DeleteObject(font);
+            }
+        }
+        Some(letters.iter().map(|letter| known[letter]).collect())
     }
 
     /// What each of these characters advances, in whole pixels.
@@ -2576,6 +2680,28 @@ mod windows_draw {
             }
         }
         SetTextAlign(dc, TA_TOP | TA_LEFT);
+
+        // What the chart is annotated with, over everything it plots. These
+        // are text boxes in a part of their own — the corpus's charts keep
+        // their footnotes there rather than in a cell — so what they say is
+        // drawn whether or not a sheet's own shapes are.
+        for drawn in &chart.shapes {
+            let (Some(frame), oxicells_core::ir::DrawingKind::Shape(held)) =
+                (drawn.frame, &drawn.kind)
+            else {
+                continue;
+            };
+            let over = RECT {
+                left: box_.left + (frame.x * across as f64).round() as i32,
+                top: box_.top + (frame.y * down as f64).round() as i32,
+                right: box_.left + ((frame.x + frame.w) * across as f64).round() as i32,
+                bottom: box_.top + ((frame.y + frame.h) * down as f64).round() as i32,
+            };
+            shape(dc, held, over, scale, normal);
+            if let Some(said) = &held.text {
+                says(dc, said, over, scale, normal, false);
+            }
+        }
     }
 
     /// How many ticks stand between the ends of a scale.
@@ -2783,17 +2909,54 @@ mod windows_draw {
             let letters = wide(line);
             let letters = &letters[..letters.len() - 1];
             if !letters.is_empty() {
+                // Stepped by the font's own advances at the exact em, not by
+                // the whole-pixel ones the device would use — but only for a
+                // shape. A note is laid out by the engine that lays out
+                // cells, and that one steps in whole pixels.
+                let steps = (!note)
+                    .then(|| {
+                        super::shape_run(
+                            &face,
+                            paragraph.size,
+                            paragraph.bold,
+                            paragraph.italic,
+                            line,
+                        )
+                    })
+                    .flatten();
                 let mut measured = SIZE::default();
                 let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
+                let width = match &steps {
+                    Some(steps) => steps.iter().sum::<i32>(),
+                    None => measured.cx,
+                };
                 let left = match paragraph.align.as_deref() {
                     Some("ctr") => {
-                        area.left + ((area.right - area.left - measured.cx) as f32 / 2.0).round()
-                            as i32
+                        area.left + ((area.right - area.left - width) as f32 / 2.0).round() as i32
                     }
-                    Some("r") => area.right - measured.cx,
+                    Some("r") => area.right - width,
                     _ => area.left,
                 };
-                let _ = TextOutW(dc, left, at.round() as i32 + leading[step], letters);
+                let down = at.round() as i32 + leading[step];
+                match &steps {
+                    // One `dx` a UTF-16 unit, so a character outside the basic
+                    // plane carries its whole advance on the first of its two.
+                    Some(steps) if steps.len() == letters.len() => {
+                        let _ = ExtTextOutW(
+                            dc,
+                            left,
+                            down,
+                            ETO_OPTIONS(0),
+                            None,
+                            PCWSTR(letters.as_ptr()),
+                            letters.len() as u32,
+                            Some(steps.as_ptr()),
+                        );
+                    }
+                    _ => {
+                        let _ = TextOutW(dc, left, down, letters);
+                    }
+                }
             }
             at += pitch[step];
             SelectObject(dc, held);
