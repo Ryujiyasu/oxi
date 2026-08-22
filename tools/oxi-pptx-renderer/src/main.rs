@@ -286,8 +286,9 @@ fn sh_paragraphs(content: &ShapeContent) -> Option<&Vec<oxislides_core::ir::Slid
 /// height — the centring law is `baseline = inner_top + (inner_h - block_h)/2
 /// + first_line_ascent`, anchor_probe / anchor_trigger render-truth).
 ///
-/// When the block is taller than the inner area the offset clamps to 0
-/// (top-aligned; conservative — overflow behaviour not yet measured).
+/// A block TALLER than the inner area is NOT clamped: both anchors keep their
+/// formula and let the block overflow (upward for "b", equally for "ctr"), as
+/// PowerPoint does — `anchorb` probe, 12 arms, and d24 s1 for the centre.
 #[cfg(windows)]
 fn compute_shape_anchor_off(
     dc: windows::Win32::Graphics::Gdi::HDC,
@@ -384,6 +385,16 @@ fn compute_shape_anchor_off(
         } else {
             (inner_h - block_h).max(0.0) / 2.0
         }
+    } else if anchorb_on() {
+        // ★The BOTTOM anchor does not clamp either. Probe `anchorb`, 12 arms
+        // (t / ctr / b x 1..4 lines of 32pt in a 57.6pt text area): PowerPoint
+        // holds the LAST baseline at 201.53 for two, three and four lines and
+        // lets the block run off the TOP of the box, matching the unclamped
+        // offset to 0.03pt at every count. Clamping at zero pinned the block
+        // to the box top instead -- one whole line-height per overflowing
+        // line too low. 246 shapes on the dev corpus's slides anchor bottom,
+        // all in the eight SlidesCarnival-family decks.
+        inner_h - block_h
     } else {
         (inner_h - block_h).max(0.0)
     }
@@ -9847,6 +9858,12 @@ unsafe fn draw_line_runs(
 /// is set.
 fn phlevel_on() -> bool {
     std::env::var("OXI_PHLEVEL_DISABLE").is_err()
+}
+
+/// A bottom-anchored block taller than its box overflows upward rather than
+/// being clamped to the box top, unless this is set.
+fn anchorb_on() -> bool {
+    std::env::var("OXI_ANCHORB_DISABLE").is_err()
 }
 
 /// Run-level styling within a paragraph is applied unless this is set.
