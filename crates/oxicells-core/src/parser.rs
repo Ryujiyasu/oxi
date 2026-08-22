@@ -3114,7 +3114,13 @@ mod tests {
         let said = shape.text.as_ref().expect("the shape says something");
         assert_eq!(said.anchor.as_deref(), Some("ctr"));
         assert_eq!(said.insets, (288000, 72000, 288000, 72000));
-        assert_eq!(said.paragraphs.len(), 1, "the trailing empty one is a marker");
+        // The trailing empty paragraph is a line, not a marker: Excel moves
+        // the ink of a middle-anchored block half a line up and a
+        // bottom-anchored one a whole line up when it is there
+        // (`_xlsx_shape_block.py`). It states its own size in `endParaRPr`.
+        assert_eq!(said.paragraphs.len(), 2);
+        assert_eq!(said.paragraphs[1].text, "");
+        assert_eq!(said.paragraphs[1].size, 20.0);
         let first = &said.paragraphs[0];
         assert_eq!(first.text, "この計算書は、所得を計算するものです。");
         assert_eq!(first.align.as_deref(), Some("ctr"));
