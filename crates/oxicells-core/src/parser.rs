@@ -327,6 +327,7 @@ struct XfRecord {
     applies_number_format: bool,
     horizontal_align: Option<String>,
     vertical_align: Option<String>,
+    indent: u32,
     wrap_text: bool,
     stacked_text: bool,
     shrink_to_fit: bool,
@@ -632,6 +633,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(0),
                             horizontal_align: None,
+                            indent: 0,
                             vertical_align: None,
                             wrap_text: false,
                             stacked_text: false,
@@ -654,6 +656,9 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
                         current_xf.vertical_align = get_attr(&e, "vertical");
+                        current_xf.indent = get_attr(&e, "indent")
+                            .and_then(|level| level.parse().ok())
+                            .unwrap_or(0);
                         current_xf.wrap_text =
                             matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
                         // 255 is not an angle: it is Excel's way of saying the
@@ -761,6 +766,9 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
                         current_xf.vertical_align = get_attr(&e, "vertical");
+                        current_xf.indent = get_attr(&e, "indent")
+                            .and_then(|level| level.parse().ok())
+                            .unwrap_or(0);
                         current_xf.wrap_text =
                             matches!(get_attr(&e, "wrapText").as_deref(), Some("1") | Some("true"));
                         // 255 is not an angle: it is Excel's way of saying the
@@ -788,6 +796,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(0),
                             horizontal_align: None,
+                            indent: 0,
                             vertical_align: None,
                             wrap_text: false,
                             stacked_text: false,
@@ -949,6 +958,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         bg_color: fill.bg_color,
         number_format,
         horizontal_align: xf.horizontal_align.clone(),
+        indent: xf.indent,
         vertical_align: xf.vertical_align.clone(),
         wrap_text: xf.wrap_text,
         stacked_text: xf.stacked_text,
@@ -1959,6 +1969,34 @@ mod tests {
         assert!(header.bold);
         assert_eq!(header.font_name.as_deref(), Some("ＭＳ Ｐゴシック"));
         assert_eq!(header.font_size, Some(9.0));
+    }
+
+    /// An indent is a level, not a measurement, and it survives whichever way
+    /// the alignment element is written: quick-xml hands an empty element to a
+    /// different arm than one with children, and only one of them used to be
+    /// read.
+    #[test]
+    fn an_indent_is_read_either_way_the_alignment_is_written() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1">
+      <alignment horizontal="left" indent="2"/>
+    </xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1">
+      <alignment horizontal="distributed" indent="3" vertical="center"/>
+    </xf>
+  </cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+        assert_eq!(resolve_cell_style(0, &sheet).indent, 0);
+        assert_eq!(resolve_cell_style(1, &sheet).indent, 2);
+        assert_eq!(resolve_cell_style(2, &sheet).indent, 3);
     }
 
     #[test]

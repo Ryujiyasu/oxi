@@ -395,7 +395,8 @@ fn row_pixels(
             // keeps either side of it, which is the cell font's own — five
             // pixels for an eight-pixel digit, more for a bigger one.
             let (left_room, right_room) = gutters(face, size, cell.style.bold, cell.style.italic);
-            let width = width - left_room - right_room;
+            let (before, after) = indent_room(&cell.style);
+            let width = width - left_room - right_room - before - after;
             counter
                 .and_then(|counter| {
                     counter.lines(
@@ -510,6 +511,42 @@ fn may_break(before: char, after: char) -> bool {
     // space — a Latin word, and a web address with it. Excel puts a 94
     // character URL on two lines rather than breaking it after its colon.
     ideographic(before) || ideographic(after)
+}
+
+/// The pieces a distributed cell is spread by: a run of plain Latin letters
+/// travels whole, and everything else stands on its own.
+///
+/// Measured on `_xlsx_distributed.py`: `(1-2)` sits in the middle of its cell
+/// as a single piece, brackets and hyphen and all, while `（①－②）` is pulled
+/// apart into five and `あ、い` into three. So this is *not* the line-breaking
+/// rule — Excel spreads a comma away from the character it may not follow —
+/// but the plainer one of whether both characters are ASCII. A space breaks a
+/// piece even between two of them: `A B` is spread to the cell's two edges.
+/// Returns how many characters are in each piece.
+pub(crate) fn distribution(line: &str) -> Vec<usize> {
+    let clustered = |before: char, after: char| {
+        before.is_ascii()
+            && after.is_ascii()
+            && !before.is_ascii_whitespace()
+            && !after.is_ascii_whitespace()
+    };
+    let mut pieces = Vec::new();
+    let mut held = 0usize;
+    let mut before: Option<char> = None;
+    for letter in line.chars() {
+        if let Some(before) = before {
+            if !clustered(before, letter) {
+                pieces.push(held);
+                held = 0;
+            }
+        }
+        held += 1;
+        before = Some(letter);
+    }
+    if held > 0 {
+        pieces.push(held);
+    }
+    pieces
 }
 
 /// How far a run of text reaches, measured the way Excel measures it: each
@@ -629,6 +666,43 @@ pub(crate) fn centred_across(row: &Row, cell: &Cell, spans_columns: u32) -> (u32
 /// together up to an eight-pixel digit, seven to twelve, nine to sixteen,
 /// eleven beyond. The left keeps one more than the right, which is the three
 /// and two that the small sizes show.
+/// One level of indent, in 96-dpi pixels.
+///
+/// Measured on `_xlsx_indent.py`: fifteen pixels a level, the same for every
+/// face and size tried — 8, 11 and 14 point, ＭＳ Ｐゴシック, ＭＳ ゴシック,
+/// Meiryo UI, Calibri, 游ゴシック — and the same again in a workbook whose
+/// Normal font is not the default. Unlike the room either side of a cell,
+/// which follows the font's own digit, this is a constant.
+pub(crate) const INDENT: f32 = 15.0;
+
+/// How far this cell's text is pushed in from the edge it sits against.
+pub(crate) fn indent_px(style: &CellStyle) -> f32 {
+    INDENT * style.indent as f32
+}
+
+/// How much room an indent takes from a cell, before and after the text.
+///
+/// Against the left or the right edge the indent comes off that edge alone.
+/// A distributed cell gives it up at **both** edges: at `indent="1"` its text
+/// runs from 18 to 139 of a column whose room is 3 to 154, which is the
+/// fifteen pixels off each end. A centred cell loses the same total from its
+/// right, which is why its text sits 15px left of the middle a level rather
+/// than staying in the middle — all measured on `_xlsx_distributed.py` and
+/// `_xlsx_indent.py`.
+///
+/// The wrapped line is broken in what is left, and both kinds do wrap tighter
+/// with an indent: 4, 4, 5, 7 lines at indents 0 to 3 against the left edge,
+/// 4, 5, 10, 20 centred (`_xlsx_indent_wrap.py`).
+pub(crate) fn indent_room(style: &CellStyle) -> (f32, f32) {
+    let indent = indent_px(style);
+    match style.horizontal_align.as_deref() {
+        Some("distributed") | Some("justify") => (indent, indent),
+        Some("center") | Some("centre") | Some("centerContinuous") => (0.0, indent * 2.0),
+        Some("right") => (0.0, indent),
+        _ => (indent, 0.0),
+    }
+}
+
 pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32, f32) {
     let digit = advances(face, points, bold, italic, "0")
         .and_then(|held| held.first().copied())
@@ -1826,6 +1900,12 @@ mod windows_draw {
                         }
                     }
 
+                    // An indent takes fifteen pixels a level off the cell,
+                    // from whichever edge its alignment says.
+                    let (before, after) = super::indent_room(&cell.style);
+                    area.left += (before * scale).round() as i32;
+                    area.right -= (after * scale).round() as i32;
+
                     // A cell told to shrink to fit is drawn smaller until its
                     // text fits, and the size it settles on is not a scaling
                     // of the one it asks for: measured across three faces and
@@ -2144,26 +2224,33 @@ mod windows_draw {
                         if !letters.is_empty() {
                             let width = width_of(line);
                             let room = area.right - area.left;
-                            let left = match placed {
-                                Align::Left | Align::Spread => area.left,
-                                Align::Right => area.right - width,
-                                // The odd pixel goes to the left of the text.
-                                Align::Centre => {
-                                    area.left + ((room - width) as f32 / 2.0).ceil() as i32
-                                }
-                            };
                             // A distributed cell fills its whole width, which
                             // is how a Japanese sheet sets a heading: 第 ３ 表,
-                            // not 第３表. The gap goes between every pair of
-                            // characters, with half of one at each end.
-                            let spread = placed == Align::Spread
-                                && line.chars().count() > 1
-                                && room > width;
+                            // not 第３表. It is spread by the pieces it could
+                            // break a line at, so a Latin word travels whole,
+                            // the first piece sits against the left edge and
+                            // the last against the right, with nothing kept
+                            // back at either end. A single piece is centred
+                            // instead — measured on _xlsx_distributed.py.
+                            let pieces = super::distribution(line);
+                            let spread =
+                                placed == Align::Spread && pieces.len() > 1 && room > width;
+                            let middle = area.left + ((room - width) as f32 / 2.0).ceil() as i32;
+                            let left = match placed {
+                                Align::Left => area.left,
+                                Align::Right => area.right - width,
+                                // The odd pixel goes to the left of the text.
+                                Align::Centre => middle,
+                                Align::Spread if room > width => middle,
+                                Align::Spread => area.left,
+                            };
                             if spread {
-                                let letters_in = line.chars().count() as i32;
                                 let spare = room - width;
-                                let gap = spare / letters_in;
+                                let gaps = pieces.len() as i32 - 1;
                                 let mut steps: Vec<i32> = Vec::new();
+                                let mut piece = 0usize;
+                                let mut left_in_piece = pieces[0];
+                                let mut given = 0;
                                 for letter in line.chars() {
                                     let one = wide(&letter.to_string());
                                     let mut measured = SIZE::default();
@@ -2178,6 +2265,18 @@ mod windows_draw {
                                     } else {
                                         0
                                     };
+                                    left_in_piece -= 1;
+                                    // The gap falls after the last character
+                                    // of a piece, and the spare room is shared
+                                    // out from the total so it never drifts.
+                                    let mut gap = 0;
+                                    if left_in_piece == 0 && piece + 1 < pieces.len() {
+                                        piece += 1;
+                                        let want = (spare * piece as i32 + gaps - 1) / gaps;
+                                        gap = want - given;
+                                        given = want;
+                                        left_in_piece = pieces[piece];
+                                    }
                                     // A character written as a surrogate pair
                                     // takes two of the units GDI steps by.
                                     for step in 0..letter.len_utf16() {
@@ -2186,7 +2285,7 @@ mod windows_draw {
                                 }
                                 let _ = ExtTextOutW(
                                     dc,
-                                    area.left + gap / 2,
+                                    area.left,
                                     at,
                                     ETO_OPTIONS(0),
                                     None,
