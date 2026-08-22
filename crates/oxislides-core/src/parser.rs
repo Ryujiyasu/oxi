@@ -620,6 +620,37 @@ fn parse_layout_ph_lststyles(
     out
 }
 
+/// `p:presentation/@firstSlideNum` -- the number PowerPoint prints for the
+/// FIRST slide of the deck. An absent attribute means 1.
+///
+/// Derived, not assumed (`gen_pptx_slidenum.py` + `read_pptx_slidenum.py`,
+/// three 6-slide arms exported by PowerPoint itself): with the attribute
+/// absent the deck prints 1..6, with `firstSlideNum="5"` it prints 5..10 and
+/// with `"100"` it prints 100..105 -- so the printed number is the slide's
+/// 1-based position plus this, less one. The same probe pins that the value
+/// CACHED inside the field is ignored: a field holding `<a:t>777</a:t>` on
+/// slide 3 printed 3 / 7 / 102 in the three arms.
+fn parse_first_slide_num(pres_xml: &str) -> u32 {
+    let mut reader = Reader::from_str(pres_xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                if local_name(e.name().as_ref()) == "presentation" {
+                    return get_attr(&e, "firstSlideNum")
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(1);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    1
+}
+
 /// Read `p:embeddedFontLst` and pull in every `.fntdata` part it names.
 ///
 /// The list sits in `ppt/presentation.xml`; each `p:embeddedFont` carries one
@@ -692,16 +723,30 @@ fn parse_embedded_fonts(
     out
 }
 
+/// Where a slide sits in its deck.
+///
+/// The two travel together because a `slidenum` field prints their sum less
+/// one, so splitting them into separate parameters only ever invites them to
+/// be passed apart.
+struct SlidePos {
+    /// 1-based position in `p:sldIdLst` order -- what `Slide.index` carries.
+    index: usize,
+    /// `p:presentation/@firstSlideNum`; 1 when the deck does not state it.
+    first_slide_num: u32,
+}
+
 /// Parse a single slide XML into shapes.
 fn parse_slide(
     xml: &str,
-    slide_index: usize,
+    pos: SlidePos,
     archive: &mut OoxmlArchive,
     slide_rels_path: &str,
     master_ph_geoms: &HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
     master_ph_anchors: &HashMap<(Option<String>, Option<String>), String>,
     theme_colors: &HashMap<String, String>,
 ) -> Result<Slide, PptxError> {
+    let SlidePos { index: slide_index, first_slide_num } = pos;
+
     // Parse slide relationships for image resolution
     let rels = if let Ok(Some(rels_xml)) = archive.try_read_part(slide_rels_path) {
         parse_relationships(&rels_xml).unwrap_or_default()
@@ -1080,6 +1125,14 @@ fn parse_slide(
 
     // Run state
     let mut in_run = false;
+    // `<a:fld>` is a run that carries a FIELD rather than literal text: the
+    // `<a:t>` inside it is only PowerPoint's cache of what the field last
+    // printed, and PowerPoint recomputes it on every render. It is parsed
+    // exactly like `<a:r>` -- same rPr, same a:t -- with the text substituted
+    // when the element closes. `None` here means the current run is a plain
+    // `<a:r>`. See `parse_first_slide_num` for the derivation.
+    let mut fld_type: Option<String> = None;
+    let s_slidenum = std::env::var("OXI_SLIDENUM_DISABLE").is_err();
     let mut run_text = String::new();
     let mut run_bold = false;
     let mut run_italic = false;
@@ -1762,8 +1815,13 @@ fn parse_slide(
                         let start_at = get_attr(&e, "startAt").and_then(|v| v.parse::<u32>().ok());
                         para_bullet = SlideBullet::AutoNum { kind, start_at };
                     }
-                    "r" if in_paragraph => {
+                    "r" | "fld" if in_paragraph => {
                         in_run = true;
+                        fld_type = if name == "fld" {
+                            get_attr(&e, "type").or_else(|| Some(String::new()))
+                        } else {
+                            None
+                        };
                         run_text.clear();
                         run_bold = false;
                         run_italic = false;
@@ -1885,6 +1943,26 @@ fn parse_slide(
                             if let Ok(p) = v.parse::<f32>() {
                                 shape_fill_alpha = Some((p / 100000.0).clamp(0.0, 1.0));
                             }
+                        }
+                    }
+                    // A field with no cached `<a:t>` is self-closing, so it
+                    // reaches quick-xml on the Empty arm and never on Start --
+                    // the same split that has cost this renderer prstDash,
+                    // prstTxWarp, run alpha and the line ends. It still prints:
+                    // the number does not come from the file.
+                    "fld" if in_paragraph && s_slidenum => {
+                        if get_attr(&e, "type").as_deref() == Some("slidenum") {
+                            para_runs.push(SlideRun {
+                                text: (slide_index as u32 + first_slide_num - 1).to_string(),
+                                font_size: run_font_size,
+                                bold: false,
+                                italic: false,
+                                underline: false,
+                                color: None,
+                                color_alpha: None,
+                                highlight: None,
+                                font_family: run_font_family.clone(),
+                            });
                         }
                     }
                     // `<a:endParaRPr sz="1400"/>` normally has no children, so it
@@ -2796,8 +2874,26 @@ fn parse_slide(
                             ),
                         });
                     }
-                    "r" if in_run => {
+                    "r" | "fld" if in_run => {
                         in_run = false;
+                        // A field's own text is what PowerPoint computes, not
+                        // what the file caches. `slidenum` is the only type in
+                        // the dev corpus (295 fields over 9 decks) and prints
+                        // the slide's 1-based position offset by the deck's
+                        // firstSlideNum; any other type keeps its cached text,
+                        // which is the last value PowerPoint itself wrote.
+                        if let Some(kind) = fld_type.take() {
+                            if kind == "slidenum" {
+                                if s_slidenum {
+                                    run_text = (slide_index as u32 + first_slide_num - 1)
+                                        .to_string();
+                                } else {
+                                    run_text.clear();
+                                }
+                            } else if !s_slidenum {
+                                run_text.clear();
+                            }
+                        }
                         if !run_text.is_empty() {
                             para_runs.push(SlideRun {
                                 text: std::mem::take(&mut run_text),
@@ -5103,6 +5199,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
     // 1. Parse presentation.xml for slide list and slide size
     let pres_xml = archive.read_part("ppt/presentation.xml")?;
     let (slide_infos, slide_width, slide_height) = parse_presentation_slides(&pres_xml)?;
+    let first_slide_num = parse_first_slide_num(&pres_xml);
 
     // 2. Parse presentation relationships
     let rels_xml = archive.read_part("ppt/_rels/presentation.xml.rels")?;
@@ -5188,7 +5285,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
             Some(slide_xml) => {
                 let slide = parse_slide(
                     &slide_xml,
-                    i + 1,
+                    SlidePos { index: i + 1, first_slide_num },
                     &mut archive,
                     &slide_rels_path,
                     &master_ph_geoms,
@@ -5291,7 +5388,7 @@ mod tests {
         let mut ar = archive_of("ppt/slides/slide1.xml", &xml);
         parse_slide(
             &xml,
-            0,
+            SlidePos { index: 0, first_slide_num: 1 },
             &mut ar,
             "ppt/slides/_rels/slide1.xml.rels",
             &HashMap::new(),
@@ -5326,6 +5423,89 @@ mod tests {
         let s = slide_with(r#"<a:headEnd type="none" w="sm" len="sm"/><a:tailEnd/>"#);
         assert!(s.shapes[0].head_end.is_none());
         assert!(s.shapes[0].tail_end.is_none());
+    }
+
+    /// A slide holding one text box whose single paragraph is `body`.
+    fn text_slide_with(body: &str, index: usize, first: u32) -> Slide {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+ <p:cSld><p:spTree>
+  <p:sp>
+   <p:nvSpPr><p:cNvPr id="2" name="t"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+   <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+   <p:txBody><a:bodyPr/><a:lstStyle/><a:p>{body}</a:p></p:txBody>
+  </p:sp>
+ </p:spTree></p:cSld>
+</p:sld>"#
+        );
+        let mut ar = archive_of("ppt/slides/slide1.xml", &xml);
+        parse_slide(
+            &xml,
+            SlidePos { index, first_slide_num: first },
+            &mut ar,
+            "ppt/slides/_rels/slide1.xml.rels",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("slide must parse")
+    }
+
+    fn only_text(s: &Slide) -> String {
+        match &s.shapes[0].content {
+            ShapeContent::TextBox { paragraphs, .. } | ShapeContent::AutoShape { paragraphs, .. } => {
+                paragraphs[0].runs.iter().map(|r| r.text.as_str()).collect()
+            }
+            other => panic!("expected a text shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slidenum_field_prints_the_position_not_the_cache() {
+        // The `<a:t>` inside a field is PowerPoint's cache of the last value it
+        // printed; PowerPoint recomputes it. The probe deck states 777 on its
+        // third slide and PowerPoint prints 3.
+        let s = text_slide_with(
+            r#"<a:r><a:rPr lang="en"/><a:t>p.</a:t></a:r>
+               <a:fld id="{1}" type="slidenum"><a:rPr lang="en"/><a:t>777</a:t></a:fld>"#,
+            3,
+            1,
+        );
+        assert_eq!(only_text(&s), "p.3");
+    }
+
+    #[test]
+    fn slidenum_field_counts_from_first_slide_num() {
+        // firstSlideNum="5" on a six-slide deck prints 5..10 (COM probe).
+        let s = text_slide_with(
+            r#"<a:fld id="{1}" type="slidenum"><a:rPr lang="en"/><a:t>#</a:t></a:fld>"#,
+            3,
+            5,
+        );
+        assert_eq!(only_text(&s), "7");
+    }
+
+    #[test]
+    fn slidenum_field_is_read_in_both_element_forms() {
+        // A field with no cached text is self-closing and reaches quick-xml on
+        // the EMPTY arm; a handler on the Start arm alone is silently inert.
+        let s = text_slide_with(r#"<a:fld id="{1}" type="slidenum"/>"#, 12, 1);
+        assert_eq!(only_text(&s), "12");
+    }
+
+    #[test]
+    fn a_field_of_another_type_keeps_its_cached_text() {
+        // Only `slidenum` is recomputed. A datetime field's cache is the last
+        // string PowerPoint itself wrote, which is the best available answer.
+        let s = text_slide_with(
+            r#"<a:fld id="{1}" type="datetime1"><a:rPr lang="en"/><a:t>3/14/2026</a:t></a:fld>"#,
+            2,
+            1,
+        );
+        assert_eq!(only_text(&s), "3/14/2026");
     }
 
     #[test]
