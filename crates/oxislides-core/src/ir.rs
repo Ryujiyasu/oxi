@@ -318,6 +318,11 @@ pub struct Shape {
     /// for it; every arm of the COM-built `embedsplit` probes does.
     #[serde(default = "default_true")]
     pub wrap_text: bool,
+    /// `a:bodyPr/a:prstTxWarp/@prst` — WordArt text fitting. On an AUTOSHAPE
+    /// PowerPoint stretches the text's ink box onto the shape box exactly; on
+    /// a plain text box it changes nothing.
+    #[serde(default)]
+    pub text_warp: Option<String>,
     /// `a:blipFill/@rotWithShape` — whether the picture inside a shape turns
     /// with the shape's `@rot`. True (the default) for a `p:pic`, whose raster
     /// always follows the shape.
@@ -847,6 +852,11 @@ pub struct SlideRun {
     #[serde(default)]
     pub underline: bool,
     pub color: Option<String>,     // hex color
+    /// `<a:alpha>` inside the run's own `a:solidFill`, 0.0..1.0. d35's
+    /// transition numerals are white at 26.9%, so the gradient behind shows
+    /// through; drawn opaque they read as a solid slab.
+    #[serde(default)]
+    pub color_alpha: Option<f32>,
     /// `a:rPr/a:highlight` -- a filled box behind the run's glyphs, as hex.
     /// PowerPoint draws it the height of the LINE's font (hhea ascent plus
     /// descent) with its bottom on the line box's bottom, and as wide as the

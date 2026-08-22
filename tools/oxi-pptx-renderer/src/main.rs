@@ -613,6 +613,7 @@ fn shape_json(sh: &Shape) -> Value {
         "fill_alpha": sh.fill_alpha,
         "border_color": sh.border_color,
         "border_width": sh.border_width,
+        "text_warp": sh.text_warp,
         "anchor": sh.anchor,
         "l_ins": sh.l_ins,
         "r_ins": sh.r_ins,
@@ -2654,6 +2655,24 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 match &sh.content {
                     ShapeContent::TextBox { paragraphs }
                     | ShapeContent::AutoShape { paragraphs } => {
+                        // WordArt: an AUTOSHAPE carrying `a:prstTxWarp` has its
+                        // text's INK BOX mapped onto the shape box exactly, and
+                        // stretched independently in each axis. Derived from
+                        // PowerPoint's own export (probe `txwarp`, 6 arms over
+                        // three faces and four aspect ratios: ink offset 0.000
+                        // and ink/box ratio 1.000 every time), and confirmed on
+                        // the corpus specimen d35 s4 (box 75.9 x 303.5, ink
+                        // 75.8 x 297.5). A plain TEXT BOX with the same element
+                        // is left alone -- the same probe's textbox arms all
+                        // render at the default 18pt.
+                        if txwarp_on()
+                            && sh.text_warp.is_some()
+                            && matches!(sh.content, ShapeContent::AutoShape { .. })
+                        {
+                            if draw_warped_text(mem_dc, pres, sh, paragraphs, scale) {
+                                continue;
+                            }
+                        }
                         let left_x = x + (sh.l_ins as f64 * scale).round() as i32;
                         let right_x = x
                             + ((sh.width - sh.r_ins) as f64 * scale).round() as i32;
@@ -10053,6 +10072,279 @@ fn fits_line(
         }
     }
     measure_wrap(dc, text, fs, family, bold, italic, scale) <= width_px
+}
+
+/// WordArt text fitting is applied unless this is set.
+fn txwarp_on() -> bool {
+    std::env::var("OXI_TXWARP_DISABLE").is_err()
+}
+
+/// Draw an autoshape's text stretched onto the shape box (WordArt).
+///
+/// Returns false when the shape does not qualify -- no single line of text, an
+/// unmeasurable face -- so the caller falls back to normal layout.
+#[cfg(windows)]
+fn draw_warped_text(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    pres: &Presentation,
+    sh: &Shape,
+    paragraphs: &[oxislides_core::ir::SlideParagraph],
+    scale: f64,
+) -> bool {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
+
+    let texts: Vec<String> = paragraphs
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    if texts.len() != 1 || sh.width <= 0.0 || sh.height <= 0.0 {
+        return false;
+    }
+    let text = &texts[0];
+    let para = match paragraphs.iter().find(|p| {
+        !p.runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<String>()
+            .trim()
+            .is_empty()
+    }) {
+        Some(p) => p,
+        None => return false,
+    };
+    let family = effective_family(
+        dc,
+        &paragraph_family(pres, sh, para, &sh.ph_levels[..], &pres.master_styles.other),
+    );
+    let bold = para.runs.iter().any(|r| r.bold);
+    let italic = para.runs.iter().any(|r| r.italic);
+    let Some((ix0, ix1, iy0, iy1)) = text_ink_box_em(&family, bold, italic, text) else {
+        return false;
+    };
+    let (ink_w, ink_h) = (ix1 - ix0, iy1 - iy0);
+    if ink_w <= 0.0 || ink_h <= 0.0 {
+        return false;
+    }
+    // Vertical scale sets the font size; the horizontal one is asked for
+    // through the pen width, which is how GDI stretches glyphs.
+    let fs_px = (sh.height as f64 * scale) / f64::from(ink_h);
+    let target_w_px = (sh.width as f64) * scale;
+    let natural_w_px = f64::from(ink_w) * fs_px;
+    if fs_px < 1.0 || natural_w_px <= 0.0 {
+        return false;
+    }
+    let (face, weight, italic_flag) = styled_face(&family, bold, italic);
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        // Measure the face's natural average width at this height, then ask for
+        // the stretched one.
+        let probe = CreateFontW(
+            -(fs_px.round() as i32),
+            0,
+            0,
+            0,
+            weight,
+            u32::from(italic_flag),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        );
+        if probe.is_invalid() {
+            return false;
+        }
+        let old_probe = SelectObject(dc, probe);
+        let mut tm = TEXTMETRICW::default();
+        let ok = GetTextMetricsW(dc, &mut tm).as_bool();
+        SelectObject(dc, old_probe);
+        let _ = DeleteObject(probe);
+        if !ok || tm.tmAveCharWidth <= 0 {
+            return false;
+        }
+        let stretched = (f64::from(tm.tmAveCharWidth) * target_w_px / natural_w_px)
+            .round()
+            .max(1.0) as i32;
+        let font = CreateFontW(
+            -(fs_px.round() as i32),
+            stretched,
+            0,
+            0,
+            weight,
+            u32::from(italic_flag),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return false;
+        }
+        let old = SelectObject(dc, font);
+        // Place the ink's top-left on the shape's: the pen sits left of the ink
+        // by its left bearing and above the baseline by the ink's top.
+        let k = target_w_px / natural_w_px;
+        let pen_x = (f64::from(sh.x) * scale) - f64::from(ix0) * fs_px * k;
+        let baseline = (f64::from(sh.y) * scale) + f64::from(iy1) * fs_px;
+        let color = para
+            .runs
+            .iter()
+            .find_map(|r| r.color.clone())
+            .or_else(|| sh.fill_color.clone());
+        let rgb = color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
+        let alpha = para.runs.iter().find_map(|r| r.color_alpha).unwrap_or(1.0);
+        let old_color = SetTextColor(dc, COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
+        let old_align = SetTextAlign(dc, TA_LEFT | TA_BASELINE);
+        let wtext: Vec<u16> = text.encode_utf16().collect();
+        let px = pen_x.round() as i32;
+        let py = baseline.round() as i32;
+        // A translucent run (d35's numerals are white at 26.9%) has to be
+        // blended, and GDI's text has no alpha: draw it onto a COPY of the
+        // destination and blend that back with a constant alpha, so the
+        // gradient behind still shows through.
+        // HELD OPT-IN: blending the run's alpha measured 5 improved / 2
+        // regressed (d11 −0.0021, d35 −0.0009) against 7 improved / 0
+        // regressed without it, so the fit ships first and the translucency
+        // is a separate question.
+        if std::env::var("OXI_TXWARPALPHA_ENABLE").is_ok() && alpha < 0.999 {
+            let bx = (f64::from(sh.x) * scale).floor() as i32 - 4;
+            let by = (f64::from(sh.y) * scale).floor() as i32 - 4;
+            let bw = (f64::from(sh.width) * scale).ceil() as i32 + 8;
+            let bh = (f64::from(sh.height) * scale).ceil() as i32 + 8;
+            let mem = CreateCompatibleDC(dc);
+            let bmp = CreateCompatibleBitmap(dc, bw, bh);
+            if !mem.0.is_null() && !bmp.is_invalid() {
+                let old_bmp = SelectObject(mem, bmp);
+                let _ = BitBlt(mem, 0, 0, bw, bh, dc, bx, by, SRCCOPY);
+                let old_f = SelectObject(mem, font);
+                SetTextColor(mem, COLORREF(colorref(rgb.0, rgb.1, rgb.2)));
+                let old_a = SetTextAlign(mem, TA_LEFT | TA_BASELINE);
+                let _ = TextOutW(mem, px - bx, py - by, &wtext);
+                SetTextAlign(mem, TEXT_ALIGN_OPTIONS(old_a));
+                SelectObject(mem, old_f);
+                let bf = BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: (alpha * 255.0_f32).round().clamp(0.0, 255.0) as u8,
+                    AlphaFormat: 0,
+                };
+                let _ = AlphaBlend(dc, bx, by, bw, bh, mem, 0, 0, bw, bh, bf);
+                SelectObject(mem, old_bmp);
+                let _ = DeleteObject(bmp);
+                let _ = DeleteDC(mem);
+                SetTextAlign(dc, TEXT_ALIGN_OPTIONS(old_align));
+                SetTextColor(dc, old_color);
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                return true;
+            }
+            if !mem.0.is_null() {
+                let _ = DeleteDC(mem);
+            }
+        }
+        let _ = TextOutW(dc, px, py, &wtext);
+        SetTextAlign(dc, TEXT_ALIGN_OPTIONS(old_align));
+        SetTextColor(dc, old_color);
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+    }
+    true
+}
+
+/// The ink box of `text` in EM units: (left, right, bottom, top) where the
+/// vertical pair is measured up from the baseline.
+///
+/// `GetGlyphOutlineW(GGO_METRICS)` reports each glyph's black box and its
+/// origin relative to the pen, which is what a WordArt fit needs -- the
+/// advance width is not the ink.
+#[cfg(windows)]
+fn text_ink_box_em(
+    family: &str,
+    bold: bool,
+    italic: bool,
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    const PROBE: i32 = 2048;
+    let dc = probe_dc();
+    let (face, weight, italic_flag) = styled_face(family, bold, italic);
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -PROBE,
+            0,
+            0,
+            0,
+            weight,
+            u32::from(italic_flag),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return None;
+        }
+        let old = SelectObject(dc, font);
+        let mut pen = 0.0f32;
+        let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        let mat = MAT2 {
+            eM11: FIXED { fract: 0, value: 1 },
+            eM12: FIXED { fract: 0, value: 0 },
+            eM21: FIXED { fract: 0, value: 0 },
+            eM22: FIXED { fract: 0, value: 1 },
+        };
+        for ch in text.chars() {
+            let mut gm = GLYPHMETRICS::default();
+            let got = GetGlyphOutlineW(
+                dc,
+                ch as u32,
+                GGO_METRICS,
+                &mut gm,
+                0,
+                None,
+                &mat,
+            );
+            if got == GDI_ERROR as u32 {
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                return None;
+            }
+            if gm.gmBlackBoxX > 0 && gm.gmBlackBoxY > 0 {
+                let gx0 = pen + gm.gmptGlyphOrigin.x as f32;
+                let gx1 = gx0 + gm.gmBlackBoxX as f32;
+                let gy1 = gm.gmptGlyphOrigin.y as f32;
+                let gy0 = gy1 - gm.gmBlackBoxY as f32;
+                x0 = x0.min(gx0);
+                x1 = x1.max(gx1);
+                y0 = y0.min(gy0);
+                y1 = y1.max(gy1);
+            }
+            pen += gm.gmCellIncX as f32;
+        }
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let em = PROBE as f32;
+        Some((x0 / em, x1 / em, y0 / em, y1 / em))
+    }
 }
 
 /// True when `family` itself contains a glyph for every char of `text`.

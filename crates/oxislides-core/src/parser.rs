@@ -987,6 +987,7 @@ fn parse_slide(
     let mut shape_border_color: Option<String> = None;
     let mut shape_border_width: Option<f32> = None;
     let mut shape_border_dash: Option<String> = None;
+    let mut shape_text_warp: Option<String> = None;
     // Placeholder identity (p:ph type/idx from nvPr) and whether spPr had an
     // explicit xfrm. Spec #3: a placeholder without an explicit xfrm inherits
     // its geometry from the referenced slideLayout's matching placeholder.
@@ -1069,6 +1070,7 @@ fn parse_slide(
     let mut run_underline = false;
     let mut run_font_size: Option<f32> = None;
     let mut run_color: Option<String> = None;
+    let mut run_color_alpha: Option<f32> = None;
     // `a:rPr/a:highlight` -- the run's text highlight. It holds a colour
     // element of exactly the shape `a:solidFill` does, so without this flag
     // the colour dispatch below reads it as the run's own text colour: d11
@@ -1362,6 +1364,14 @@ fn parse_slide(
                             }
                         }
                     }
+                    // A run's own colour alpha (d35's 26.9% white numerals).
+                    "alpha" if in_run && !in_highlight => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(pc) = v.parse::<f32>() {
+                                run_color_alpha = Some((pc / 100000.0).clamp(0.0, 1.0));
+                            }
+                        }
+                    }
                     "alpha" if in_tc_pr => {
                         if let Some(v) = get_attr(&e, "val") {
                             if let Ok(p) = v.parse::<f32>() {
@@ -1618,8 +1628,14 @@ fn parse_slide(
                         para_bullet_font = None;
                         para_end_size = None;
                     }
+                    // `a:prstTxWarp` is normally self-closing, so both arms
+                    // route here (the Start/Empty trap this file keeps).
+                    "prstTxWarp" if in_body_pr => {
+                        shape_text_warp = get_attr(&e, "prst");
+                    }
                     "bodyPr" if in_shape => {
                         in_body_pr = true;
+                        shape_text_warp = None;
                         if let Some(v) = get_attr(&e, "lIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_l_ins = emu_to_pt(v);
@@ -1723,6 +1739,7 @@ fn parse_slide(
                         run_underline = false;
                         run_font_size = None;
                         run_color = None;
+                        run_color_alpha = None;
                         run_highlight = None;
                         run_font_family = None;
                     }
@@ -1806,6 +1823,7 @@ fn parse_slide(
                             italic: false,
                             underline: false,
                             color: None,
+                            color_alpha: None,
                             highlight: None,
                             font_family: run_font_family.clone(),
                         });
@@ -1894,6 +1912,14 @@ fn parse_slide(
                                 tc_ln_color = Some(hex);
                             } else {
                                 tc_fill = Some(hex);
+                            }
+                        }
+                    }
+                    // A run's own colour alpha (d35's 26.9% white numerals).
+                    "alpha" if in_run && !in_highlight => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            if let Ok(pc) = v.parse::<f32>() {
+                                run_color_alpha = Some((pc / 100000.0).clamp(0.0, 1.0));
                             }
                         }
                     }
@@ -2121,6 +2147,12 @@ fn parse_slide(
                                 run_font_size = Some(v / 100.0);
                             }
                         }
+                    }
+                    // `<a:prstTxWarp prst="textPlain"/>` is self-closing, so
+                    // THIS is the arm that fires; the Start arm above exists
+                    // only for the rare form with children.
+                    "prstTxWarp" if in_body_pr => {
+                        shape_text_warp = get_attr(&e, "prst");
                     }
                     "bodyPr" if in_shape => {
                         // Self-closing <p:bodyPr .../> with inset attributes.
@@ -2539,6 +2571,7 @@ fn parse_slide(
                             b_ins: shape_b_ins,
                             anchor: resolved_anchor,
                             wrap_text: std::mem::replace(&mut shape_wrap, true),
+                            text_warp: shape_text_warp.take(),
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
@@ -2680,6 +2713,7 @@ fn parse_slide(
                         };
                         shapes.push(Shape {
                             wrap_text: true,
+                            text_warp: None,
                             x: shape_x,
                             y: shape_y,
                             width: shape_w,
@@ -2723,6 +2757,7 @@ fn parse_slide(
                                 italic: run_italic,
                             underline: run_underline,
                                 color: run_color.take(),
+                            color_alpha: run_color_alpha.take(),
                                 highlight: run_highlight.take(),
                                 font_family: run_font_family.take(),
                             });
@@ -3446,6 +3481,7 @@ fn parse_inherited_shapes(
                                         // bodyPr, and no corpus group asks for
                                         // wrap="none".
                                         wrap_text: true,
+                                        text_warp: None,
                                         x,
                                         y,
                                         width: w,
