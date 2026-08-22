@@ -84,7 +84,9 @@ export function countLines(letters, advances, width) {
 export function cellText(cell) {
   const value = cell?.value;
   if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
+  // A cell that holds nothing is the unit variant `Empty`, which serialises
+  // as the bare name — text of its own would arrive as `{String: "Empty"}`.
+  if (typeof value === 'string') return value === 'Empty' ? '' : value;
   if (typeof value === 'object') {
     for (const key of ['String', 'Number', 'Boolean', 'Error']) {
       if (key in value) return String(value[key]);
