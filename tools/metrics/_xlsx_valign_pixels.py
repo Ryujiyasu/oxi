@@ -30,13 +30,21 @@ SCRATCH = Path(r"C:\tmp\xlsx_valign_px")
 BOOK = SCRATCH / "valign.xlsx"
 MERGED = SCRATCH / "valign_merged.xlsx"
 
-FONTS = [("ＭＳ Ｐゴシック", 11.0), ("ＭＳ Ｐゴシック", 12.0), ("ＭＳ Ｐゴシック", 14.0),
-         ("ＭＳ ゴシック", 11.0), ("ＭＳ 明朝", 11.0), ("Meiryo UI", 11.0),
-         ("游ゴシック", 11.0), ("Calibri", 11.0)]
+# A bold face ships its own design in some families, and `mappingsheet2025`'s
+# bold URLs sit a pixel out, so the weight is swept as well as the size.
+FONTS = [("ＭＳ Ｐゴシック", 11.0, False), ("ＭＳ Ｐゴシック", 12.0, False),
+         ("ＭＳ Ｐゴシック", 14.0, False), ("ＭＳ ゴシック", 11.0, False),
+         ("ＭＳ 明朝", 11.0, False), ("Meiryo UI", 11.0, False),
+         ("游ゴシック", 11.0, False), ("Calibri", 11.0, False)]
+# A bold face ships a design of its own in some families, and
+# `mappingsheet2025`'s bold URLs sit a pixel out, so the weight is swept too.
+FONTS += [(face, points, True)
+          for face in ("游ゴシック", "ＭＳ Ｐゴシック", "ＭＳ ゴシック", "ＭＳ 明朝",
+                       "メイリオ", "Meiryo UI", "Yu Gothic UI", "Calibri", "Arial")
+          for points in (9.0, 10.0, 11.0, 12.0, 14.0, 18.0)]
 # Points. Each is a different slack against the font's own line box, so the
 # odd pixel lands both ways round.
-HEIGHTS = [10.5, 11.25, 12.0, 12.75, 13.5, 14.25, 15.0, 15.75, 17.25, 18.0,
-           20.25, 24.0, 30.0]
+HEIGHTS = [10.5, 12.0, 13.5, 15.0, 17.25, 18.0, 19.5, 24.0, 30.0]
 PLACES = ["top", "center", "bottom"]
 
 
@@ -50,12 +58,12 @@ def build(merged=False, deep=1, lines=1):
     for column in "ABC":
         sheet.column_dimensions[column].width = 12.0
     cases, row = [], 1
-    for face, points in FONTS:
+    for face, points, bold in FONTS:
         for height in HEIGHTS:
             for place in PLACES:
                 cell = sheet.cell(row=row, column=1,
                                   value=chr(10).join(["あA"] * lines))
-                cell.font = Font(name=face, size=points)
+                cell.font = Font(name=face, size=points, bold=bold)
                 cell.alignment = Alignment(vertical=place, horizontal="left",
                                            wrap_text=lines > 1)
                 for step in range(deep):
@@ -65,7 +73,7 @@ def build(merged=False, deep=1, lines=1):
                 if merged or deep > 1:
                     sheet.merge_cells(start_row=row, start_column=1,
                                       end_row=row + deep - 1, end_column=3)
-                cases.append((row, face, points, height, place, deep))
+                cases.append((row, face, points, height, place, deep, bold))
                 row += deep
     book.save(BOOK)
     return cases
@@ -132,7 +140,7 @@ def main():
           f"{'Excel':>8}{'ours':>7}{'delta':>7}"
           f"{'Excel':>8}{'ours':>7}{'delta':>7}   (ink top, then ink foot)")
     trouble = 0
-    for row, face, points, height, place, deep in cases:
+    for row, face, points, height, place, deep, bold in cases:
         if row not in edges or (row + deep - 1) not in edges:
             continue
         top, foot = edges[row][0], edges[row + deep - 1][1]
@@ -141,13 +149,16 @@ def main():
         theirs = ink_top(truth, top, foot)
         mine = ink_top(ours, top, foot)
         if theirs is None or mine is None:
-            print(f"{face:<16}{points:>5}{height:>7}{foot - top:>4}{place:>8}"
-                  f"{'(no ink)' if theirs is None else '':>8}{'(no ink)' if mine is None else '':>7}")
+            print(f"{face + (' bold' if bold else ''):<20}{points:>5}{height:>7}"
+                  f"{foot - top:>4}{place:>8}"
+                  f"{'(no ink)' if theirs is None else '':>8}"
+                  f"{'(no ink)' if mine is None else '':>7}")
             continue
         delta = mine[0] - theirs[0]
         below = mine[1] - theirs[1]
         trouble += delta != 0 or below != 0
-        print(f"{face:<16}{points:>5}{height:>7}{foot - top:>4}{place:>8}"
+        print(f"{face + (' bold' if bold else ''):<20}{points:>5}{height:>7}"
+              f"{foot - top:>4}{place:>8}"
               f"{theirs[0]:>8}{mine[0]:>7}{delta:>+7}"
               f"{theirs[1]:>8}{mine[1]:>7}{below:>+7}")
     print(f"\n{trouble} of {len(cases)} rows sit at a different height")
