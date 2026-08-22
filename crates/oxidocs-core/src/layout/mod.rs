@@ -16706,8 +16706,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // (Amended 2010)» is the last line before a table in a no-grid
             // Latin doc: S603 forces the 12.000 box against a 720.000 bottom at
             // cursor 708.110 and pushes a line Word keeps (hhea 11.499 → −0.391).
-            let s1194_grid_scope =
-                std::env::var("OXI_S1194").is_err() || page.grid_line_pitch.is_some();
+            // SHIPPED default-ON 2026-08-22 (opt-out `OXI_S1194_DISABLE`).
+            // GATE: inert everywhere measured — EN 248 PASS 224 → 224 with ZERO
+            // docs changed in all five sets; the golden Phase-1 census (98 docs)
+            // unchanged; the SSIM sentinel over all 82 pure-Latin golden docs
+            // byte-identical. The 156 CJK golden docs are structurally excluded
+            // (`s779_latin` needs `!doc_body_has_real_cjk`, and the grid gate
+            // only relaxes where there is no docGrid at all). What it buys is
+            // S1192: `S1189+S1192` on 00501ca3 goes FAIL 0.9963 → PASS 1.0000.
+            let s1194_grid_scope = std::env::var("OXI_S1194_DISABLE").is_ok()
+                || page.grid_line_pitch.is_some();
             let s603_typed_fullbox = next_block_is_table
                 && line_idx + 1 == lines.len()
                 && std::env::var("OXI_S603_DISABLE").is_err()
@@ -17140,8 +17148,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // «(Added 2002) (Amended 2010)»: cursor_y 708.110, cbot 720.000).
                 // Same shape as S576 on the CJK side — the spacing box is not
                 // the capacity.
-                let s1194_hhea =
-                    std::env::var("OXI_S1194").is_ok() && s779_latin && !no_type_multiple_ink;
+                let s1194_hhea = std::env::var("OXI_S1194_DISABLE").is_err()
+                    && s779_latin
+                    && !no_type_multiple_ink;
                 let base = if s1194_hhea && s779_floor > 0.0 {
                     s779_floor
                 } else {
