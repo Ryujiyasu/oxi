@@ -31,6 +31,7 @@ fn blank_sheet(name: &str) -> Sheet {
         declared_range: None,
         tables: Vec::new(),
         drawings: Vec::new(),
+            comments: Vec::new(),
         unsupported_elements: Vec::new(),
     }
 }

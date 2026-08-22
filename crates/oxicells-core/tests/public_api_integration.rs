@@ -204,6 +204,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         declared_range: None,
         tables: Vec::new(),
             drawings: Vec::new(),
+            comments: Vec::new(),
         unsupported_elements: vec![],
     }
 }

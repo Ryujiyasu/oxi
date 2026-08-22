@@ -748,6 +748,18 @@ pub(crate) fn drawing_box(
     layout: &Geometry,
     scale: f32,
 ) -> Option<windows::Win32::Foundation::RECT> {
+    anchored_box(&drawn.from, drawn.to.as_ref(), drawn.extent, layout, scale)
+}
+
+/// The box between two anchors, or between one and a stated size.
+#[cfg(windows)]
+pub(crate) fn anchored_box(
+    from: &oxicells_core::ir::Anchor,
+    to: Option<&oxicells_core::ir::Anchor>,
+    extent: Option<(i64, i64)>,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<windows::Win32::Foundation::RECT> {
     let at = |anchor: &oxicells_core::ir::Anchor| -> Option<(i32, i32)> {
         // The drawing part counts both from zero; the layout counts columns
         // from zero and rows from one, the way the sheet states them. A cell
@@ -765,9 +777,14 @@ pub(crate) fn drawing_box(
             (top + anchor.row_off as f32 / EMU * scale).round() as i32,
         ))
     };
-    let (left, top) = at(&drawn.from)?;
-    let (right, bottom) = match (&drawn.to, drawn.extent) {
-        (Some(to), _) => at(to)?,
+    let (left, top) = at(from)?;
+    let (right, bottom) = match (to, extent) {
+        // A corner past the drawn range falls off the picture, which is where
+        // the sheet's own edge is: keep the box and let the drawing be cut.
+        (Some(to), _) => at(to).unwrap_or((
+            *layout.columns.last().unwrap_or(&0.0) as i32,
+            *layout.rows.last().unwrap_or(&0.0) as i32,
+        )),
         (None, Some((cx, cy))) => (
             left + (cx as f32 / EMU * scale).round() as i32,
             top + (cy as f32 / EMU * scale).round() as i32,
@@ -1946,7 +1963,7 @@ mod windows_draw {
         // the geometry catches up.
         if let Some(said) = &shape.text {
             if std::env::var("OXI_XLSX_SHAPE_TEXT").is_ok() {
-                says(dc, said, box_, scale, normal);
+                says(dc, said, box_, scale, normal, false);
             }
         }
     }
@@ -1963,6 +1980,11 @@ mod windows_draw {
         box_: RECT,
         scale: f32,
         normal: Option<&(String, f32)>,
+        // A note is laid out by the engine that lays out cells, not the one
+        // that lays out shapes: its lines are a cell's line box apart —
+        // メイリオ 14pt comes out 30.5px in `002`'s note where the same face
+        // and size in a shape is 36.5.
+        note: bool,
     ) {
         let inset = |emu: i64| (emu as f32 / super::EMU * scale).round() as i32;
         let area = RECT {
@@ -1999,7 +2021,12 @@ mod windows_draw {
             // a Japanese face's extra three tenths of leading falls half above
             // the letters and half below, which is what puts `002`'s panel
             // four pixels down from its inset.
-            let measured = super::shape_line(&face, paragraph.size, paragraph.bold, paragraph.italic);
+            let measured = if note {
+                super::line_box(&face, paragraph.size, paragraph.bold, paragraph.italic)
+                    .map(|(tall, _)| (tall, tall))
+            } else {
+                super::shape_line(&face, paragraph.size, paragraph.bold, paragraph.italic)
+            };
             let (tall, natural) = match (paragraph.line_pitch, measured) {
                 (Some(points), found) => (
                     points * 96.0 / 72.0,
@@ -2861,6 +2888,37 @@ mod windows_draw {
                     }
                     _ => {}
                 }
+            }
+
+            // A note the sheet keeps pinned open sits above everything.
+            for note in &sheet.comments {
+                let extent = (
+                    (note.size.0 * super::EMU * 96.0 / 72.0) as i64,
+                    (note.size.1 * super::EMU * 96.0 / 72.0) as i64,
+                );
+                let Some(box_) = super::anchored_box(&note.from, None, Some(extent), layout, scale)
+                else {
+                    continue;
+                };
+                if box_.right <= box_.left || box_.bottom <= box_.top {
+                    continue;
+                }
+                let paper = CreateSolidBrush(colour(note.fill.as_deref(), 0x00E1_FFFF));
+                FillRect(dc, &box_, paper);
+                let _ = DeleteObject(paper);
+                let pen = CreatePen(PS_SOLID, 1, COLORREF(0x0000_0000));
+                let held = SelectObject(dc, pen);
+                let hollow = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                let _ = Rectangle(dc, box_.left, box_.top, box_.right, box_.bottom);
+                SelectObject(dc, hollow);
+                SelectObject(dc, held);
+                let _ = DeleteObject(pen);
+                // A note shows what fits in its box and no more.
+                let clip = CreateRectRgn(box_.left, box_.top, box_.right, box_.bottom);
+                SelectClipRgn(dc, clip);
+                says(dc, &note.text, box_, scale, sheet.normal_font.as_ref(), true);
+                SelectClipRgn(dc, None);
+                let _ = DeleteObject(clip);
             }
 
             // Excel prints no gridlines by default, so none are drawn here.

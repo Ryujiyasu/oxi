@@ -1512,6 +1512,187 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     found
 }
 
+/// The notes a sheet keeps pinned open, from the pair of parts that hold
+/// them: the text in `xl/comments{n}.xml`, keyed by cell, and the box in the
+/// VML beside it, which states it in points from the sheet's corner and says
+/// whether Excel shows it.
+fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
+    use crate::ir::{Anchor, Comment, ShapeParagraph, ShapeText};
+
+    // The text of each note, by the cell it belongs to.
+    let mut said: HashMap<(u32, u32), Vec<ShapeParagraph>> = HashMap::new();
+    let mut reader = Reader::from_str(comments_xml);
+    let mut buf = Vec::new();
+    let mut at: Option<(u32, u32)> = None;
+    let mut run = ShapeParagraph {
+        text: String::new(),
+        align: None,
+        size: 9.0,
+        bold: false,
+        italic: false,
+        face: None,
+        color: None,
+        line_pitch: None,
+    };
+    let blank_run = run.clone();
+    let (mut in_run_props, mut in_text, mut first) = (false, false, true);
+    let mut text = String::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                match local_name(e.name().as_ref()).as_str() {
+                    "comment" => {
+                        let cell = get_attr(e, "ref").map(|held| parse_cell_ref(&held));
+                        at = cell.map(|(column, row)| (row, column));
+                        run = blank_run.clone();
+                        first = true;
+                    }
+                    "rPr" => in_run_props = true,
+                    "sz" if in_run_props && first => {
+                        if let Some(points) = get_attr(e, "val").and_then(|v| v.parse().ok()) {
+                            run.size = points;
+                        }
+                    }
+                    "b" if in_run_props && first => run.bold = true,
+                    "i" if in_run_props && first => run.italic = true,
+                    "rFont" if in_run_props && first => run.face = get_attr(e, "val"),
+                    "t" => {
+                        in_text = true;
+                        text.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) if in_text => {
+                if let Ok(held) = e.unescape() {
+                    text.push_str(&held);
+                }
+            }
+            Ok(Event::End(ref e)) => match local_name(e.name().as_ref()).as_str() {
+                "rPr" => in_run_props = false,
+                "t" => {
+                    in_text = false;
+                    run.text.push_str(&text);
+                    first = false;
+                }
+                "comment" => {
+                    if let Some(key) = at.take() {
+                        // A note is one run of text with newlines in it; the
+                        // paragraphs are what the drawing splits it into.
+                        let paragraphs = run
+                            .text
+                            .split('\n')
+                            .map(|line| ShapeParagraph {
+                                text: line.trim_end_matches('\r').to_string(),
+                                ..run.clone()
+                            })
+                            .collect();
+                        said.insert(key, paragraphs);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    // The box of each note, and whether it is shown at all.
+    let mut held = Vec::new();
+    for shape in vml.split("<v:shape").skip(1) {
+        let shape = shape.split("</v:shape>").next().unwrap_or(shape);
+        if !shape.contains("<x:Visible/>") {
+            continue;
+        }
+        let tagged = |name: &str| -> Option<String> {
+            let open = format!("<x:{name}>");
+            let at = shape.find(&open)? + open.len();
+            let rest = &shape[at..];
+            Some(rest[..rest.find('<')?].trim().to_string())
+        };
+        let (Some(row), Some(column)) = (
+            tagged("Row").and_then(|v| v.parse::<u32>().ok()),
+            tagged("Column").and_then(|v| v.parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        // `<x:Row>` and `<x:Column>` count from zero, the way the cell
+        // reference in the comment part does once it is parsed.
+        let Some(paragraphs) = said.get(&(row, column)) else {
+            continue;
+        };
+        // The anchor is eight numbers: the cell each corner hangs from and
+        // how far into it, in pixels at 96 dpi. Measured against Excel's own
+        // picture of `002`, whose note lands at column 64 plus 12 pixels —
+        // where the margin the same shape states is 13 pixels short.
+        let Some(anchor) = tagged("Anchor") else { continue };
+        let numbers: Vec<i64> = anchor
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        let [left, dx, top, dy, right, dx2, bottom, dy2] = numbers[..] else {
+            continue;
+        };
+        let corner = |column: i64, x: i64, row: i64, y: i64| Anchor {
+            col: column.max(0) as u32,
+            col_off: x * 9525,
+            row: row.max(0) as u32,
+            row_off: y * 9525,
+        };
+        let _ = (right, dx2, bottom, dy2);
+        // How big the box is comes from the style, in whatever unit it names:
+        // Excel sizes a note to its text and writes the answer there.
+        let measure = |name: &str| -> Option<f32> {
+            let at = shape.find(name)? + name.len();
+            let rest = &shape[at..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+                .unwrap_or(rest.len());
+            let number: f32 = rest[..end].parse().ok()?;
+            Some(match rest[end..].chars().take(2).collect::<String>().as_str() {
+                held if held.starts_with("in") => number * 72.0,
+                held if held.starts_with("mm") => number * 72.0 / 25.4,
+                held if held.starts_with("cm") => number * 72.0 / 2.54,
+                held if held.starts_with("px") => number * 72.0 / 96.0,
+                _ => number,
+            })
+        };
+        let (Some(wide), Some(tall)) = (measure("width:"), measure("height:")) else {
+            continue;
+        };
+        // A note is `#ffffe1` unless the shape says otherwise; the three-digit
+        // form is the one Excel writes.
+        let fill = shape
+            .split("fillcolor=\"#")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .map(|held| held.split_whitespace().next().unwrap_or("").to_string())
+            .filter(|held| held.len() == 3 || held.len() == 6)
+            .map(|held| {
+                if held.len() == 3 {
+                    held.chars().flat_map(|part| [part, part]).collect()
+                } else {
+                    held
+                }
+            })
+            .unwrap_or_else(|| "FFFFE1".to_string());
+        held.push(Comment {
+            from: corner(left, dx, top, dy),
+            size: (wide, tall),
+            text: ShapeText {
+                paragraphs: paragraphs.clone(),
+                anchor: Some("t".to_string()),
+                // 2.5mm and 2.3mm, which is what the VML states.
+                insets: (90000, 82800, 90000, 82800),
+                wrap: true,
+            },
+            fill: Some(fill.to_uppercase()),
+        });
+    }
+    held
+}
+
 /// The theme slot a DrawingML colour names. `tx1` and `bg1` are the same two
 /// colours as `dk1` and `lt1` under other names.
 fn scheme_colour(name: &str, theme: &Theme) -> Option<String> {
@@ -2102,6 +2283,7 @@ fn parse_worksheet(
     Ok(Sheet {
         tables: Vec::new(),
         drawings: Vec::new(),
+        comments: Vec::new(),
         name: sheet_name.to_string(),
         rows,
         col_count,
@@ -2276,7 +2458,23 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                     .map(|(dir, file)| format!("{dir}/_rels/{file}.rels"))
                     .unwrap_or_default();
                 if let Some(rels_xml) = archive.try_read_part(&rels_path)? {
-                    for rel in parse_relationships(&rels_xml)?.values() {
+                    let rels = parse_relationships(&rels_xml)?;
+                    // A note is two parts: its text, and the VML that says
+                    // where its box is and whether the sheet shows it.
+                    let beside = |ending: &str| {
+                        rels.values()
+                            .find(|rel| rel.rel_type.ends_with(ending))
+                            .map(|rel| part_beside(&sheet_path, &rel.target))
+                    };
+                    if let (Some(notes), Some(vml)) = (beside("/comments"), beside("Drawing")) {
+                        if let (Some(notes), Some(vml)) = (
+                            archive.try_read_part(&notes)?,
+                            archive.try_read_part(&vml)?,
+                        ) {
+                            sheet.comments = parse_comments(&notes, &vml);
+                        }
+                    }
+                    for rel in rels.values() {
                         if rel.rel_type.ends_with("/table") {
                             let part = part_beside(&sheet_path, &rel.target);
                             if let Some(table_xml) = archive.try_read_part(&part)? {

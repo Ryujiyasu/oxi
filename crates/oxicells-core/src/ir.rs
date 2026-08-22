@@ -54,6 +54,11 @@ pub struct Sheet {
     /// What is drawn over the grid rather than in it: pictures and shapes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drawings: Vec<Drawing>,
+    /// The notes a sheet keeps pinned open. A comment Excel hides is not part
+    /// of the picture; one the workbook pins is, and two of the conformance
+    /// corpus's workbooks pin ninety between them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
     /// The filter a sheet is under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_filter: Option<AutoFilter>,
@@ -276,6 +281,26 @@ pub enum DrawingKind {
     Shape(Shape),
     /// Anything else the drawing part holds — a group, a text box.
     Other,
+}
+
+/// A note pinned open on the sheet.
+///
+/// Its box hangs from two cells, the way a drawing's does. The VML the note
+/// lives in states that twice over — once as a margin in points, cached from
+/// wherever the file was last written, and once as `<x:Anchor>`, which is what
+/// Excel lays it out from and what these corners hold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub from: Anchor,
+    /// How big the box is, in points. The anchor states a second corner as
+    /// well, but Excel sizes a note to its text and keeps the result in the
+    /// style's `width`/`height` — which is what it shows.
+    pub size: (f32, f32),
+    /// The note's text, dressed the way a shape's is.
+    pub text: ShapeText,
+    /// Six hex digits; Excel's own note is FFFFE1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
 }
 
 /// A preset shape, with what it is painted and ruled with.

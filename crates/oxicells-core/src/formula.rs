@@ -190,6 +190,7 @@ mod tests {
             declared_range: None,
             tables: Vec::new(),
             drawings: Vec::new(),
+            comments: Vec::new(),
             unsupported_elements: vec![],
         }
     }
