@@ -4883,6 +4883,13 @@ h_tw={} pitch_tw={} cells={} text={:?}",
         // (top, bottom, page) of the active float; a following block whose
         // cursor lands inside [top, bottom) on that page is bumped to bottom.
         let mut text_float_region: Option<(f32, f32, usize)> = None;
+        // S1195 (2026-08-22, default ON, opt-out `OXI_S1195_DISABLE`): a
+        // wrap-below float that still leaves a usable side LANE. Word flows the
+        // EMPTY paragraphs that follow such a float in that lane, beside the
+        // table, and only drops real content below it — so those empties must
+        // not spend a line under the float.
+        // Records (below_y, page) of the float whose lane is still open.
+        let mut float_lane_below: Option<(f32, usize)> = None;
 
         let mut grid_pitch = page.grid_line_pitch;
         // S735 (2026-07-03): per-section grid-pitch runs on a merged continuous
@@ -5705,6 +5712,29 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     }
                 } else {
                     text_float_region = None;
+                }
+            }
+            // S1195: the lane beside a wrap-below float. An EMPTY paragraph is a
+            // zero-width line, so Word fits it in the lane and it costs nothing
+            // below the float; the first block with content resumes at the
+            // float's bottom (or wherever the lane cursor has reached, if the
+            // empties already carried it past). Measured on
+            // `_pb_floatlane2_gen.py` (the lane floor) and on ed025cbecffb page 6
+            // (one empty in a 28pt lane: Word puts the note directly under the
+            // float, Oxi spent a line on the empty and ran 18pt low from there).
+            if let Some((below_y, fpage)) = float_lane_below {
+                if current_page_idx != fpage {
+                    float_lane_below = None;
+                } else {
+                    let lane_ok = cursor.cursor_y < below_y
+                        && matches!(block, Block::Paragraph(p)
+                            if p.runs.iter().all(|r| r.text.is_empty()));
+                    if !lane_ok {
+                        if cursor.cursor_y < below_y {
+                            cursor.set(below_y);
+                        }
+                        float_lane_below = None;
+                    }
                 }
             }
             // S560: on a fresh page the section-bottom tracker resets to the
@@ -9334,7 +9364,60 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if s469_enabled {
                                 anchor_flow_offset += (candidate_y_bottom + 1.5) - saved_cursor_y;
                             }
-                            cursor.set(candidate_y_bottom + 1.5);
+                            // S1195 (2026-08-22, default ON, opt-out
+                            // `OXI_S1195_DISABLE`): keep the LANE open when
+                            // one exists and the next block is an empty paragraph.
+                            // Word flows those empties beside the float; only real
+                            // content drops below it. The lane floor is measured
+                            // (`_pb_floatlane2_gen.py`, Arial 11, 1pt steps): the
+                            // free side NET of the tblpPr wrap distance flips the
+                            // paragraph from below-the-float to in-the-lane between
+                            // 17.9 and 18.9pt for leftFromText 142/284tw, and
+                            // between 19 and 20 for 0 — so 18.5 sits in every
+                            // bracket. ed025cbecffb's page-6 float leaves 27.97pt.
+                            let s1195_lane = std::env::var("OXI_S1195_DISABLE").is_err() && {
+                                let tpos = table.style.position.as_ref();
+                                // Same placement the S758 band uses below: an
+                                // ALIGN-positioned float (tblpXSpec) resolves
+                                // against its anchor rect, an OFFSET one is tblpX.
+                                let band_x0 = match tpos {
+                                    Some(tp) => match tp.h_align.as_deref() {
+                                        Some(ha) => {
+                                            let (rl, rw) = match tp.h_anchor.as_deref() {
+                                                Some("page") => (0.0, page.size.width),
+                                                _ => (start_x, content_width),
+                                            };
+                                            match ha {
+                                                "center" => rl + (rw - table_w_pt) * 0.5,
+                                                "right" => rl + rw - table_w_pt,
+                                                _ => rl,
+                                            }
+                                        }
+                                        None => match tp.h_anchor.as_deref() {
+                                            Some("page") => tp.x,
+                                            _ => start_x + tp.x,
+                                        },
+                                    },
+                                    None => start_x,
+                                };
+                                let (dl, dr) = tpos.map_or((0.0, 0.0), |tp| {
+                                    (tp.left_from_text, tp.right_from_text)
+                                });
+                                let left_lane = band_x0 - dl - start_x;
+                                let right_lane =
+                                    start_x + content_width - (band_x0 + table_w_pt + dr);
+                                left_lane.max(right_lane) >= 18.5
+                            } && matches!(page.blocks.get(block_idx + 1),
+                                Some(Block::Paragraph(p))
+                                    if p.runs.iter().all(|r| r.text.is_empty()));
+                            if s1195_lane {
+                                cursor.set(saved_cursor_y);
+                                float_lane_below =
+                                    Some((candidate_y_bottom + 1.5, current_page_idx));
+                            } else {
+                                cursor.set(candidate_y_bottom + 1.5);
+                            }
+
                         } else {
                             // Original behavior: floating tables don't advance text flow
                             // S772 (2026-07-10, opt-out OXI_S772_DISABLE): when a
