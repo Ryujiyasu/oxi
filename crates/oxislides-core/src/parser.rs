@@ -3555,9 +3555,11 @@ fn parse_inherited_shapes(
                                         // corpus states prstDash on top-level
                                         // shapes and connectors only.
                                         border_dash: None,
-                                        // A group member's ln is not walked
-                                        // yet; the corpus states line ends on
-                                        // top-level connectors only.
+                                        // A group member's `ln` is walked for
+                                        // its colour and width but not for its
+                                        // ends, so 35 of the corpus's 359
+                                        // decorated ends are dropped here --
+                                        // 22 of them on d02 slide 22.
                                         head_end: None,
                                         tail_end: None,
                                         l_ins: default_l_ins(),
