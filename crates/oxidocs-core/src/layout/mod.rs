@@ -28943,6 +28943,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 .unwrap_or(false)
         };
         let mut s728_hdr_rows_seen: usize = 0;
+        // S1192b: a vMerge span's outstanding height, per cell column. Recorded
+        // at the restart row from the SAME `pad_t + content_h + pad_b` the emit
+        // pass measures for a normal cell (the estimator's synthetic-row
+        // measurement came out 11.25pt/line where emit renders 12.21), then
+        // drawn down by each row the span passes through. The span's LAST row
+        // has to cover whatever is left — Word's rule, `_pb_vmergedist_gen.py`.
+        let mut s1192_pending: Vec<(usize, f32)> = Vec::new();
         for (row_idx, row) in table.rows.iter().enumerate() {
             // S740: page-transition bookkeeping + commit of the PREVIOUS row's
             // footnote reserve. On a page push the new page starts with zero
@@ -35573,6 +35580,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         max_actual_cell_h = actual;
                     }
                 }
+                // S1192b: remember what the merged cell needs. It deliberately
+                // does NOT grow its own row (the arm above excludes it, which is
+                // Word's behaviour); the span's last row pays instead.
+                if is_vmerge_restart && std::env::var("OXI_S1192").is_ok() {
+                    let need = pad_t + content_h + pad_b;
+                    s1192_pending.retain(|(c, _)| *c != cell_idx);
+                    s1192_pending.push((cell_idx, need));
+                }
 
                 // Apply vAlign offset
                 // Session 79c (2026-05-17): use visual_row_h (pre-computed from
@@ -36088,18 +36103,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // estimator hook alone changed nothing precisely because the emit
             // pass computes its own height here.
             if std::env::var("OXI_S1192").is_ok() {
-                max_actual_cell_h = max_actual_cell_h.max(self.s1192_vmerge_last_row_min(
-                    table,
-                    row_idx,
-                    &col_widths,
-                    default_pad_l,
-                    default_pad_r,
-                    default_pad_t,
-                    default_pad_b,
-                    table_grid_pitch,
-                    grid_char_pitch,
-                    grid_char_cw_ratio,
-                ));
+                let is_cont = |c: &TableCell| {
+                    matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
+                };
+                for (ci, remaining) in s1192_pending.iter() {
+                    let here_cont = row.cells.get(*ci).map_or(false, is_cont);
+                    let next_cont = table
+                        .rows
+                        .get(row_idx + 1)
+                        .and_then(|r| r.cells.get(*ci))
+                        .map_or(false, is_cont);
+                    if here_cont && !next_cont {
+                        max_actual_cell_h = max_actual_cell_h.max(*remaining);
+                    }
+                }
             }
             // If actual content exceeds estimated row_height, fix border elements
             if max_actual_cell_h > row_height + 0.01 {
@@ -37785,6 +37802,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 && visual_row_h + 0.4 < row_height
                         })
                         .unwrap_or(false);
+                // S1192b: this row is now final — draw it down from every span
+                // it passes through, and forget spans that ended here.
+                if std::env::var("OXI_S1192").is_ok() && !s1192_pending.is_empty() {
+                    let is_cont = |c: &TableCell| {
+                        matches!(c.v_merge.as_deref(), Some("continue") | Some(""))
+                    };
+                    for (ci, remaining) in s1192_pending.iter_mut() {
+                        if row.cells.get(*ci).is_some() {
+                            *remaining -= row_height;
+                        }
+                    }
+                    s1192_pending.retain(|(ci, remaining)| {
+                        let next_cont = table
+                            .rows
+                            .get(row_idx + 1)
+                            .and_then(|r| r.cells.get(*ci))
+                            .map_or(false, is_cont);
+                        next_cont && *remaining > 0.01
+                    });
+                }
                 if std::env::var("OXI_DBG_ROWADV").is_ok() {
                     eprintln!("[ROWADV] r={} rh={:.3} vrh={:.3} trH={:?} cy={:.2}",
                         row_idx, row_height, visual_row_h, row.height, cursor.cursor_y);
@@ -39350,21 +39387,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// height, exactly as that function's header warns ("Mirrors the inlined
     /// logic at the top of the table row-loop").
     ///
-    /// STATE (opt-in): the DISTRIBUTION is now Word's — the span grows and the
-    /// LAST row takes the remainder, and the merged text no longer spills
-    /// through the table's bottom edge. The MAGNITUDE is still short by about
-    /// 0.9pt per merged line, because measuring the restart cell through a
-    /// synthetic one-cell row yields ~11.42pt/line where the emit pass renders
-    /// ~12.21:
-    ///     arm        Word                       Oxi                    d
-    ///     span2_m3   [12.72, 24.36]             [12.70, 22.50]         −1.86
-    ///     span2_m4   [12.72, 36.60]             [12.70, 33.75]         −2.85
-    ///     span3_m5   [12.72, 12.72, 36.12]      [12.70, 12.71, 33.25]  −2.87
-    ///     span3_m7   [12.72, 12.72, 60.48]      [12.70, 12.71, 55.75]  −4.73
-    /// (1- and 2-line spans, where nothing overflows, are exact.) The remaining
-    /// gap is the measurement, not the rule: the synthetic row does not take
-    /// the emit-equivalent line-height path (the S218/S222 `_emit` variant).
-    /// Fix that before gating.
+    /// STATE (opt-in). Measuring the restart cell through a synthetic one-cell
+    /// row first gave ~11.25pt/line where emit renders 12.21 (a GDI 15px cell
+    /// height), leaving every span 0.9pt/line short. S1192b therefore records
+    /// the need from the emit pass's OWN `pad_t + content_h + pad_b` at the
+    /// restart row (`s1192_pending`), draws it down by each row the span
+    /// crosses, and hands the remainder to the span's last row. All 8 probe
+    /// arms then land within 0.06pt of Word:
+    ///     span2_m3 [12.72, 24.36] -> [12.70, 24.42]
+    ///     span2_m4 [12.72, 36.60] -> [12.70, 36.62]
+    ///     span3_m5 [.., 36.12]    -> [.., 36.12]
+    ///     span3_m7 [.., 60.48]    -> [.., 60.54]
+    ///
+    /// ★STILL BLOCKED on `technical__00501ca3`: its page-8 table has TWO spans
+    /// and only the second is fixed —
+    ///     Word [28.80, 40.32, 16.32, 22.95, 16.32, 23.04]
+    ///     Oxi  [27.80, 39.30, 30.10, 16.55, 16.30, 22.99]
+    /// r4/r5 now match (16.30 / 22.99 against 16.32 / 23.04), but r2 is 30.10
+    /// where Word says 16.32: the RESTART row is still absorbing the merged
+    /// cell's content through some other path. `max_actual_cell_h` already
+    /// excludes `is_vmerge_restart`, and the pre-pass estimator skips every
+    /// vMerge cell, so the inflation arrives by a third route — find it before
+    /// gating. The second half of the same rule.
     #[allow(clippy::too_many_arguments)]
     fn s1192_vmerge_last_row_min(
         &self,
