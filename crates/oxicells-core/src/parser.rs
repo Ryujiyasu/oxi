@@ -1164,6 +1164,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut paragraph: Option<ShapeParagraph> = None;
     let mut in_run_props = false;
     let mut in_text = false;
+    let mut in_line_spacing = false;
     let mut text = String::new();
     // A group states where it sits and what its children's coordinates mean;
     // a child inside one is placed by mapping its own box through that.
@@ -1356,6 +1357,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         face: None,
                         color: None,
                         line_pitch: None,
+                        line_scale: None,
                     });
                 }
                 "pPr" if paragraph.is_some() => {
@@ -1371,14 +1373,28 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         held.text.push('\n');
                     }
                 }
-                // A paragraph can pin its line pitch outright.
-                "spcPts" => {
+                "lnSpc" => in_line_spacing = true,
+                // A paragraph can pin its line pitch outright, or ask for a
+                // share of the font's own. Both are stated the same way
+                // inside `<a:lnSpc>` as they are inside the space before and
+                // after a paragraph, so only what is inside that counts.
+                "spcPts" if in_line_spacing => {
                     if let (Some(held), Some(points)) = (
                         paragraph.as_mut(),
                         get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()),
                     ) {
                         if held.line_pitch.is_none() && points > 0.0 {
                             held.line_pitch = Some(points / 100.0);
+                        }
+                    }
+                }
+                "spcPct" if in_line_spacing => {
+                    if let (Some(held), Some(share)) = (
+                        paragraph.as_mut(),
+                        get_attr(e, "val").and_then(|v| v.parse::<f32>().ok()),
+                    ) {
+                        if held.line_scale.is_none() && share > 0.0 {
+                            held.line_scale = Some(share / 100_000.0);
                         }
                     }
                 }
@@ -1502,6 +1518,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         }
                         text.clear();
                     }
+                    "lnSpc" => in_line_spacing = false,
                     "rPr" => in_run_props = false,
                     "p" => {
                         if let Some(held) = paragraph.take() {
@@ -1638,6 +1655,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         face: None,
         color: None,
         line_pitch: None,
+        line_scale: None,
     };
     let blank_run = run.clone();
     let (mut in_run_props, mut in_text, mut first) = (false, false, true);

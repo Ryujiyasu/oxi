@@ -2723,6 +2723,11 @@ mod windows_draw {
                     (em * 1.3, em)
                 }
             };
+            // A paragraph that asks for a share of the font's own pitch takes
+            // it from the whole box: `glossary_05`'s flowchart sets every one
+            // of its boxes at four fifths, which is 22 pixels a line where
+            // Yu Gothic UI's own is 28.
+            let tall = tall * paragraph.line_scale.unwrap_or(1.0);
             for line in broken {
                 lines.push((index, line));
                 pitch.push(tall * scale);

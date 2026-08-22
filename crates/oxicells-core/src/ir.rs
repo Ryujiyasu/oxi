@@ -364,6 +364,11 @@ pub struct ShapeParagraph {
     /// The line pitch the paragraph pins, in points, when it pins one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_pitch: Option<f32>,
+    /// The share of the font's own pitch the paragraph asks for, when it
+    /// states one as a percentage rather than outright — `glossary_05`'s
+    /// flowchart sets every box at four fifths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_scale: Option<f32>,
 }
 
 /// A graph drawn over the grid, as its own part states it.
