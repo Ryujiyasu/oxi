@@ -5,7 +5,9 @@ For each square in `gen_pptx_shadow.py`'s sweeps, measured off PowerPoint's own
 PDF rasterised at 300 DPI:
 
   offset      the shadow ink's centre of mass minus the square's centre, which
-              should come out as dist x (cos dir, -sin dir)
+              should come out as dist x (cos dir, sin dir) -- DrawingML measures
+              `dir` clockwise from the +x axis in a y-DOWN frame, so dir=90 is
+              straight down, not up
   reach       how far the penumbra extends past the square's edge along that
               direction (the 2% ink contour) -- the blurRad reading
   edge 10-90  the distance over which the penumbra goes from 10% to 90% of its
