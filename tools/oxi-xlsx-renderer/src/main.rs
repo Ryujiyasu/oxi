@@ -907,6 +907,120 @@ pub(crate) fn anchored_box(
     Some(windows::Win32::Foundation::RECT { left, top, right, bottom })
 }
 
+/// The face Excel draws when the workbook asks for one this machine has not.
+///
+/// Not the name, and not the PANOSE the file carries: `_xlsx_missing_face_map.py`
+/// gives every arm a workbook of its own — a name resolves once per document,
+/// so two arms sharing a name in one book share its answer — and sweeps them
+/// separately. Six names, from the two the corpus asks for to one that never
+/// existed, all answer the same way, and only the run's charset moves it:
+/// Japanese (-128) draws in 游ゴシック, everything else in ＭＳ ゴシック,
+/// whatever the pitchFamily says. GDI's own mapper answers ＭＳ Ｐゴシック to
+/// both, which is neither.
+pub(crate) fn face_in_place(face: &str, charset: Option<i32>) -> String {
+    if face.is_empty() || installed(face) {
+        return face.to_string();
+    }
+    // -128 is SHIFT_JIS as a signed byte; a file can also write it as 128.
+    match charset {
+        Some(-128) | Some(128) => "游ゴシック".to_string(),
+        _ => "ＭＳ ゴシック".to_string(),
+    }
+}
+
+/// Whether the device has this face, or is quietly drawing something else.
+///
+/// GDI has no way to say "I have not got that": it hands back a face of its
+/// own choosing. So the question is asked twice — once for the face, once for
+/// a name nothing can have — and a face that answers the way the impossible
+/// one does is a face the device has not got.
+#[cfg(windows)]
+fn installed(face: &str) -> bool {
+    thread_local! {
+        static KNOWN: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(held) = KNOWN.with(|known| known.borrow().get(face).copied()) {
+        return held;
+    }
+    const NOTHING: &str = "Nonesuch Face ZZQ";
+    let answer = physical_face(face);
+    let fallback = physical_face(NOTHING);
+    let held = match (answer, fallback) {
+        (Some(answer), Some(fallback)) => answer != fallback || answer == face,
+        _ => true,
+    };
+    KNOWN.with(|known| known.borrow_mut().insert(face.to_string(), held));
+    held
+}
+
+#[cfg(not(windows))]
+fn installed(_face: &str) -> bool {
+    true
+}
+
+/// The face the device actually draws when asked for this one.
+///
+/// `GetTextFace` answers with the name that was asked for, whether or not
+/// anything answered to it; the outline metrics carry the name of the face
+/// that was actually realised, which is the one worth comparing.
+#[cfg(windows)]
+fn physical_face(face: &str) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Graphics::Gdi::*;
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return None;
+        }
+        let dc = CreateCompatibleDC(screen);
+        let name: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+        let font = CreateFontW(
+            -16,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            DEFAULT_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(name.as_ptr()),
+        );
+        let previous = SelectObject(dc, font);
+        let mut answer = None;
+        let size = GetOutlineTextMetricsW(dc, 0, None);
+        if size > 0 {
+            let mut held: Vec<u8> = vec![0; size as usize];
+            let metrics = held.as_mut_ptr() as *mut OUTLINETEXTMETRICW;
+            if GetOutlineTextMetricsW(dc, size, Some(metrics)) != 0 {
+                // The name is stored inside the same block, as an offset in
+                // bytes from its start.
+                let at = (*metrics).otmpFaceName.0 as usize;
+                if at > 0 && at < held.len() {
+                    let letters = held.as_ptr().add(at) as *const u16;
+                    let mut end = 0usize;
+                    while at + (end + 1) * 2 <= held.len() && *letters.add(end) != 0 {
+                        end += 1;
+                    }
+                    answer = Some(String::from_utf16_lossy(
+                        std::slice::from_raw_parts(letters, end),
+                    ));
+                }
+            }
+        }
+        SelectObject(dc, previous);
+        let _ = DeleteObject(font);
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        answer
+    }
+}
+
 /// One level of indent, in 96-dpi pixels, when the workbook's own font
 /// cannot be measured.
 pub(crate) const INDENT: f32 = 15.0;
@@ -2832,11 +2946,16 @@ mod windows_draw {
         let mut pitch: Vec<f32> = Vec::new();
         let mut leading: Vec<i32> = Vec::new();
         for (index, paragraph) in said.paragraphs.iter().enumerate() {
-            let face = paragraph
-                .face
-                .clone()
-                .or_else(|| normal.map(|(face, _)| face.clone()))
-                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string());
+            // A face this machine has not got is not GDI's business to
+            // guess: Excel answers by the run's charset (see `face_in_place`).
+            let face = super::face_in_place(
+                &paragraph
+                    .face
+                    .clone()
+                    .or_else(|| normal.map(|(face, _)| face.clone()))
+                    .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string()),
+                paragraph.charset,
+            );
             let broken = super::wrapped_lines(
                 &face,
                 paragraph.size,
@@ -2898,11 +3017,16 @@ mod windows_draw {
         SetTextAlign(dc, TA_TOP | TA_LEFT);
         for (step, (index, line)) in lines.iter().enumerate() {
             let paragraph = &said.paragraphs[*index];
-            let face = paragraph
-                .face
-                .clone()
-                .or_else(|| normal.map(|(face, _)| face.clone()))
-                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string());
+            // A face this machine has not got is not GDI's business to
+            // guess: Excel answers by the run's charset (see `face_in_place`).
+            let face = super::face_in_place(
+                &paragraph
+                    .face
+                    .clone()
+                    .or_else(|| normal.map(|(face, _)| face.clone()))
+                    .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string()),
+                paragraph.charset,
+            );
             let pixels = -((paragraph.size * scale * 96.0 / 72.0).round() as i32);
             let named = wide(&face);
             let font = CreateFontW(

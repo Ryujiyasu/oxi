@@ -1364,6 +1364,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         bold: false,
                         italic: false,
                         face: None,
+                        charset: None,
                         color: None,
                         line_pitch: None,
                         line_scale: None,
@@ -1430,6 +1431,11 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             let face = get_attr(e, "typeface").filter(|face| !face.is_empty());
                             if face.is_some() && (name == "ea" || held.face.is_none()) {
                                 held.face = face;
+                                // The charset travels with the face it is
+                                // written beside: it is what Excel falls back
+                                // on when the face is not installed.
+                                held.charset = get_attr(e, "charset")
+                                    .and_then(|held| held.parse::<i32>().ok());
                             }
                         }
                     }
@@ -1692,6 +1698,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         bold: false,
         italic: false,
         face: None,
+        charset: None,
         color: None,
         line_pitch: None,
         line_scale: None,

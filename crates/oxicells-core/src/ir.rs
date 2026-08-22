@@ -370,6 +370,11 @@ pub struct ShapeParagraph {
     pub italic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face: Option<String>,
+    /// The charset the run states beside the face, when it states one.
+    /// Excel's answer for a face this machine has not got turns on this and
+    /// on nothing else — not the name, not the PANOSE the file carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charset: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     /// The line pitch the paragraph pins, in points, when it pins one.
