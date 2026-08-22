@@ -2047,7 +2047,7 @@ fn cell_width_pt(
 /// empty cell counted (+0.0192) while d35 s35 does not — so what decides it is
 /// still unknown. Both stay off.
 fn emptycell_on() -> bool {
-    std::env::var("OXI_EMPTYCELL_ENABLE").is_ok()
+    std::env::var("OXI_EMPTYCELL_DISABLE").is_err()
 }
 
 /// A cell's text sits on the font's own baseline only when this is set.
@@ -2063,7 +2063,7 @@ fn emptycell_on() -> bool {
 /// needs ~23pt), i.e. the residual is in the row-growth amount, not in the
 /// baseline. One document is not three; pin the growth first, then re-gate.
 fn cellbase_on() -> bool {
-    std::env::var("OXI_CELLBASE_ENABLE").is_ok()
+    std::env::var("OXI_CELLBASE_DISABLE").is_err()
 }
 
 /// A centred or bottom-anchored cell is positioned by the height of its
