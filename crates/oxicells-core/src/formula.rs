@@ -184,6 +184,7 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
             merge_cells: vec![],
             hidden_cols: vec![],
             auto_filter: None,

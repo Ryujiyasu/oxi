@@ -51,6 +51,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         default_row_custom: false,
         col_fonts: vec![],
         normal_font: None,
+        first_font: None,
         merge_cells: vec![],
         hidden_cols: Vec::new(),
         auto_filter: None,

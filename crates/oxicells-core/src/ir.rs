@@ -37,6 +37,12 @@ pub struct Sheet {
     /// The workbook's Normal font, worn by every column no `<col>` dresses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normal_font: Option<(String, f32)>,
+    /// The first font in the workbook's list, with a theme scheme resolved
+    /// the way every other font's is. One level of a cell's indent is three
+    /// of this font's spaces — this one, and not the font the Normal style
+    /// points at, which is a different entry in books openpyxl writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_font: Option<(String, f32)>,
     pub merge_cells: Vec<MergeCell>,
     /// Zero-based indices of the columns that are hidden. Columns have no
     /// record of their own, so this sits beside `col_widths`.

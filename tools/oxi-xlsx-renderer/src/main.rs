@@ -417,7 +417,7 @@ fn row_pixels(
             // keeps either side of it, which is the cell font's own — five
             // pixels for an eight-pixel digit, more for a bigger one.
             let (left_room, right_room) = gutters(face, size, cell.style.bold, cell.style.italic);
-            let (before, after) = indent_room(&cell.style);
+            let (before, after) = indent_room(&cell.style, indent_level(sheet));
             let width = width - left_room - right_room - before - after;
             counter
                 .and_then(|counter| {
@@ -907,18 +907,38 @@ pub(crate) fn anchored_box(
     Some(windows::Win32::Foundation::RECT { left, top, right, bottom })
 }
 
-/// One level of indent, in 96-dpi pixels.
-///
-/// Measured on `_xlsx_indent.py`: fifteen pixels a level, the same for every
-/// face and size tried — 8, 11 and 14 point, ＭＳ Ｐゴシック, ＭＳ ゴシック,
-/// Meiryo UI, Calibri, 游ゴシック — and the same again in a workbook whose
-/// Normal font is not the default. Unlike the room either side of a cell,
-/// which follows the font's own digit, this is a constant.
+/// One level of indent, in 96-dpi pixels, when the workbook's own font
+/// cannot be measured.
 pub(crate) const INDENT: f32 = 15.0;
 
+/// One level of indent: three spaces of the workbook's first font.
+///
+/// `_xlsx_indent.py` reads fifteen pixels a level whatever the cell wears,
+/// and called it a constant; the `h2daa*dendeba_kmc` trio reads twelve.
+/// `_xlsx_indent_bisect.py` puts one property of that workbook back at a
+/// time: only the first font in the list moves it, and moving it moves the
+/// level with the width of that font's space — ＭＳ Ｐゴシック 11 five and
+/// fifteen, ＭＳ ゴシック 11 eight and twenty-four, 游ゴシック 11 four and
+/// twelve, Calibri 11 three and nine, at 8 and 14 point likewise, in twelve
+/// arms. The probe read a constant because every book it wrote resolves its
+/// first font to the same ＭＳ Ｐゴシック through the theme.
+///
+/// It is the first font in the list, not the one the Normal style points at:
+/// pointing Normal elsewhere leaves the level where it was.
+pub(crate) fn indent_level(sheet: &oxicells_core::ir::Sheet) -> f32 {
+    sheet
+        .first_font
+        .as_ref()
+        .and_then(|(face, points)| {
+            let spaces = advances(face, *points, false, false, " ")?;
+            spaces.first().map(|space| 3.0 * *space as f32)
+        })
+        .unwrap_or(INDENT)
+}
+
 /// How far this cell's text is pushed in from the edge it sits against.
-pub(crate) fn indent_px(style: &CellStyle) -> f32 {
-    INDENT * style.indent as f32
+pub(crate) fn indent_px(style: &CellStyle, level: f32) -> f32 {
+    level * style.indent as f32
 }
 
 /// How much room an indent takes from a cell, before and after the text.
@@ -934,8 +954,8 @@ pub(crate) fn indent_px(style: &CellStyle) -> f32 {
 /// The wrapped line is broken in what is left, and both kinds do wrap tighter
 /// with an indent: 4, 4, 5, 7 lines at indents 0 to 3 against the left edge,
 /// 4, 5, 10, 20 centred (`_xlsx_indent_wrap.py`).
-pub(crate) fn indent_room(style: &CellStyle) -> (f32, f32) {
-    let indent = indent_px(style);
+pub(crate) fn indent_room(style: &CellStyle, level: f32) -> (f32, f32) {
+    let indent = indent_px(style, level);
     match style.horizontal_align.as_deref() {
         Some("distributed") | Some("justify") => (indent, indent),
         Some("center") | Some("centre") | Some("centerContinuous") => (0.0, indent * 2.0),
@@ -3389,9 +3409,10 @@ mod windows_draw {
                         }
                     }
 
-                    // An indent takes fifteen pixels a level off the cell,
-                    // from whichever edge its alignment says.
-                    let (before, after) = super::indent_room(&cell.style);
+                    // An indent takes three of the workbook's own spaces a
+                    // level off the cell, from whichever edge its alignment says.
+                    let (before, after) =
+                        super::indent_room(&cell.style, super::indent_level(sheet));
                     area.left += (before * scale).round() as i32;
                     area.right -= (after * scale).round() as i32;
 

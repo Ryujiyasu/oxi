@@ -2452,6 +2452,14 @@ fn parse_worksheet(
         })
     };
 
+    // The first font in the list, which is what an indent is measured in.
+    let first_font = stylesheet.fonts.first().and_then(|font| {
+        match (font.name.clone(), font.size) {
+            (Some(name), Some(size)) => Some((name, size)),
+            _ => None,
+        }
+    });
+
     Ok(Sheet {
         tables: Vec::new(),
         drawings: Vec::new(),
@@ -2465,6 +2473,7 @@ fn parse_worksheet(
         default_row_custom,
         col_fonts,
         normal_font,
+        first_font,
         merge_cells,
         auto_filter,
         declared_range,
@@ -3310,6 +3319,35 @@ mod tests {
         assert_eq!(resolve_cell_style(0, &sheet).indent, 0);
         assert_eq!(resolve_cell_style(1, &sheet).indent, 2);
         assert_eq!(resolve_cell_style(2, &sheet).indent, 3);
+    }
+
+    /// The font an indent is measured in is the first one in the list, not
+    /// the one the Normal style points at. The two are the same in a workbook
+    /// Excel writes and different in one openpyxl does, and Excel's indent
+    /// follows the first entry in both (`_xlsx_indent_bisect.py`).
+    #[test]
+    fn the_first_font_is_kept_apart_from_the_normal_style_font() {
+        let styles = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><sz val="9"/><name val="Meiryo UI"/></font>
+  </fonts>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  </cellXfs>
+</styleSheet>"##;
+        let stylesheet = parse_styles_xml(styles, &Theme::default()).unwrap();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+</worksheet>"#;
+        let sheet = parse_worksheet(xml, "probe", &[], &stylesheet).expect("should parse");
+        assert_eq!(sheet.first_font, Some(("Calibri".to_string(), 11.0)));
+        assert_eq!(sheet.normal_font, Some(("Meiryo UI".to_string(), 9.0)));
     }
 
     #[test]
