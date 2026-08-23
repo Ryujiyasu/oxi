@@ -4057,11 +4057,36 @@ mod windows_draw {
                     // pixel. Measured against Excel on a box ruled all the way
                     // round, whose edges landed exactly on the column and row
                     // starts.
+                    // A merged block takes each edge from the cell ON that
+                    // edge, not from the one it is anchored to. `B4:B5` in
+                    // `glossary_05` is anchored on B4, which states a top
+                    // rule and no bottom; the bottom medium rule is B5's, and
+                    // Excel draws it — 745 pixels of it, right under the
+                    // banner, which this drew as nothing at all.
+                    let beside = |row_at: u32, column: u32| {
+                        sheet
+                            .rows
+                            .iter()
+                            .find(|held| held.index == row_at)
+                            .and_then(|held| held.cells.iter().find(|held| held.col == column))
+                    };
+                    let foot = if spans_rows > 0 {
+                        beside(row.index + spans_rows, cell.col)
+                            .map_or(&cell.style.border_bottom, |held| &held.style.border_bottom)
+                    } else {
+                        &cell.style.border_bottom
+                    };
+                    let far = if spans_columns > 0 {
+                        beside(row.index, cell.col + spans_columns)
+                            .map_or(&cell.style.border_right, |held| &held.style.border_right)
+                    } else {
+                        &cell.style.border_right
+                    };
                     let edges: [(&Option<BorderLine>, bool, i32); 4] = [
                         (&cell.style.border_top, true, box_.top),
-                        (&cell.style.border_bottom, true, box_.bottom),
+                        (foot, true, box_.bottom),
                         (&cell.style.border_left, false, box_.left),
-                        (&cell.style.border_right, false, box_.right),
+                        (far, false, box_.right),
                     ];
                     for (line, horizontal, at) in edges {
                         let Some(line) = line else { continue };
