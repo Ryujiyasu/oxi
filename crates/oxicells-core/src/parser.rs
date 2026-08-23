@@ -447,6 +447,23 @@ impl Theme {
 /// what the corpus is compared to.
 const THEME_SCRIPT: &str = "Jpan";
 
+/// The face a shape's run means when it names the theme's scheme instead of a
+/// face of its own. `+mn-ea` is "whatever the minor scheme says for East
+/// Asian text", `+mj-lt` the major scheme's, and so on — the same resolution
+/// a cell's font gets from `scheme="minor"`.
+///
+/// Left as it stands, `+mn-ea` reaches the device as a face name nothing has,
+/// and the missing-face rule answers ＭＳ ゴシック for it. `tb_r8_youshiki`'s
+/// banner then steps its lines 21 pixels where Excel, in the theme's
+/// 游ゴシック, steps 27. 38 shapes across five workbooks name a theme font.
+fn scheme_face(face: &str, theme: &Theme) -> Option<String> {
+    match face.strip_prefix('+')?.get(..2)? {
+        "mj" => theme.major_face.clone(),
+        "mn" => theme.minor_face.clone(),
+        _ => None,
+    }
+}
+
 fn parse_theme_xml(xml: &str) -> Theme {
     let mut reader = Reader::from_str(xml);
     let mut theme = Theme::default();
@@ -1444,7 +1461,9 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "latin" | "ea" if in_run_props => {
                     if let Some(held) = paragraph.as_mut() {
                         if held.text.is_empty() {
-                            let face = get_attr(e, "typeface").filter(|face| !face.is_empty());
+                            let face = get_attr(e, "typeface")
+                                .filter(|face| !face.is_empty())
+                                .map(|face| scheme_face(&face, theme).unwrap_or(face));
                             if face.is_some() && (name == "ea" || held.face.is_none()) {
                                 held.face = face;
                                 // The charset travels with the face it is
@@ -3259,6 +3278,56 @@ mod tests {
         let line = shape.line.as_ref().expect("the shape is ruled");
         assert_eq!(line.dash.as_deref(), Some("dash"));
         assert_eq!(line.width, 19050);
+    }
+
+    /// A shape's run can name the theme's scheme instead of a face.
+    #[test]
+    fn a_run_that_names_the_theme_wears_the_face_the_theme_names() {
+        let theme = Theme {
+            major_face: Some("游ゴシック Light".into()),
+            minor_face: Some("游ゴシック".into()),
+            ..Theme::default()
+        };
+        let xml = r##"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:sp>
+      <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+      <xdr:txBody>
+        <a:bodyPr/>
+        <a:p><a:r>
+          <a:rPr sz="1200"><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:rPr>
+          <a:t>昨年からの変更点</a:t>
+        </a:r></a:p>
+        <a:p><a:r>
+          <a:rPr sz="1200"><a:ea typeface="+mj-ea"/></a:rPr>
+          <a:t>見出し</a:t>
+        </a:r></a:p>
+        <a:p><a:r>
+          <a:rPr sz="1200"><a:ea typeface="メイリオ"/></a:rPr>
+          <a:t>名指し</a:t>
+        </a:r></a:p>
+      </xdr:txBody>
+    </xdr:sp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"##;
+        let found = parse_drawing_xml(xml, &theme);
+        let crate::ir::DrawingKind::Shape(shape) = &found[0].0.kind else {
+            panic!("the anchor holds a shape");
+        };
+        let said = shape.text.as_ref().expect("the shape says something");
+        assert_eq!(said.paragraphs[0].face.as_deref(), Some("游ゴシック"));
+        assert_eq!(said.paragraphs[1].face.as_deref(), Some("游ゴシック Light"));
+        assert_eq!(
+            said.paragraphs[2].face.as_deref(),
+            Some("メイリオ"),
+            "a face named outright is left alone"
+        );
     }
 
     /// A shape can name a theme colour and shade it rather than state one.
