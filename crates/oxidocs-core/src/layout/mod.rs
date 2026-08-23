@@ -30877,9 +30877,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // 条文 boxes are the reason the widen exists, is untouched:
                     // they overflow, so this carve-out does not reach them
                     // (0.8607 -> 0.8607, all 90 pages identical).
+                    // S1200 (2026-08-23, opt-in `OXI_S1200`): the box "fits" up to the
+                    // S1196 cap, not up to the bare content area. Word lets an auto
+                    // table hang its cell margins outside the text area (S1196:
+                    // cap = content - tblInd + inset_L + inset_R when a tblInd is
+                    // declared), and the single-column path never reaches that rule
+                    // because the shrink branch requires more than one column.
+                    //
+                    // WORD RENDER-TRUTH (tokyoshugyo p20 条文 box, rules read out of
+                    // Word's own PDF): grid 8458tw = 422.90, drawn 92.18..515.14 =
+                    // 422.96 -- the DECLARED width, shifted left by the cell margin,
+                    // its right border 4.87 past the right text margin and inside the
+                    // 5.40 tolerance. Word does NOT clamp it. Oxi widens it by a cell
+                    // margin (428.30) purely so the S585c clamp trigger fires, and the
+                    // clamp then approximately undoes the widen -- two errors that
+                    // leave 0.66pt, which is exactly what makes its 「…手待時間」）
+                    // line hold one character Word pushes out.
+                    let s1200_cap = if std::env::var("OXI_S1200").is_ok() {
+                        content_width - table.style.indent.unwrap_or(0.0) + pad_l + pad_r
+                    } else {
+                        content_width - pad_l
+                    };
                     let s1163_fits = std::env::var("OXI_S1163_DISABLE").is_err()
                         && table.style.width_type.as_deref() == Some("auto")
-                        && cell_w + pad_l <= content_width;
+                        && cell_w + pad_l <= s1200_cap + pad_l;
                     let s766_shift_whole = row.cells.len() == 1
                         && (matches!(table.style.width_type.as_deref(), Some("dxa") | Some("pct"))
                             || s1163_fits)
