@@ -33773,6 +33773,60 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // per-line best-fit + a1d6-safe gate = multi-session. Reverted.
                                                 would_overflow_natural
                                             };
+                                            // S1201 (2026-08-23, opt-in `OXI_S1201`): a character that
+                                            // would DRAG a run of closing marks with it must fit
+                                            // TOGETHER WITH THE WHOLE RUN. 」）cannot begin a line
+                                            // (行頭禁則), so taking the character before them commits
+                                            // the line to all three.
+                                            //
+                                            // `_pb_hang2.py`: when the character at the boundary is
+                                            // followed by closing marks, Word takes it 3 times out of
+                                            // 634 -- and S1199 measured that a run of two or more
+                                            // never hangs, so there is no relief at the end either.
+                                            // The specimen shows the same thing where the character
+                                            // fits NATURALLY, which the squeeze-side rule does not
+                                            // cover: tokyoshugyo p20's line 2 has 17.6pt of slack and
+                                            // Word still pushes 間」）down, because 間+」+） is
+                                            // 371.15 against a 367.6 budget.
+                                            //
+                                            // Scoped to a run of TWO OR MORE: a single trailing mark
+                                            // hangs (441/441), so the character before it is free.
+                                            //
+                                            // ★PARKED opt-in: it OVER-CORRECTS badly (tokyoshugyo
+                                            // 1.0000 -> 0.5607, 3a4f9fbe 1.0000 -> 0.9981). The reason
+                                            // is measured, not guessed: per-glyph, Oxi's advances for
+                                            // that line total 373.50 against Word's 371.15 -- kana
+                                            // +0.066 each and 約物 +0.244 each (kanji are exact) -- so
+                                            // Oxi's groups reach the wrap earlier than Word's and the
+                                            // rule fires where Word never sees the condition. The
+                                            // ORDER is therefore fixed: the per-character widths have
+                                            // to come off `_pb_pmincho.advances` first, and only then
+                                            // can this rule be judged.
+                                            let would_overflow = if would_overflow
+                                                || std::env::var("OXI_S1201").is_err()
+                                                || kinsoku::cell_yaku_type_a(ch)
+                                            {
+                                                would_overflow
+                                            } else {
+                                                let mut group = 0.0f32;
+                                                let mut n = 0usize;
+                                                let mut k = s586_ci + 1;
+                                                while let Some(c) = s586_run_chars.get(k) {
+                                                    if !kinsoku::cell_yaku_type_a(*c) {
+                                                        break;
+                                                    }
+                                                    group += self
+                                                        .registry
+                                                        .char_width_pt_with_fallback(
+                                                            *c, font_size, cm,
+                                                        );
+                                                    n += 1;
+                                                    k += 1;
+                                                }
+                                                n >= 2
+                                                    && (line_x + buf_w + cw + group)
+                                                        > effective_wrap
+                                            };
                                             // PROPCELL OIKOMI (tokyoshugyo/d77a commentary boxes, 2026-06-23,
                                             // default ON, opt-out OXI_PROPCELL_DISABLE):
                                             // a jc=LEFT cell in a PROPORTIONAL CJK font (MS PMincho/PGothic/
