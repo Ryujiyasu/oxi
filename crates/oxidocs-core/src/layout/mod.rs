@@ -33805,7 +33805,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // «…「手待時» / «間」）» exactly as Word does).
                                             let would_overflow = if would_overflow
                                                 || std::env::var("OXI_S1201").is_err()
-                                                || kinsoku::cell_yaku_type_a(ch)
+                                                || kinsoku::is_line_start_prohibited(ch)
                                             {
                                                 would_overflow
                                             } else {
@@ -33832,9 +33832,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     n += 1;
                                                     k += 1;
                                                 }
-                                                n >= 2
-                                                    && (line_x + buf_w + cw + group)
-                                                        > effective_wrap
+                                                // Three cases, layered the way `_pb_hang2.py`
+                                                // layers the boundary:
+                                                //   ch already overflows, any closers follow
+                                                //       -> never squeezed (3/634)
+                                                //   ch fits, TWO OR MORE closers follow
+                                                //       -> the group must fit (they cannot hang: 1/154)
+                                                //   ch fits, ONE closer follows
+                                                //       -> that mark hangs (441/441), ch is free
+                                                if n == 0 {
+                                                    false
+                                                } else if would_overflow_natural {
+                                                    true
+                                                } else if n >= 2 {
+                                                    (line_x + buf_w + cw + group) > effective_wrap
+                                                } else {
+                                                    false
+                                                }
                                             };
                                             // PROPCELL OIKOMI (tokyoshugyo/d77a commentary boxes, 2026-06-23,
                                             // default ON, opt-out OXI_PROPCELL_DISABLE):
