@@ -33604,8 +33604,35 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // 250/250 hang was swept at jc=both. Do not
                                                 // extend an unconditional rule past its
                                                 // envelope.
+                                                // S1199 (2026-08-23, opt-out
+                                                // `OXI_S1199_DISABLE`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): a RUN of closing marks
+                                                // does not hang. The unconditional short-circuit
+                                                // below came from a sweep that only ever put ONE
+                                                // mark at the boundary.
+                                                //
+                                                // `_pb_hang2.py` layers the boundary by how many
+                                                // closers form the group there (801-1301 widths,
+                                                // 3 arms, ＭＳ 明朝 10.5pt, the specimen's compat):
+                                                //
+                                                //   one closer overflows   -> hangs   441/441
+                                                //   two or more overflow   -> hangs     1/154,
+                                                //                                       2/180,
+                                                //                                       0/158
+                                                //
+                                                // tokyoshugyo's 「…手待時間」） is the second case:
+                                                // Word pushes 間」）to the next line as a group
+                                                // where Oxi fits 間 and hangs both marks.
+                                                let s1199_run_of_closers =
+                                                    std::env::var("OXI_S1199_DISABLE").is_err()
+                                                        && s586_run_chars
+                                                            .get(s586_ci + 1)
+                                                            .map_or(false, |n| {
+                                                                kinsoku::cell_yaku_type_a(*n)
+                                                            });
                                                 if s1174_yakucomp
                                                     && kinsoku::cell_yaku_type_a(ch)
+                                                    && !s1199_run_of_closers
                                                     && matches!(
                                                         para.alignment,
                                                         Alignment::Justify | Alignment::Distribute
