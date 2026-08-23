@@ -349,6 +349,10 @@ struct StyleSheet {
     fonts: Vec<FontInfo>,
     fills: Vec<FillInfo>,
     borders: Vec<BorderInfo>,
+    /// The borders the differential formats state, in the order they are
+    /// written. A table names the rule it draws round itself by an index into
+    /// these.
+    dxf_borders: Vec<BorderInfo>,
     cell_xfs: Vec<XfRecord>,
     cell_style_xfs: Vec<XfRecord>,
 }
@@ -677,6 +681,9 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
         Borders,
         CellXfs,
         CellStyleXfs,
+        /// The differential formats. A table states the rule it draws round
+        /// itself as an index into these, not into the ordinary borders.
+        Dxfs,
     }
     let mut section = Section::None;
     let mut in_font = false;
@@ -686,6 +693,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     let mut current_fill = FillInfo::default();
     let mut in_border = false;
     let mut current_border = BorderInfo::default();
+    // How many differential formats have been closed.
+    let mut dxf_seen = 0usize;
     let mut in_xf = false;
     let mut current_xf = XfRecord::default();
 
@@ -698,6 +707,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "fonts" => section = Section::Fonts,
                     "fills" => section = Section::Fills,
                     "borders" => section = Section::Borders,
+                    "dxfs" => section = Section::Dxfs,
                     "cellXfs" => section = Section::CellXfs,
                     "cellStyleXfs" => section = Section::CellStyleXfs,
 
@@ -709,7 +719,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         in_fill = true;
                         current_fill = FillInfo::default();
                     }
-                    "border" if section == Section::Borders => {
+                    "border" if section == Section::Borders || section == Section::Dxfs => {
                         in_border = true;
                         current_border = BorderInfo::default();
                         // Which way the corner-to-corner rule runs is stated
@@ -964,9 +974,25 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         in_fill = false;
                     }
                     "border" if in_border => {
-                        ss.borders.push(std::mem::take(&mut current_border));
+                        let held = std::mem::take(&mut current_border);
+                        if section == Section::Dxfs {
+                            ss.dxf_borders.push(held);
+                        } else {
+                            ss.borders.push(held);
+                        }
                         in_border = false;
                     }
+                    // Every differential format takes a place in the list,
+                    // whether or not it states a border — a table's index
+                    // counts them all, so one that only changes a font must
+                    // still hold its place.
+                    "dxf" if section == Section::Dxfs => {
+                        dxf_seen += 1;
+                        while ss.dxf_borders.len() < dxf_seen {
+                            ss.dxf_borders.push(BorderInfo::default());
+                        }
+                    }
+                    "dxfs" => section = Section::None,
                     "xf" if in_xf
                         && (section == Section::CellXfs
                             || section == Section::CellStyleXfs) =>
@@ -2120,12 +2146,17 @@ pub(crate) fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
     )
 }
 
-fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
+fn parse_table_xml(
+    xml: &str,
+    theme: &Theme,
+    dxf_borders: &[BorderInfo],
+) -> Option<crate::ir::Table> {
     let mut reader = Reader::from_str(xml);
     let mut range = None;
     let mut header_rows = 1;
     let mut style = None;
     let mut banded_rows = false;
+    let mut outline_at: Option<usize> = None;
     let mut buf = Vec::new();
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -2137,6 +2168,8 @@ fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
                         if let Some(count) = get_attr(e, "headerRowCount") {
                             header_rows = count.parse().unwrap_or(1);
                         }
+                        outline_at = get_attr(e, "tableBorderDxfId")
+                            .and_then(|held| held.parse::<usize>().ok());
                     }
                     "tableStyleInfo" => {
                         style = get_attr(e, "name");
@@ -2150,6 +2183,18 @@ fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
         }
         buf.clear();
     }
+    // The outline is one rule, not four: every one of the corpus's fifteen
+    // states the same thin auto-coloured line on all four sides, so the first
+    // side that names a style is the rule.
+    let outline = outline_at
+        .and_then(|at| dxf_borders.get(at))
+        .and_then(|held| {
+            held.top
+                .clone()
+                .or_else(|| held.bottom.clone())
+                .or_else(|| held.left.clone())
+                .or_else(|| held.right.clone())
+        });
     let (start_col, start_row, end_col, end_row) = range?;
     // A built-in style is named for the theme colour it uses: TableStyleMedium2
     // dresses the table in accent1, Medium7 in accent6. Measured on a worksheet
@@ -2183,6 +2228,7 @@ fn parse_table_xml(xml: &str, theme: &Theme) -> Option<crate::ir::Table> {
         end_row,
         end_col,
         style,
+        outline,
         header_rows,
         banded_rows,
         accent,
@@ -2854,7 +2900,9 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                         if rel.rel_type.ends_with("/table") {
                             let part = part_beside(&sheet_path, &rel.target);
                             if let Some(table_xml) = archive.try_read_part(&part)? {
-                                if let Some(table) = parse_table_xml(&table_xml, &theme) {
+                                if let Some(table) =
+                                    parse_table_xml(&table_xml, &theme, &stylesheet.dxf_borders)
+                                {
                                     sheet.tables.push(table);
                                 }
                             }

@@ -5065,6 +5065,64 @@ mod windows_draw {
                 }
             }
 
+            // A table rules a line round the whole of itself, and states it
+            // as an index into the workbook's differential formats rather
+            // than as a border on any cell. Its bottom edge is the only one
+            // that usually shows — the other three sit on cell borders that
+            // are drawn anyway — and it is long: thirteen hundred pixels in
+            // every one of the fifteen `procurement_contractor` workbooks,
+            // under the last row of the table, mentioned by no cell.
+            for table in &sheet.tables {
+                let Some(line) = table.outline.as_ref() else { continue };
+                let (Some(left), Some(right)) = (
+                    layout.columns.get(
+                        (table.start_col as usize).saturating_sub(layout.first_column as usize),
+                    ),
+                    layout.columns.get(
+                        (table.end_col as usize + 1).saturating_sub(layout.first_column as usize),
+                    ),
+                ) else {
+                    continue;
+                };
+                let (Some(top), Some(bottom)) = (
+                    layout.rows.get(
+                        (table.start_row as usize).saturating_sub(layout.first_row as usize),
+                    ),
+                    layout.rows.get(
+                        (table.end_row as usize + 1).saturating_sub(layout.first_row as usize),
+                    ),
+                ) else {
+                    continue;
+                };
+                let box_ = RECT {
+                    left: *left as i32,
+                    top: *top as i32,
+                    right: *right as i32,
+                    bottom: *bottom as i32,
+                };
+                let rule = super::rule_for(&line.style);
+                let ink = CreateSolidBrush(colour(line.color.as_deref(), 0x0000_0000));
+                for (horizontal, at) in [
+                    (true, box_.top),
+                    (true, box_.bottom),
+                    (false, box_.left),
+                    (false, box_.right),
+                ] {
+                    for step in -rule.before..=rule.after {
+                        if rule.hollow && step == 0 {
+                            continue;
+                        }
+                        let edge = if horizontal {
+                            RECT { top: at + step, bottom: at + step + 1, ..box_ }
+                        } else {
+                            RECT { left: at + step, right: at + step + 1, ..box_ }
+                        };
+                        FillRect(dc, &edge, ink);
+                    }
+                }
+                let _ = DeleteObject(ink);
+            }
+
             // What hangs over the grid is drawn last, so it covers the cells
             // it is laid over rather than the other way round.
             let telling = std::env::var("OXI_XLSX_DUMP_DRAWINGS").is_ok();

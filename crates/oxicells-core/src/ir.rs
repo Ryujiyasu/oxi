@@ -205,6 +205,13 @@ pub struct Table {
     /// accent again, under a lighter tint than the banding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<String>,
+    /// The rule the table draws round its whole self, which it states as an
+    /// index into the workbook's differential formats rather than as a border
+    /// on any cell. Fifteen of the corpus's workbooks carry one — the whole
+    /// `procurement_contractor` family — and its bottom edge is a rule
+    /// thirteen hundred pixels long that no cell mentions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<BorderLine>,
 }
 
 /// A stretch of a cell's text that is dressed differently from the rest of it.
