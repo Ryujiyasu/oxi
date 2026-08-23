@@ -99,27 +99,27 @@ def main() -> None:
                 # A caption can be split across spans, and a family name has
                 # SPACES in it ("Segoe Script"), so join the line and match that.
                 joined = "".join("".join(c["c"] for c in sp["chars"]) for sp in line["spans"])
-                hit = re.match(r"arm (.+?)\|(\d+)\|(\d+)", joined)
+                hit = re.match(r"arm (.+?)\|(\d+)\|(\d+)\|(\d+)", joined)
                 if hit:
-                    arm = (hit.group(1), int(hit.group(2)), int(hit.group(3)))
+                    arm = (hit.group(1), int(hit.group(2)), int(hit.group(3)), int(hit.group(4)))
                     continue
                 for span in line["spans"]:
                     text = "".join(c["c"] for c in span["chars"])
                     if text.startswith("Hxg"):
                         spans.append((span["origin"][1], text))
-        if arm is None or len(spans) < 2:
+        if arm is None or not spans:
             continue
         spans.sort()
-        font, pct, size = arm
+        font, pct, size, lines = arm
         n = pct / 100.0
         off = spans[0][0] - AREA_TOP
-        pitch = spans[1][0] - spans[0][0]
+        pitch = (spans[1][0] - spans[0][0]) if len(spans) > 1 else 1.2 * size * n
         met = metrics(font)
         face = 1.2 * met[0] / (met[0] + met[1]) if met else float("nan")
         model = rule(face, size, n)
         delta = off - model
         worst.append(abs(delta))
-        print(f"{font + '|' + str(pct) + '|' + str(size):22s} {off:9.3f} {pitch:8.3f} "
+        print(f"{font + '|' + str(pct) + '|' + str(size) + '|' + str(lines) + 'L':24s} {off:9.3f} {pitch:8.3f} "
               f"{face:7.4f} {model:9.3f} {delta:+7.3f}  "
               f"{'ok' if abs(delta) < 0.08 else 'OFF THE RULE'}")
 

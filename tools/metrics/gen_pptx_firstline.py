@@ -67,19 +67,37 @@ ARMS = [
      ("Segoe Script", 93, 40), ("Courier New", 93, 40),
      ("Segoe Script", 93, 144), ("Courier New", 93, 144),
      ("Segoe Script", 90, 144), ("Courier New", 90, 144),
-     ("Arial", 90, 144)]
+     ("Arial", 90, 144),
+     # ★d39 s4 (ONE line) and s5 (two) are the same deck, face and spacing and
+     # land on different models -- every arm above has three lines, so the line
+     # COUNT has never been under test.
+     ("Arial", 90, 40, 1), ("Calibri", 90, 40, 1), ("Segoe Script", 90, 40, 1),
+     ("Courier New", 90, 40, 1), ("Segoe Script", 80, 40, 1), ("Arial", 80, 40, 1),
+     ("Segoe Script", 100, 40, 1), ("Segoe Script", 120, 40, 1),
+     ("Arial", 90, 40, 2), ("Segoe Script", 90, 40, 2),
+     # ★d39 s4's box is 1.0100 pitches tall -- one line with 1.6pt to spare --
+     # while s5's is 2.02. A box that barely fits is the last variable left.
+     ("Segoe Script", 93, 40, 1, 1.01), ("Courier New", 93, 40, 1, 1.01),
+     ("Arial", 93, 40, 1, 1.01), ("Segoe Script", 93, 40, 1, 1.00),
+     ("Segoe Script", 93, 40, 1, 0.95), ("Segoe Script", 93, 40, 1, 2.02),
+     ("Courier New", 93, 40, 1, 2.02)]
 
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     prs = Presentation()
     blank = prs.slide_layouts[6]
-    for font, pct, size in ARMS:
+    for arm in ARMS:
+        font, pct, size = arm[0], arm[1], arm[2]
+        lines = arm[3] if len(arm) > 3 else LINES
+        # arm[4] = box height in PITCHES; default is the roomy fixed box.
+        box_h = (Emu(int(arm[4] * 1.2 * size * pct / 100.0 * 12700))
+                 if len(arm) > 4 else BOX_H)
         slide = prs.slides.add_slide(blank)
         # A caption OUTSIDE the measured box so the reader can name the arm.
         cap = slide.shapes.add_textbox(BOX_X, Emu(228600), BOX_W, Emu(300000))
-        cap.text_frame.text = f"arm {font}|{pct}|{size}"
-        box = slide.shapes.add_textbox(BOX_X, BOX_Y, BOX_W, BOX_H)
+        cap.text_frame.text = f"arm {font}|{pct}|{size}|{lines}"
+        box = slide.shapes.add_textbox(BOX_X, BOX_Y, BOX_W, box_h)
         tf = box.text_frame
         body = tf._txBody.find(f"{{{A}}}bodyPr")
         for child in list(body):
@@ -90,7 +108,7 @@ def main() -> None:
         for key in ("lIns", "rIns", "tIns", "bIns"):
             body.set(key, "0")
         body.append(etree.SubElement(body, f"{{{A}}}noAutofit"))
-        for index in range(LINES):
+        for index in range(lines):
             para = tf.paragraphs[0] if index == 0 else tf.add_paragraph()
             ppr = para._pPr if para._pPr is not None else para._p.get_or_add_pPr()
             spc = etree.SubElement(ppr, f"{{{A}}}lnSpc")
