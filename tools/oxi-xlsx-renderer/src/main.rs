@@ -615,6 +615,31 @@ pub(crate) fn advances(
 /// whole-pixel one the device draws at, and accumulated before they are
 /// rounded — which is how Excel steps a shape's text.
 #[cfg(windows)]
+/// The same advances, before they are put on whole pixels.
+///
+/// A shape is *drawn* on whole pixels — a glyph lands where `shape_run` puts
+/// it — but the break is decided on the fractions. `_xlsx_shape_room.py`
+/// sweeps a box a quarter of a pixel at a time under two lines: ten
+/// full-width kana, whose advances are 160.00 exactly, turn at a room of
+/// 160.00, and `sanko_tool`'s own thirty-seven-character line turns at
+/// **557.75** — which is that line's fractional sum, not the 558 its
+/// rounded-per-glyph positions add up to. Excel breaks on the first, draws by
+/// the second.
+pub(crate) fn shape_widths(
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    text: &str,
+) -> Option<Vec<f32>> {
+    held(|counter| {
+        let letters: Vec<char> = text.chars().collect();
+        let shares = counter.design_advances(face, bold, italic, &letters)?;
+        let em = points * 96.0 / 72.0;
+        Some(shares.into_iter().map(|share| share * em).collect())
+    })
+}
+
 pub(crate) fn shape_run(
     face: &str,
     points: f32,
@@ -1166,18 +1191,28 @@ pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Opt
 /// characters until the next would not fit, then gives them back one at a time
 /// until the break is one Excel would make.
 fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
+    let held: Vec<f32> = advances.iter().map(|advance| *advance as f32).collect();
+    // A cell measures its room in whole pixels, and always has.
+    broken_at(letters, &held, width.max(1.0).trunc())
+}
+
+fn broken_at(letters: &[char], advances: &[f32], width: f32) -> Vec<usize> {
     let mut breaks = Vec::new();
     if letters.is_empty() {
         return breaks;
     }
-    let box_px = width.max(1.0) as i32;
+    let room = width.max(1.0);
     let mut start = 0usize;
     while start < letters.len() {
         let mut take = 0usize;
-        let mut run = 0i32;
+        let mut run = 0.0f32;
         while start + take < letters.len() {
             let next = run + advances[start + take];
-            if take > 0 && next > box_px {
+            // A hair of slack: the fractions are worked out from the font's
+            // own design units and Excel's arithmetic is not this one's, so a
+            // line whose sum lands on the room to a thousandth is a line that
+            // fits.
+            if take > 0 && next > room + 0.01 {
                 break;
             }
             run = next;
@@ -1270,13 +1305,11 @@ fn broken_lines(
     let mut held = Vec::new();
     for paragraph in text.split('\n') {
         let letters: Vec<char> = paragraph.chars().collect();
-        let stepped = if shape {
-            shape_run(face, points, bold, italic, paragraph)
-        } else {
-            advances(face, points, bold, italic, paragraph)
-        };
         let breaks = match width {
-            Some(width) => stepped
+            Some(width) if shape => shape_widths(face, points, bold, italic, paragraph)
+                .map(|advances| broken_at(&letters, &advances, width))
+                .unwrap_or_default(),
+            Some(width) => advances(face, points, bold, italic, paragraph)
                 .map(|advances| line_breaks(&letters, &advances, width))
                 .unwrap_or_default(),
             None => Vec::new(),
@@ -3032,8 +3065,13 @@ mod windows_draw {
         if area.right <= area.left {
             return;
         }
+        // The insets keep their own fractions here as well: Excel states them
+        // in points (7.2 of them either side is 9.6 pixels, not 10), and the
+        // room is what is left of the exact box after the exact insets.
         let room = match exact {
-            Some(exact) => exact / scale - (inset(said.insets.0) + inset(said.insets.2)) as f32 / scale,
+            Some(exact) => {
+                (exact - (said.insets.0 + said.insets.2) as f32 / super::EMU * scale) / scale
+            }
             None => (area.right - area.left) as f32 / scale,
         };
 
@@ -3108,6 +3146,19 @@ mod windows_draw {
             // metric of theirs explains it, and the two corpus workbooks that
             // pin a pitch are both メイリオ: shipping the law without its
             // remainder costs them 0.002 each. The remainder is the work.
+            if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
+                for line in &broken {
+                    let run = super::shape_run(
+                        &face, paragraph.size, paragraph.bold, paragraph.italic, line,
+                    )
+                    .map(|steps| steps.iter().sum::<i32>());
+                    eprintln!(
+                        "shape line room {room:.2} run {run:?} chars {} {:?}",
+                        line.chars().count(),
+                        line.chars().take(14).collect::<String>()
+                    );
+                }
+            }
             for line in broken {
                 lines.push((index, line));
                 pitch.push(tall * scale);

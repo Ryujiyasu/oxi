@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-r"""How much room does a shape's text really get, to the fraction of a pixel?
+r"""Will Excel leave one character alone on a shape's last line?
 
-`sanko_tool`'s panel holds a line 558 pixels wide in a box the renderer makes
-577 wide with 19.2 of inset — 557.8 of room — so the renderer breaks the last
-character onto a line of its own and Excel does not. The margin is under a
-pixel, and the box's own edges are fractional: its anchors carry 1280160 and
-624840 EMU, which are 134.4 and 65.6 pixels into their columns.
+`sanko_tool`'s panel breaks its line at 「…選択」and puts 「する」on the next,
+where this renderer fits one character more and leaves 「る」 by itself. Both
+breaks are inside the room, so what is being tested is not the room: it is
+whether Excel holds a character back rather than end a paragraph with a line
+of one.
 
-So this asks where the break really falls. Each case is a shape whose width is
-set in EMU a quarter of a pixel at a time around the point where a line of
-known width stops fitting, and whose left edge is offset by a fraction of a
-pixel as well. The width at which Excel first takes two lines is the room.
+Each case is a run of full-width characters in a box whose room is a whole
+number of them, so the leftover is known: a room of sixteen characters for a
+run of seventeen leaves one, for eighteen leaves two, and so on. What is read
+back is how wide the last line's ink is.
 
-    python tools\metrics\_xlsx_shape_room.py
-    python tools\metrics\_xlsx_shape_room.py --reuse
+    python tools\metrics\_xlsx_shape_orphan.py
+    python tools\metrics\_xlsx_shape_orphan.py --reuse
 """
 import argparse
 import os
@@ -28,70 +28,43 @@ from PIL import Image
 REPO = Path(__file__).resolve().parents[2]
 SHOOTER = Path(__file__).resolve().parent / "_xlsx_screen_shot.ps1"
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
-SCRATCH = Path(r"C:\tmp\xlsx_shape_room")
-BOOK = SCRATCH / "room.xlsx"
+SCRATCH = Path(r"C:\tmp\xlsx_shape_orphan")
+BOOK = SCRATCH / "orphan.xlsx"
 EMU = 9525.0
 
-SPACING = 5
+SPACING = 8
 FACE, POINTS = "游ゴシック", 12.0
-LETTERS = 10                    # ten full-width characters: 160 pixels of run
-RUN = 160.0
-# The line `sanko_tool`'s panel keeps whole and this renderer breaks: three
-# spaces and a run of names, whose advances sum to 558 by the renderer's own
-# reckoning in a box whose room is 557.0. Swept the same way, it says whether
-# Excel's sum for it is smaller than ours or its comparison has slack.
-PANEL = ("   \u300c\u8abf\u67fb\u7968\u756a\u53f7\u300d\u3001\u300c\u54c1\u76ee\u756a\u53f7\u300d\u3001"
-         "\u300c\u30a2\u30a4\u30c6\u30e0\u8a18\u53f7\u300d\u3092\u30d7\u30eb\u30c0\u30a6\u30f3"
-         "\u3067\u9078\u629e\u3059\u308b")
-PANEL_RUN = 558.0
-INSET = 2 * 91440 / EMU         # the default insets, 19.2 pixels
-# A quarter of a pixel at a time, from a box that cannot hold the line to one
-# that comfortably can.
-STEPS = [round((RUN + INSET + quarter / 4.0) * EMU)
-         for quarter in range(-8, 9)]
-# And the same widths again with the left edge a fraction of a pixel in, to
-# see whether where the box starts changes what fits in it.
-OFFSETS = [0, round(0.4 * EMU), round(0.6 * EMU)]
-
-
-PANEL_STEPS = [round((PANEL_RUN + INSET + quarter / 4.0) * EMU)
-               for quarter in range(-12, 9)]
+EM = 16.0                       # one full-width character at this size
+INSET = 2 * 91440 / EMU
+FITS = 12                       # characters a line has room for
+# A run of this many characters, so the last line would hold one, two, three
+# — and the same again with a Latin tail, where a word may not be split.
+LENGTHS = [13, 14, 15, 16, 24, 25, 26]
+KINDS = [("kana", "\u3042"), ("kanji", "\u56fd")]
 
 
 def cases():
-    held = [(width, offset, LETTERS * 16, "\u3042" * LETTERS, False)
-            for offset in OFFSETS for width in STEPS]
-    held += [(width, 0, PANEL_RUN, PANEL, False) for width in PANEL_STEPS]
-    # And the same line again in a box ruled the way the panel's is: three
-    # points of blue round its edge. `sanko_tool` breaks that line one
-    # character earlier than a plain box of the same width does, so the rule
-    # is the thing to measure. A square box, so the corners of a rounded one
-    # cannot be counted as words.
-    held += [(width, 0, PANEL_RUN, PANEL, True) for width in PANEL_STEPS]
-    return held
+    return [(kind, letter, length) for kind, letter in KINDS for length in LENGTHS]
 
 
 def anchors_xml():
     held = []
-    for index, (width, offset, _run, text, ruled) in enumerate(cases()):
+    for index, (_kind, letter, length) in enumerate(cases()):
+        size = int(POINTS * 100)
         runs = (f'<a:p><a:pPr algn="l"/><a:r>'
-                f'<a:rPr lang="ja-JP" sz="{int(POINTS * 100)}">'
+                f'<a:rPr lang="ja-JP" sz="{size}">'
                 f'<a:latin typeface="{FACE}"/><a:ea typeface="{FACE}"/>'
-                f'</a:rPr><a:t>{text}</a:t></a:r></a:p>')
+                f"</a:rPr><a:t>{letter * length}</a:t></a:r></a:p>")
         held.append(
             f"<xdr:oneCellAnchor>"
-            f"<xdr:from><xdr:col>1</xdr:col><xdr:colOff>{offset}</xdr:colOff>"
+            f"<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
             f"<xdr:row>{index * SPACING}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
-            f'<xdr:ext cx="{width}" cy="{int(4 * 20 * EMU)}"/>'
+            f'<xdr:ext cx="{round((FITS * EM + INSET) * EMU)}" cy="{int(7 * 20 * EMU)}"/>'
             f'<xdr:sp macro="" textlink="">'
             f'<xdr:nvSpPr><xdr:cNvPr id="{index + 2}" name="box {index}"/>'
             f"<xdr:cNvSpPr/></xdr:nvSpPr>"
-            f'<xdr:spPr><a:prstGeom prst="{"roundRect" if ruled else "rect"}">'
-            f"<a:avLst/></a:prstGeom>"
-            + ('<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>'
-               '<a:ln w="38100"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln>'
-               if ruled else "<a:noFill/><a:ln><a:noFill/></a:ln>")
-            + "</xdr:spPr>"
+            f'<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            f"<a:noFill/><a:ln><a:noFill/></a:ln></xdr:spPr>"
             f'<xdr:txBody><a:bodyPr wrap="square" anchor="t"/><a:lstStyle/>'
             f"{runs}</xdr:txBody></xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
         )
@@ -158,15 +131,15 @@ def shoot():
     subprocess.run(["powershell", "-NoProfile", "-File", str(SHOOTER),
                     "-ListFile", str(listing.resolve())],
                    capture_output=True, text=True, encoding="utf-8",
-                   errors="replace", timeout=1800)
+                   errors="replace", timeout=900)
     listing.unlink(missing_ok=True)
     return picture
 
 
 def drawn():
-    ours = SCRATCH / "room.oxi.png"
+    ours = SCRATCH / "orphan.oxi.png"
     done = subprocess.run(
-        [str(RENDERER), str(BOOK), str(ours), "96"], capture_output=True, timeout=1800,
+        [str(RENDERER), str(BOOK), str(ours), "96"], capture_output=True, timeout=900,
         env=dict(os.environ, OXI_XLSX_DUMP_ROWS="1", OXI_XLSX_DUMP_COLUMNS="1",
                  OXI_XLSX_SHAPE_TEXT="1"))
     heights, lane = {}, 0
@@ -179,26 +152,24 @@ def drawn():
     return ours, heights, lane
 
 
-def how_many(picture, top, foot, lane):
-    """How many lines of words, counting the words and not the box's rule.
-
-    A ruled box lights every row of the band along its sides, so the count is
-    taken from the black of the letters alone: the rule these cases draw is
-    blue, and a blue pixel is one whose parts are not all alike."""
-    band = picture[top:foot, lane + 20:lane + 500]
-    if band.ndim == 3:
-        dark = band.min(axis=2) < 128
-        grey = (band.max(axis=2).astype(int) - band.min(axis=2).astype(int)) < 40
-        held = (dark & grey).sum(axis=1)
-    else:
-        held = (band < 128).sum(axis=1)
-    lines, run = 0, False
-    for lit in held:
-        if lit and not run:
-            lines, run = lines + 1, True
-        elif not lit:
-            run = False
-    return lines
+def lines_of(picture, top, foot, lane):
+    """Each line's ink width, in order."""
+    band = (picture[top:foot, lane:] < 128)
+    rows = band.sum(axis=1)
+    held, run = [], None
+    for step, lit in enumerate(rows):
+        if lit:
+            run = [step, step] if run is None else [run[0], step]
+        elif run is not None and step - run[1] > 2:
+            held.append(run)
+            run = None
+    if run is not None:
+        held.append(run)
+    widths = []
+    for first, last in held:
+        columns = np.flatnonzero(band[first:last + 1].any(axis=0))
+        widths.append(int(columns[-1] - columns[0] + 1) if columns.size else 0)
+    return widths
 
 
 def main():
@@ -212,28 +183,25 @@ def main():
     if not picture.exists():
         print("Excel gave no picture")
         return
-    truth = np.asarray(Image.open(picture).convert("RGB"))
+    truth = np.asarray(Image.open(picture).convert("L"))
     ours_png, heights, lane = drawn()
-    mine = np.asarray(Image.open(ours_png).convert("RGB"))
+    mine = np.asarray(Image.open(ours_png).convert("L"))
     edges, at = {}, 0
     for index in sorted(heights):
         edges[index] = at
         at += heights[index]
 
-    print(f"the line is {RUN:.0f} pixels of run, the insets {INSET:.1f}")
-    print(f"{'box px':>9}{'left in':>9}{'room':>9}{'run':>7}{'box':>7}"
-          f"{'Excel lines':>12}{'ours':>6}")
-    for index, (width, offset, run, _text, ruled) in enumerate(cases()):
+    print(f"the room holds {FITS} characters of {EM:g} pixels")
+    print(f"{'text':>7}{'length':>7}{'Excel lines':>28}{'ours':>28}")
+    for index, (kind, _letter, length) in enumerate(cases()):
         top = edges.get(index * SPACING + 1)
         foot = edges.get(index * SPACING + SPACING)
         if top is None or foot is None or foot > min(truth.shape[0], mine.shape[0]):
             continue
-        theirs = how_many(truth, top, foot, lane)
-        ours = how_many(mine, top, foot, lane)
+        theirs = lines_of(truth, top, foot, lane)
+        ours = lines_of(mine, top, foot, lane)
         mark = "" if theirs == ours else "  <<"
-        print(f"{width / EMU:>9.2f}{offset / EMU:>9.2f}{width / EMU - INSET:>9.2f}"
-              f"{run:>7.0f}{'ruled' if ruled else 'plain':>7}"
-              f"{theirs:>12}{ours:>6}{mark}")
+        print(f"{kind:>7}{length:>7}{str(theirs):>28}{str(ours):>28}{mark}")
 
 
 if __name__ == "__main__":
