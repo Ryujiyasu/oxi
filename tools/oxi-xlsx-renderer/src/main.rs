@@ -2455,6 +2455,67 @@ mod windows_draw {
                     };
                     let _ = MoveToEx(dc, from_x, from_y, None);
                     let _ = LineTo(dc, to_x, to_y);
+                    // And whatever the rule wears at its ends. Measured off
+                    // Excel's own picture by `_xlsx_arrow_head.py`, which
+                    // reads the head as the ink the same line has WITH one
+                    // and has not without — a head is thinnest at its tip and
+                    // thickest at its base, so every attempt to find it
+                    // inside a single picture measured something else.
+                    //
+                    // At the width the corpus actually draws them — 1296 of
+                    // its 1301 ruled ends are 0.75pt, which is one pixel — a
+                    // `triangle` is 7 long and 7 across and an `arrow` is 8
+                    // and 10, and 1pt gives the same. Wider rules were swept
+                    // too and grow more slowly than the rule does, which is
+                    // what the halves below say; the corpus does not live
+                    // there, so that part is a fit rather than a law.
+                    if let Some(ruled) = shape.line.as_ref() {
+                        let thick = ((ruled.width as f32 / super::EMU) * scale).max(1.0);
+                        for (worn, tip, tail) in [
+                            (ruled.tail_end.as_deref(), (to_x, to_y), (from_x, from_y)),
+                            (ruled.head_end.as_deref(), (from_x, from_y), (to_x, to_y)),
+                        ] {
+                            let Some(worn) = worn else { continue };
+                            let (long, wide) = match worn {
+                                "arrow" => (3.0 * thick + 5.0, 4.0 * thick + 6.0),
+                                "stealth" => (2.0 * thick + 4.0, 2.0 * thick + 5.0),
+                                // triangle, diamond, oval and the rest.
+                                _ => (2.0 * thick + 5.0, 2.0 * thick + 5.0),
+                            };
+                            let (dx, dy) = ((tip.0 - tail.0) as f32, (tip.1 - tail.1) as f32);
+                            let span = (dx * dx + dy * dy).sqrt();
+                            if span < 1.0 {
+                                continue;
+                            }
+                            let (ux, uy) = (dx / span, dy / span);
+                            let base = (tip.0 as f32 - ux * long, tip.1 as f32 - uy * long);
+                            let half = wide / 2.0;
+                            let corner = |sign: f32| POINT {
+                                x: (base.0 - uy * half * sign).round() as i32,
+                                y: (base.1 + ux * half * sign).round() as i32,
+                            };
+                            let points = [
+                                POINT { x: tip.0, y: tip.1 },
+                                corner(1.0),
+                                corner(-1.0),
+                            ];
+                            if worn == "arrow" {
+                                // An open V, drawn in the rule's own pen.
+                                let _ = MoveToEx(dc, points[1].x, points[1].y, None);
+                                let _ = LineTo(dc, points[0].x, points[0].y);
+                                let _ = LineTo(dc, points[2].x, points[2].y);
+                            } else {
+                                let paint = CreateSolidBrush(colour(
+                                    Some(&ruled.color),
+                                    0x0000_0000,
+                                ));
+                                let held_brush = SelectObject(dc, paint);
+                                let _ = Polygon(dc, &points);
+                                SelectObject(dc, held_brush);
+                                let _ = DeleteObject(paint);
+                            }
+                        }
+                    }
                 }
             }
             // A curly brace: two arms reaching the left edge, a body up the
@@ -2534,6 +2595,74 @@ mod windows_draw {
                     (half, down - corner + corner * PULL),
                     (half * PULL, down),
                     (0.0, down),
+                );
+                let _ = EndPath(dc);
+                if rule.is_some() {
+                    let _ = StrokePath(dc);
+                } else {
+                    let _ = AbortPath(dc);
+                }
+            }
+            // A pair of square brackets: two strokes, each a straight side
+            // with a quarter-circle hook at the top and the bottom. Read off
+            // Excel's picture by `_xlsx_bracket_shape.py` over five arms —
+            // the hook's radius is `min(w,h) x adj/100000` (default 16667),
+            // and it is a CIRCLE, not an ellipse stretched to the box: the
+            // 80x267 arm settles that, where adj 25000 gives 20 pixels and
+            // not the 67 that scaling by the height would give.
+            "bracketPair" => {
+                let across = (box_.right - box_.left) as f32;
+                let down = (box_.bottom - box_.top) as f32;
+                let adjust = shape
+                    .adjusts
+                    .iter()
+                    .find(|(held, _)| held == "adj")
+                    .map_or(16_667.0, |(_, value)| *value as f32);
+                let hook = (across.min(down) * adjust.clamp(0.0, 50_000.0) / 100_000.0)
+                    .min(across / 2.0)
+                    .min(down / 2.0)
+                    .max(0.0);
+                const PULL: f32 = 0.552_284_8;
+                let left = box_.left as f32;
+                let top = box_.top as f32;
+                let at = |x: f32, y: f32| POINT {
+                    x: (left + x).round() as i32,
+                    y: (top + y).round() as i32,
+                };
+                let curve = |one: (f32, f32), two: (f32, f32), end: (f32, f32)| {
+                    let held = [at(one.0, one.1), at(two.0, two.1), at(end.0, end.1)];
+                    let _ = PolyBezierTo(dc, &held);
+                };
+                let _ = BeginPath(dc);
+                // The left bracket, top hook down to the bottom one.
+                let start = at(hook, 0.0);
+                let _ = MoveToEx(dc, start.x, start.y, None);
+                curve(
+                    (hook - hook * PULL, 0.0),
+                    (0.0, hook - hook * PULL),
+                    (0.0, hook),
+                );
+                let foot = at(0.0, down - hook);
+                let _ = LineTo(dc, foot.x, foot.y);
+                curve(
+                    (0.0, down - hook + hook * PULL),
+                    (hook - hook * PULL, down),
+                    (hook, down),
+                );
+                // The right one, which is the same the other way about.
+                let start = at(across - hook, 0.0);
+                let _ = MoveToEx(dc, start.x, start.y, None);
+                curve(
+                    (across - hook + hook * PULL, 0.0),
+                    (across, hook - hook * PULL),
+                    (across, hook),
+                );
+                let foot = at(across, down - hook);
+                let _ = LineTo(dc, foot.x, foot.y);
+                curve(
+                    (across, down - hook + hook * PULL),
+                    (across - hook + hook * PULL, down),
+                    (across - hook, down),
                 );
                 let _ = EndPath(dc);
                 if rule.is_some() {
@@ -2819,6 +2948,8 @@ mod windows_draw {
                 color: "000000".into(),
                 width: 9525,
                 dash: None,
+                head_end: None,
+                tail_end: None,
             });
             let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
             let pen = ruling_pen(
@@ -2872,6 +3003,8 @@ mod windows_draw {
                 color: "000000".into(),
                 width: 3175,
                 dash: None,
+                head_end: None,
+                tail_end: None,
             });
             let width = ((stated.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
             (

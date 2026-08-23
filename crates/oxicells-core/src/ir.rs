@@ -618,6 +618,14 @@ pub struct Legend {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShapeLine {
+    /// What the rule wears at each end — "triangle", "arrow", "stealth",
+    /// "oval", "diamond" — when it wears anything. 76 of the corpus's rules
+    /// carry one, and `glossary_05`'s flowchart is drawn almost entirely out
+    /// of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_end: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_end: Option<String>,
     /// Six hex digits.
     pub color: String,
     /// Width in EMU. Excel draws a line of its own accord at 9525 — one pixel

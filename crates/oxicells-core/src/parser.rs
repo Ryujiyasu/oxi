@@ -1183,6 +1183,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut shape = blank_shape.clone();
     let mut line_width: i64 = 9525;
     let mut dash: Option<String> = None;
+    let (mut head_end, mut tail_end): (Option<String>, Option<String>) = (None, None);
     let mut embed: Option<String> = None;
     // Which corner the col/row elements belong to, and whether we are inside
     // a shape — where `<ext>` is the shape's own size, not the anchor's.
@@ -1247,6 +1248,8 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     shape = blank_shape.clone();
                     line_width = 9525;
                     dash = None;
+                    head_end = None;
+                    tail_end = None;
                     fill_stated = false;
                     line_stated = false;
                     said = ShapeText {
@@ -1289,6 +1292,8 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         paragraph = None;
                         fill_stated = false;
                         line_stated = false;
+                        head_end = None;
+                        tail_end = None;
                         own_off = None;
                         own_ext = None;
                         embed = None;
@@ -1388,6 +1393,16 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     }
                 }
                 "prstDash" if in_ln => dash = get_attr(e, "val"),
+                // What the rule wears at its ends. `type="none"` is most of
+                // them and means bare.
+                "headEnd" | "tailEnd" if in_ln => {
+                    let worn = get_attr(e, "type").filter(|kind| kind != "none");
+                    if name == "headEnd" {
+                        head_end = worn;
+                    } else {
+                        tail_end = worn;
+                    }
+                }
                 "noFill" if in_sp_pr && in_ext_lst == 0 => {
                     if in_ln {
                         line_stated = true;
@@ -1593,6 +1608,8 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 color: painted,
                                 width: line_width,
                                 dash: dash.clone(),
+                                head_end: head_end.clone(),
+                                tail_end: tail_end.clone(),
                             })
                         }
                         Paints::Text => {
@@ -1655,6 +1672,8 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                         color: painted,
                                         width: line_width,
                                         dash: dash.clone(),
+                                        head_end: head_end.clone(),
+                                        tail_end: tail_end.clone(),
                                     })
                                 }
                                 Paints::Text => {
@@ -1705,6 +1724,19 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     // whole of `<a:ln>` has been read.
                     "ln" => {
                         in_ln = false;
+                        // The ends are stated AFTER the fill inside `<a:ln>`,
+                        // and the fill is what builds the rule — so they are
+                        // hung on it here rather than when it is made.
+                        // `glossary_05` states every one of its twelve arrows
+                        // this way, and reading them at build time found none.
+                        if let Some(ruled) = shape.line.as_mut() {
+                            if ruled.head_end.is_none() {
+                                ruled.head_end = head_end.clone();
+                            }
+                            if ruled.tail_end.is_none() {
+                                ruled.tail_end = tail_end.clone();
+                            }
+                        }
                         if let Some(line) = shape.line.as_mut() {
                             line.width = line_width;
                             line.dash = dash.take();

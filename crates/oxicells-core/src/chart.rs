@@ -160,6 +160,8 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                                 .and_then(|w| w.parse().ok())
                                 .unwrap_or(9525),
                             dash: None,
+                            head_end: None,
+                            tail_end: None,
                         });
                     }
                     "noFill" => {
