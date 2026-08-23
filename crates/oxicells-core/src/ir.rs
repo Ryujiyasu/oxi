@@ -352,6 +352,11 @@ pub struct Shape {
     pub fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<ShapeLine>,
+    /// What a preset's adjust handles are set to, by name — `adj`, `adj1`,
+    /// `adj2` — in the hundred-thousandths a preset states them in. A preset
+    /// left alone carries none and takes its own defaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjusts: Vec<(String, i64)>,
     /// The outline the shape draws itself with, when it has one of its own
     /// rather than a preset's.
     #[serde(default, skip_serializing_if = "Option::is_none")]

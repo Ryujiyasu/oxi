@@ -2457,6 +2457,91 @@ mod windows_draw {
                     let _ = LineTo(dc, to_x, to_y);
                 }
             }
+            // A curly brace: two arms reaching the left edge, a body up the
+            // middle, and a point at the right. Measured off Excel's own
+            // picture by `_xlsx_brace_shape.py` and `_xlsx_brace_adjust.py`
+            // rather than taken from a remembered preset definition:
+            //   * the point sits at `h x adj2/100000` — six arms, exact;
+            //   * `adj1` is capped at `min(a2, 100000-a2)/2 x h/ss` and the
+            //     corner's y-radius is `ss x a1/100000`. The capped arm is
+            //     what shows the cap is real: adj1 58333 with adj2 11152 comes
+            //     to 22.3 capped where the bare arithmetic says 30.9, and the
+            //     fitted radius is 23.1.
+            //   * the corner's x-radius is half the box, so the arm leaves the
+            //     left edge horizontally and meets the body vertically.
+            // 24 braces across three workbooks, and one of them is the brace
+            // beside `002`'s notes.
+            "rightBrace" => {
+                let across = (box_.right - box_.left) as f32;
+                let down = (box_.bottom - box_.top) as f32;
+                let smaller = across.min(down);
+                let adjust = |name: &str, fallback: f32| {
+                    shape
+                        .adjusts
+                        .iter()
+                        .find(|(held, _)| held == name)
+                        .map_or(fallback, |(_, value)| *value as f32)
+                };
+                let a2 = adjust("adj2", 50_000.0).clamp(0.0, 100_000.0);
+                let cap = if smaller > 0.0 {
+                    (100_000.0 - a2).min(a2) / 2.0 * down / smaller
+                } else {
+                    0.0
+                };
+                let a1 = adjust("adj1", 8_333.0).clamp(0.0, cap.max(0.0));
+                let corner = smaller * a1 / 100_000.0;
+                let point = down * a2 / 100_000.0;
+                // The body has to have somewhere to run, however the adjusts
+                // are set.
+                let corner = corner.min(point).min(down - point).max(0.0);
+                let half = across / 2.0;
+                // A quarter ellipse drawn as a curve: the control points sit
+                // this far along, which is the usual approximation.
+                const PULL: f32 = 0.552_284_8;
+                let left = box_.left as f32;
+                let top = box_.top as f32;
+                let at = |x: f32, y: f32| POINT { x: (left + x).round() as i32, y: (top + y).round() as i32 };
+                let _ = BeginPath(dc);
+                let start = at(0.0, 0.0);
+                let _ = MoveToEx(dc, start.x, start.y, None);
+                let curve = |one: (f32, f32), two: (f32, f32), end: (f32, f32)| {
+                    let held = [at(one.0, one.1), at(two.0, two.1), at(end.0, end.1)];
+                    let _ = PolyBezierTo(dc, &held);
+                };
+                // Down from the top-left arm to the body.
+                curve(
+                    (half * PULL, 0.0),
+                    (half, corner * (1.0 - PULL)),
+                    (half, corner),
+                );
+                let body = at(half, point - corner);
+                let _ = LineTo(dc, body.x, body.y);
+                // Out to the point and back again.
+                curve(
+                    (half, point - corner + corner * PULL),
+                    (across - half * PULL, point),
+                    (across, point),
+                );
+                curve(
+                    (across - half * PULL, point),
+                    (half, point + corner * (1.0 - PULL)),
+                    (half, point + corner),
+                );
+                let foot = at(half, down - corner);
+                let _ = LineTo(dc, foot.x, foot.y);
+                // And down to the bottom-left arm.
+                curve(
+                    (half, down - corner + corner * PULL),
+                    (half * PULL, down),
+                    (0.0, down),
+                );
+                let _ = EndPath(dc);
+                if rule.is_some() {
+                    let _ = StrokePath(dc);
+                } else {
+                    let _ = AbortPath(dc);
+                }
+            }
             "rect" | "roundRect" => {
                 // A rounded rectangle's corner has a radius of a sixth of its
                 // shorter side, which is the adjustment OOXML leaves at its

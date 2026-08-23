@@ -1147,6 +1147,10 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut frame: Option<(f64, f64)> = None;
     let mut frame_to: Option<(f64, f64)> = None;
 
+    // Whether the geometry being read is a preset, so its adjust handles are
+    // told apart from a custom geometry's formula list.
+    let mut in_preset = false;
+
     // The outline a shape draws itself with, and the step being read. A
     // verb's points are children of it, so which verb is open says what to do
     // with the points that arrive.
@@ -1168,6 +1172,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut kind: Option<DrawingKind> = None;
     let blank_shape = Shape {
         geometry: String::new(),
+        adjusts: Vec::new(),
         path: None,
         fill: None,
         line: None,
@@ -1339,6 +1344,19 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     shape.flip_h = is_true(get_attr(e, "flipH").as_deref());
                     shape.flip_v = is_true(get_attr(e, "flipV").as_deref());
                 }
+                // An adjust handle, which a preset reads its own shape from.
+                // Only the ones inside a `prstGeom` count: a `custGeom` states
+                // a `gdLst` full of formulas under the same element name.
+                "gd" if in_preset => {
+                    if let (Some(name), Some(value)) = (
+                        get_attr(e, "name"),
+                        get_attr(e, "fmla")
+                            .and_then(|held| held.strip_prefix("val ").map(str::to_string))
+                            .and_then(|held| held.trim().parse::<i64>().ok()),
+                    ) {
+                        shape.adjusts.push((name, value));
+                    }
+                }
                 "path" => {
                     let number = |name: &str| {
                         get_attr(e, name).and_then(|held| held.parse::<i64>().ok()).unwrap_or(0)
@@ -1364,6 +1382,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     points.push((number("x"), number("y")));
                 }
                 "prstGeom" => {
+                    in_preset = true;
                     if let Some(preset) = get_attr(e, "prst") {
                         shape.geometry = preset;
                     }
@@ -1707,6 +1726,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         }
                         points.clear();
                     }
+                    "prstGeom" => in_preset = false,
                     "custGeom" => {
                         shape.path = path.take();
                         if shape.geometry.is_empty() {
