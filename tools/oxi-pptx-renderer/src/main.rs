@@ -172,7 +172,8 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                             let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
                             if let Some(paragraphs) = p.get_mut("paragraphs") {
                                 if let Some(arr) = paragraphs.as_array_mut() {
-                                    let mut cursor_pt = sh.y + sh.t_ins;
+                                    let (gh, gv) = geom_text_inset(sh);
+                                    let mut cursor_pt = sh.y + sh.t_ins + gv;
                                     let anchor_off = compute_shape_anchor_off(dc, pres, sh);
                                     let master_ctx: &Vec<MasterStyleLevel> =
                                         match sh.ph_type.as_deref() {
@@ -199,8 +200,8 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 scale,
                                                 i == 0,
                                                 &def_family,
-                                                sh.l_ins,
-                                                sh.r_ins,
+                                                sh.l_ins + gh,
+                                                sh.r_ins + gh,
                                                 &master_ctx[..],
                                                 &sh.ph_levels[..],
                                                 anchor_off,
@@ -309,7 +310,8 @@ fn compute_shape_anchor_off(
     if paragraphs.is_empty() {
         return 0.0;
     }
-    let inner_h = (sh.height - sh.t_ins - sh.b_ins).max(0.0);
+    let (geom_h_ins, geom_v_ins) = geom_text_inset(sh);
+    let inner_h = (sh.height - sh.t_ins - sh.b_ins - 2.0 * geom_v_ins).max(0.0);
     let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
         Some("title") | Some("ctrTitle") => &pres.master_styles.title,
         Some(_) => &pres.master_styles.body,
@@ -331,8 +333,8 @@ fn compute_shape_anchor_off(
             scale,
             i == 0,
             &def_family,
-            sh.l_ins,
-            sh.r_ins,
+            sh.l_ins + geom_h_ins,
+            sh.r_ins + geom_h_ins,
             &master_ctx[..],
             &sh.ph_levels[..],
             0.0,
@@ -3123,10 +3125,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 continue;
                             }
                         }
-                        let left_x = x + (sh.l_ins as f64 * scale).round() as i32;
+                        let (geom_h_ins, geom_v_ins) = geom_text_inset(sh);
+                        let left_x =
+                            x + ((sh.l_ins + geom_h_ins) as f64 * scale).round() as i32;
                         let right_x = x
-                            + ((sh.width - sh.r_ins) as f64 * scale).round() as i32;
-                        let mut cursor_pt = sh.y + sh.t_ins;
+                            + ((sh.width - sh.r_ins - geom_h_ins) as f64 * scale).round() as i32;
+                        let mut cursor_pt = sh.y + sh.t_ins + geom_v_ins;
                         let anchor_off = compute_shape_anchor_off(mem_dc, pres, sh);
                         let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
                             Some("title") | Some("ctrTitle") => &pres.master_styles.title,
@@ -3207,8 +3211,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 scale,
                                 pi == 0,
                                 &family,
-                                sh.l_ins,
-                                sh.r_ins,
+                                sh.l_ins + geom_h_ins,
+                                sh.r_ins + geom_h_ins,
                                 &master_ctx[..],
                                 &sh.ph_levels[..],
                                 anchor_off,
@@ -11432,6 +11436,43 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
 /// `a:bodyPr/@wrap="none"` is honoured unless this is set.
 fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
+}
+
+/// The extra inset a non-rectangular preset geometry puts on its own text.
+///
+/// PowerPoint lays a shape's text out in the rectangle INSCRIBED in its
+/// geometry, not in its bounding box. For an ellipse that is `w/sqrt2` by
+/// `h/sqrt2`, centred -- and d35 s34's competitor matrix says so to a
+/// hundredth of a point on all seven of its bubbles:
+///
+///   w=78.76 "Our company" (50.87pt) fits 55.69      -> one line, and it is
+///   w=68.98 "Competitor"  (42.61pt) fits 48.77      -> one line, twice
+///   w=57.52 "Competitor"  (42.61pt) EXCEEDS 40.67   -> breaks, three times
+///   w=36.78 "Competitor"           exceeds 26.01    -> breaks after "Comp"
+///
+/// and the horizontal origin lands on it too: the w=57.52 bubble at x=108.89
+/// has an inscribed left edge of 117.315, its 39.39pt first line centres at
+/// **117.955**, and PowerPoint drew it at **117.96**. Reading the box at full
+/// width fits every one of those lines on one line instead.
+///
+/// 108 text-bearing ellipses across 8 dev decks. Opt-out
+/// `OXI_GEOMINSET_DISABLE`.
+fn geom_text_inset(sh: &Shape) -> (f32, f32) {
+    if !geominset_on() {
+        return (0.0, 0.0);
+    }
+    match sh.shape_type.as_deref() {
+        Some("ellipse") => {
+            let k = (1.0 - std::f32::consts::FRAC_1_SQRT_2) / 2.0;
+            (sh.width * k, sh.height * k)
+        }
+        _ => (0.0, 0.0),
+    }
+}
+
+/// A preset geometry insets its own text unless this is set.
+fn geominset_on() -> bool {
+    std::env::var("OXI_GEOMINSET_DISABLE").is_err()
 }
 
 /// A picture covers every pixel its exact rectangle TOUCHES unless this is
