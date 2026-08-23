@@ -115,6 +115,21 @@ pub struct MasterStyleLevel {
     /// quotation in italic; 18 levels across two dev decks declare one.
     #[serde(default)]
     pub italic: bool,
+    /// `a:defRPr/@b` -- the level asks for bold. d11's MASTER title
+    /// placeholder declares `<a:defRPr b="1" sz="3200"><a:latin
+    /// typeface="Kulim Park"/></a:defRPr>` and PowerPoint sets every title in
+    /// the deck in Kulim Park **Bold**; Oxi took the size and the face from
+    /// that level and left the weight at 400, so "Team Presentation" came out
+    /// 2.65% narrow (264.5pt of ink against PowerPoint's 271.7 at 32pt).
+    ///
+    /// `Option` rather than `bool` because an inner level must be able to turn
+    /// an outer level's bold OFF. **461 placeholder levels across 27 of the 40
+    /// dev decks declare one** -- against 18 for `italic`, in 2 decks. Every
+    /// one of the 461 lives in a placeholder `a:lstStyle`; the master's
+    /// `p:txStyles` carries none, so this belongs in the placeholder chain
+    /// alone.
+    #[serde(default)]
+    pub bold: Option<bool>,
     /// `a:defRPr/a:highlight` -- the box this outline level paints behind its
     /// text. d35's master TITLE placeholder declares a white one, which is the
     /// slab behind "BIG CONCEPT"; 19 levels in that deck carry one and no other

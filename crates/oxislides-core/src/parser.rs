@@ -493,6 +493,7 @@ fn parse_layout_ph_lststyles(
     let mut cur_lvl: Option<usize> = None;
     let mut in_def_rpr = false;
     let s_lvlitalic = std::env::var("OXI_LVLITALIC_DISABLE").is_err();
+    let s_lvlbold = std::env::var("OXI_LVLBOLD_DISABLE").is_err();
     // `a:highlight` inside a level's defRPr holds a colour element shaped just
     // like the level's own solidFill, so without this flag it is read as the
     // level's TEXT colour -- the same trap the run-level highlight sprang.
@@ -560,6 +561,15 @@ fn parse_layout_ph_lststyles(
                         if let (Some(idx), Some(i)) = (cur_lvl, get_attr(&e, "i")) {
                             if s_lvlitalic {
                                 levels[idx].italic = i == "1" || i == "true";
+                            }
+                        }
+                        // A level asks for WEIGHT the same way it asks for
+                        // slant. d11's master title placeholder says b="1" and
+                        // every title in the deck is bold; 461 placeholder
+                        // levels over 27 dev decks declare one.
+                        if let (Some(idx), Some(b)) = (cur_lvl, get_attr(&e, "b")) {
+                            if s_lvlbold {
+                                levels[idx].bold = Some(b == "1" || b == "true");
                             }
                         }
                     }
@@ -4501,6 +4511,7 @@ fn merge_ph_levels(
                 },
                 highlight: l.highlight.clone().or(m.highlight.clone()),
                 italic: l.italic || m.italic,
+                bold: l.bold.or(m.bold),
                 ..l
             }
         })

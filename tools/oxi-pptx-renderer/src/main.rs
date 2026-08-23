@@ -3240,11 +3240,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // headings are one run each with `b="1"` and came
                             // out regular; 1377 paragraphs across all 40 decks
                             // are all-bold like that.
-                            let para_weight = if p.runs.iter().any(|r| r.bold) && parabold_on() {
-                                700
-                            } else {
-                                400
-                            };
+                            // A LEVEL asks for WEIGHT the same way: d11's
+                            // master title placeholder declares
+                            // `<a:defRPr b="1" sz="3200">` with Kulim Park, and
+                            // Oxi took the size and the face from that level
+                            // while leaving the weight at 400 -- "Team
+                            // Presentation" 264.5pt of ink against
+                            // PowerPoint's 271.7 at 32pt.
+                            let lvl_bold =
+                                lvlbold_on() && phl.and_then(|l| l.bold).unwrap_or(false);
+                            let para_weight =
+                                if (p.runs.iter().any(|r| r.bold) || lvl_bold) && parabold_on() {
+                                    700
+                                } else {
+                                    400
+                                };
                             // A LEVEL can ask for italic too: d16's layout body
                             // level declares `<a:defRPr i="1"/>` and PowerPoint
                             // sets the whole quotation slanted.
@@ -3299,6 +3309,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         run_default_color.as_deref(),
                                         para_highlight.as_deref(),
                                         lvl_italic,
+                                        lvl_bold,
                                         scale,
                                     );
                                     continue;
@@ -9966,6 +9977,9 @@ unsafe fn draw_line_runs(
     default_highlight: Option<&str>,
     // The level's `a:defRPr/@i`, which every run inherits.
     default_italic: bool,
+    // The level's `a:defRPr/@b`, likewise. d11's master title placeholder
+    // declares it and every title in the deck is bold.
+    default_bold: bool,
     scale: f64,
 ) {
     // Walk the runs, clipping each to this line's character range.
@@ -10017,11 +10031,12 @@ unsafe fn draw_line_runs(
         let fs = run.font_size.unwrap_or(default_fs);
         let family = &effective_family(dc, run.font_family.as_deref().unwrap_or(default_family));
         let color = run.color.as_deref().or(default_color);
-        let weight = if run.bold { 700 } else { 400 };
-        let w = runtime_width_px(dc, &seg, fs, family, run.bold, run.italic, scale)
+        let bold = run.bold || default_bold;
+        let weight = if bold { 700 } else { 400 };
+        let w = runtime_width_px(dc, &seg, fs, family, bold, run.italic, scale)
             .or_else(|| font_adv::text_hmtx_px(&seg, fs, family, scale))
             .unwrap_or_else(|| {
-                measure_text_width(dc, &seg, fs, family, run.bold, scale).round() as i32
+                measure_text_width(dc, &seg, fs, family, bold, scale).round() as i32
             });
         // Behind the glyphs, and exactly as wide as this run's advance -- the
         // probe's `HIGH ` arm put the box's right edge on the trailing space's
@@ -11349,6 +11364,11 @@ fn lvlitalic_on() -> bool {
     std::env::var("OXI_LVLITALIC_DISABLE").is_err()
 }
 
+/// A level's `a:defRPr/@b` is honoured unless this is set.
+fn lvlbold_on() -> bool {
+    std::env::var("OXI_LVLBOLD_DISABLE").is_err()
+}
+
 /// A run with no colour takes the LEVEL's rather than a sibling run's unless
 /// this is set.
 fn runcolordef_on() -> bool {
@@ -11829,6 +11849,9 @@ fn layout_paragraph_baselines(
         if l.line_spacing.is_some() {
             m.line_spacing = l.line_spacing;
         }
+        if l.bold.is_some() {
+            m.bold = l.bold;
+        }
     }
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
@@ -11895,7 +11918,10 @@ fn layout_paragraph_baselines(
     // many characters per line.
     let font = create_font_for(&family, fs, scale);
     let old_font = unsafe { SelectObject(dc, font) };
-    let bold = para.runs.iter().any(|r| r.bold);
+    // The WRAP has to measure at the weight the line is drawn at, level bold
+    // included -- measuring d11's titles at 400 and drawing them at 700 would
+    // break them a word later than PowerPoint.
+    let bold = para.runs.iter().any(|r| r.bold) || (lvlbold_on() && m.bold.unwrap_or(false));
     let italic = para.runs.iter().any(|r| r.italic);
     let area_w = effective_width;
     let adv = fs * 1.2 * n;
