@@ -2103,12 +2103,36 @@ pub(crate) fn shaded(hex: &str, mods: &[(String, f32)]) -> String {
         ((value >> 8) & 0xFF) as f32 / 255.0,
         (value & 0xFF) as f32 / 255.0,
     ];
+    // `shade` and `tint` scale the LIGHT, not the byte. sRGB is not linear,
+    // so halving a byte and halving the light are different colours — and it
+    // is the light Excel halves. `cas-r02-ippan-4hyou` rules a box in `lt1`
+    // under `shade 50000` and Excel draws 188, where halving the byte gives
+    // 128. `_xlsx_shade_curve.py` sweeps both modifiers over four bases and
+    // three amounts: all twelve land on the light, several to the integer —
+    // white shaded a quarter is 137 and not 64, `4472C4` shaded a quarter is
+    // 32,58,104 and not 17,28,49.
+    let straight = |part: f32| {
+        if part <= 0.040_45 {
+            part / 12.92
+        } else {
+            ((part + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let encoded = |light: f32| {
+        if light <= 0.003_130_8 {
+            12.92 * light
+        } else {
+            1.055 * light.powf(1.0 / 2.4) - 0.055
+        }
+    };
     for (name, amount) in mods {
         match name.as_str() {
-            "shade" => channels.iter_mut().for_each(|part| *part *= amount),
-            "tint" => channels
+            "shade" => channels
                 .iter_mut()
-                .for_each(|part| *part = *part * amount + (1.0 - amount)),
+                .for_each(|part| *part = encoded(straight(*part) * amount)),
+            "tint" => channels.iter_mut().for_each(|part| {
+                *part = encoded(straight(*part) * amount + (1.0 - amount))
+            }),
             // Lightness is HSL's, and only it moves: the hue and the
             // saturation stay where they are. Measured on `002`'s banner,
             // whose fill is accent1 under `lumMod 20% lumOff 80%` — 5B9BD5
@@ -3565,8 +3589,10 @@ mod tests {
         assert_eq!(shape.fill.as_deref(), Some("4472C4"));
         assert_eq!(
             shape.line.as_ref().map(|line| line.color.as_str()),
-            Some("223962"),
-            "a 50% shade halves every channel"
+            Some("2F528F"),
+            "a 50% shade halves the LIGHT, not the byte — halving the byte \
+             would give 223962, and Excel draws neither that nor anything \
+             near it (see `_xlsx_shade_curve.py`)"
         );
     }
 
