@@ -3988,22 +3988,28 @@ mod windows_draw {
                         .get(top_at + 1 + spans_rows as usize)
                         .unwrap_or(bottom);
                     let brush = CreateSolidBrush(colour(Some(fill), 0xFFFFFF));
-                    // A cell's paint covers `(left, right]` and `(top,
-                    // bottom]`: the gridline row and column at its top-left
-                    // belong to the cell before it, and it paints one past
-                    // its own bottom-right instead. Inside a sheet this
-                    // cannot be seen — the paint tiles either way — but at
-                    // the picture's edge it is plain: the header band of
-                    // `gen2_000` runs x 1..360 and y 1..18 in Excel's picture
-                    // where this drew it at 0..359 and 0..17, and
-                    // `ui_checklist`'s 52-pixel band the same.
+                    // A cell's paint covers BOTH of its boundaries —
+                    // `[left, right]` and `[top, bottom]` — and the cells go
+                    // down in order, so a neighbour below or to the right
+                    // takes the shared pixel back. Where there is no such
+                    // neighbour, or it carries no paint of its own, the pixel
+                    // stays. The picture's first row and column are never
+                    // painted.
+                    //
+                    // Two generated books settle it between them, and neither
+                    // could alone. `gen_styled` stacks six painted rows: its
+                    // red band shows 1..17 because green paints 18 back.
+                    // `gen2_000` paints only its header row, and its band
+                    // shows 1..18 — the same rule with nothing below to take
+                    // the boundary. Reading either on its own gives a rule
+                    // that the other contradicts.
                     FillRect(
                         dc,
                         &RECT {
-                            left: *left as i32 + 1,
+                            left: (*left as i32).max(1),
                             top: (*top as i32).max(1),
                             right: *right as i32 + 1,
-                            bottom: *bottom as i32,
+                            bottom: *bottom as i32 + 1,
                         },
                         brush,
                     );
