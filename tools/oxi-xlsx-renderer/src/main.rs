@@ -4097,11 +4097,64 @@ mod windows_draw {
                     } else {
                         &cell.style.border_right
                     };
+                    // Two cells sharing an edge both state a rule for it, and
+                    // Excel draws ONE: the one belonging to the cell below, or
+                    // to the right. `_xlsx_border_contest.py` stacks two cells
+                    // and sweeps the style each states at the edge between
+                    // them — thin, medium, thick, double, dashed, dotted,
+                    // hair — and in all forty-two pairs, both ways round and
+                    // in both directions, what is drawn is the lower or
+                    // righthand cell's rule, whatever the two styles are. It
+                    // is not the heavier that wins; it is the later.
+                    //
+                    // Drawing both is only visible when one of them is hollow:
+                    // `R6kessan` stacks `bottom thin` on `top double`, and the
+                    // thin fills the double's white gap so a two-line rule
+                    // reads as a solid three-pixel one.
+                    //
+                    // A neighbour that is COVERED by a merge never draws its
+                    // own top or left rule — the block it belongs to draws
+                    // one at its own edge instead — so giving way to it loses
+                    // the line altogether. That is what cost the `28C0*`
+                    // family, whose sheets are largely merged blocks.
+                    // …and a neighbour outside the drawn range does not draw
+                    // one either, though the file still holds it.
+                    let inside = |row_at: u32, column: u32| {
+                        let down = (row_at as usize).checked_sub(layout.first_row as usize);
+                        let across = (column as usize).checked_sub(layout.first_column as usize);
+                        matches!(down, Some(down) if down + 1 < layout.rows.len())
+                            && matches!(across, Some(across) if across + 1 < layout.columns.len())
+                    };
+                    let drawn_itself = |row_at: u32, column: u32| {
+                        inside(row_at, column)
+                            && !matches!(
+                                merged.get(&(row_at, column)),
+                                Some(super::Merged::Covered)
+                            )
+                    };
+                    // Giving way is only WORTH it where drawing both can be
+                    // seen. For a solid rule the winner is laid down after the
+                    // loser and covers it, so the picture is already right;
+                    // standing aside as well only moves single-pixel lines
+                    // about, and across the corpus that cost as much as it
+                    // paid (15 improved against 10 regressed, no net change).
+                    // A hollow rule cannot cover anything — its middle is the
+                    // gap that makes it a double — so there, and only there,
+                    // the loser has to be held back.
+                    let hollow = |line: &Option<BorderLine>| {
+                        line.as_ref().is_some_and(|line| super::rule_for(&line.style).hollow)
+                    };
+                    let below = drawn_itself(row.index + spans_rows + 1, cell.col)
+                        && beside(row.index + spans_rows + 1, cell.col)
+                            .is_some_and(|held| hollow(&held.style.border_top));
+                    let after = drawn_itself(row.index, cell.col + spans_columns + 1)
+                        && beside(row.index, cell.col + spans_columns + 1)
+                            .is_some_and(|held| hollow(&held.style.border_left));
                     let edges: [(&Option<BorderLine>, bool, i32); 4] = [
                         (&cell.style.border_top, true, box_.top),
-                        (foot, true, box_.bottom),
+                        (if below { &None } else { foot }, true, box_.bottom),
                         (&cell.style.border_left, false, box_.left),
-                        (far, false, box_.right),
+                        (if after { &None } else { far }, false, box_.right),
                     ];
                     for (line, horizontal, at) in edges {
                         let Some(line) = line else { continue };
