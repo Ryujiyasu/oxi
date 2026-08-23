@@ -664,6 +664,41 @@ pub(crate) fn shape_run(
     })
 }
 
+/// The advances of a line whose runs are not all worn the same way.
+///
+/// Only weight varies inside a shape's paragraph in the corpus — never the
+/// size or the face — so the shares are gathered run by run and then added up
+/// ONCE. Measuring each run on its own and laying them end to end would start
+/// the cumulative rounding again at every boundary, and a line of four bold
+/// letters among Japanese text has four of those.
+pub(crate) fn shape_run_worn(
+    face: &str,
+    points: f32,
+    italic: bool,
+    worn: &[(bool, String)],
+) -> Option<Vec<i32>> {
+    held(|counter| {
+        let em = points * 96.0 / 72.0;
+        let mut at = 0.0f32;
+        let mut was = 0;
+        let mut steps = Vec::new();
+        for (bold, text) in worn {
+            let letters: Vec<char> = text.chars().collect();
+            let shares = counter.design_advances(face, *bold, italic, &letters)?;
+            for (letter, share) in letters.iter().zip(shares) {
+                at += share * em;
+                let now = at.round() as i32;
+                // One `dx` a UTF-16 unit, as `ExtTextOutW` wants them.
+                for unit in 0..letter.len_utf16() {
+                    steps.push(if unit == 0 { now - was } else { 0 });
+                }
+                was = now;
+            }
+        }
+        Some(steps)
+    })
+}
+
 /// One counter for the life of the program, holding its device context and
 /// remembering every character it has measured. The renderer draws on one
 /// thread, so it lives there.
@@ -3156,7 +3191,10 @@ mod windows_draw {
 
         // Every line, with the paragraph it belongs to, so the block can be
         // measured before any of it is written.
-        let mut lines: Vec<(usize, String)> = Vec::new();
+        // Each line, the paragraph it belongs to, and where in that
+        // paragraph's characters it starts — which is what says which runs it
+        // is written in.
+        let mut lines: Vec<(usize, String, usize)> = Vec::new();
         let mut pitch: Vec<f32> = Vec::new();
         let mut leading: Vec<i32> = Vec::new();
         for (index, paragraph) in said.paragraphs.iter().enumerate() {
@@ -3251,8 +3289,17 @@ mod windows_draw {
                     );
                 }
             }
+            // The lines are the paragraph's text with only its newlines
+            // taken out, so walking them forward gives each its own start.
+            let letters: Vec<char> = paragraph.text.chars().collect();
+            let mut cursor = 0usize;
             for line in broken {
-                lines.push((index, line));
+                let start = cursor;
+                cursor += line.chars().count();
+                if letters.get(cursor) == Some(&'\n') {
+                    cursor += 1;
+                }
+                lines.push((index, line, start));
                 pitch.push(tall * scale);
                 leading.push(match pinned {
                     Some((ascent, descent, _)) => {
@@ -3320,7 +3367,7 @@ mod windows_draw {
         // Nothing follows this on the sheet, so the alignment stays as it is
         // left.
         SetTextAlign(dc, TA_TOP | TA_LEFT);
-        for (step, (index, line)) in lines.iter().enumerate() {
+        for (step, (index, line, from)) in lines.iter().enumerate() {
             let paragraph = &said.paragraphs[*index];
             // A face this machine has not got is not GDI's business to
             // guess: Excel answers by the run's charset (see `face_in_place`).
@@ -3334,24 +3381,63 @@ mod windows_draw {
             );
             let pixels = -((paragraph.size * scale * 96.0 / 72.0).round() as i32);
             let named = wide(&face);
-            let font = CreateFontW(
-                pixels,
-                0,
-                0,
-                0,
-                if paragraph.bold { 700 } else { 400 },
-                u32::from(paragraph.italic),
-                0,
-                0,
-                DEFAULT_CHARSET.0 as u32,
-                OUT_DEFAULT_PRECIS.0 as u32,
-                CLIP_DEFAULT_PRECIS.0 as u32,
-                CLEARTYPE_QUALITY.0 as u32,
-                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-                PCWSTR(named.as_ptr()),
-            );
+            let dressed = |bold: bool, underline: bool| {
+                CreateFontW(
+                    pixels,
+                    0,
+                    0,
+                    0,
+                    if bold { 700 } else { 400 },
+                    u32::from(paragraph.italic),
+                    u32::from(underline),
+                    0,
+                    DEFAULT_CHARSET.0 as u32,
+                    OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32,
+                    CLEARTYPE_QUALITY.0 as u32,
+                    (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                    PCWSTR(named.as_ptr()),
+                )
+            };
+            // The pieces this line is written in: a paragraph written all one
+            // way gives one, and one behaves exactly as the whole line did.
+            // `u="sng"` and a weight sit on the RUN, and `sanko_tool` holds an
+            // underlined heading, two breaks and then its body inside a single
+            // paragraph — so wearing the first run's dressing across the
+            // paragraph underlines the body too.
+            let mut worn: Vec<(bool, bool, Option<String>, String)> = Vec::new();
+            {
+                let want = *from..*from + line.chars().count();
+                let mut walked = 0usize;
+                for run in &paragraph.runs {
+                    let len = run.text.chars().count();
+                    let start = walked.max(want.start);
+                    let stop = (walked + len).min(want.end);
+                    if start < stop {
+                        let piece: String = run
+                            .text
+                            .chars()
+                            .skip(start - walked)
+                            .take(stop - start)
+                            .filter(|letter| *letter != '\n')
+                            .collect();
+                        if !piece.is_empty() {
+                            worn.push((
+                                run.bold,
+                                run.underline,
+                                run.color.clone().or_else(|| paragraph.color.clone()),
+                                piece,
+                            ));
+                        }
+                    }
+                    walked += len;
+                }
+            }
+            if worn.is_empty() {
+                worn.push((paragraph.bold, false, paragraph.color.clone(), line.clone()));
+            }
+            let font = dressed(worn[0].0, worn[0].1);
             let held = SelectObject(dc, font);
-            SetTextColor(dc, colour(paragraph.color.as_deref(), 0x0000_0000));
             let letters = wide(line);
             let letters = &letters[..letters.len() - 1];
             if !letters.is_empty() {
@@ -3361,12 +3447,14 @@ mod windows_draw {
                 // cells, and that one steps in whole pixels.
                 let steps = (!note)
                     .then(|| {
-                        super::shape_run(
+                        super::shape_run_worn(
                             &face,
                             paragraph.size,
-                            paragraph.bold,
                             paragraph.italic,
-                            line,
+                            &worn
+                                .iter()
+                                .map(|(bold, _, _, text)| (*bold, text.clone()))
+                                .collect::<Vec<_>>(),
                         )
                     })
                     .flatten();
@@ -3384,24 +3472,48 @@ mod windows_draw {
                     _ => area.left,
                 };
                 let down = at.round() as i32 + leading[step];
-                match &steps {
-                    // One `dx` a UTF-16 unit, so a character outside the basic
-                    // plane carries its whole advance on the first of its two.
-                    Some(steps) if steps.len() == letters.len() => {
-                        let _ = ExtTextOutW(
-                            dc,
-                            left,
-                            down,
-                            ETO_OPTIONS(0),
-                            None,
-                            PCWSTR(letters.as_ptr()),
-                            letters.len() as u32,
-                            Some(steps.as_ptr()),
-                        );
+                let mut x = left;
+                let mut taken = 0usize;
+                for (bold, underline, painted, piece) in &worn {
+                    let held_piece = wide(piece);
+                    let shown = &held_piece[..held_piece.len() - 1];
+                    if shown.is_empty() {
+                        continue;
                     }
-                    _ => {
-                        let _ = TextOutW(dc, left, down, letters);
+                    let piece_font = dressed(*bold, *underline);
+                    let previous = SelectObject(dc, piece_font);
+                    SetTextColor(dc, colour(painted.as_deref(), 0x0000_0000));
+                    let mine = steps
+                        .as_ref()
+                        .filter(|steps| steps.len() == letters.len())
+                        .map(|steps| &steps[taken..taken + shown.len()]);
+                    match mine {
+                        // One `dx` a UTF-16 unit, so a character outside the
+                        // basic plane carries its whole advance on the first
+                        // of its two.
+                        Some(mine) => {
+                            let _ = ExtTextOutW(
+                                dc,
+                                x,
+                                down,
+                                ETO_OPTIONS(0),
+                                None,
+                                PCWSTR(shown.as_ptr()),
+                                shown.len() as u32,
+                                Some(mine.as_ptr()),
+                            );
+                            x += mine.iter().sum::<i32>();
+                        }
+                        None => {
+                            let _ = TextOutW(dc, x, down, shown);
+                            let mut walked = SIZE::default();
+                            let _ = GetTextExtentPoint32W(dc, shown, &mut walked);
+                            x += walked.cx;
+                        }
                     }
+                    taken += shown.len();
+                    SelectObject(dc, previous);
+                    let _ = DeleteObject(piece_font);
                 }
             }
             at += pitch[step];

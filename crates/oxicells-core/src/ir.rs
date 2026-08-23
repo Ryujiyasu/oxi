@@ -362,10 +362,33 @@ pub struct ShapeText {
     pub clip: bool,
 }
 
+/// One piece of a shape's paragraph, when the paragraph is not written all
+/// one way.
+///
+/// Only weight, underline and colour vary inside a shape's paragraph in the
+/// corpus — 42 of its 826 shape paragraphs, across nine workbooks, and never
+/// the size or the face — so the paragraph keeps the face and the size it is
+/// laid out with and the runs carry the rest. The texts of the runs add up to
+/// the paragraph's own text, the break a `<a:br/>` makes included.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShapeRun {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
 /// One paragraph of a shape's text, dressed the way its first run is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShapeParagraph {
     pub text: String,
+    /// The pieces the text is written in. Empty for a paragraph written all
+    /// one way, which is the common case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<ShapeRun>,
     /// "l", "ctr", "r" or "just".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<String>,

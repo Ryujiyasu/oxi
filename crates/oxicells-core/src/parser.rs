@@ -1128,7 +1128,7 @@ fn part_beside(from: &str, target: &str) -> String {
 /// at the top-left, which is where its offsets are measured from anyway.
 fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Option<String>)> {
     use crate::ir::{
-        Anchor, Drawing, DrawingKind, Shape, ShapeLine, ShapeParagraph, ShapeText,
+        Anchor, Drawing, DrawingKind, Shape, ShapeLine, ShapeParagraph, ShapeRun, ShapeText,
     };
 
     /// Which part of the shape a colour being read belongs to.
@@ -1145,6 +1145,13 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     // Where a chart's own shape sits, as fractions of the chart's box.
     let mut frame: Option<(f64, f64)> = None;
     let mut frame_to: Option<(f64, f64)> = None;
+
+    // What the run being read is worn in. A paragraph is laid out in its
+    // first run's face and size, but drawn in each run's own weight,
+    // underline and colour.
+    let mut run_bold = false;
+    let mut run_underline = false;
+    let mut run_color: Option<String> = None;
 
     let blank = Anchor { col: 0, col_off: 0, row: 0, row_off: 0 };
     let mut from = blank;
@@ -1384,8 +1391,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     said.clip = get_attr(e, "vertOverflow").as_deref() == Some("clip");
                 }
                 "p" => {
+                    run_bold = false;
+                    run_underline = false;
+                    run_color = None;
                     paragraph = Some(ShapeParagraph {
                         text: String::new(),
+                        runs: Vec::new(),
                         align: None,
                         size: 18.0,
                         bold: false,
@@ -1408,6 +1419,15 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "br" => {
                     if let Some(held) = paragraph.as_mut() {
                         held.text.push('\n');
+                        match held.runs.last_mut() {
+                            Some(last) => last.text.push('\n'),
+                            None => held.runs.push(ShapeRun {
+                                text: "\n".to_string(),
+                                bold: run_bold,
+                                underline: run_underline,
+                                color: run_color.clone(),
+                            }),
+                        }
                     }
                 }
                 "lnSpc" => in_line_spacing = true,
@@ -1445,6 +1465,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 // states, not of the size a paragraph defaults to.
                 "rPr" | "endParaRPr" => {
                     in_run_props = true;
+                    run_bold = is_true(get_attr(e, "b").as_deref());
+                    // A shape names the underline it wants rather than
+                    // flagging it, so anything but "none" is one.
+                    run_underline = get_attr(e, "u")
+                        .is_some_and(|kind| !kind.is_empty() && kind != "none");
+                    run_color = None;
                     if let Some(held) = paragraph.as_mut() {
                         if held.text.is_empty() {
                             if let Some(size) = get_attr(e, "sz").and_then(|v| v.parse::<f32>().ok())
@@ -1567,9 +1593,10 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 Paints::Text => {
                                     if let Some(held) = paragraph.as_mut() {
                                         if held.text.is_empty() {
-                                            held.color = Some(painted);
+                                            held.color = Some(painted.clone());
                                         }
                                     }
+                                    run_color = Some(painted);
                                 }
                             }
                         }
@@ -1578,6 +1605,12 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         in_text = false;
                         if let Some(held) = paragraph.as_mut() {
                             held.text.push_str(&text);
+                            held.runs.push(ShapeRun {
+                                text: text.clone(),
+                                bold: run_bold,
+                                underline: run_underline,
+                                color: run_color.clone(),
+                            });
                         }
                         text.clear();
                     }
@@ -1721,6 +1754,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
     let mut at: Option<(u32, u32)> = None;
     let mut run = ShapeParagraph {
         text: String::new(),
+        runs: Vec::new(),
         align: None,
         size: 9.0,
         bold: false,
