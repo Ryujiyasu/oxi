@@ -2374,6 +2374,70 @@ mod windows_draw {
         });
         let held = rule.map(|(pen, _)| SelectObject(dc, pen));
 
+        // A shape that carries an outline of its own is drawn from it rather
+        // than from a preset. The points are stated in a space the path names
+        // — `002`'s brace is 799 by 1377 — and are mapped onto the box the
+        // anchors give the shape. Sixteen shapes across four workbooks are
+        // drawn this way, one of them the brace beside `002`'s notes, and
+        // before this they were drawn as nothing at all.
+        if let Some(drawn) = &shape.path {
+            let across = box_.right - box_.left;
+            let down = box_.bottom - box_.top;
+            let at = |x: i64, y: i64| POINT {
+                x: box_.left + (x as f64 / drawn.across as f64 * across as f64).round() as i32,
+                y: box_.top + (y as f64 / drawn.down as f64 * down as f64).round() as i32,
+            };
+            let brush = shape
+                .fill
+                .as_deref()
+                .map(|fill| CreateSolidBrush(colour(Some(fill), 0x00FF_FFFF)));
+            let held_brush = brush.map(|brush| SelectObject(dc, brush));
+            let _ = BeginPath(dc);
+            for step in &drawn.steps {
+                match *step {
+                    oxicells_core::ir::PathStep::MoveTo(x, y) => {
+                        let point = at(x, y);
+                        let _ = MoveToEx(dc, point.x, point.y, None);
+                    }
+                    oxicells_core::ir::PathStep::LineTo(x, y) => {
+                        let point = at(x, y);
+                        let _ = LineTo(dc, point.x, point.y);
+                    }
+                    oxicells_core::ir::PathStep::CurveTo(ax, ay, bx, by, cx, cy) => {
+                        let held = [at(ax, ay), at(bx, by), at(cx, cy)];
+                        let _ = PolyBezierTo(dc, &held);
+                    }
+                    oxicells_core::ir::PathStep::Close => {
+                        let _ = CloseFigure(dc);
+                    }
+                }
+            }
+            let _ = EndPath(dc);
+            // Painted, ruled, or both. A path with neither is nothing to draw
+            // rather than a black outline, which is what `FillPath` on its
+            // own would give it.
+            match (brush.is_some(), rule.is_some()) {
+                (true, true) => {
+                    let _ = StrokeAndFillPath(dc);
+                }
+                (true, false) => {
+                    let _ = FillPath(dc);
+                }
+                (false, true) => {
+                    let _ = StrokePath(dc);
+                }
+                (false, false) => {
+                    let _ = AbortPath(dc);
+                }
+            }
+            if let Some(held_brush) = held_brush {
+                SelectObject(dc, held_brush);
+            }
+            if let Some(brush) = brush {
+                let _ = DeleteObject(brush);
+            }
+        } else {
+
         match shape.geometry.as_str() {
             // A line runs from one corner of its box to the other, and a
             // flipped one from the corners the other way round.
@@ -2473,6 +2537,8 @@ mod windows_draw {
             _ => {}
         }
 
+        }
+
         if let (Some((pen, _)), Some(held)) = (rule, held) {
             SelectObject(dc, held);
             let _ = DeleteObject(pen);
@@ -2487,12 +2553,13 @@ mod windows_draw {
         // rectangle in by the corner, a pinned pitch puts the baseline at
         // three quarters of itself less the descent that overruns a quarter
         // em, and a line's last 句読点 hangs past the end — and the corpus
-        // went from 6 improved against 15 regressed to **18 against 2**,
-        // 0.9859 -> 0.9862. The two that still lose are `tb_r8_jizensoudan`
-        // (-0.0032) and `tb_r8_youshiki` (-0.0025), whose banners come out
-        // with the right words a hair narrow: sub-pixel advance drift over a
-        // line eleven hundred pixels long, which SSIM scores below a blank
-        // banner. `OXI_XLSX_NO_SHAPE_TEXT` puts it back.
+        // went from 6 improved against 15 regressed to 18 against 2, 0.9859
+        // -> 0.9862. The two that still lost were `tb_r8_jizensoudan` and
+        // `tb_r8_youshiki`, and they were not losses of this at all: their
+        // runs name the theme's font rather than a face, which went to the
+        // device as a face name nothing has. Resolving it put both above
+        // where they stood before the text was drawn, and nothing loses now.
+        // `OXI_XLSX_NO_SHAPE_TEXT` puts it back.
         if let Some(said) = &shape.text {
             if std::env::var("OXI_XLSX_NO_SHAPE_TEXT").is_err() {
                 says(

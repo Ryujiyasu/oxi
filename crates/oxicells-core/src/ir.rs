@@ -318,6 +318,30 @@ pub struct Comment {
     pub fill: Option<String>,
 }
 
+/// One step of a shape's own outline, in the space the path states.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PathStep {
+    MoveTo(i64, i64),
+    LineTo(i64, i64),
+    /// Two control points and the point the curve ends on.
+    CurveTo(i64, i64, i64, i64, i64, i64),
+    Close,
+}
+
+/// A shape drawn from its own outline rather than from a preset.
+///
+/// The corpus holds sixteen of them across four workbooks — one path each,
+/// 160 straight segments, 18 curves and 10 closes — and one of them is the
+/// curly brace beside `002`'s notes, in the lowest-scoring workbook there is.
+/// The points are stated in a space of the path's own, which is mapped onto
+/// the box the anchors give the shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShapePath {
+    pub across: i64,
+    pub down: i64,
+    pub steps: Vec<PathStep>,
+}
+
 /// A preset shape, with what it is painted and ruled with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
@@ -328,6 +352,10 @@ pub struct Shape {
     pub fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<ShapeLine>,
+    /// The outline the shape draws itself with, when it has one of its own
+    /// rather than a preset's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<ShapePath>,
     /// A shape whose box is flipped: a line drawn from the other corner.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip_h: bool,

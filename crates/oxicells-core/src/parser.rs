@@ -1128,7 +1128,8 @@ fn part_beside(from: &str, target: &str) -> String {
 /// at the top-left, which is where its offsets are measured from anyway.
 fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Option<String>)> {
     use crate::ir::{
-        Anchor, Drawing, DrawingKind, Shape, ShapeLine, ShapeParagraph, ShapeRun, ShapeText,
+        Anchor, Drawing, DrawingKind, PathStep, Shape, ShapeLine, ShapeParagraph, ShapePath,
+        ShapeRun, ShapeText,
     };
 
     /// Which part of the shape a colour being read belongs to.
@@ -1146,6 +1147,13 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut frame: Option<(f64, f64)> = None;
     let mut frame_to: Option<(f64, f64)> = None;
 
+    // The outline a shape draws itself with, and the step being read. A
+    // verb's points are children of it, so which verb is open says what to do
+    // with the points that arrive.
+    let mut path: Option<ShapePath> = None;
+    let mut step: Option<String> = None;
+    let mut points: Vec<(i64, i64)> = Vec::new();
+
     // What the run being read is worn in. A paragraph is laid out in its
     // first run's face and size, but drawn in each run's own weight,
     // underline and colour.
@@ -1160,6 +1168,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     let mut kind: Option<DrawingKind> = None;
     let blank_shape = Shape {
         geometry: String::new(),
+        path: None,
         fill: None,
         line: None,
         flip_h: false,
@@ -1330,6 +1339,30 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     shape.flip_h = is_true(get_attr(e, "flipH").as_deref());
                     shape.flip_v = is_true(get_attr(e, "flipV").as_deref());
                 }
+                "path" => {
+                    let number = |name: &str| {
+                        get_attr(e, name).and_then(|held| held.parse::<i64>().ok()).unwrap_or(0)
+                    };
+                    let (across, down) = (number("w"), number("h"));
+                    if across > 0 && down > 0 {
+                        path = Some(ShapePath { across, down, steps: Vec::new() });
+                    }
+                }
+                "moveTo" | "lnTo" | "cubicBezTo" if path.is_some() => {
+                    step = Some(name.clone());
+                    points.clear();
+                }
+                "close" if path.is_some() => {
+                    if let Some(held) = path.as_mut() {
+                        held.steps.push(PathStep::Close);
+                    }
+                }
+                "pt" if step.is_some() => {
+                    let number = |name: &str| {
+                        get_attr(e, name).and_then(|held| held.parse::<i64>().ok()).unwrap_or(0)
+                    };
+                    points.push((number("x"), number("y")));
+                }
                 "prstGeom" => {
                     if let Some(preset) = get_attr(e, "prst") {
                         shape.geometry = preset;
@@ -1356,8 +1389,23 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         paints = Some(Paints::Fill);
                     }
                 }
-                "fillRef" if in_style && !fill_stated => paints = Some(Paints::Fill),
-                "lnRef" if in_style && !line_stated => paints = Some(Paints::Line),
+                // A style reference at index 0 is the theme's empty slot: it
+                // names a colour but asks for nothing to be drawn with it.
+                // Excel leaves such a shape unpainted or unruled, and the
+                // corpus carries 559 `fillRef idx="0"` and 49 `lnRef idx="0"`.
+                // A freeform built through Excel's own BuildFreeform with its
+                // fill turned off states no fill at all in `spPr` and says so
+                // only this way — drawn from the reference regardless, it came
+                // out filled in the theme's accent blue where Excel draws bare
+                // strokes (`_xlsx_custgeom_repro.py`).
+                "fillRef" if in_style && !fill_stated => {
+                    paints = (get_attr(e, "idx").as_deref() != Some("0"))
+                        .then_some(Paints::Fill);
+                }
+                "lnRef" if in_style && !line_stated => {
+                    paints = (get_attr(e, "idx").as_deref() != Some("0"))
+                        .then_some(Paints::Line);
+                }
                 "solidFill" if in_run_props => paints = Some(Paints::Text),
                 "srgbClr" | "schemeClr" | "sysClr" if paints.is_some() => {
                     let named = match name.as_str() {
@@ -1646,6 +1694,25 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     "spPr" => in_sp_pr = false,
                     "style" => in_style = false,
                     "extLst" => in_ext_lst = in_ext_lst.saturating_sub(1),
+                    "moveTo" | "lnTo" | "cubicBezTo" => {
+                        if let (Some(held), Some(which)) = (path.as_mut(), step.take()) {
+                            match (which.as_str(), points.as_slice()) {
+                                ("moveTo", [(x, y)]) => held.steps.push(PathStep::MoveTo(*x, *y)),
+                                ("lnTo", [(x, y)]) => held.steps.push(PathStep::LineTo(*x, *y)),
+                                ("cubicBezTo", [(ax, ay), (bx, by), (cx, cy)]) => held
+                                    .steps
+                                    .push(PathStep::CurveTo(*ax, *ay, *bx, *by, *cx, *cy)),
+                                _ => {}
+                            }
+                        }
+                        points.clear();
+                    }
+                    "custGeom" => {
+                        shape.path = path.take();
+                        if shape.geometry.is_empty() {
+                            shape.geometry = "custGeom".to_string();
+                        }
+                    }
                     "grpSpPr" => in_group_props = false,
                     "pic" | "sp" | "cxnSp" | "grpSp" | "graphicFrame" => {
                         depth_in_shape = depth_in_shape.saturating_sub(1);
