@@ -361,11 +361,7 @@ fn compute_shape_anchor_off(
             .iter()
             .find_map(|r| r.font_family.clone())
             .unwrap_or_else(|| def_family.clone());
-        if (n - 1.0).abs() > 1e-4 {
-            0.75 * fs * 1.2 * n
-        } else {
-            font_baseline_offset_em(&family) * fs
-        }
+        first_baseline_off(&family, fs, n)
     };
     // With the line-box cursor the run already ends at the block's bottom;
     // the old cursor ended one ascent lower, hence the subtraction.
@@ -11364,9 +11360,76 @@ fn lvlitalic_on() -> bool {
     std::env::var("OXI_LVLITALIC_DISABLE").is_err()
 }
 
+/// Where the FIRST baseline of a text block sits below the text-area top.
+///
+/// Derived 2026-08-23 from PowerPoint's own export, probe `firstline`: 31 arms
+/// over Arial / Calibri / Verdana / Georgia / Segoe Script / Comic Sans MS x
+/// `lnSpc` 70 / 80 / 90 / 95 / 100 / 110 / 120% x 20 / 40 / 60pt, in a box with
+/// every inset 0 and `anchor="t"`, so the measured baseline IS the offset.
+///
+/// The rule is not about the ascent at all -- it is about the DESCENT, and only
+/// then does it collapse to one expression. With `P = 1.2 * fs` the natural line
+/// box and `D0 = P - face * fs` the face's own share of it below the baseline:
+///
+///     n <= 1:  D = max( D0 + 0.25 * P * (n - 1),  min(D0, 0.25 * P * n) )
+///     n >  1:  D = max( D0,                       0.25 * P * n          )
+///     off = P * n - D
+///
+/// i.e. the baseline sits its own descent above the box's bottom; that descent
+/// is **capped at a quarter of the box**, and a face already deeper than that
+/// quarter gives up a quarter of whatever the box loses. Above single spacing
+/// the quarter becomes a FLOOR instead of a cap, which is why 120% reads
+/// 43.25pt at 40pt for both Arial and Calibri although their faces differ by
+/// 0.036 em, while Segoe Script -- whose descent is deeper than the quarter --
+/// keeps its own and lands at 42.65.
+///
+/// All 31 arms match within 0.072pt and every residual is POSITIVE: the per-face
+/// constant already present at n == 1 (Arial 0.035, Calibri 0.050, Verdana
+/// 0.062, Georgia 0.072, Segoe Script 0.054, Comic Sans MS 0.011) plus a flat
+/// 0.050 wherever the quarter binds. That is the existing baseline residual, not
+/// a gap in this rule.
+///
+/// ★What the first attempt got wrong, and why the corpus caught it: reading the
+/// same data as an ASCENT rule gives `max(face - (1-n) * P, 0.75 * P * n)`,
+/// which fits every face whose `face` exceeds 0.75 * P and none that does not.
+/// The four faces of the first probe round were all above it. d04 slide 1 --
+/// 58pt **Satisfy**, whose face is 0.7877 -- was 6.5pt low under that rule, and
+/// the corpus read 114 slides down against 116 up. Segoe Script (0.8249) is the
+/// installed face that reproduces it, and it is in the probe for that reason.
+#[cfg(windows)]
+fn first_baseline_off(family: &str, fs: f32, n: f32) -> f32 {
+    if !firstline_on() {
+        // ★The parenthesis is load-bearing: the pre-change code computed
+        // `0.75 * adv` with `adv = fs * 1.2 * n`, and `0.75 * fs * 1.2 * n`
+        // associates the other way. The 1-ULP difference flipped one page of
+        // d37 in the opt-out arm -- a byte-identity proof lost to float
+        // association, not to a leak.
+        return if (n - 1.0).abs() > 1e-4 {
+            0.75 * (fs * 1.2 * n)
+        } else {
+            font_baseline_offset_em(family) * fs
+        };
+    }
+    let pitch = fs * 1.2;
+    let natural_descent = pitch - font_baseline_offset_em(family) * fs;
+    let quarter = 0.25 * pitch;
+    let descent = if n <= 1.0 {
+        (natural_descent + quarter * (n - 1.0)).max(natural_descent.min(quarter * n))
+    } else {
+        natural_descent.max(quarter * n)
+    };
+    pitch * n - descent
+}
+
 /// A level's `a:defRPr/@b` is honoured unless this is set.
 fn lvlbold_on() -> bool {
     std::env::var("OXI_LVLBOLD_DISABLE").is_err()
+}
+
+/// The joined first-baseline rule is used unless this is set, which restores
+/// the two unrelated models either side of `lnSpc` 100%.
+fn firstline_on() -> bool {
+    std::env::var("OXI_FIRSTLINE_DISABLE").is_err()
 }
 
 /// A run with no colour takes the LEVEL's rather than a sibling run's unless
@@ -11925,11 +11988,7 @@ fn layout_paragraph_baselines(
     let italic = para.runs.iter().any(|r| r.italic);
     let area_w = effective_width;
     let adv = fs * 1.2 * n;
-    let first_off = if (n - 1.0).abs() > 1e-4 {
-        0.75 * adv
-    } else {
-        font_baseline_offset_em(&family) * fs
-    };
+    let first_off = first_baseline_off(&family, fs, n);
     // `cursor_pt` between paragraphs is the BOTTOM of the previous line box,
     // and every paragraph's first baseline sits its own ascent below it. When
     // the sizes match this is the old flat `adv` step exactly; when they differ
