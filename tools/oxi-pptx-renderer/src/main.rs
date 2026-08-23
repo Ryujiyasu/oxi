@@ -11404,6 +11404,18 @@ fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
 }
 
+/// A soft break that changes SIZE steps by the mixed-pitch rule unless this is
+/// set, which restores the paragraph's flat advance for every line in it.
+///
+/// d11 s33's caption is one paragraph: "Imani Jackson" at 12pt, `<a:br/>`, then
+/// "JOB TITLE" at 8.04pt. PowerPoint steps 10.560pt between those baselines --
+/// the 12pt line's descent plus the 8.04pt line's ascent -- and the flat rule
+/// steps 14.40. The 3.81pt is then carried by every line after it, so the whole
+/// block below the photos sits low. The same template is in d16 and d35.
+fn brpitch_on() -> bool {
+    std::env::var("OXI_BRPITCH_DISABLE").is_err()
+}
+
 /// `<a:br/>` ends the line it stands on unless this is set.
 fn softbreak_on() -> bool {
     std::env::var("OXI_SOFTBREAK_DISABLE").is_err()
@@ -12186,11 +12198,61 @@ fn layout_paragraph_baselines(
     };
     let n_lines = lines.len();
 
+    // The size each LINE is set in. A soft break carries the size of the run it
+    // stands in, so a paragraph can change size without ending -- and the step
+    // across such a break is `descent(prev) + ascent(next)`, the same
+    // mixed-pitch rule the paragraph boundary already uses, not the flat
+    // paragraph advance.
+    let line_sizes: Vec<f32> = {
+        let mut sizes = Vec::with_capacity(n_lines);
+        let mut at = 0usize;
+        for line in &lines {
+            let len = line.chars().count().max(1);
+            let mut best: Option<f32> = None;
+            let mut seen = 0usize;
+            for run in &para.runs {
+                let run_len = run.text.chars().count();
+                if seen < at + len && at < seen + run_len {
+                    if let Some(size) = run.font_size {
+                        best = Some(best.map_or(size, |b: f32| b.max(size)));
+                    }
+                }
+                seen += run_len;
+            }
+            sizes.push(best.unwrap_or(fs));
+            at += line.chars().count();
+        }
+        sizes
+    };
+    let mixed_lines = brpitch_on() && line_sizes.iter().any(|s| (s - fs).abs() > 1e-4);
+    // Only the mixed case leaves the flat arithmetic: an all-one-size paragraph
+    // must keep `i * adv` exactly, down to the float association.
+    let mixed_baselines: Vec<f32> = if mixed_lines {
+        let ascent = |size: f32| first_baseline_off(&family, size, n);
+        let mut baselines = Vec::with_capacity(n_lines);
+        let mut at = text_area_top
+            + if mixpitch_on() || is_first { ascent(line_sizes[0]) } else { 0.0 };
+        for (i, size) in line_sizes.iter().enumerate() {
+            if i > 0 {
+                let prev = line_sizes[i - 1];
+                at += (1.2 * prev * n - ascent(prev)) + ascent(*size);
+            }
+            baselines.push(at);
+        }
+        baselines
+    } else {
+        Vec::new()
+    };
+
     let mut out = Vec::with_capacity(n_lines);
     for (i, line) in lines.iter().enumerate() {
-        let baseline = text_area_top
-            + if mixpitch_on() || is_first { first_off } else { 0.0 }
-            + i as f32 * adv;
+        let baseline = if mixed_lines {
+            mixed_baselines[i]
+        } else {
+            text_area_top
+                + if mixpitch_on() || is_first { first_off } else { 0.0 }
+                + i as f32 * adv
+        };
         // Logical line width in pt = hmtx design-advance sum of the VISIBLE
         // characters (trailing spaces excluded; final visible char included).
         // GDI's measured width (hinted / pixel-snapped) over-measures a line by
@@ -12230,9 +12292,14 @@ fn layout_paragraph_baselines(
     let _ = unsafe { SelectObject(dc, old_font) };
     // Leaving the paragraph, the cursor stops at the last line box's bottom --
     // one descent below the last baseline, which is `adv - first_off`.
-    *cursor_pt = text_area_top
-        + if !mixpitch_on() && is_first { first_off } else { 0.0 }
-        + n_lines as f32 * adv;
+    *cursor_pt = if mixed_lines {
+        let last = *line_sizes.last().unwrap_or(&fs);
+        mixed_baselines[n_lines - 1] + (1.2 * last * n - first_baseline_off(&family, last, n))
+    } else {
+        text_area_top
+            + if !mixpitch_on() && is_first { first_off } else { 0.0 }
+            + n_lines as f32 * adv
+    };
     if let Some(sa) = para.space_after {
         *cursor_pt += sa;
     }
