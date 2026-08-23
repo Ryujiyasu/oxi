@@ -33648,7 +33648,27 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // 8-72% of what is available; the lines it declines (34140b/04b88e's
                                                 // 「（年度）」 cells) would have needed 85-98%. So the pool is a ceiling
                                                 // with a fraction under it -- swept via OXI_YAKUK.
-                                                let pool = (yaku + joints + spaces)
+                                                // S1206 (2026-08-24, opt-out
+                                                // `OXI_S1206_DISABLE`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): the CJK/Latin joint pool
+                                                // does NOT add on top of the 約物 pool.
+                                                //
+                                                // `_cw_yaku_joint.py` puts both on one line and
+                                                // reads the transition points. A line ending in an
+                                                // ordinary character lends 0.502 / 0.508 / 0.503 em
+                                                // with 約物 alone, and 0.502 / 0.511 / 0.385 / 0.504
+                                                // with 約物 AND one or two joints -- the same half
+                                                // em. Adding the terms is what let tokyoshugyo p30
+                                                // take a 7.725pt overflow on 5.25 (約物) + 3.94
+                                                // (three joints) where Word takes none.
+                                                let pool_terms = if std::env::var("OXI_S1206_DISABLE")
+                                                    .is_ok()
+                                                {
+                                                    yaku + joints + spaces
+                                                } else {
+                                                    yaku.max(joints + spaces)
+                                                };
+                                                let pool = pool_terms
                                                     * std::env::var("OXI_YAKUK")
                                                         .ok()
                                                         .and_then(|v| v.parse::<f32>().ok())
