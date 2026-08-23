@@ -33711,9 +33711,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             .map_or(false, |n| {
                                                                 kinsoku::cell_yaku_type_a(*n)
                                                             });
+                                                // S1205 (2026-08-24, opt-out
+                                                // `OXI_S1205_DISABLE`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): the hang is CAPPED at half
+                                                // the mark's own advance -- it lends its right-side
+                                                // aki, not itself.
+                                                //
+                                                // The unconditional "take a line-final closing mark
+                                                // whatever the shortfall" came from a reading of
+                                                // 441/441 whose demand was computed at one em per
+                                                // character, which inflates it. `_pb_tailhang.py`
+                                                // measures the boundary directly, with the advances
+                                                // read off Word's own PDF: the mark hangs up to
+                                                // 0.517em of overflow and is pushed from 0.521
+                                                // (0.527 / 0.532 with two characters after it), so
+                                                // the threshold is half an em and whether the mark
+                                                // ends the PARAGRAPH makes no difference.
+                                                //
+                                                // tokyoshugyo p30 is the case: its 。 overflows the
+                                                // 389.69 budget by 9.31pt = 0.887em, so Word declines
+                                                // to hang it and drops す。 to its own line.
+                                                let s1205_hang_ok = std::env::var("OXI_S1205_DISABLE")
+                                                    .is_ok()
+                                                    || ((line_x + buf_w + cw) - effective_wrap)
+                                                        <= 0.5 * cw + 0.01;
                                                 if s1174_yakucomp
                                                     && kinsoku::cell_yaku_type_a(ch)
                                                     && !s1199_run_of_closers
+                                                    && s1205_hang_ok
                                                     && matches!(
                                                         para.alignment,
                                                         Alignment::Justify | Alignment::Distribute
