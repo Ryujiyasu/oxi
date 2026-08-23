@@ -2062,7 +2062,18 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 // 2.5mm and 2.3mm, which is what the VML states.
                 insets: (90000, 82800, 90000, 82800),
                 wrap: true,
-                clip: false,
+                // A note keeps its text inside its box, and the file never
+                // says so — a note has no body properties at all, unlike a
+                // shape, which states `vertOverflow`. Measured instead:
+                // `_xlsx_note_clip.py` holds a box and grows the text, and
+                // Excel draws 3 lines in a 53-pixel box, 4 in an 80 and 6 in
+                // a 107, whether the text runs to four lines or eight. It is
+                // the same rule a clipped shape follows.
+                //
+                // The corpus's lowest-scoring workbook is where this shows:
+                // `002`'s worst tiles are all one column of yellow notes, in
+                // which Excel stops after three lines and this drew a fourth.
+                clip: true,
             },
             fill: Some(fill.to_uppercase()),
         });
