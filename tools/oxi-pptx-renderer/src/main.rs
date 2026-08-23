@@ -11327,6 +11327,22 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
                     } else {
                         (u16at(74), u16at(76))
                     };
+                    // The numbers behind every line-box decision. Printing them
+                    // is the difference between measuring what the renderer
+                    // reads and inferring it from where a baseline landed --
+                    // which is how a font whose OS/2 disagrees with PowerPoint
+                    // gets mistaken for a broken layout rule.
+                    if std::env::var("OXI_DEBUG_BASELINE").is_ok() {
+                        eprintln!(
+                            "BASELINE {family:24} use_typo={use_typo} asc={asc} desc={desc}                              sTypo=({}, {}, gap {}) usWin=({}, {}) em={:.4}",
+                            i16at(68),
+                            i16at(70),
+                            i16at(72),
+                            u16at(74),
+                            u16at(76),
+                            1.2 * asc / (asc + desc),
+                        );
+                    }
                     if asc + desc > 0.0 {
                         Some(1.2 * asc / (asc + desc))
                     } else {
