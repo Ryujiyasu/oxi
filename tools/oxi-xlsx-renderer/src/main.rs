@@ -3988,12 +3988,21 @@ mod windows_draw {
                         .get(top_at + 1 + spans_rows as usize)
                         .unwrap_or(bottom);
                     let brush = CreateSolidBrush(colour(Some(fill), 0xFFFFFF));
+                    // A cell's paint covers `(left, right]` and `(top,
+                    // bottom]`: the gridline row and column at its top-left
+                    // belong to the cell before it, and it paints one past
+                    // its own bottom-right instead. Inside a sheet this
+                    // cannot be seen — the paint tiles either way — but at
+                    // the picture's edge it is plain: the header band of
+                    // `gen2_000` runs x 1..360 and y 1..18 in Excel's picture
+                    // where this drew it at 0..359 and 0..17, and
+                    // `ui_checklist`'s 52-pixel band the same.
                     FillRect(
                         dc,
                         &RECT {
-                            left: *left as i32,
-                            top: *top as i32,
-                            right: *right as i32,
+                            left: *left as i32 + 1,
+                            top: (*top as i32).max(1),
+                            right: *right as i32 + 1,
                             bottom: *bottom as i32,
                         },
                         brush,
