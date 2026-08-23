@@ -33793,16 +33793,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // Scoped to a run of TWO OR MORE: a single trailing mark
                                             // hangs (441/441), so the character before it is free.
                                             //
-                                            // ★PARKED opt-in: it OVER-CORRECTS badly (tokyoshugyo
-                                            // 1.0000 -> 0.5607, 3a4f9fbe 1.0000 -> 0.9981). The reason
-                                            // is measured, not guessed: per-glyph, Oxi's advances for
-                                            // that line total 373.50 against Word's 371.15 -- kana
-                                            // +0.066 each and 約物 +0.244 each (kanji are exact) -- so
-                                            // Oxi's groups reach the wrap earlier than Word's and the
-                                            // rule fires where Word never sees the condition. The
-                                            // ORDER is therefore fixed: the per-character widths have
-                                            // to come off `_pb_pmincho.advances` first, and only then
-                                            // can this rule be judged.
+                                            // ★The first cut keyed the run on `cell_yaku_type_a` and
+                                            // collapsed tokyoshugyo to 0.5607. That class is a
+                                            // COMPRESSION class and contains U+3000, which may begin a
+                                            // line -- so «１年　　　　» and «…第１０４　　　» were torn
+                                            // apart at the digit. Keying on what actually cannot start
+                                            // a line makes it inert at default (10 documents unchanged)
+                                            // and worth +0.0056 inside the cell bundle
+                                            // (OXI_CELLLAW + OXI_YAKUCOMP + OXI_AUTOSPACE2:
+                                            // tokyoshugyo 0.9906 -> 0.9962, its p20 box breaking
+                                            // «…「手待時» / «間」）» exactly as Word does).
                                             let would_overflow = if would_overflow
                                                 || std::env::var("OXI_S1201").is_err()
                                                 || kinsoku::cell_yaku_type_a(ch)
@@ -33813,7 +33813,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 let mut n = 0usize;
                                                 let mut k = s586_ci + 1;
                                                 while let Some(c) = s586_run_chars.get(k) {
-                                                    if !kinsoku::cell_yaku_type_a(*c) {
+                                                    // ★the run is what CANNOT START A LINE, which is
+                                                    // the whole justification for dragging the
+                                                    // preceding character down. `cell_yaku_type_a`
+                                                    // is a COMPRESSION class and includes U+3000,
+                                                    // which may begin a line: keying on it broke
+                                                    // «１年　　　　» and «…第１０４　　　» apart at
+                                                    // the digit. The probe only ever put closing
+                                                    // brackets and punctuation there.
+                                                    if !kinsoku::is_line_start_prohibited(*c) {
                                                         break;
                                                     }
                                                     group += self
