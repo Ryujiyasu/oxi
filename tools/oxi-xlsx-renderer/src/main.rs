@@ -2689,8 +2689,21 @@ mod windows_draw {
                         FillRect(dc, &box_, brush);
                     }
                     if rule.is_some() {
+                        // GDI rules a rectangle up to `right - 1` and
+                        // `bottom - 1`, so a box asked for at its own edges
+                        // comes out a pixel short on two sides. Excel rules
+                        // the whole box: `application_B`'s 204.7-pixel panel
+                        // with a 3-pixel pen measures 208 across in Excel's
+                        // picture — the box and the pen — and 207 here, with
+                        // its foot a row high as well.
                         let hollow = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        let _ = Rectangle(dc, box_.left, box_.top, box_.right, box_.bottom);
+                        let _ = Rectangle(
+                            dc,
+                            box_.left,
+                            box_.top,
+                            box_.right + 1,
+                            box_.bottom + 1,
+                        );
                         SelectObject(dc, hollow);
                     }
                 } else if brush.is_some() || rule.is_some() {
@@ -2703,7 +2716,13 @@ mod windows_draw {
                         None
                     };
                     let _ = RoundRect(
-                        dc, box_.left, box_.top, box_.right, box_.bottom, round, round,
+                        dc,
+                        box_.left,
+                        box_.top,
+                        box_.right + 1,
+                        box_.bottom + 1,
+                        round,
+                        round,
                     );
                     if let Some(pen) = pen {
                         SelectObject(dc, pen);
