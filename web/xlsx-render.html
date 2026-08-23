@@ -473,9 +473,11 @@ function draw() {
       let left = box.left + before + (placed === 'left' ? pushed : 0);
       let right = box.right - after - (placed === 'right' ? pushed : 0);
       const room = right - left;
-      const lines = style.wrap_text || text.includes('\n')
-        ? breakLines(measurer, font, text, style.wrap_text ? room : 0)
-        : [text];
+      // A cell that does not wrap takes no notice of the breaks inside it:
+      // Excel runs the pieces together on one line (`_xlsx_cell_break.py`).
+      const lines = style.wrap_text
+        ? breakLines(measurer, font, text, room)
+        : [text.split('\n').join('')];
 
       ink.font = font;
       ink.fillStyle = colour(style.font_color, '#000000');

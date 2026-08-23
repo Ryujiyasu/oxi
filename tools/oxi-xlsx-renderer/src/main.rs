@@ -3642,6 +3642,21 @@ mod windows_draw {
 
                     let text = cell_text(&cell.value, &cell.style)
                         .replace("\r\n", "\n");
+                    // A cell that does not wrap takes no notice of the breaks
+                    // inside it: Excel runs the pieces together on one line
+                    // and gives the row the height of one. `_xlsx_cell_break.py`
+                    // puts a break at the front, in the middle and at the end
+                    // of a cell's text, wrapped and not, in a row of a stated
+                    // height and one Excel works out for itself: with wrapping
+                    // every break spends a line, without it none of them do —
+                    // 「あA(break)いB」 comes out 46 pixels of ink on the one
+                    // line where each piece alone is 23. It is what centred
+                    // `r03_seizosangyo_tkh`'s headings nine pixels high here.
+                    let text = if cell.style.wrap_text {
+                        text
+                    } else {
+                        text.replace('\n', "")
+                    };
                     let text = if cell.style.stacked_text {
                         super::stacked_text(&text)
                     } else {

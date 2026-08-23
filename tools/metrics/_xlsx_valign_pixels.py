@@ -44,7 +44,10 @@ FONTS += [(face, points, True)
           for points in (9.0, 10.0, 11.0, 12.0, 14.0, 18.0)]
 # Points. Each is a different slack against the font's own line box, so the
 # odd pixel lands both ways round.
-HEIGHTS = [10.5, 12.0, 13.5, 15.0, 17.25, 18.0, 19.5, 24.0, 30.0]
+HEIGHTS = [10.5, 12.0, 13.5, 15.0, 17.25, 18.0, 19.5, 24.0, 30.0,
+           # Taller rows as well: `r03_seizosangyo_tkh` centres a line in a
+           # 54-pixel row and Excel puts it a pixel above where this does.
+           33.0, 36.0, 39.6, 42.0, 45.0]
 PLACES = ["top", "center", "bottom"]
 
 
