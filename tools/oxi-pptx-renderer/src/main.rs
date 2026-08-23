@@ -1705,11 +1705,25 @@ unsafe fn draw_table_legacy(
     let old_pen = SelectObject(mem_dc, pen);
     let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
     let mut cy = y;
+    let mut cy_pt = 0.0f64;
     for (r, row) in table.rows.iter().enumerate() {
-        let ph = (table.row_heights.get(r).copied().unwrap_or(0.0) as f64 * scale).round() as i32;
+        let h_pt = table.row_heights.get(r).copied().unwrap_or(0.0) as f64;
+        let ph = if tbledge_on() {
+            cy = y + (cy_pt * scale).round() as i32;
+            y + ((cy_pt + h_pt) * scale).round() as i32 - cy
+        } else {
+            (h_pt * scale).round() as i32
+        };
         let mut cx = x;
+        let mut cx_pt = 0.0f64;
         for (c, cell) in row.iter().enumerate() {
-            let pw = (table.col_widths.get(c).copied().unwrap_or(0.0) as f64 * scale).round() as i32;
+            let w_pt = table.col_widths.get(c).copied().unwrap_or(0.0) as f64;
+            let pw = if tbledge_on() {
+                cx = x + (cx_pt * scale).round() as i32;
+                x + ((cx_pt + w_pt) * scale).round() as i32 - cx
+            } else {
+                (w_pt * scale).round() as i32
+            };
             let _ = Rectangle(mem_dc, cx, cy, cx + pw, cy + ph);
             let mut cursor_y = cy + (0.06 * scale).round() as i32;
             let mut prev_fs: Option<f32> = None;
@@ -1748,8 +1762,10 @@ unsafe fn draw_table_legacy(
                 cursor_y += (fs as f64 * scale * 1.2).round() as i32;
             }
             cx += pw;
+            cx_pt += w_pt;
         }
         cy += ph;
+        cy_pt += h_pt;
     }
     SelectObject(mem_dc, old_pen);
     let _ = DeleteObject(pen);
@@ -2280,6 +2296,19 @@ fn outline_pen(
             pen
         }
     }
+}
+
+/// Table row and column EDGES are rounded from the exact running sum unless
+/// this is set, which restores rounding each cell's size and adding those up.
+///
+/// d06 s29's Gantt grid is the tell: 14 columns of 31.917pt each: PowerPoint's
+/// right edge lands at 719.52 and Oxi's at 718.80, drifting a tenth of a pixel
+/// per column until the last third of the table is a whole pixel out. Every
+/// rule and every bar in it moves with the drift, which is why LibreOffice --
+/// which does not accumulate -- beat Oxi on that slide by 0.0296 while being
+/// WORSE on its title.
+fn tbledge_on() -> bool {
+    std::env::var("OXI_TBLEDGE_DISABLE").is_err()
 }
 
 /// A cell spans the columns its `gridSpan` claims unless this is set, which
@@ -3457,13 +3486,25 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             })
                             .collect();
                         let mut cy = y;
+                        let mut cy_pt = 0.0f64;
                         for (r, row) in table.rows.iter().enumerate() {
-                            let ph = (row_h.get(r).copied().unwrap_or(0.0) as f64 * scale)
-                                .round() as i32;
+                            let h_pt = row_h.get(r).copied().unwrap_or(0.0) as f64;
+                            let ph = if tbledge_on() {
+                                cy = y + (cy_pt * scale).round() as i32;
+                                y + ((cy_pt + h_pt) * scale).round() as i32 - cy
+                            } else {
+                                (h_pt * scale).round() as i32
+                            };
                             let mut cx = x;
+                            let mut cx_pt = 0.0f64;
                             for (c, cell) in row.iter().enumerate() {
-                                let pw = (cell_width_pt(table, c, cell) as f64 * scale)
-                                    .round() as i32;
+                                let w_pt = cell_width_pt(table, c, cell) as f64;
+                                let pw = if tbledge_on() {
+                                    cx = x + (cx_pt * scale).round() as i32;
+                                    x + ((cx_pt + w_pt) * scale).round() as i32 - cx
+                                } else {
+                                    (w_pt * scale).round() as i32
+                                };
                                 // A continuation of the cell to its left owns no
                                 // ink of its own: painting it would lay a second
                                 // fill and a second set of rules over the spanning
@@ -3724,8 +3765,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     cursor_y += advance.round() as i32;
                                 }
                                 cx += pw;
+                                cx_pt += w_pt;
                             }
                             cy += ph;
+                            cy_pt += h_pt;
                         }
                     }
                     ShapeContent::Chart { chart } => {
