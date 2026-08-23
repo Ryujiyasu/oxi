@@ -2443,17 +2443,23 @@ mod windows_draw {
             let _ = DeleteObject(pen);
         }
 
-        // What a shape says is drawn only when asked for: the lines land where
-        // Excel puts them (see `shape_line`), and on the one workbook whose
-        // shapes carry most of its words it is worth +0.034 — but across the
-        // corpus it comes out flat, because a shape that says something is
-        // usually a shape this does not draw properly yet. A flowchart's
-        // decision boxes, a dashed frame, a connector between two of them: the
-        // text lands on top of geometry that is still missing or misplaced,
-        // and the pair reads worse than the missing text alone. Draw it when
-        // the geometry catches up.
+        // What a shape says is drawn. It was held behind a flag for as long as
+        // it cost the corpus more than it paid: a shape that says something is
+        // usually a shape this did not draw properly yet, and text landing on
+        // geometry that is missing or misplaced reads worse than no text at
+        // all. Four laws closed that gap — a clipped box draws only the lines
+        // it has room for and anchors those, a rounded box pulls its text
+        // rectangle in by the corner, a pinned pitch puts the baseline at
+        // three quarters of itself less the descent that overruns a quarter
+        // em, and a line's last 句読点 hangs past the end — and the corpus
+        // went from 6 improved against 15 regressed to **18 against 2**,
+        // 0.9859 -> 0.9862. The two that still lose are `tb_r8_jizensoudan`
+        // (-0.0032) and `tb_r8_youshiki` (-0.0025), whose banners come out
+        // with the right words a hair narrow: sub-pixel advance drift over a
+        // line eleven hundred pixels long, which SSIM scores below a blank
+        // banner. `OXI_XLSX_NO_SHAPE_TEXT` puts it back.
         if let Some(said) = &shape.text {
-            if std::env::var("OXI_XLSX_SHAPE_TEXT").is_ok() {
+            if std::env::var("OXI_XLSX_NO_SHAPE_TEXT").is_err() {
                 says(
                     dc,
                     said,
