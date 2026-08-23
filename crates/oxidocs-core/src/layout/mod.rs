@@ -32861,9 +32861,40 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 &run.style,
                                                 &para.style,
                                             );
+                                            // S1204 (2026-08-24, opt-in `OXI_S1204`): snap the
+                                            // SIZE to the 600dpi device grid once, then take the
+                                            // advance at that size -- as opposed to S1203, which
+                                            // snapped every advance and is falsified. Rounding the
+                                            // size happens once, so it does not conflict with the
+                                            // alternating 10.444/10.560 that says the ORIGIN is what
+                                            // gets snapped per glyph.
+                                            //   10.5pt -> 10.5 x 600/72 = 87.5 (a tie) -> 88 -> 10.56
+                                            // tokyoshugyo p30 needs exactly this: its budget is
+                                            // 389.69 (cell rules 92.06..522.22 out of Word's PDF,
+                                            // pad 4.95, line origin 127.58) and Word refuses the
+                                            // 37th fullwidth glyph, which is 388.50 at 10.50 but
+                                            // 390.72 at 10.56.
+                                            //
+                                            // ★FALSIFIED too, and with the SAME signature as S1203:
+                                            // 3a4f9fbe 1.0000 -> 0.8334, ed025 1.0000 -> 0.9633.
+                                            // So 10.56 is not a global property of the face at
+                                            // 10.5pt -- neither snapping each advance nor snapping
+                                            // the size once survives the corpus. Whatever charges
+                                            // tokyoshugyo p30 its extra 0.74pt is LOCAL, and every
+                                            // local input there has been read and matches Word: the
+                                            // cell rules (92.06..522.22 vs Oxi 92.05..522.10), the
+                                            // padding (4.95, from the Normal Table default -- the
+                                            // table declares no tblCellMar, no tblInd, no tblStyle)
+                                            // and the line origin (127.58 vs 127.60). Both flags are
+                                            // kept only so the two models are not tried a third time.
+                                            let s1204_fs = if std::env::var("OXI_S1204").is_ok() {
+                                                (font_size * 600.0 / 72.0 + 0.5).floor() * 72.0 / 600.0
+                                            } else {
+                                                font_size
+                                            };
                                             let mut cw = self
                                                 .registry
-                                                .char_width_pt_with_fallback(ch, font_size, cm);
+                                                .char_width_pt_with_fallback(ch, s1204_fs, cm);
                                             // S1203 (2026-08-24, opt-in `OXI_S1203`): snap the
                                             // break-time advance to the 600dpi device grid
                                             // (1/600 inch = 0.12pt, half up).
