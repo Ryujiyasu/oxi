@@ -8987,12 +8987,42 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .max(1);
                                 // Destination rect after fillRect insets (px;
                                 // negative inset expands beyond the box).
-                                let dx = (x as f64 + ew as f64 * dl).round() as i32;
-                                let dy = (y as f64 + eh as f64 * dt).round() as i32;
-                                let dw = ((ew as f64 * (1.0 - dl - dr)).round() as i32)
-                                    .max(1);
-                                let dh = ((eh as f64 * (1.0 - dt - db)).round() as i32)
-                                    .max(1);
+                                let (dx, dy, dw, dh) = if imgrect_on() {
+                                    // From the EXACT points, covering every
+                                    // pixel the rectangle touches.
+                                    let bw = sh.width as f64 * scale;
+                                    let bh = sh.height as f64 * scale;
+                                    let x0 = sh.x as f64 * scale + bw * dl;
+                                    let y0 = sh.y as f64 * scale + bh * dt;
+                                    let x1 = x0 + bw * (1.0 - dl - dr);
+                                    let y1 = y0 + bh * (1.0 - dt - db);
+                                    // ★A hair of coverage is not coverage. The
+                                    // `embedsplit` master picture is
+                                    // 720.0002pt wide -- 1500.0005px, five
+                                    // ten-thousandths past the slide's right
+                                    // edge -- and a bare `ceil` gave it a
+                                    // 1501st column, stretching the whole
+                                    // background 0.07% and costing every page
+                                    // of that probe 0.0036. An edge within
+                                    // EPS of a pixel boundary belongs to the
+                                    // pixel it is on.
+                                    const EPS: f64 = 0.02;
+                                    let left = (x0 + EPS).floor() as i32;
+                                    let top = (y0 + EPS).floor() as i32;
+                                    (
+                                        left,
+                                        top,
+                                        ((x1 - EPS).ceil() as i32 - left).max(1),
+                                        ((y1 - EPS).ceil() as i32 - top).max(1),
+                                    )
+                                } else {
+                                    (
+                                        (x as f64 + ew as f64 * dl).round() as i32,
+                                        (y as f64 + eh as f64 * dt).round() as i32,
+                                        ((ew as f64 * (1.0 - dl - dr)).round() as i32).max(1),
+                                        ((eh as f64 * (1.0 - dt - db)).round() as i32).max(1),
+                                    )
+                                };
                                 // A blipFill belongs to the SHAPE, so it is
                                 // clipped to the shape's outline -- both the
                                 // part of the box the outline does not cover
@@ -11402,6 +11432,20 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
 /// `a:bodyPr/@wrap="none"` is honoured unless this is set.
 fn wrapnone_on() -> bool {
     std::env::var("OXI_WRAPNONE_DISABLE").is_err()
+}
+
+/// A picture covers every pixel its exact rectangle TOUCHES unless this is
+/// set, which restores a rectangle rounded from the shape's rounded box.
+///
+/// PowerPoint's export is vector: the rasteriser antialiases a fractional edge,
+/// so the image reaches into the pixel row that its top only partly covers.
+/// d08 s11's lower photo sits at y=202.5pt = 421.875px and PowerPoint's content
+/// starts in row **421**, while Oxi rounded to 422 and stretched the source into
+/// 422 rows instead of 423. The error is not a shift but a SCALE: 1px at the top
+/// of the photo, nothing at the bottom, which is exactly `[round, round+round)`
+/// against `[floor, ceil)`.
+fn imgrect_on() -> bool {
+    std::env::var("OXI_IMGRECT_DISABLE").is_err()
 }
 
 /// A soft break that changes SIZE steps by the mixed-pitch rule unless this is
