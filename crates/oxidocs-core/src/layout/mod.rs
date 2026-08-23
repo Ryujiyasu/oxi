@@ -33140,11 +33140,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     .collect();
                                                 if want.is_empty() || ptext.contains(&want) {
                                                     eprintln!(
-                                        "[GLYPHW] ch={:?} fw={} base={:.3} cs={:.3} bal={:.3} aki={:.3} cw={:.3} line_x={:.3} buf_w={:.3} fs={:.2}",
+                                        "[GLYPHW] ch={:?} fw={} base={:.3} cs={:.3} bal={:.3} aki={:.3} cw={:.3} line_x={:.3} buf_w={:.3} fs={:.2} face={:?} upem={}",
                                         ch, crate::font::is_fullwidth(ch),
                                         cw - cs - balance_extra_cs - auto_space_extra,
                                         cs, balance_extra_cs, auto_space_extra, cw,
-                                        line_x, buf_w, font_size
+                                        line_x, buf_w, font_size,
+                                        cm.family, cm.units_per_em
                                     );
                                                 }
                                             }

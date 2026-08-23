@@ -23,6 +23,10 @@ fn default_upm() -> u16 {
 /// MS Mincho 10.5pt digit/letter/ｱｲｳ all measure 5.25 mid-cluster at
 /// fs 9/10.5/12/14; repro_s546_digit_sweep.py). The old "5.0 not 5.25"
 /// was a 96dpi paint-snap artifact. Opt-out: OXI_S546_DISABLE.
+pub fn s1202_proportional_cjk_exact() -> bool {
+    std::env::var("OXI_S1202").is_ok()
+}
+
 pub fn s546_exact_halfwidth() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("OXI_S546_DISABLE").is_err())
@@ -1355,6 +1359,27 @@ impl FontMetricsRegistry {
         // COM-confirmed (2026-04-14): Word rounds char widths to 10tw (0.5pt).
         if metrics.char_widths.contains_key(&c) {
             let advance_em = metrics.char_width_em(c);
+            // S1202 (2026-08-23, opt-in `OXI_S1202`): a PROPORTIONAL CJK face is
+            // not on the 10tw grid. The rounding above was confirmed on the
+            // monospaced faces, where every advance is already a multiple of half
+            // a point, so the rule could not be falsified there -- and it is wrong
+            // here. Word's own advances for MS PMincho at 10.5pt, read glyph by
+            // glyph out of a jc=left line in its PDF (`_pb_pmincho.advances`), are
+            //   （5.164 ）5.207 「5.280 」5.280 ら7.899 る8.374 て9.483 で9.937
+            //   か9.979 い10.064 保10.444 間10.560
+            // -- no 0.5pt grid at all. The design widths track them to about
+            // 0.06pt (て 9.475 vs 9.483), while the rounded ones are off by up to
+            // 0.25: every half-em 約物 sits EXACTLY on the tie and always rounds
+            // up, 5.25 -> 5.50, which is +0.244 on each mark and +2.35 on
+            // tokyoshugyo's 40-character line.
+            if crate::font::s1202_proportional_cjk_exact()
+                && metrics.units_per_em == 256
+                && (metrics.family == "MS PMincho"
+                    || metrics.family == "MS PGothic"
+                    || metrics.family == "HGPGothicM")
+            {
+                return advance_em * font_size;
+            }
             let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;
             return width_tw / 20.0;
         }
