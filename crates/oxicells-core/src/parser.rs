@@ -1170,6 +1170,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
         anchor: None,
         insets: (91440, 45720, 91440, 45720),
         wrap: true,
+        clip: false,
     };
     let mut paragraph: Option<ShapeParagraph> = None;
     let mut in_run_props = false;
@@ -1215,6 +1216,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         anchor: None,
                         insets: (91440, 45720, 91440, 45720),
                         wrap: true,
+                        clip: false,
                     };
                     paragraph = None;
                     group = None;
@@ -1362,6 +1364,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     );
                     said.anchor = get_attr(e, "anchor");
                     said.wrap = get_attr(e, "wrap").as_deref() != Some("none");
+                    said.clip = get_attr(e, "vertOverflow").as_deref() == Some("clip");
                 }
                 "p" => {
                     paragraph = Some(ShapeParagraph {
@@ -1861,6 +1864,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 // 2.5mm and 2.3mm, which is what the VML states.
                 insets: (90000, 82800, 90000, 82800),
                 wrap: true,
+                clip: false,
             },
             fill: Some(fill.to_uppercase()),
         });

@@ -353,6 +353,13 @@ pub struct ShapeText {
     pub insets: (i64, i64, i64, i64),
     /// True when a line too long for the box breaks rather than running on.
     pub wrap: bool,
+    /// True when the body says `vertOverflow="clip"`. Excel then draws only
+    /// the lines that fit the box and drops the rest; with the attribute
+    /// absent, or saying `overflow`, every line is drawn and the block hangs
+    /// out of the box. 256 of the corpus's shapes clip, 322 say nothing and
+    /// 7 say overflow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clip: bool,
 }
 
 /// One paragraph of a shape's text, dressed the way its first run is.
@@ -368,6 +375,12 @@ pub struct ShapeParagraph {
     pub bold: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub italic: bool,
+    // A shape's underline is NOT here on purpose. `u="sng"` sits on a run,
+    // and a shape paragraph is dressed by its FIRST run — in `sanko_tool`
+    // one paragraph holds an underlined heading, two `<a:br/>`s and then the
+    // body, so wearing the heading's underline across the paragraph underlines
+    // all of it and costs that workbook 0.0092. It needs per-run dressing of a
+    // shape's line, the way a cell's runs are dressed, not a paragraph flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face: Option<String>,
     /// The charset the run states beside the face, when it states one.

@@ -37,15 +37,23 @@ LINES = 4
 # the face's ascent first.
 WORD = "A"
 
-FONTS = [("メイリオ", 11.0), ("メイリオ", 9.0), ("ＭＳ Ｐゴシック", 11.0),
-         ("Meiryo UI", 11.0)]
-ANCHORS = ["t", "b"]
+# メイリオ is the one face whose first baseline does not sit at 0.750 of a
+# pinned pitch, so it is swept at four sizes against three faces that do (and
+# against 游ゴシック, which the earlier note called a mild deviant). The
+# question is what metric of the face predicts the residual.
+FONTS = [("メイリオ", 9.0), ("メイリオ", 11.0), ("メイリオ", 14.0), ("メイリオ", 20.0),
+         ("Meiryo UI", 11.0), ("Meiryo UI", 14.0),
+         ("ＭＳ Ｐゴシック", 11.0), ("ＭＳ Ｐゴシック", 14.0),
+         ("游ゴシック", 11.0), ("游ゴシック", 14.0)]
+# The two anchors gave the same first baseline in every one of the earlier
+# thirty-two rows, so only the top one is worth the rows.
+ANCHORS = ["t"]
 # What `<a:lnSpc>` can say, and saying nothing at all.
 SPACINGS = [("none", "")]
 # A fine sweep of the pinned pitch: the slope of the first baseline against
 # the pitch is what says where in the line Excel puts it.
 SPACINGS += [(f"pts {value}", f'<a:lnSpc><a:spcPts val="{value}"/></a:lnSpc>')
-             for value in (1500, 2100, 2700)]
+             for value in (1200, 1500, 1800, 2100, 2400, 2700, 3000, 3300)]
 
 
 def cases():

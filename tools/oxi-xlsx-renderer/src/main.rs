@@ -1192,11 +1192,29 @@ pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Opt
 /// until the break is one Excel would make.
 pub(crate) fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
     let held: Vec<f32> = advances.iter().map(|advance| *advance as f32).collect();
-    // A cell measures its room in whole pixels, and always has.
-    broken_at(letters, &held, width.max(1.0).trunc())
+    // A cell measures its room in whole pixels, and always has, and does not
+    // hang its punctuation (`_xlsx_cell_hang.py`).
+    broken_at(letters, &held, width.max(1.0).trunc(), false)
 }
 
-fn broken_at(letters: &[char], advances: &[f32], width: f32) -> Vec<usize> {
+/// The two characters a shape lets hang past the end of its line.
+///
+/// `_xlsx_shape_hang.py` sweeps a box's room across the point where a line's
+/// last character stops fitting, over eight last characters. 「。」 and 「、」
+/// hold the line together all the way down to the room the body alone needs —
+/// they hang their whole em — and 「」」「）」「！」「ゃ」「あ」 break the moment
+/// the room is two pixels short. (「)」 looks like it hangs and does not: it is
+/// half-width, so it simply fits for longer.)
+///
+/// A CELL does not do this. `_xlsx_cell_hang.py` asks the same question of a
+/// wrapping cell — same face, same body, the column swept through the same
+/// crossing — and every one of 。、」あ takes two lines. So this is a shape's
+/// rule, not the breaker's, and it is passed in rather than assumed.
+fn hangs(letter: char) -> bool {
+    matches!(letter, '。' | '、')
+}
+
+fn broken_at(letters: &[char], advances: &[f32], width: f32, hang: bool) -> Vec<usize> {
     let mut breaks = Vec::new();
     if letters.is_empty() {
         return breaks;
@@ -1213,6 +1231,14 @@ fn broken_at(letters: &[char], advances: &[f32], width: f32) -> Vec<usize> {
             // line whose sum lands on the room to a thousandth is a line that
             // fits.
             if take > 0 && next > room + 0.01 {
+                // A 句読点 that will not fit hangs past the end instead of
+                // taking the character before it down to the next line —
+                // which is what kinsoku would otherwise do, since it may not
+                // start one. `001`'s panel ends a line on 「ください。」 and
+                // Excel keeps all of it.
+                if hang && hangs(letters[start + take]) {
+                    take += 1;
+                }
                 break;
             }
             run = next;
@@ -1307,7 +1333,7 @@ fn broken_lines(
         let letters: Vec<char> = paragraph.chars().collect();
         let breaks = match width {
             Some(width) if shape => shape_widths(face, points, bold, italic, paragraph)
-                .map(|advances| broken_at(&letters, &advances, width))
+                .map(|advances| broken_at(&letters, &advances, width, true))
                 .unwrap_or_default(),
             Some(width) => advances(face, points, bold, italic, paragraph)
                 .map(|advances| line_breaks(&letters, &advances, width))
@@ -2428,7 +2454,18 @@ mod windows_draw {
         // the geometry catches up.
         if let Some(said) = &shape.text {
             if std::env::var("OXI_XLSX_SHAPE_TEXT").is_ok() {
-                says(dc, said, box_, room, scale, normal, false);
+                says(
+                    dc,
+                    said,
+                    Frame {
+                        box_,
+                        exact: room,
+                        pull: preset_pull(&shape.geometry, box_),
+                    },
+                    scale,
+                    normal,
+                    false,
+                );
             }
         }
     }
@@ -2953,7 +2990,14 @@ mod windows_draw {
             };
             shape(dc, held, over, None, scale, normal);
             if let Some(said) = &held.text {
-                says(dc, said, over, None, scale, normal, false);
+                says(
+                    dc,
+                    said,
+                    Frame { box_: over, exact: None, pull: 0.0 },
+                    scale,
+                    normal,
+                    false,
+                );
             }
         }
     }
@@ -3039,14 +3083,38 @@ mod windows_draw {
     /// Excel's own are a tenth of an inch either side and a twentieth above
     /// and below — wrapped in what is left, and the block of lines is put
     /// against the top, the middle or the foot by the body's anchor.
+    /// What a preset's own text rectangle pulls in from each edge of the box.
+    ///
+    /// A rounded rectangle's text does not start at its edge: the preset's
+    /// `rect` is inset by `(1 - cos 45°)` of the corner radius, which is
+    /// `min(w, h) × adj / 100000` with `adj` 16667 when the file leaves
+    /// `avLst` empty — every workbook in the corpus does. Measured against a
+    /// plain rectangle at nine box heights by `_xlsx_shape_overflow.py`: the
+    /// two differ by 9, 8, 7, 6, 5, 5, 4, 3, 3 pixels where this arithmetic
+    /// says 9.11, 7.81, 6.51, 5.86, 5.21, 4.56, 3.91, 3.25, 2.60.
+    fn preset_pull(geometry: &str, box_: RECT) -> f32 {
+        if geometry != "roundRect" {
+            return 0.0;
+        }
+        let across = (box_.right - box_.left) as f32;
+        let down = (box_.bottom - box_.top) as f32;
+        across.min(down) * 0.166_67 * 0.292_89
+    }
+
+    /// The box a shape's text is set in: the rectangle it is drawn against,
+    /// the exact width a line breaks against before that rectangle was put on
+    /// whole pixels, and what the preset's own text rectangle pulls in from
+    /// every edge.
+    struct Frame {
+        box_: RECT,
+        exact: Option<f32>,
+        pull: f32,
+    }
+
     unsafe fn says(
         dc: HDC,
         said: &oxicells_core::ir::ShapeText,
-        box_: RECT,
-        // The box's width before its edges were put on whole pixels, when the
-        // caller knows it: a line breaks against this, not against the drawn
-        // rectangle (see `drawing_room`).
-        exact: Option<f32>,
+        frame: Frame,
         scale: f32,
         normal: Option<&(String, f32)>,
         // A note is laid out by the engine that lays out cells, not the one
@@ -3055,12 +3123,14 @@ mod windows_draw {
         // and size in a shape is 36.5.
         note: bool,
     ) {
+        let Frame { box_, exact, pull } = frame;
         let inset = |emu: i64| (emu as f32 / super::EMU * scale).round() as i32;
+        let pulled = pull.round() as i32;
         let area = RECT {
-            left: box_.left + inset(said.insets.0),
-            top: box_.top + inset(said.insets.1),
-            right: box_.right - inset(said.insets.2),
-            bottom: box_.bottom - inset(said.insets.3),
+            left: box_.left + inset(said.insets.0) + pulled,
+            top: box_.top + inset(said.insets.1) + pulled,
+            right: box_.right - inset(said.insets.2) - pulled,
+            bottom: box_.bottom - inset(said.insets.3) - pulled,
         };
         if area.right <= area.left {
             return;
@@ -3070,7 +3140,10 @@ mod windows_draw {
         // room is what is left of the exact box after the exact insets.
         let room = match exact {
             Some(exact) => {
-                (exact - (said.insets.0 + said.insets.2) as f32 / super::EMU * scale) / scale
+                (exact
+                    - (said.insets.0 + said.insets.2) as f32 / super::EMU * scale
+                    - 2.0 * pull)
+                    / scale
             }
             None => (area.right - area.left) as f32 / scale,
         };
@@ -3137,15 +3210,28 @@ mod windows_draw {
             // Yu Gothic UI's own is 28.
             let tall = tall * paragraph.line_scale.unwrap_or(1.0);
             // A paragraph that pins its pitch outright does NOT centre its
-            // glyphs in it the way this does. `_xlsx_shape_pitch.py` sweeps
-            // the pinned pitch from 15 to 33 point over eight faces: six of
-            // them put the baseline at `0.750 × pitch` with not a pixel of
-            // residual, while this moves it only half as fast. Left as it is
-            // because the other two — メイリオ at three sizes, 游ゴシック
-            // mildly — sit two to three pixels above that line, no design
-            // metric of theirs explains it, and the two corpus workbooks that
-            // pin a pitch are both メイリオ: shipping the law without its
-            // remainder costs them 0.002 each. The remainder is the work.
+            // glyphs in it: Excel puts the baseline three quarters of the way
+            // down the pinned pitch, and then lifts the line by however much
+            // the face's descent overruns a quarter of the em.
+            //
+            //     baseline = line top + 0.75 × pitch - max(0, descent - em/4)
+            //
+            // `_xlsx_shape_pitch.py` sweeps eight pinned pitches (12 to 33
+            // point) over four faces at ten sizes. The slope is 0.750 for
+            // every one of them; only the intercept moves, and it is dead
+            // constant across all eight pitches of a face (メイリオ at 20
+            // point gives 17 six times running). The lift accounts for every
+            // intercept measured: メイリオ 5-3, 7-3.75, 8-4.75, 12-6.75 give
+            // 2, 3, 3, 5 against the measured -2, -3, -3, -5; 游ゴシック's
+            // 1.25 gives 1; Meiryo UI and ＭＳ Ｐゴシック go negative and are
+            // held at 0 — which is why the earlier reading, that internal
+            // leading was the discriminator, was wrong: Meiryo UI carries
+            // leading and does not move. Ten of ten.
+            let pinned = paragraph.line_pitch.and_then(|_| {
+                super::held(|counter| {
+                    counter.shape_of(&face, paragraph.size, paragraph.bold, paragraph.italic)
+                })
+            });
             if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
                 for line in &broken {
                     let run = super::shape_run(
@@ -3162,11 +3248,55 @@ mod windows_draw {
             for line in broken {
                 lines.push((index, line));
                 pitch.push(tall * scale);
-                leading.push((((tall - natural) / 2.0) * scale).round().max(0.0) as i32);
+                leading.push(match pinned {
+                    Some((ascent, descent, _)) => {
+                        let em = paragraph.size * 96.0 / 72.0;
+                        let lift = (descent - em / 4.0).max(0.0).floor();
+                        // The ink of a pinned line may well start above the
+                        // line: a pitch smaller than the face asks for is
+                        // exactly what a pinned pitch is usually for.
+                        ((0.75 * tall - lift - ascent) * scale).round() as i32
+                    }
+                    None => (((tall - natural) / 2.0) * scale).round().max(0.0) as i32,
+                });
             }
         }
         if lines.is_empty() {
             return;
+        }
+
+        // A block taller than its box is not centred and left to hang out of
+        // both ends: Excel draws the lines that FIT and anchors those, and
+        // drops the rest. `_xlsx_shape_overflow.py` sweeps a box from
+        // comfortably taller than the text down to half its height, over
+        // t/ctr/b and over a plain rectangle as well as a rounded one — 54
+        // arms, every one of them the count `floor(room / pitch)` and the
+        // shortened block anchored in the usual way. Against a plain
+        // rectangle the top-anchored first line does not move at all (145 at
+        // every one of nine heights), which is what says the box, not the
+        // block, is what gets cut. Centring the whole block instead put
+        // `sanko_tool`'s ten lines a whole pitch above Excel's.
+        // Only a body that says so, though: `_xlsx_shape_clip.py` draws the
+        // same five lines in the same box three times over, with
+        // `vertOverflow` written clip, left out, and written overflow. The
+        // clipped one holds four lines; the other two hold all five, the
+        // fifth hanging below the box. So the dropping is what `clip` means,
+        // not what a box does.
+        if said.clip {
+            let mut fits = 0usize;
+            let mut down = 0.0f32;
+            let room_down = (area.bottom - area.top) as f32;
+            for step in &pitch {
+                if fits > 0 && down + step > room_down + 0.01 {
+                    break;
+                }
+                down += step;
+                fits += 1;
+            }
+            let fits = fits.clamp(1, lines.len());
+            lines.truncate(fits);
+            pitch.truncate(fits);
+            leading.truncate(fits);
         }
 
         let block: i32 = pitch.iter().sum::<f32>().round() as i32;
@@ -4639,7 +4769,14 @@ mod windows_draw {
                 // A note shows what fits in its box and no more.
                 let clip = CreateRectRgn(box_.left, box_.top, box_.right, box_.bottom);
                 SelectClipRgn(dc, clip);
-                says(dc, &note.text, box_, None, scale, sheet.normal_font.as_ref(), true);
+                says(
+            dc,
+            &note.text,
+            Frame { box_, exact: None, pull: 0.0 },
+            scale,
+            sheet.normal_font.as_ref(),
+            true,
+        );
                 SelectClipRgn(dc, None);
                 let _ = DeleteObject(clip);
             }
