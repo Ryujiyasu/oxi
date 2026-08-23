@@ -4026,28 +4026,304 @@ mod windows_draw {
                     // at 4..16 and 22..34, and a big piece on the last line
                     // grows that line alone. Drawn whole in the cell's own
                     // font — which is what this did — a 20-point title inside
-                    // an 11-point cell comes out 11.
+                    // an 11-point cell comes out 11. 58 of the 285 workbooks
+                    // hold 817 such cells.
                     let dressed_lines = !dressed_runs
                         && !cell.style.stacked_text
                         && !cell.runs.is_empty()
                         && cell.runs.iter().map(|run| run.text.chars().count()).sum::<usize>()
                             == text.chars().count();
-                    // A cell dressed in pieces that does not come out on
-                    // one line is still drawn whole in the cell's own font.
-                    // Excel breaks it with each piece measured in its own and
-                    // gives every line the height of the tallest piece on it:
-                    // `_xlsx_cell_runs.py` reads a 20-point piece after an
-                    // 11-point one as ink at 6..29 and 38..61 where an
-                    // undressed pair of lines sits at 4..16 and 22..34, and a
-                    // big piece on the last line grows that line alone. 58 of
-                    // the 285 workbooks hold 817 such cells. A first cut of it
-                    // (drawing each piece with its own font, the line box of
-                    // the tallest piece, the block placed by the cell's own
-                    // rule) gained `001290291` +0.0240 and cost
-                    // `bunya_taikeizu_point` −0.0199, whose cells came out
-                    // holding the wrong words altogether — so the piece that
-                    // is missing is which characters belong to which line,
-                    // not the fonts. Corpus was +0.0001 net: not shipped.
+                    if dressed_lines {
+                        // Which piece each character belongs to, and what that
+                        // piece is worn in.
+                        let mut letters: Vec<char> = Vec::new();
+                        let mut wearing: Vec<usize> = Vec::new();
+                        for (index, run) in cell.runs.iter().enumerate() {
+                            for letter in run.text.chars() {
+                                letters.push(letter);
+                                wearing.push(index);
+                            }
+                        }
+                        let dress = |index: usize| {
+                            let run = &cell.runs[index];
+                            let raised = run.vert_align.is_some();
+                            let size = run.size.unwrap_or(points);
+                            let size = if raised { size * 0.65 } else { size };
+                            (
+                                run.font.clone().unwrap_or_else(|| name.to_string()),
+                                size,
+                                run.bold || bold,
+                                run.italic || cell.style.italic,
+                                run.underline || cell.style.underline,
+                            )
+                        };
+                        let font_of = |index: usize| {
+                            let (face, size, bold, italic, underline) = dress(index);
+                            let named = wide(&face);
+                            CreateFontW(
+                                -((size * scale * 96.0 / 72.0).round() as i32),
+                                0,
+                                0,
+                                0,
+                                if bold { 700 } else { 400 },
+                                u32::from(italic),
+                                u32::from(underline),
+                                0,
+                                DEFAULT_CHARSET.0 as u32,
+                                OUT_DEFAULT_PRECIS.0 as u32,
+                                CLIP_DEFAULT_PRECIS.0 as u32,
+                                CLEARTYPE_QUALITY.0 as u32,
+                                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                                PCWSTR(named.as_ptr()),
+                            )
+                        };
+                        // Each character advances what its own piece gives it.
+                        let mut steps: Vec<i32> = Vec::with_capacity(letters.len());
+                        {
+                            let mut at = 0usize;
+                            while at < letters.len() {
+                                let piece = wearing[at];
+                                let font = font_of(piece);
+                                let previous = SelectObject(dc, font);
+                                while at < letters.len() && wearing[at] == piece {
+                                    let held = wide(&letters[at].to_string());
+                                    let mut measured = SIZE::default();
+                                    let _ = GetTextExtentPoint32W(
+                                        dc,
+                                        &held[..held.len() - 1],
+                                        &mut measured,
+                                    );
+                                    steps.push(if letters[at] == '\n' {
+                                        0
+                                    } else {
+                                        measured.cx
+                                    });
+                                    at += 1;
+                                }
+                                SelectObject(dc, previous);
+                                let _ = DeleteObject(font);
+                            }
+                        }
+                        // The breaks: the cell's own, and where it wraps, the
+                        // ones the room asks for.
+                        let mut breaks: Vec<usize> = Vec::new();
+                        let mut start = 0usize;
+                        for (index, letter) in letters.iter().enumerate() {
+                            if *letter == '\n' {
+                                breaks.push(index + 1);
+                                start = index + 1;
+                            }
+                        }
+                        let _ = start;
+                        if cell.style.wrap_text {
+                            let room = (area.right - area.left) as f32 / scale;
+                            // Text that ends on a newline ends on an empty
+                            // line, and re-breaking the paragraphs must not
+                            // swallow the break that made it.
+                            let tail = breaks.last() == Some(&letters.len());
+                            let mut held: Vec<usize> = Vec::new();
+                            let mut from = 0usize;
+                            for stop in breaks.iter().copied().chain(std::iter::once(letters.len())) {
+                                if from == stop && stop == letters.len() {
+                                    continue;
+                                }
+                                let piece = &letters[from..stop];
+                                let inside = super::line_breaks(piece, &steps[from..stop], room);
+                                held.extend(inside.iter().map(|at| from + at));
+                                if stop < letters.len() {
+                                    held.push(stop);
+                                }
+                                from = stop;
+                            }
+                            breaks = held;
+                            if tail {
+                                breaks.push(letters.len());
+                            }
+                        }
+                        // Every line, as a stretch of characters.
+                        let mut stretches: Vec<(usize, usize)> = Vec::new();
+                        let mut from = 0usize;
+                        for stop in breaks.iter().copied().chain(std::iter::once(letters.len())) {
+                            stretches.push((from, stop));
+                            from = stop;
+                        }
+                        // A line stands in the box of the tallest piece on it.
+                        let boxes: Vec<(f32, f32)> = stretches
+                            .iter()
+                            .map(|(from, stop)| {
+                                let mut tall = (0.0f32, 0.0f32);
+                                // A line with no characters of its own — the
+                                // empty one text ending in a newline ends on —
+                                // is dressed by the newline that made it, which
+                                // sits at the end of the line before.
+                                let worn: Vec<usize> = if *from == *stop && *from > 0 {
+                                    vec![*from - 1]
+                                } else {
+                                    (*from..*stop).collect()
+                                };
+                                for at in worn {
+                                    let (face, size, bold, italic, _) = dress(wearing[at]);
+                                    if let Some((held, base)) =
+                                        super::line_box(&face, size, bold, italic)
+                                    {
+                                        if held > tall.0 {
+                                            tall = (held, base);
+                                        }
+                                    }
+                                }
+                                if tall.0 == 0.0 {
+                                    (line_px as f32 / scale, baseline)
+                                } else {
+                                    tall
+                                }
+                            })
+                            .collect();
+                        let block: i32 = boxes
+                            .iter()
+                            .map(|(tall, _)| (tall * scale).round() as i32)
+                            .sum();
+                        let slack = (box_.bottom - box_.top) - block;
+                        // Placed by the cell's own rule, the merged block's
+                        // pixel of leading included: without it this sat a
+                        // pixel below the plain path on every merged cell it
+                        // took over, which is what `bunya_taikeizu_point`
+                        // lost 0.0199 to.
+                        let alone = stretches.len() == 1;
+                        let mut at = box_.top
+                            + match cell.style.vertical_align.as_deref() {
+                                Some("top") => 0,
+                                Some("center") | Some("centre") => {
+                                    let leading =
+                                        i32::from(merged_block && (alone || slack > 0));
+                                    ((slack - leading) as f32 / 2.0).floor() as i32
+                                }
+                                _ => slack - i32::from(merged_block && !alone),
+                            };
+                        for ((from, stop), (tall, base)) in stretches.iter().zip(&boxes) {
+                            let width: i32 = steps[*from..*stop].iter().sum();
+                            // A distributed line fills its cell here as it
+                            // does when the whole cell is worn in one font:
+                            // the same pieces, the same shares. Without it
+                            // `kojo`'s headings, which are dressed and
+                            // distributed both, came out packed to the left.
+                            let room = area.right - area.left;
+                            let shown: String = letters[*from..*stop]
+                                .iter()
+                                .filter(|letter| **letter != '\n')
+                                .collect();
+                            let pieces = super::distribution(&shown);
+                            let spread =
+                                placed == Align::Spread && pieces.len() > 1 && room > width;
+                            let mut extra: Vec<i32> = vec![0; *stop - *from];
+                            if spread {
+                                let spare = room - width;
+                                let gaps = pieces.len() as i32 - 1;
+                                let mut piece = 0usize;
+                                let mut left_in_piece = pieces[0];
+                                let mut given = 0;
+                                for (n, letter) in letters[*from..*stop].iter().enumerate() {
+                                    if *letter == '\n' {
+                                        continue;
+                                    }
+                                    left_in_piece -= 1;
+                                    if left_in_piece == 0 && piece + 1 < pieces.len() {
+                                        piece += 1;
+                                        let want = (spare * piece as i32 + gaps - 1) / gaps;
+                                        extra[n] = want - given;
+                                        given = want;
+                                        left_in_piece = pieces[piece];
+                                    }
+                                }
+                            }
+                            let middle = area.left + ((room - width) as f32 / 2.0).ceil() as i32;
+                            let mut x = match placed {
+                                Align::Left => area.left,
+                                Align::Right => area.right - width,
+                                Align::Centre => middle,
+                                Align::Spread if spread => area.left,
+                                Align::Spread if room > width => middle,
+                                Align::Spread => area.left,
+                            };
+                            let down = at + (base * scale).round() as i32;
+                            let mut walk = *from;
+                            while walk < *stop {
+                                let piece = wearing[walk];
+                                let mut end = walk;
+                                while end < *stop && wearing[end] == piece {
+                                    end += 1;
+                                }
+                                let font = font_of(piece);
+                                let previous = SelectObject(dc, font);
+                                if let Some(shade) = cell.runs[piece].color.as_deref() {
+                                    if !header {
+                                        SetTextColor(dc, colour(Some(shade), 0x0000_0000));
+                                    }
+                                }
+                                let held: String = letters[walk..end]
+                                    .iter()
+                                    .filter(|letter| **letter != '\n')
+                                    .collect();
+                                let wided = wide(&held);
+                                if wided.len() > 1 {
+                                    // A raised piece sits above the line, a
+                                    // lowered one below it, as on one line.
+                                    let size = cell.runs[piece].size.unwrap_or(points);
+                                    let lift = match cell.runs[piece].vert_align.as_deref() {
+                                        Some("superscript") => {
+                                            -(((size * 0.65) * scale * 96.0 / 72.0) / 2.2).round()
+                                                as i32
+                                        }
+                                        Some("subscript") => {
+                                            (((size * 0.65) * scale * 96.0 / 72.0) / 4.0).round()
+                                                as i32
+                                        }
+                                        _ => 0,
+                                    };
+                                    if spread {
+                                        // The share a character was given is
+                                        // written into the step that follows
+                                        // it, as the plain path writes it.
+                                        let mut given: Vec<i32> = Vec::new();
+                                        for at in walk..end {
+                                            if letters[at] == '\n' {
+                                                continue;
+                                            }
+                                            let step = steps[at] + extra[at - *from];
+                                            for unit in 0..letters[at].len_utf16() {
+                                                given.push(if unit == 0 { step } else { 0 });
+                                            }
+                                        }
+                                        let _ = ExtTextOutW(
+                                            dc,
+                                            x,
+                                            down + lift,
+                                            ETO_OPTIONS(0),
+                                            None,
+                                            PCWSTR(wided.as_ptr()),
+                                            (wided.len() - 1) as u32,
+                                            Some(given.as_ptr()),
+                                        );
+                                    } else {
+                                        let _ =
+                                            TextOutW(dc, x, down + lift, &wided[..wided.len() - 1]);
+                                    }
+                                }
+                                x += steps[walk..end].iter().sum::<i32>()
+                                    + extra[walk - *from..end - *from].iter().sum::<i32>();
+                                if cell.runs[piece].color.is_some() && !header {
+                                    SetTextColor(
+                                        dc,
+                                        colour(cell.style.font_color.as_deref(), 0x0000_0000),
+                                    );
+                                }
+                                SelectObject(dc, previous);
+                                let _ = DeleteObject(font);
+                                walk = end;
+                            }
+                            at += (tall * scale).round() as i32;
+                        }
+                    }
+
                     // A stacked cell is drawn through the vertical face —
                     // "@ＭＳ ゴシック" turned a quarter turn — because that is
                     // the face Excel takes its shapes from: measured character
@@ -4141,7 +4417,7 @@ mod windows_draw {
                     }
                     for line in lines
                         .iter()
-                        .filter(|_| !dressed_runs && !cell.style.stacked_text)
+                        .filter(|_| !dressed_runs && !dressed_lines && !cell.style.stacked_text)
                     {
                         let held = wide(line);
                         let letters = &held[..held.len() - 1];
