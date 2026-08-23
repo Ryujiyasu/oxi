@@ -221,7 +221,14 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
             }
             Event::Text(e) => {
                 if in_t && in_si && !in_phonetic {
-                    let text = e.unescape()?.to_string();
+                    // A break inside a cell is written as a pair of
+                    // characters by some writers and one by others; the IR
+                    // holds one, so the pieces of a string add up to the
+                    // string. They did not before: `001290291`'s title came
+                    // out 85 characters in its five pieces against 62 in the
+                    // cell, and every one of the 23 was the other half of a
+                    // break.
+                    let text = e.unescape()?.replace("\r\n", "\n");
                     current.text.push_str(&text);
                     if in_run {
                         current_run.text.push_str(&text);
@@ -3360,6 +3367,34 @@ mod tests {
         let sheet = parse_worksheet(xml, "probe", &[], &stylesheet).expect("should parse");
         assert_eq!(sheet.first_font, Some(("Calibri".to_string(), 11.0)));
         assert_eq!(sheet.normal_font, Some(("Meiryo UI".to_string(), 9.0)));
+    }
+
+    /// The pieces a shared string is dressed in add up to the string: a
+    /// reader that draws them one after another must not be handed more text
+    /// than the cell holds. `f1b851d0a096_001290291`'s title is five pieces
+    /// of 23, 2, 3, 19 and 15 characters — 62 in all, which is what its cell
+    /// shows.
+    #[test]
+    fn the_pieces_of_a_shared_string_add_up_to_it() {
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+            r#"<si><r><rPr><sz val="20"/><rFont val="ＭＳ 明朝"/></rPr>"#,
+            "<t xml:space=\"preserve\">\n\nはじめ</t></r>",
+            r#"<r><rPr><sz val="14"/><rFont val="ＭＳ 明朝"/></rPr>"#,
+            "<t xml:space=\"preserve\">\n\n</t></r>",
+            r#"<r><rPr><sz val="18"/><rFont val="ＭＳ 明朝"/></rPr><t>集計表</t></r>"#,
+            r#"<rPh sb="25" eb="28"><t>シュウケイヒョウ</t></rPh>"#,
+            r#"<phoneticPr fontId="9"/></si></sst>"#,
+        );
+        let held = parse_shared_strings(xml).expect("should parse");
+        let string = &held[0];
+        let pieces: usize = string.runs.iter().map(|run| run.text.chars().count()).sum();
+        assert_eq!(string.text.chars().count(), pieces, "text {:?} runs {:?}",
+                   string.text, string.runs.iter().map(|r| &r.text).collect::<Vec<_>>());
+        assert_eq!(string.runs.len(), 3);
+        // The phonetic guide is in neither.
+        assert!(!string.text.contains('シ'));
     }
 
     #[test]

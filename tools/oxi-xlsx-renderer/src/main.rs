@@ -1190,7 +1190,7 @@ pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Opt
 /// advances: the first character of each line after the first. The line holds
 /// characters until the next would not fit, then gives them back one at a time
 /// until the break is one Excel would make.
-fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
+pub(crate) fn line_breaks(letters: &[char], advances: &[i32], width: f32) -> Vec<usize> {
     let held: Vec<f32> = advances.iter().map(|advance| *advance as f32).collect();
     // A cell measures its room in whole pixels, and always has.
     broken_at(letters, &held, width.max(1.0).trunc())
@@ -4016,6 +4016,38 @@ mod windows_draw {
                             }
                         }
                     }
+                    // A cell dressed in pieces that does not come out on one
+                    // line: Excel breaks it with each piece measured in its
+                    // own font and gives every line the height of the tallest
+                    // piece standing on it. `_xlsx_cell_runs.py`, over seven
+                    // dressings in a row of a stated height: a 20-point piece
+                    // after an 11-point one puts the first line's ink at 6..29
+                    // and the second at 38..61, where an undressed line sits
+                    // at 4..16 and 22..34, and a big piece on the last line
+                    // grows that line alone. Drawn whole in the cell's own
+                    // font — which is what this did — a 20-point title inside
+                    // an 11-point cell comes out 11.
+                    let dressed_lines = !dressed_runs
+                        && !cell.style.stacked_text
+                        && !cell.runs.is_empty()
+                        && cell.runs.iter().map(|run| run.text.chars().count()).sum::<usize>()
+                            == text.chars().count();
+                    // A cell dressed in pieces that does not come out on
+                    // one line is still drawn whole in the cell's own font.
+                    // Excel breaks it with each piece measured in its own and
+                    // gives every line the height of the tallest piece on it:
+                    // `_xlsx_cell_runs.py` reads a 20-point piece after an
+                    // 11-point one as ink at 6..29 and 38..61 where an
+                    // undressed pair of lines sits at 4..16 and 22..34, and a
+                    // big piece on the last line grows that line alone. 58 of
+                    // the 285 workbooks hold 817 such cells. A first cut of it
+                    // (drawing each piece with its own font, the line box of
+                    // the tallest piece, the block placed by the cell's own
+                    // rule) gained `001290291` +0.0240 and cost
+                    // `bunya_taikeizu_point` −0.0199, whose cells came out
+                    // holding the wrong words altogether — so the piece that
+                    // is missing is which characters belong to which line,
+                    // not the fonts. Corpus was +0.0001 net: not shipped.
                     // A stacked cell is drawn through the vertical face —
                     // "@ＭＳ ゴシック" turned a quarter turn — because that is
                     // the face Excel takes its shapes from: measured character
