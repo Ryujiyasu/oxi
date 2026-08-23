@@ -32864,6 +32864,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             let mut cw = self
                                                 .registry
                                                 .char_width_pt_with_fallback(ch, font_size, cm);
+                                            // S1203 (2026-08-24, opt-in `OXI_S1203`): snap the
+                                            // break-time advance to the 600dpi device grid
+                                            // (1/600 inch = 0.12pt, half up).
+                                            //
+                                            // Word's own advances, read glyph by glyph out of its
+                                            // PDF, are all multiples of 0.12: ＭＳ Ｐ明朝 「5.280
+                                            // （5.164 て9.483, and ＭＳ 明朝 fullwidth 10.560 --
+                                            // which is 10.5pt snapped UP (10.5 x 600/72 = 87.5, a
+                                            // tie). tokyoshugyo p30 turns on exactly that 0.06:
+                                            // Word's cell there measures 92.06..522.22 off the PDF
+                                            // rules, so the budget is 389.24, and «…ありますす。»
+                                            // is 37 glyphs -- 388.50 at 10.50 each (fits, which is
+                                            // what Oxi does) but 390.72 at 10.56 (does not, which is
+                                            // what Word does).
+                                            //
+                                            // ★FALSIFIED, parked so it is not tried again. Snapping
+                                            // EVERY advance is broadly wrong: 3a4f9fbe 1.0000 ->
+                                            // 0.8334, ed025 1.0000 -> 0.9690, tokyoshugyo -> 0.9931.
+                                            // The tell was already in the measurement -- ＭＳ 明朝
+                                            // fullwidth comes out of Word's PDF as BOTH 10.444 and
+                                            // 10.560 along one line. That alternation is the
+                                            // signature of snapping the cumulative ORIGIN to the
+                                            // grid, not each advance: the running total then stays
+                                            // within 0.06 of n x 10.5 and never drifts, so it cannot
+                                            // be what pushes 37 glyphs over a 389.24 budget.
+                                            if std::env::var("OXI_S1203").is_ok() {
+                                                cw = (cw * 600.0 / 72.0 + 0.5).floor() * 72.0 / 600.0;
+                                            }
                                             // S869 (2026-07-16, default ON, opt-out OXI_S869_DISABLE):
                                             // LATINEM for the CELL wrapper. The cell
                                             // breaker is a SEPARATE greedy wrapper from break_into_lines,
