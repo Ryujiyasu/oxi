@@ -1,215 +1,172 @@
-# -*- coding: utf-8 -*-
-r"""Where does Excel put each character of a shape's line?
+"""How wide does Excel make a shape's line, against how wide Oxi makes it?
 
-`sanko_tool`'s panel takes one line more than Excel's for the same words, and
-`_xlsx_shape_wrap.py` narrowed that to the run of glyphs rather than the box:
-the line counts agree for kana and part company for proportional Latin, and
-positions inside a line differ by a pixel or two, more the longer the line.
+Right-aligned text in a shape is a ruler for the line's total advance. The box
+edge and the inset are known, both renderers agree on where the area's right
+edge is when `rIns` is zero, and the glyphs are the same — so whatever gap is
+left between the box and the last letter's ink is the width each engine
+believes the line has, read off directly.
 
-This asks the question one character at a time. Each case is a shape holding
-the first N characters of a string, set not to wrap, so the ink's right edge is
-where the run has got to by character N. The first N at which Excel and the
-renderer part company names the character whose advance is wrong.
+`_xlsx_shape_inset.py` found that gap to be a fixed 2 pixels in Excel and 0 in
+Oxi, which says Oxi's line is two pixels short. Two pixels is either a
+per-character rounding that grows with the line, or something fixed at its
+end. This sweeps the length and the size to tell those apart: a per-character
+error rises with the count, a trailing one does not.
 
-    python tools\metrics\_xlsx_shape_advance.py
-    python tools\metrics\_xlsx_shape_advance.py --reuse
+The same sweep is the thing that has to land beside the `floor` on a shape's
+far edge — correcting that edge alone walked 16 workbooks backwards, because
+rounding the inset was cancelling this.
+
+Run: python tools/metrics/_xlsx_shape_advance.py
 """
-import argparse
-import os
+
+from __future__ import annotations
+
+import re
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+import win32com.client
+from PIL import Image, ImageGrab
 
+Image.MAX_IMAGE_PIXELS = None
 REPO = Path(__file__).resolve().parents[2]
-SHOOTER = Path(__file__).resolve().parent / "_xlsx_screen_shot.ps1"
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 SCRATCH = Path(r"C:\tmp\xlsx_shape_advance")
-BOOK = SCRATCH / "advance.xlsx"
-EMU = 9525.0
-
-SPACING = 3             # rows per case: one line each
-LONGEST = 37
-# The workbook's own words, the kana that wrap the same way, and a
-# proportional Latin run that does not.
-STRINGS = [
-    # The very line `sanko_tool` breaks and Excel does not: three spaces and
-    # then the run of names, in the face Excel puts in place of the missing
-    # one. It is one pixel too wide by the renderer's sum and fits by Excel's.
-    ("spaced", "   " + "「調査票番号」、「品目番号」、"
-     + "「アイテム記号」をプルダウンで選択する"),
-    # One character repeated: the ink either end is then the same ink, so the
-    # difference between two lengths is the advance itself and nothing else.
-    ("one ア", "ア" * 30),
-    ("one W", "W" * 30),
-    ("one i", "i" * 30),
-]
-# The face `sanko_tool` asks for and has not got, dressed the way its own
-# runs dress it, beside the face Excel puts in its place: if the two
-# step differently, the substitute is not simply that face.
-MISSING = "AR P丸ゴシック体E"
-DRESSED = ' pitchFamily="50" charset="-128"'
-FONTS = [("游ゴシック", 12.0, ""), (MISSING, 12.0, DRESSED)]
+# The law was first read off ONE glyph — a full-width あ, whose advance is the
+# em exactly — and rounding each of those to a whole pixel matched Excel's ink
+# width but cost the corpus 12 workbooks against 6. A glyph whose advance is
+# NOT the em has to be in the sweep before any rule is believed.
+LETTERS = ["あ", "W", "i", "1", "ｱ"]
+COUNTS = [1, 8]
+SIZES = [11.0, 20.0]
+FACES = ["ＭＳ ゴシック", "ＭＳ Ｐゴシック"]
 
 
-def cases():
-    return [(face, points, extra, kind, text[:count])
-            for face, points, extra in FONTS
-            for kind, text in STRINGS
-            for count in range(1, LONGEST + 1)]
-
-
-def anchors_xml():
-    held = []
-    for index, (face, points, extra, _kind, text) in enumerate(cases()):
-        # `&` and `<` never appear in these strings, so the text goes in whole.
-        runs = (f'<a:p><a:pPr algn="l"/><a:r>'
-                f'<a:rPr lang="ja-JP" sz="{int(points * 100)}">'
-                f'<a:latin typeface="{face}"{extra}/>'
-                f'<a:ea typeface="{face}"{extra}/>'
-                f"</a:rPr><a:t>{text}</a:t></a:r></a:p>")
-        held.append(
-            f"<xdr:oneCellAnchor>"
-            f"<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
-            f"<xdr:row>{index * SPACING}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
-            f'<xdr:ext cx="{int(900 * EMU)}" cy="{int(2 * 20 * EMU)}"/>'
-            f'<xdr:sp macro="" textlink="">'
-            f'<xdr:nvSpPr><xdr:cNvPr id="{index + 2}" name="box {index}"/>'
-            f"<xdr:cNvSpPr/></xdr:nvSpPr>"
-            f'<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
-            f"<a:noFill/><a:ln><a:noFill/></a:ln></xdr:spPr>"
-            f'<xdr:txBody><a:bodyPr wrap="none" anchor="t"/><a:lstStyle/>'
-            f"{runs}</xdr:txBody></xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
-        )
-    return "".join(held)
-
-
-def build():
-    from openpyxl import Workbook
-
+def seed(arms) -> Path:
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    plain = SCRATCH / "_plain.xlsx"
-    book = Workbook()
-    sheet = book.active
-    sheet.column_dimensions["A"].width = 2.0
-    sheet.column_dimensions["B"].width = 120.0
-    sheet.cell(row=1, column=1, value="a")
-    sheet.cell(row=len(cases()) * SPACING + 2, column=4, value="z")
-    book.save(plain)
-
-    drawing = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"'
-        ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
-        f"{anchors_xml()}</xdr:wsDr>"
-    )
-    rels = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1"'
-        ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"'
-        ' Target="../drawings/drawing1.xml"/></Relationships>'
-    )
-    BOOK.unlink(missing_ok=True)
-    with zipfile.ZipFile(plain) as source, \
-            zipfile.ZipFile(BOOK, "w", zipfile.ZIP_DEFLATED) as out:
-        for item in source.infolist():
-            held = source.read(item.filename)
-            if item.filename == "[Content_Types].xml":
-                held = held.decode("utf-8").replace(
-                    "</Types>",
-                    '<Override PartName="/xl/drawings/drawing1.xml"'
-                    ' ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
-                    "</Types>",
-                ).encode("utf-8")
-            if item.filename == "xl/worksheets/sheet1.xml":
-                held = held.decode("utf-8").replace(
-                    "</worksheet>", '<drawing r:id="rId1"/></worksheet>')
-                if "xmlns:r=" not in held:
-                    held = held.replace(
-                        "<worksheet ",
-                        '<worksheet xmlns:r="http://schemas.openxmlformats.org/'
-                        'officeDocument/2006/relationships" ', 1)
-                held = held.encode("utf-8")
-            out.writestr(item, held)
-        out.writestr("xl/drawings/drawing1.xml", drawing)
-        out.writestr("xl/worksheets/_rels/sheet1.xml.rels", rels)
+    made = SCRATCH / "seed.xlsx"
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    book = excel.Workbooks.Add()
+    try:
+        sheet = book.Worksheets(1)
+        sheet.Range("A1:R120").Interior.Color = 0xFFFFFF
+        for at, (face, size, letter, count) in enumerate(arms):
+            shape = sheet.Shapes.AddShape(1, 40.0, 14.0 + at * 44.0, 460.0, 34.0)
+            shape.TextFrame2.TextRange.Text = letter * count
+            shape.TextFrame2.TextRange.Font.Size = size
+            shape.TextFrame2.TextRange.Font.Name = face
+            shape.TextFrame2.TextRange.ParagraphFormat.Alignment = 3     # right
+            shape.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = 0x000000
+            shape.Fill.ForeColor.RGB = 0xF7EBDE
+            shape.Line.Visible = False
+        book.SaveAs(str(made), FileFormat=51)
+    finally:
+        book.Close(SaveChanges=False)
+        excel.Quit()
+    return made
 
 
-def shoot():
-    picture = BOOK.with_suffix(".excel.png")
-    picture.unlink(missing_ok=True)
-    listing = SCRATCH / "_batch.txt"
-    listing.write_text(f"{BOOK.resolve()}\t{picture.resolve()}", encoding="utf-8-sig")
-    subprocess.run(["powershell", "-NoProfile", "-File", str(SHOOTER),
-                    "-ListFile", str(listing.resolve())],
-                   capture_output=True, text=True, encoding="utf-8",
-                   errors="replace", timeout=1800)
-    listing.unlink(missing_ok=True)
-    return picture
+def written(source: Path, arms) -> Path:
+    """Every box gets a zero right inset, so the area's edge is the box's."""
+    out = SCRATCH / "advance.xlsx"
+    if out.exists():
+        out.unlink()
+    held = zipfile.ZipFile(source)
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as writing:
+        for item in held.infolist():
+            raw = held.read(item.filename)
+            if item.filename.startswith("xl/drawings/") and item.filename.endswith(".xml"):
+                text = raw.decode("utf-8")
+                bodies = list(re.finditer(r"<a:bodyPr[^>]*/>|<a:bodyPr[^>]*>", text))
+                assert len(bodies) >= len(arms), f"{len(bodies)} bodyPr for {len(arms)} arms"
+                for spot in reversed(bodies[: len(arms)]):
+                    fresh = ('<a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="none" '
+                             'lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"/>')
+                    text = text[: spot.start()] + fresh + text[spot.end():]
+                raw = text.encode("utf-8")
+            writing.writestr(item, raw)
+    return out
 
 
-def drawn():
-    ours = SCRATCH / "advance.oxi.png"
-    done = subprocess.run(
-        [str(RENDERER), str(BOOK), str(ours), "96"], capture_output=True, timeout=1800,
-        env=dict(os.environ, OXI_XLSX_DUMP_ROWS="1", OXI_XLSX_DUMP_COLUMNS="1",
-                 OXI_XLSX_SHAPE_TEXT="1"))
-    heights, lane = {}, 0
-    for line in done.stdout.decode("utf-8", "replace").splitlines():
-        parts = line.split()
-        if len(parts) == 4 and parts[0] == "row":
-            heights[int(parts[1])] = int(float(parts[3]))
-        if len(parts) == 4 and parts[0] == "column" and lane == 0:
-            lane = int(float(parts[3]))
-    return ours, heights, lane
+def main() -> int:
+    arms = [(face, size, letter, count)
+            for face in FACES for size in SIZES
+            for letter in LETTERS for count in COUNTS]
+    book_path = written(seed(arms), arms)
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = True
+    excel.DisplayAlerts = False
+    book = excel.Workbooks.Open(str(book_path))
+    boxes = []
+    try:
+        sheet = book.Worksheets(1)
+        for at in range(len(arms)):
+            shape = sheet.Shapes(at + 1)
+            boxes.append((round(shape.Top * 96 / 72), round(shape.Height * 96 / 72)))
+        for _ in range(10):
+            try:
+                sheet.Activate()
+                sheet.Range("A1:R120").CopyPicture(Appearance=1, Format=2)
+            except Exception:
+                time.sleep(0.8)
+                continue
+            time.sleep(0.8)
+            shot = ImageGrab.grabclipboard()
+            if shot is not None:
+                break
+        else:
+            print("Excel would not hand over a picture")
+            return 1
+        shot.save(SCRATCH / "excel.png")
+    finally:
+        book.Close(SaveChanges=False)
+        excel.Quit()
 
+    subprocess.run([str(RENDERER), str(book_path), str(SCRATCH / "oxi.png")],
+                   capture_output=True, check=False)
 
-def edges(picture, top, foot, lane):
-    band = (picture[top:foot, lane:] < 128)
-    columns = np.flatnonzero(band.any(axis=0))
-    if not columns.size:
-        return None, None
-    return int(columns[0]), int(columns[-1])
+    def gaps(path):
+        rgb = np.asarray(Image.open(path).convert("RGB")).astype(int)
+        grey = np.asarray(Image.open(path).convert("L")).astype(int)
+        fill = ((rgb[:, :, 0] == 0xDE) & (rgb[:, :, 1] == 0xEB) & (rgb[:, :, 2] == 0xF7))
+        out = []
+        for top, high in boxes:
+            band_fill = np.where(fill[top:top + high].any(axis=0))[0]
+            band_ink = np.where((grey[top:top + high] < 140).any(axis=0))[0]
+            out.append((int(band_fill.max()) - int(band_ink.max()),
+                        int(band_ink.max()) - int(band_ink.min()) + 1)
+                       if len(band_fill) and len(band_ink) else (None, None))
+        return out
 
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--reuse", action="store_true")
-    args = parser.parse_args()
-    sys.stdout.reconfigure(encoding="utf-8")
-
-    build()
-    picture = BOOK.with_suffix(".excel.png") if args.reuse else shoot()
-    if not picture.exists():
-        print("Excel gave no picture")
-        return
-    truth = np.asarray(Image.open(picture).convert("L"))
-    ours_png, heights, lane = drawn()
-    mine = np.asarray(Image.open(ours_png).convert("L"))
-    at, starts = 0, {}
-    for index in sorted(heights):
-        starts[index] = at
-        at += heights[index]
-
-    print(f"{'face':<14}{'pt':>5}{'text':>7}{'n':>4}"
-          f"{'Excel right':>12}{'ours right':>11}{'d':>4}   last character")
-    for index, (face, points, _extra, kind, text) in enumerate(cases()):
-        top = starts.get(index * SPACING + 1)
-        foot = starts.get(index * SPACING + SPACING)
-        if top is None or foot is None or foot > min(truth.shape[0], mine.shape[0]):
-            continue
-        _, theirs = edges(truth, top, foot, lane)
-        _, ours = edges(mine, top, foot, lane)
-        if theirs is None or ours is None:
-            continue
-        mark = "" if theirs == ours else "  <<"
-        print(f"{face:<14}{points:>5}{kind:>7}{len(text):>4}"
-              f"{theirs:>12}{ours:>11}{ours - theirs:>+4}   {text[-1]!r}{mark}")
+    theirs, ours = gaps(SCRATCH / "excel.png"), gaps(SCRATCH / "oxi.png")
+    # The advance each engine believes, solved from the ink's width:
+    # span(8) - span(1) = 7 * advance.
+    print("  right-aligned, box with no insets; advance solved from the ink width")
+    print("  face          size letter   Excel adv   Oxi adv   exact em*share")
+    spans = {}
+    for at, (face, size, letter, count) in enumerate(arms):
+        spans[(face, size, letter, count)] = (theirs[at][1], ours[at][1])
+    for face in FACES:
+        for size in SIZES:
+            for letter in LETTERS:
+                one, many = spans[(face, size, letter, 1)], spans[(face, size, letter, 8)]
+                if None in one or None in many:
+                    print(f"  {face:<13}{size:>4.0f} {letter:<6}   no ink")
+                    continue
+                e_adv = (many[0] - one[0]) / 7
+                o_adv = (many[1] - one[1]) / 7
+                flag = "" if abs(e_adv - o_adv) < 0.08 else "   <--"
+                print(f"  {face:<13}{size:>4.0f} {letter:<6}   {e_adv:>9.3f}   {o_adv:>7.3f}"
+                      f"{flag}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.stdout.reconfigure(encoding="utf-8")
+    raise SystemExit(main())
