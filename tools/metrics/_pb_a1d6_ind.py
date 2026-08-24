@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Does a1d6e4ef's note keep its TWIP indents when the row is sliced out?
+"""Why does a1d6e4ef's note read its indent in POINTS where a synthetic cell
+reads the same attributes in CHARACTERS?
 
-`_pb_indchars_gen.py` says a non-zero *Chars beats the twip beside it, and the
-character is the grid pitch. a1d6e4ef's own note carries
-`leftChars=50 left=489 hangingChars=203 hanging=380` and renders at 24.45/19.00
--- the twips. Everything the probe can vary (compat, grid, style file, style
-name, hanging, magnitude) leaves the probe on the *Chars side, so the difference
-must be in the document around the paragraph.
+`_pb_indchars_gen.py` (20 arms) says a non-zero *Chars beats the twip beside it,
+and one character is the grid pitch. a1d6e4ef's note carries
+`leftChars=50 left=489 hangingChars=203 hanging=380` and Word renders 24.45 /
+19.00 -- the twips. Slicing the row out reproduces that, so the cause is inside
+the row; compat, the grid, styles.xml, settings.xml and the style name are all
+ruled out.
 
-Slice the row out verbatim and read the same two numbers. Twips in the slice =>
-the cause is inside the row; *Chars => it is outside it.
+One arm per FILE (the first attempt put every arm in one document, but each arm
+is a whole table row and they cross pages, so the readings could not be matched
+to their arms). Each arm removes exactly one thing from the row.
 
     python _pb_a1d6_ind.py
 """
@@ -28,23 +30,10 @@ SRC = [p for p in glob.glob(os.path.join(REPO, "tools", "golden-test", "document
                                          "docx", "a1d6*.docx"))
        if not os.path.basename(p).startswith("~$")][0]
 MARK = "提供依頼申出"
-# The slice reproduced the twips (59.90 / 78.98 against 59.69 / 78.69 predicted).
-# So the cause is inside the row. Replace ONLY the note paragraph's <w:ind> and
-# watch which unit Word uses in THIS cell.
-INDS = [
-    ("as_written", '<w:ind w:leftChars="50" w:left="489" w:rightChars="50"'
-                   ' w:right="109" w:hangingChars="203" w:hanging="380"/>'),
-    ("no_leftchars", '<w:ind w:left="489" w:rightChars="50" w:right="109"'
-                     ' w:hangingChars="203" w:hanging="380"/>'),
-    ("no_left_tw", '<w:ind w:leftChars="50" w:rightChars="50" w:right="109"'
-                   ' w:hangingChars="203" w:hanging="380"/>'),
-    ("probe_arm", '<w:ind w:leftChars="100" w:left="81"/>'),
-    ("lc50_l489", '<w:ind w:leftChars="50" w:left="489"/>'),
-]
+CELLMAR_PT = 12 / 20.0          # this table's tblCellMar left
 
 
-def build():
-    os.makedirs(OUT, exist_ok=True)
+def parts():
     x = zipfile.ZipFile(SRC).read("word/document.xml").decode("utf-8")
     i = x.index(MARK)
     tbl_start = x.rindex("<w:tbl>", 0, i)
@@ -54,17 +43,64 @@ def build():
     head = x[:x.index("<w:body>") + len("<w:body>")]
     sect = re.search(r"<w:sectPr[^>]*>.*?</w:sectPr>", x, re.S).group(0)
     sect = re.sub(r"<w:(headerReference|footerReference)[^>]*/>", "", sect)
-    i2 = row.index(MARK)
-    ps = max((row.rfind("<w:p ", 0, i2), row.rfind("<w:p>", 0, i2)))
-    pe = row.index("</w:p>", i2) + len("</w:p>")
-    para = row[ps:pe]
-    blocks = []
-    for name, ind in INDS:
-        p2 = re.sub(r"<w:ind[^>]*/>", ind, para, count=1)
-        blocks.append(tbl_head + row[:ps] + p2 + row[pe:] + "</w:tbl>"
-                      + '<w:p><w:pPr><w:rPr><w:sz w:val="16"/></w:rPr></w:pPr></w:p>')
-    doc = head + "".join(blocks) + sect + "</w:body></w:document>"
-    dst = os.path.join(OUT, "a1d6_row.docx")
+    return head, tbl_head, row, sect
+
+
+def note_para(row):
+    i = row.index(MARK)
+    ps = max((row.rfind("<w:p ", 0, i), row.rfind("<w:p>", 0, i)))
+    pe = row.index("</w:p>", i) + len("</w:p>")
+    return ps, pe
+
+
+def sub_para(row, fn):
+    ps, pe = note_para(row)
+    return row[:ps] + fn(row[ps:pe]) + row[pe:]
+
+
+ARMS = [
+    ("base", lambda h, r: (h, r)),
+    ("no_vmerge", lambda h, r: (h, re.sub(r"<w:vMerge[^>]*/>", "", r))),
+    ("no_tcw", lambda h, r: (h, re.sub(r'<w:tcW w:w="\d+" w:type="\w+"/>', "", r))),
+    ("style_a", lambda h, r: (h, sub_para(r, lambda p: p.replace(
+        '<w:pStyle w:val="ac"/>', '<w:pStyle w:val="a"/>')))),
+    ("no_pstyle", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:pStyle[^>]*/>", "", p)))),
+    ("no_wordwrap", lambda h, r: (h, sub_para(r, lambda p: p.replace(
+        "<w:wordWrap/>", "")))),
+    ("no_spacing", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:spacing[^>]*/>", "", p, count=1)))),
+    ("no_ppr_rpr", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:rPr>.*?</w:rPr></w:pPr>", "</w:pPr>", p, count=1, flags=re.S)))),
+    ("ind_probe", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:ind[^>]*/>", '<w:ind w:leftChars="100" w:left="81"/>', p, count=1)))),
+    ("no_grid", lambda h, r: (h, r)),        # handled in build(): drops the docGrid
+    # ind_probe reads as CHARS in this very cell while the note's own ind reads as
+    # TWIPS -- so vary the ind alone and find which member flips it.
+    ("ind_lc50_l489", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:ind[^>]*/>", '<w:ind w:leftChars="50" w:left="489"/>', p, count=1)))),
+    ("ind_lc50_l489_h", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:ind[^>]*/>",
+        '<w:ind w:leftChars="50" w:left="489" w:hanging="380"/>', p, count=1)))),
+    ("ind_lc50_l489_hc", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:ind[^>]*/>",
+        '<w:ind w:leftChars="50" w:left="489" w:hangingChars="203"/>', p, count=1)))),
+    ("ind_lc100_l489", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:ind[^>]*/>", '<w:ind w:leftChars="100" w:left="489"/>', p, count=1)))),
+    ("ind_lc300_l489", lambda h, r: (h, sub_para(r, lambda p: re.sub(
+        r"<w:ind[^>]*/>", '<w:ind w:leftChars="300" w:left="489"/>', p, count=1)))),
+]
+
+
+def build(name, fn):
+    os.makedirs(OUT, exist_ok=True)
+    head, tbl_head, row, sect = parts()
+    tbl_head, row = fn(tbl_head, row)
+    if name == "no_grid":
+        sect = re.sub(r"<w:docGrid[^>]*/>", '<w:docGrid w:type="lines" w:linePitch="292"/>',
+                      sect)
+    doc = head + tbl_head + row + "</w:tbl>" + sect + "</w:body></w:document>"
+    dst = os.path.join(OUT, "arm_%s.docx" % name)
     shutil.copyfile(SRC, dst)
     zin = zipfile.ZipFile(SRC)
     zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
@@ -74,60 +110,74 @@ def build():
             data = doc.encode("utf-8")
         zout.writestr(item, data)
     zout.close()
-    print("built", dst)
     return dst
 
 
-def to_pdf(docx):
+def export(paths):
     import win32com.client as wc
-    pdf = os.path.splitext(docx)[0] + ".pdf"
     app = wc.Dispatch("Word.Application")
     app.Visible = False
+    out = []
     try:
-        d = app.Documents.Open(os.path.abspath(docx), ReadOnly=True)
-        d.ExportAsFixedFormat(OutputFileName=os.path.abspath(pdf),
-                              ExportFormat=17, OpenAfterExport=False)
-        d.Close(False)
+        for docx in paths:
+            pdf = os.path.splitext(docx)[0] + ".pdf"
+            d = app.Documents.Open(os.path.abspath(docx), ReadOnly=True)
+            d.ExportAsFixedFormat(OutputFileName=os.path.abspath(pdf),
+                                  ExportFormat=17, OpenAfterExport=False)
+            d.Close(False)
+            out.append(pdf)
     finally:
         app.Quit()
-    return pdf
+    return out
 
 
-def measure(pdf):
+def read(pdf):
+    """(cell inner left, first-line x, continuation x) for the ※1 note."""
     import fitz
     doc = fitz.open(pdf)
-    print("arms:", [n for n, _ in INDS])
-    p = doc[0]
-    rules = []
-    for d in p.get_drawings():
-        for it in d["items"]:
-            if it[0] == "l" and abs(it[1].x - it[2].x) < 0.4 and abs(it[1].y - it[2].y) > 3:
-                rules.append(round((it[1].x + it[2].x) / 2, 2))
-            elif it[0] == "re" and it[1].width < 0.9 and it[1].height > 3:
-                rules.append(round(it[1].x0, 2))
-    left_rule = min(rules) if rules else 0.0
-    inner = left_rule + 12 / 20.0          # the table's own tblCellMar left = 12tw
-    lines = []
-    for b in p.get_text("rawdict")["blocks"]:
-        if b["type"] != 0:
+    rules, first, cont = [], None, None
+    for page in doc:
+        for d in page.get_drawings():
+            for it in d["items"]:
+                if it[0] == "l" and abs(it[1].x - it[2].x) < 0.4 and abs(it[1].y - it[2].y) > 3:
+                    rules.append(round((it[1].x + it[2].x) / 2, 2))
+                elif it[0] == "re" and it[1].width < 0.9 and it[1].height > 3:
+                    rules.append(round(it[1].x0, 2))
+        for b in page.get_text("rawdict")["blocks"]:
+            if b["type"] != 0:
+                continue
+            for l in b["lines"]:
+                ch = sorted([c for s in l["spans"] for c in s["chars"]],
+                            key=lambda c: c["origin"][0])
+                if not ch:
+                    continue
+                t = "".join(c["c"] for c in ch)
+                if first is None and t.startswith("※１"):
+                    first = ch[0]["origin"][0]
+                elif first is not None and cont is None and t.startswith("者及び"):
+                    cont = ch[0]["origin"][0]
+    inner = (min(rules) if rules else 0.0) + CELLMAR_PT
+    return inner, first, cont
+
+
+def main():
+    paths = [build(n, f) for n, f in ARMS]
+    print("built %d arms" % len(paths))
+    pdfs = export(paths)
+    print("   arm          inner    first     cont   |  first ind   cont ind   reads as")
+    for (name, _), pdf in zip(ARMS, pdfs):
+        inner, first, cont = read(pdf)
+        if first is None or cont is None:
+            print("   %-12s %7.2f   (note not found)" % (name, inner))
             continue
-        for l in b["lines"]:
-            ch = sorted([c for s in l["spans"] for c in s["chars"]],
-                        key=lambda c: c["origin"][0])
-            if ch and ch[0]["origin"][0] < inner + 60 and MARK[:4] in "".join(
-                    c["c"] for c in ch):
-                lines.append((round(l["bbox"][1], 1), ch[0]["origin"][0],
-                              "".join(c["c"] for c in ch)[:12]))
-    lines.sort()
-    print("rules:", sorted(set(rules))[:6])
-    print("cell inner left %.2f" % inner)
-    print("  twips would give   first %.2f  cont %.2f" % (inner + 489 / 20.0 - 380 / 20.0,
-                                                          inner + 489 / 20.0))
-    print("  *Chars would give  first %.2f  cont %.2f  (1 char = 10.8547 grid pitch)"
-          % (inner + 0.5 * 10.8547 - 2.03 * 10.8547, inner + 0.5 * 10.8547))
-    for y, x, t in lines[:20]:
-        print("   y=%7.1f x0=%7.2f %s" % (y, x, t))
+        fi, ci = first - inner, cont - inner
+        # twips: left 24.45, hanging 19.00 ; chars: 0.5 and 2.03 of the grid pitch
+        pitch = 10.8547
+        reads = ("TWIP" if abs(ci - 24.45) < 1.2 else
+                 "CHARS" if abs(ci - 0.5 * pitch) < 1.2 else "?")
+        print("   %-12s %7.2f  %7.2f  %7.2f  |  %+7.2f   %+7.2f   %s"
+              % (name, inner, first, cont, fi, ci, reads))
 
 
 if __name__ == "__main__":
-    measure(to_pdf(build()))
+    main()

@@ -4227,6 +4227,7 @@ fn parse_paragraph_properties(
                         let mut right_chars: Option<f32> = None;
                         let mut first_line_chars: Option<f32> = None;
                         let mut hanging_chars: Option<f32> = None;
+                        let mut saw_hanging_tw = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -4256,6 +4257,7 @@ fn parse_paragraph_properties(
                                     // Hanging indent: negative first-line indent
                                     style.indent_first_line =
                                         val.parse::<f32>().ok().map(|v| -(v / 20.0));
+                                    saw_hanging_tw = true;
                                 }
                                 "hangingChars" => {
                                     // Hanging indent in character units (hundredths)
@@ -4292,7 +4294,22 @@ fn parse_paragraph_properties(
                         // reach the *Chars only via `.or_else`, so firstLineChars is dead
                         // wherever firstLine is written too -- which is 29dc6e8943fe's
                         // cell (left=81 firstLineChars=100 firstLine=199).
-                        let s1214 = std::env::var("OXI_S1214").ok().as_deref() == Some("1");
+                        // ★THE CONDITION (2026-08-25, `_pb_a1d6_ind.py`, 15 arms cut
+                        // from a1d6e4ef's own row, one file per arm): a HANGING indent
+                        // sends `left` back to the twip. In that cell,
+                        //     leftChars=50 left=489                 -> 5.66  = 0.5 char
+                        //     leftChars=50 left=489 hanging=380     -> 24.74 = the twip
+                        //     leftChars=50 left=489 hangingChars=203-> 24.74 = the twip
+                        //     leftChars=100 left=489                -> 11.06 = 1 char
+                        // and removing vMerge / tcW / the style / wordWrap / the spacing
+                        // / the paragraph mark's rPr / even the character grid changes
+                        // nothing. The synthetic arms in `_pb_indchars_gen.py` could not
+                        // see this: with a hanging indent the FIRST line lands within
+                        // 0.2pt of both readings (24.45-19.00 = 5.45 against 0.5 char =
+                        // 5.25), and only the CONTINUATION line separates them.
+                        let saw_hanging = hanging_chars.is_some() || saw_hanging_tw;
+                        let s1214 = std::env::var("OXI_S1214").ok().as_deref() == Some("1")
+                            && !saw_hanging;
                         if s1214 {
                             if left_chars.map_or(false, |v| v != 0.0) {
                                 style.indent_left = None;
