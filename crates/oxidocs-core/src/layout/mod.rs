@@ -23301,8 +23301,39 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // skip is fs < default, not unconditional. Gated so the corpus
                         // (charGrid family tokumei/b35/b837) can be A/B re-gated;
                         // Phase-1-sensitive (re-wrap moves pagination).
-                        let h8_trigger =
-                            char_space_pt > 0.0 && (!s466_grid_expand || font_size < default_fs);
+                        // MEASURED (2026-08-24, `tools/metrics/_s1210_pitch.py`,
+                        // a1d6e4ef + 6514f214, unjustified lines only): Word's own
+                        // PDF export lays the page out at 600dpi -- every span size
+                        // is a whole 0.12pt device pixel (9.5pt -> 9.48, 10pt ->
+                        // 9.96, 10.5pt -> 10.56, 16pt -> 15.96), and so is every
+                        // glyph origin. Read that way the advances are ONE law,
+                        // ADDITIVE and independent of the run's size:
+                        //     pitch = fs + charSpace/4096
+                        // fs 9    -> 9.3547 = 77.96px: 95% of advances land on the
+                        //                     78th pixel (9.36), 5% on the 77th
+                        // fs 10   -> 10.3547 = 86.29px: 68% / 32%
+                        // fs 10.5 -> 10.8547 = 90.46px: 55% / 45%
+                        // fs 12   -> 12.3547 = 102.96px: 93% on 103px
+                        // The proportional form (fs * pitch / default_fs, below)
+                        // predicts 9.304 for fs 9 = 77.5px, i.e. an EVEN split
+                        // between the 77th and 78th pixel; the measured 95/5
+                        // falsifies it. The two forms differ by 0.027pt at fs 10 --
+                        // which is why the 2026-05-13 single-size COM check could
+                        // not separate them, and picked the wrong one.
+                        // S1210 (2026-08-24, opt-in `OXI_S1210=1` while it is
+                        // measured): with the additive pitch the S141 carve-out
+                        // ("Word does not expand a font SMALLER than the grid
+                        // default") is unnecessary. The sz=10 cell it was derived
+                        // from holds 33 x 10.3547 = 341.7pt in its 345pt cell -- one
+                        // line, exactly as Word renders it -- so that observation was
+                        // never evidence against expansion, only against the pitch
+                        // Oxi used then. The carve-out costs a1d6e4ef its note
+                        // column: 8 chars at the natural 9.00 fit where Word breaks
+                        // after 7, and the 9th line that follows pushes the ※2 note
+                        // onto the next page in Word but not in Oxi.
+                        let s1210 = std::env::var("OXI_S1210").ok().as_deref() == Some("1");
+                        let h8_trigger = char_space_pt > 0.0
+                            && (!s466_grid_expand || (font_size < default_fs && !s1210));
                         let h7_trigger =
                             h7_gate_enabled && char_space_pt > 0.0 && font_size <= default_fs;
                         let h6_trigger =
@@ -23326,9 +23357,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if h6_trigger || h7_trigger || h8_trigger || s344_skip || s466_no_grid {
                             0.0
                         } else {
-                            let expected_w = if char_space_pt >= 0.0 {
+                            let expected_w = if char_space_pt >= 0.0 && !s1210 {
                                 font_size * pitch / default_fs
                             } else {
+                                // S1210: additive for BOTH signs (see above).
                                 font_size + char_space_pt
                             };
                             expected_w - char_width
@@ -33084,7 +33116,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         // 05-31 revert predated those vertical fixes). Default OFF.
                                                         let s466cell =
                                                             std::env::var("OXI_S466CELL").is_ok();
+                                                        // S1210 (2026-08-24, opt-in `OXI_S1210=1`):
+                                                        // the cell mirror of the additive pitch
+                                                        // derived in break_into_lines. a1d6e4ef's
+                                                        // note cell is the specimen: Word breaks
+                                                        // 「者及び利用者、」 after 7 characters, and
+                                                        // only the grid pitch explains it. The cell
+                                                        // is 67.74pt wide (measured off the PDF's own
+                                                        // rules: 53.64..152.90 less 0.6pt margins and
+                                                        // the paragraph's indents), 8 x 9.3547 =
+                                                        // 74.84 overflows it by 0.76em -- past any
+                                                        // 約物 credit S1209 can pay -- while 8 x 9.00
+                                                        // = 72.00 overflows by only 0.47em, which the
+                                                        // half-em credit DOES cover. That is why the
+                                                        // ※2 note sits a page early in Oxi.
+                                                        let s1210 = std::env::var("OXI_S1210")
+                                                            .ok()
+                                                            .as_deref()
+                                                            == Some("1");
                                                         let h8_skip = char_space_pt > 0.0
+                                                            && !s1210
                                                             && (!s466cell
                                                                 || font_size < default_fs);
                                                         // S344: when snap_to_grid=false and S344 enabled,
@@ -33097,9 +33148,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             || h8_skip
                                                             || s344_skip)
                                                         {
-                                                            cw = if char_space_pt >= 0.0 {
+                                                            cw = if char_space_pt >= 0.0
+                                                                && !s1210
+                                                            {
                                                                 font_size * pitch / default_fs
                                                             } else {
+                                                                // S1210: additive for both signs.
                                                                 font_size + char_space_pt
                                                             };
                                                         }
@@ -39326,16 +39380,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // S466CELL re-test (2026-06-25): mirror of the emit-site change
                             // (count_cell_lines must match the visible wrap). Default OFF.
                             let s466cell = std::env::var("OXI_S466CELL").is_ok();
-                            let h8_skip =
-                                char_space_pt > 0.0 && (!s466cell || font_size < default_fs);
+                            // S1210: the height estimate has to break where the
+                            // visible wrap breaks, so it carries the same additive
+                            // pitch. Leaving this site behind would give a row a
+                            // line count its own cell never renders.
+                            let s1210 =
+                                std::env::var("OXI_S1210").ok().as_deref() == Some("1");
+                            let h8_skip = char_space_pt > 0.0
+                                && !s1210
+                                && (!s466cell || font_size < default_fs);
                             // S344: when snap_to_grid=false and S344 enabled,
                             // skip compression unless fs < default_fs.
                             let s344_skip =
                                 s344_fs_gate && !para.style.snap_to_grid && font_size >= default_fs;
                             if !(h6_skip || h7_skip || h8_skip || s344_skip) {
-                                cw = if char_space_pt >= 0.0 {
+                                cw = if char_space_pt >= 0.0 && !s1210 {
                                     font_size * pitch / default_fs
                                 } else {
+                                    // S1210: additive for both signs.
                                     font_size + char_space_pt
                                 };
                             }
