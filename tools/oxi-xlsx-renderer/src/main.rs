@@ -2817,6 +2817,93 @@ mod windows_draw {
     /// wide whatever it is told, so a broken rule wider than that is drawn
     /// with a geometric pen whose pattern is spelled out in multiples of its
     /// own width — the ratios OOXML's presets stand for.
+    /// Start GDI+ once per process, and say whether it is running.
+    fn started() -> bool {
+        use windows::Win32::Graphics::GdiPlus::*;
+        static STARTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *STARTED.get_or_init(|| unsafe {
+            let mut token: usize = 0;
+            let input = GdiplusStartupInput {
+                GdiplusVersion: 1,
+                ..Default::default()
+            };
+            let mut output = GdiplusStartupOutput::default();
+            GdiplusStartup(&mut token, &input, &mut output) == Status(0)
+        })
+    }
+
+    /// Draw a chart's curve the way Excel draws it: softened.
+    ///
+    /// Excel rules a grid line and an axis with a hard pen — a single black
+    /// row, which is what GDI already gives — but it draws the SERIES curve
+    /// softened. Read a column across `9fd461bf494a_zuhyo`'s curve out of
+    /// Excel's own picture and it reads 151, 0, 56: one dark row with a pale
+    /// row either side. The same column from GDI reads 0, 0, 0 — three hard
+    /// rows, because a steep polyline steps. The geometry already agrees; it
+    /// is only the edge that does not, and across the five `zuhyo` books
+    /// Excel carries 0.17 to 1.16 of soft ink for every solid pixel while we
+    /// carry none at all.
+    ///
+    /// GDI has no way to soften a line, so the curve alone goes through
+    /// GDI+, which does. Everything else on the chart stays on the hard pen.
+    /// Returns false if GDI+ will not start, and the caller then rules it the
+    /// old way.
+    unsafe fn softened(
+        dc: HDC,
+        points: &[POINT],
+        shade: COLORREF,
+        width: f32,
+        dash: Option<&str>,
+    ) -> bool {
+        use windows::Win32::Graphics::GdiPlus::*;
+        if points.len() < 2 {
+            return false;
+        }
+        if !started() {
+            return false;
+        }
+        let mut graphics: *mut GpGraphics = std::ptr::null_mut();
+        if GdipCreateFromHDC(dc, &mut graphics) != Status(0) || graphics.is_null() {
+            return false;
+        }
+        let mut pen: *mut GpPen = std::ptr::null_mut();
+        // COLORREF is 0x00BBGGRR; GDI+ wants 0xAARRGGBB.
+        let raw = shade.0;
+        let argb = 0xFF00_0000
+            | ((raw & 0x0000_00FF) << 16)
+            | (raw & 0x0000_FF00)
+            | ((raw & 0x00FF_0000) >> 16);
+        let made = GdipCreatePen1(argb, width.max(1.0), Unit(2), &mut pen) == Status(0)
+            && !pen.is_null();
+        let mut drew = false;
+        if made {
+            // The same ratios the hard pen uses, in multiples of the width.
+            let pattern: &[f32] = match dash {
+                Some("dot") => &[1.0, 3.0],
+                Some("dash") => &[4.0, 3.0],
+                Some("lgDash") => &[8.0, 3.0],
+                Some("dashDot") => &[4.0, 3.0, 1.0, 3.0],
+                Some("lgDashDot") => &[8.0, 3.0, 1.0, 3.0],
+                Some("lgDashDotDot") => &[8.0, 3.0, 1.0, 3.0, 1.0, 3.0],
+                Some("sysDash") => &[3.0, 1.0],
+                Some("sysDot") => &[1.0, 1.0],
+                Some("sysDashDot") => &[3.0, 1.0, 1.0, 1.0],
+                Some("sysDashDotDot") => &[3.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                _ => &[],
+            };
+            if !pattern.is_empty() {
+                let _ = GdipSetPenDashArray(pen, pattern.as_ptr(), pattern.len() as i32);
+            }
+            let _ = GdipSetSmoothingMode(graphics, SmoothingMode(4));
+            let held: Vec<Point> = points.iter().map(|at| Point { X: at.x, Y: at.y }).collect();
+            drew =
+                GdipDrawLinesI(graphics, pen, held.as_ptr(), held.len() as i32) == Status(0);
+            let _ = GdipDeletePen(pen);
+        }
+        let _ = GdipDeleteGraphics(graphics);
+        drew
+    }
+
     unsafe fn ruling_pen(shade: COLORREF, width: i32, dash: Option<&str>) -> HPEN {
         let pattern: &[u32] = match dash {
             Some("dot") => &[1, 3],
@@ -2976,22 +3063,38 @@ mod windows_draw {
                 width,
                 line.dash.as_deref(),
             );
-            let held = SelectObject(dc, pen);
             // A gap in the data breaks the line rather than being read as a
-            // zero, which is what `dispBlanksAs="gap"` asks for.
-            let mut drawing = false;
+            // zero, which is what `dispBlanksAs="gap"` asks for, so the curve
+            // comes out as one run of points per unbroken stretch.
+            let mut runs: Vec<Vec<POINT>> = Vec::new();
             for (index, value) in series.values.iter().enumerate() {
                 match value {
                     Some(value) => {
-                        let (x, y) = (across_at(index), up_at(*value));
-                        if drawing {
-                            let _ = LineTo(dc, x, y);
-                        } else {
-                            let _ = MoveToEx(dc, x, y, None);
-                            drawing = true;
+                        let at = POINT { x: across_at(index), y: up_at(*value) };
+                        match runs.last_mut() {
+                            Some(run) if !run.is_empty() => run.push(at),
+                            _ => runs.push(vec![at]),
                         }
                     }
-                    None => drawing = false,
+                    None => runs.push(Vec::new()),
+                }
+            }
+            let soften = std::env::var("OXI_XLSX_HARD_CURVE").is_err();
+            let held = SelectObject(dc, pen);
+            for run in runs.iter().filter(|run| run.len() > 1) {
+                let softly = soften
+                    && softened(
+                        dc,
+                        run,
+                        colour(Some(&line.color), 0x0000_0000),
+                        (line.width as f32 / super::EMU) * scale,
+                        line.dash.as_deref(),
+                    );
+                if !softly {
+                    let _ = MoveToEx(dc, run[0].x, run[0].y, None);
+                    for at in &run[1..] {
+                        let _ = LineTo(dc, at.x, at.y);
+                    }
                 }
             }
             SelectObject(dc, held);
@@ -3827,6 +3930,53 @@ mod windows_draw {
         SetTextColor(dc, COLORREF(0x0000_0000));
     }
 
+    /// Replay an enhanced metafile with its edges softened.
+    ///
+    /// GDI+ takes an HENHMETAFILE and walks the same records, but through its
+    /// own pipeline, so a sloped line comes out anti-aliased. Returns false if
+    /// GDI+ will not take it, and the caller then plays it through GDI.
+    unsafe fn replayed(dc: HDC, held: HENHMETAFILE, box_: RECT) -> bool {
+        use windows::Win32::Graphics::GdiPlus::*;
+        if !started() {
+            return false;
+        }
+        let mut graphics: *mut GpGraphics = std::ptr::null_mut();
+        if GdipCreateFromHDC(dc, &mut graphics) != Status(0) || graphics.is_null() {
+            return false;
+        }
+        // GDI+ takes ownership of the handle it is given, so it gets a copy:
+        // the caller deletes its own either way.
+        let mut picture: *mut GpMetafile = std::ptr::null_mut();
+        let copied = CopyEnhMetaFileW(held, None);
+        let mut drew = false;
+        if !copied.is_invalid()
+            && GdipCreateMetafileFromEmf(copied, true, &mut picture) == Status(0)
+            && !picture.is_null()
+        {
+            let _ = GdipSetSmoothingMode(graphics, SmoothingMode(4));
+            let _ = GdipSetInterpolationMode(graphics, InterpolationMode(7));
+            let where_ = RectF {
+                X: box_.left as f32,
+                Y: box_.top as f32,
+                Width: (box_.right - box_.left) as f32,
+                Height: (box_.bottom - box_.top) as f32,
+            };
+            drew = GdipDrawImageRectI(
+                graphics,
+                picture.cast(),
+                where_.X as i32,
+                where_.Y as i32,
+                where_.Width as i32,
+                where_.Height as i32,
+            ) == Status(0);
+            let _ = GdipDisposeImage(picture.cast());
+        } else if !copied.is_invalid() {
+            let _ = DeleteEnhMetaFile(copied);
+        }
+        let _ = GdipDeleteGraphics(graphics);
+        drew
+    }
+
     /// Lay a picture into the box its anchors give it.
     ///
     /// The bytes are whatever the file holds — PNG, JPEG, GIF, EMF — and only
@@ -3847,7 +3997,16 @@ mod windows_draw {
         if bytes.starts_with(&[0x01, 0x00, 0x00, 0x00]) {
             let held = SetEnhMetaFileBits(bytes);
             if !held.is_invalid() {
-                let _ = PlayEnhMetaFile(dc, held, &box_);
+                // Played straight, GDI rules every line in the metafile hard.
+                // Excel does not: a column across the graph in
+                // `9fd461bf494a_zuhyo` — which is an EMF, not a chart part —
+                // reads 151, 0, 56 out of Excel's picture and 0, 0, 0 out of
+                // ours. GDI+ replays the same records with the edges softened,
+                // which is what Excel shows, so it is asked first and GDI only
+                // catches what it will not take.
+                if !replayed(dc, held, box_) {
+                    let _ = PlayEnhMetaFile(dc, held, &box_);
+                }
                 let _ = DeleteEnhMetaFile(held);
             }
             return;
