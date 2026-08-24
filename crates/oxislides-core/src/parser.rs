@@ -1074,6 +1074,10 @@ fn parse_slide(
     // both together would compare against the pre-rotation build, not the
     // shipped one.
     let s_grpflip = std::env::var("OXI_GRPFLIP_DISABLE").is_err();
+    // A NESTED group's own box turns and mirrors with its parent, as a
+    // leaf shape already did. Its own flag, so the arm-A proof isolates it
+    // from the leaf-level group flip that shipped before it.
+    let s_grpnest = std::env::var("OXI_GRPNEST_DISABLE").is_err();
     // (origin x, origin y, scale x, scale y, rotation deg, centre x, centre y,
     //  flipH, flipV) -- the group's own turn and mirror, about that centre
     let mut grp_stack: Vec<(f32, f32, f32, f32, f32, f32, f32, bool, bool)> = Vec::new();
@@ -2519,10 +2523,34 @@ fn parse_slide(
                         } else {
                             (0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, false)
                         };
-                        let box_x = base.0 + g_off.0 * base.2;
-                        let box_y = base.1 + g_off.1 * base.3;
+                        let mut box_x = base.0 + g_off.0 * base.2;
+                        let mut box_y = base.1 + g_off.1 * base.3;
                         let box_w = g_ext.0 * base.2;
                         let box_h = g_ext.1 * base.3;
+                        // ★A nested group's own BOX has to turn and mirror with
+                        // its parent, exactly as a leaf shape does. Only the
+                        // leaf did: the flip and the rotation were carried
+                        // forward in the tuple (so the leaf mirrored its
+                        // geometry) while the nested group's box stayed where
+                        // the un-flipped parent would have put it. Shapes
+                        // DIRECTLY in a flipped group therefore landed right and
+                        // shapes one level deeper landed wrong -- d10 s11's
+                        // pizza, whose slice is a direct child and whose
+                        // pepperoni highlights are a level down, came out with
+                        // every pepperoni wearing a tail.
+                        if s_grpnest && (base.7 || base.8 || base.4.abs() > 1e-4) {
+                            let (mut t, mut u) =
+                                (box_x + box_w / 2.0 - base.5, box_y + box_h / 2.0 - base.6);
+                            if base.7 {
+                                t = -t;
+                            }
+                            if base.8 {
+                                u = -u;
+                            }
+                            let (sn, cs) = (base.4.to_radians().sin(), base.4.to_radians().cos());
+                            box_x = base.5 + t * cs - u * sn - box_w / 2.0;
+                            box_y = base.6 + t * sn + u * cs - box_h / 2.0;
+                        }
                         let sx = if g_ch_ext.0 != 0.0 { box_w / g_ch_ext.0 } else { base.2 };
                         let sy = if g_ch_ext.1 != 0.0 { box_h / g_ch_ext.1 } else { base.3 };
                         if let Some(top) = grp_stack.last_mut() {
