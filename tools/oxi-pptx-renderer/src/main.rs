@@ -2389,6 +2389,12 @@ fn cellblock_on() -> bool {
     std::env::var("OXI_CELLBLOCK_DISABLE").is_err()
 }
 
+/// A cell centres on its line's VISIBLE width unless this is set, which restores
+/// counting a trailing space as ink.
+fn celltrim_on() -> bool {
+    std::env::var("OXI_CELLTRIM_DISABLE").is_err()
+}
+
 /// A table cell wraps its text unless this is set, which restores drawing each
 /// paragraph as one line however wide the column is.
 ///
@@ -3683,8 +3689,27 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             Some((&p.runs[..], 0)),
                                         );
                                         for line in &lines {
+                                            // ★A trailing space is not ink and
+                                            // must not be centred on. The text
+                                            // FRAME path has excluded it since
+                                            // S-ADVEXACT ("trailing spaces
+                                            // excluded; final visible char
+                                            // included"); the cell path still
+                                            // measured the whole line, so a
+                                            // wrapped line that ends on a space
+                                            // was centred half a space too far
+                                            // LEFT. d25 s7: PowerPoint's first
+                                            // body line has its ink centred at
+                                            // 145.28 and Oxi's at 143.84 --
+                                            // 1.44pt, against half of 11pt
+                                            // Arial's space (1.53).
+                                            let measured = if celltrim_on() {
+                                                line.trim_end()
+                                            } else {
+                                                line.as_str()
+                                            };
                                             let lw = measure_text_width(
-                                                mem_dc, line, fs, &family, bold, scale,
+                                                mem_dc, measured, fs, &family, bold, scale,
                                             );
                                             let lx = match p.alignment {
                                                 Some(SlideAlignment::Center) => {
