@@ -609,6 +609,20 @@ pub(crate) fn advances(
     })
 }
 
+/// The room a right-aligned italic line keeps past its own advance.
+///
+/// Zero for an upright face. See `LineCounter::slant_room`.
+#[cfg(windows)]
+pub(crate) fn slant_room(face: &str, points: f32, bold: bool, italic: bool, line: &str) -> i32 {
+    if !italic {
+        return 0;
+    }
+    let Some(last) = line.chars().next_back() else {
+        return 0;
+    };
+    held(|counter| Some(counter.slant_room(face, points, bold, last))).unwrap_or(0)
+}
+
 /// Where each character of a shape's text lands, from the left of the line.
 ///
 /// The advances are the font's own, scaled by the exact em rather than the
@@ -1720,6 +1734,57 @@ impl LineCounter {
             }
         }
         Some(letters.iter().map(|letter| known[letter]).collect())
+    }
+
+    /// How far a slanted glyph's ink leans past the end of its own advance.
+    ///
+    /// A right-aligned italic line sits further left in Excel than the advance
+    /// alone would put it — measured on one glyph at a time by
+    /// `_xlsx_italic_right.py`, which reads a LEFT-aligned arm beside every
+    /// right-aligned one: the left arms are ink for ink identical, so it is the
+    /// width Excel reserves and not the rasterising that differs. The device
+    /// knows the amount as the glyph's negative right bearing (`abcC`): ＭＳ Ｐ
+    /// ゴシック, ＭＳ 明朝 and Times New Roman read 2 pixels at 11 point and 4
+    /// at 20, which is exactly what Excel leaves. (Century, メイリオ, 游ゴシック
+    /// and 20-point Calibri want one more; none of them is italic anywhere in
+    /// the corpus, and no metric the device offers tells them apart yet.)
+    fn slant_room(&self, face: &str, points: f32, bold: bool, letter: char) -> i32 {
+        use windows::core::PCWSTR;
+        use windows::Win32::Graphics::Gdi::*;
+        let pixels = (points * 96.0 / 72.0).round();
+        unsafe {
+            let name: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+            let font = CreateFontW(
+                -(pixels as i32),
+                0,
+                0,
+                0,
+                if bold { 700 } else { 400 },
+                1,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                ANTIALIASED_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                PCWSTR(name.as_ptr()),
+            );
+            if font.is_invalid() {
+                return 0;
+            }
+            let previous = SelectObject(self.dc, font);
+            let mut abc = ABC::default();
+            let at = letter as u32;
+            let ok = GetCharABCWidthsW(self.dc, at, at, &mut abc).as_bool();
+            SelectObject(self.dc, previous);
+            let _ = DeleteObject(font);
+            if ok {
+                (-abc.abcC).max(0)
+            } else {
+                0
+            }
+        }
     }
 
     fn lines(
@@ -5502,9 +5567,14 @@ mod windows_draw {
                             let spread =
                                 placed == Align::Spread && pieces.len() > 1 && room > width;
                             let middle = area.left + super::halfway(room - width, cell.style.wrap_text);
+                            // An italic line leans past its advance, and Excel
+                            // keeps room for the lean when the line is put
+                            // against the right edge.
+                            let lean = super::slant_room(
+                                name, points, bold, cell.style.italic, line);
                             let left = match placed {
                                 Align::Left => area.left + reserved.0,
-                                Align::Right => area.right - width - reserved.1,
+                                Align::Right => area.right - width - lean - reserved.1,
                                 Align::Centre => middle + (reserved.0 - reserved.1) / 2,
                                 Align::Spread if room > width => middle,
                                 Align::Spread => area.left,
