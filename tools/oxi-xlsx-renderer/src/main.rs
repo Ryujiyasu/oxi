@@ -348,6 +348,16 @@ fn row_pixels(
                 None => default_px,
             };
         };
+        // A cell that names a LATIN face keeps the workbook's Japanese face
+        // beside it — xlsx has one slot and a Japanese cell wears two — and
+        // the row has to hold whichever is taller (`speaks_japanese`).
+        let font_px = match sheet.normal_font.as_ref() {
+            Some((normal, size)) if !speaks_japanese(face) => {
+                row_defaults::font_default_row_px(normal, *size)
+                    .map_or(font_px, |theirs| theirs.max(font_px))
+            }
+            _ => font_px,
+        };
         let text = cell_text(&cell.value, &cell.style).replace("\r\n", "\n");
         let text = text.as_str();
         if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
@@ -1187,6 +1197,75 @@ fn installed(face: &str) -> bool {
 
 #[cfg(not(windows))]
 fn installed(_face: &str) -> bool {
+    true
+}
+
+/// Whether a face can set Japanese at all.
+///
+/// A Japanese cell carries TWO faces — the 「日本語用」 and the 「英数字用」 of
+/// the font dialog — and xlsx has a slot for only one, so a cell that names a
+/// Latin face keeps the workbook's Japanese face beside it. Excel settles the
+/// row's height with both in hand: `_xlsx_row_companion.py` dresses a row in
+/// one face, sets only the Latin one on a cell, and reads the row back — 42
+/// arms, and every one is `max(the Latin face's line, the Japanese face's)`.
+/// It is what gives `fies_t2`'s Century 9pt notes 21 pixels where Century's own
+/// line is 18: that workbook's Normal is Terminal 14, whose line is 21.
+#[cfg(windows)]
+fn speaks_japanese(face: &str) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Graphics::Gdi::*;
+    thread_local! {
+        static KNOWN: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(held) = KNOWN.with(|known| known.borrow().get(face).copied()) {
+        return held;
+    }
+    let held = unsafe {
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(screen);
+        let name: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+        let font = CreateFontW(
+            -16,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            ANTIALIASED_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(name.as_ptr()),
+        );
+        let previous = SelectObject(dc, font);
+        // One kana is enough: a face that has it sets Japanese, and a face
+        // that does not leaves the mark GGI_MARK_NONEXISTING_GLYPHS puts there.
+        let letters: Vec<u16> = "あ".encode_utf16().chain(Some(0)).collect();
+        let mut glyphs = [0u16; 1];
+        let read = GetGlyphIndicesW(
+            dc,
+            PCWSTR(letters.as_ptr()),
+            1,
+            glyphs.as_mut_ptr(),
+            GGI_MARK_NONEXISTING_GLYPHS,
+        );
+        let answer = read as i64 != GDI_ERROR as i64 && glyphs[0] != 0xFFFF;
+        SelectObject(dc, previous);
+        let _ = DeleteObject(font);
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        answer
+    };
+    KNOWN.with(|known| known.borrow_mut().insert(face.to_string(), held));
+    held
+}
+
+#[cfg(not(windows))]
+fn speaks_japanese(_face: &str) -> bool {
     true
 }
 
