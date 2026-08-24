@@ -42,15 +42,23 @@ for f in sorted(os.listdir(DOCS_DIR)):
         continue
     by_id[f[:-5]] = os.path.join(DOCS_DIR, f)
 
+# ★an EMPTY id (a bare ".json") made the prefix fallback below match every
+# docx -- `"".startswith("")` is true -- so it measured the alphabetically first
+# document against an empty Word truth and logged a 0.0000 FAIL. `gen`/`gen2`/
+# `test` did the same against `gen2_*.docx` etc. Those four phantom rows are why
+# this gate has always reported "PASS 93" on a set whose real baseline is 97/97.
+# The DELTA between arms was never affected, but the absolute count was.
 ids = sorted(d[:-5] for d in os.listdir(WORD_DIR) if d.endswith(".json")
-             and not d.startswith("_"))
+             and not d.startswith("_") and len(d) > 5)
 todo = ids[START:START + COUNT]
 n_a = n_b = 0
 with open(LOG, "a", encoding="utf-8") as log:
     for did in todo:
         path = by_id.get(did)
         if path is None:
-            cands = [v for k, v in by_id.items() if k.startswith(did.split("_")[0])]
+            # the prefix must be the WHOLE id before the first underscore, or
+            # short ids swallow unrelated documents (`gen` -> `gen2_*.docx`)
+            cands = [v for k, v in by_id.items() if k.split("_")[0] == did]
             path = cands[0] if cands else None
         if path is None:
             log.write("%s\tNO_DOCX\n" % did); log.flush(); continue
