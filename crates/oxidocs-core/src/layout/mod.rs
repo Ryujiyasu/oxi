@@ -33630,12 +33630,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // is recorded here rather than coded.
                                                 let s1208 =
                                                     std::env::var("OXI_S1208_DISABLE").is_err();
+                                                let s1209 =
+                                                    std::env::var("OXI_S1209_DISABLE").is_err();
                                                 let yaku = if s1174_yakucomp {
                                                     let mut has_a = false;
                                                     let mut b = 0.0f32;
                                                     let mut last_a = false;
                                                     let mut saw_mark = false;
                                                     let mut n_a = 0.0f32;
+                                                    let mut n_marks = 0.0f32;
                                                     let mut last_ch: Option<char> = None;
                                                     for (i, c) in current_line_chars
                                                         .iter()
@@ -33662,26 +33665,67 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                 continue;
                                                             }
                                                             b += 0.5 * c.natural_advance;
+                                                            n_marks += 1.0;
                                                         } else if kinsoku::cell_yaku_type_a(c.ch) {
                                                             has_a = true;
                                                             saw_mark = true;
                                                             last_a = true;
                                                             n_a += 1.0;
+                                                            n_marks += 1.0;
                                                         }
                                                     }
-                                                    if s1208 && last_ch == Some('\u{3000}') {
-                                                        (0.5 * font_size * n_a).min(1.5 * font_size) + b
-                                                    } else if s1198 {
-                                                        if !saw_mark {
-                                                            0.0
-                                                        } else if last_a {
-                                                            0.5 * font_size
+                                                    // S1209 (2026-08-24, opt-out `OXI_S1209_DISABLE`; reachable
+                                                    // only under the opt-in `OXI_YAKUCOMP`): ONE rule for the
+                                                    // whole pool, replacing S1174's additive form and S1198's
+                                                    // last-mark form.
+                                                    //
+                                                    //   a line's mark credit is HALF AN EM, flat -- however many
+                                                    //   marks it carries and whatever their class -- EXCEPT when
+                                                    //   the character immediately before the one being squeezed
+                                                    //   in is a FULLWIDTH SPACE or an OPENING BRACKET, and then
+                                                    //   every mark on the line lends its own half em, capped at
+                                                    //   one and a half. A fullwidth space is not itself a mark;
+                                                    //   an opening bracket is.
+                                                    //
+                                                    // S1198 read 'the last mark is type B' where the truth is 'a
+                                                    // releasing character stands next to the squeeze': its arms
+                                                    // put a mark every third character, so the last mark was
+                                                    // always within three of the line end and the two readings
+                                                    // could not be told apart. 3a4f9fbe p80's 第５９条 cell is
+                                                    // where they differ -- one comma and one opening bracket
+                                                    // fourteen characters from the end -- and Word wraps the line
+                                                    // that S1198's full em let Oxi pack one more character into.
+                                                    // DERIVED with _pb_bodyyaku4/6/8_gen.py (35 arms, body AND
+                                                    // cell, identical readings), then STATED AS A PREDICTION and
+                                                    // tested against fresh arms in _pb_bodyyaku9_gen.py: nA 0..3
+                                                    // x nB 0..2 x the releasing character in {ordinary, fullwidth
+                                                    // space, opening bracket, period}, 40 arms, 40 of 40
+                                                    // predicted exactly, each monotone with a one-step flip
+                                                    // bracket. Word COM throughout, the paragraph's right indent
+                                                    // swept in 0.25pt steps, MS Mincho 10.5pt, jc=both, compat 11.
+                                                    let released = last_ch == Some('\u{3000}')
+                                                        || last_ch.map_or(false, kinsoku::cell_yaku_type_b);
+                                                    if !s1209 {
+                                                        if s1208 && last_ch == Some('\u{3000}') {
+                                                            (0.5 * font_size * n_a).min(1.5 * font_size) + b
+                                                        } else if s1198 {
+                                                            if !saw_mark {
+                                                                0.0
+                                                            } else if last_a {
+                                                                0.5 * font_size
+                                                            } else {
+                                                                (b + if has_a { 0.5 * font_size } else { 0.0 })
+                                                                    .min(font_size)
+                                                            }
                                                         } else {
-                                                            (b + if has_a { 0.5 * font_size } else { 0.0 })
-                                                                .min(font_size)
+                                                            (if has_a { 0.5 * font_size } else { 0.0 }) + b
                                                         }
+                                                    } else if released {
+                                                        (0.5 * font_size * n_marks).min(1.5 * font_size)
+                                                    } else if n_marks > 0.0 {
+                                                        0.5 * font_size
                                                     } else {
-                                                        (if has_a { 0.5 * font_size } else { 0.0 }) + b
+                                                        0.0
                                                     }
                                                 } else {
                                                     0.0
