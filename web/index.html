@@ -1293,7 +1293,7 @@ function showBackstagePanel(panel) {
     if (panel === 'info') {
         main.innerHTML = `<h2>${t('bsInfo')}</h2>
             <div class="bs-section">
-                <div class="bs-row"><span class="bs-icon">&#x1F4C4;</span><div><div class="bs-label">${currentFileType ? (currentFileType.toUpperCase() + ' Document') : 'No file open'}</div><div class="bs-desc">Oxi Document Engine v0.1</div></div></div>
+                <div class="bs-row"><span class="bs-icon">&#x1F4C4;</span><div><div class="bs-label">${currentFileType ? (currentFileType.toUpperCase() + ' Document') : 'No file open'}</div><div class="bs-desc">Oxi Document Engine v0.8</div></div></div>
             </div>`;
     } else if (panel === 'settings') {
         const aiProvider = localStorage.getItem('oxi-ai-provider') || 'none';

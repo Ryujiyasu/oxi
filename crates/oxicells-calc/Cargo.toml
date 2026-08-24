@@ -1,6 +1,6 @@
 [package]
 name = "oxicells-calc"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
 description = "Excel-compatible formula recalculation engine: tokenizer, AST, dependency graph, topological recalc"

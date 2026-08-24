@@ -1,13 +1,13 @@
 [package]
 name = "oxidocs-core"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2021"
 license = "MPL-2.0"
 description = "Word-compatible .docx parser, layout and rendering engine"
 repository = "https://gitlab.com/Ryujiyasu/oxi"
 
 [dependencies]
-oxidocs-common = { path = "../oxidocs-common", version = "0.1.0" }
+oxidocs-common = { path = "../oxidocs-common", version = "0.8.0" }
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }

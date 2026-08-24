@@ -1,6 +1,6 @@
 [package]
 name = "oxidocs-wasm"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "WebAssembly bindings for Oxidocs — Word-compatible .docx parsing, layout, rendering and PDF export"
