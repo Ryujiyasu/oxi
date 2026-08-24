@@ -2123,6 +2123,24 @@ pub(crate) fn turned_in_a_stack(letter: char) -> bool {
     )
 }
 
+/// Half of a centred line's leftover, rounded Excel's way.
+///
+/// The odd pixel goes to the LEFT of the text — and to the RIGHT when the cell
+/// wraps. `_xlsx_center_across.py` walks a column a pixel at a time so the
+/// leftover runs through odd and even: 14 widths in ＭＳ Ｐゴシック 12pt with
+/// 「一般競争入札（総合評価）」 and 14 in ＭＳ 明朝 11pt with 「契約の方法」, and
+/// the wrapping arms step a pixel before the plain ones every time. It is what
+/// put the right-hand column of `procurement-plan_outline_01` — every row of
+/// it — one pixel out.
+pub(crate) fn halfway(spare: i32, wraps: bool) -> i32 {
+    let half = spare as f32 / 2.0;
+    if wraps {
+        half.floor() as i32
+    } else {
+        half.ceil() as i32
+    }
+}
+
 /// Where the text sits across a cell. Excel puts numbers to the right and text
 /// to the left unless the cell says otherwise.
 /// How a table dresses one of its cells: Excel paints this, and no cell inside
@@ -5245,7 +5263,7 @@ mod windows_draw {
                                     }
                                 }
                             }
-                            let middle = area.left + ((room - width) as f32 / 2.0).ceil() as i32;
+                            let middle = area.left + super::halfway(room - width, cell.style.wrap_text);
                             let mut x = match placed {
                                 Align::Left => area.left,
                                 Align::Right => area.right - width,
@@ -5483,11 +5501,10 @@ mod windows_draw {
                             let pieces = super::distribution(line);
                             let spread =
                                 placed == Align::Spread && pieces.len() > 1 && room > width;
-                            let middle = area.left + ((room - width) as f32 / 2.0).ceil() as i32;
+                            let middle = area.left + super::halfway(room - width, cell.style.wrap_text);
                             let left = match placed {
                                 Align::Left => area.left + reserved.0,
                                 Align::Right => area.right - width - reserved.1,
-                                // The odd pixel goes to the left of the text.
                                 Align::Centre => middle + (reserved.0 - reserved.1) / 2,
                                 Align::Spread if room > width => middle,
                                 Align::Spread => area.left,
@@ -5841,6 +5858,20 @@ mod tests {
         assert_eq!(lines, vec!["one", "", "two"]);
         let one = super::wrapped_lines("Calibri", 11.0, false, false, "", None);
         assert_eq!(one, vec![""]);
+    }
+
+    /// Which way a centred line's leftover pixel falls. A wrapping cell keeps
+    /// it on the right, a plain one on the left — 28 arms in two faces walked
+    /// a pixel at a time by `_xlsx_center_across.py`.
+    #[test]
+    fn a_wrapping_cell_keeps_the_odd_pixel_on_the_right() {
+        assert_eq!(super::halfway(4, false), 2);
+        assert_eq!(super::halfway(4, true), 2);
+        assert_eq!(super::halfway(5, false), 3);
+        assert_eq!(super::halfway(5, true), 2);
+        // A line wider than its room hangs the same way round.
+        assert_eq!(super::halfway(-5, false), -2);
+        assert_eq!(super::halfway(-5, true), -3);
     }
 
     /// A stacked cell is the same thing as text with a break after every
