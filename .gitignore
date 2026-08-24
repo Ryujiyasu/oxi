@@ -93,3 +93,6 @@ AGENTS_STATE.json
 /x_p*.png
 /p_p*.png
 *.tmp
+editors/vscode/media/
+editors/vscode/node_modules/
+editors/vscode/*.vsix

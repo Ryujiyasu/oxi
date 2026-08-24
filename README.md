@@ -201,6 +201,7 @@ Beyond .docx rendering (the core mission), Oxi also ships:
 - **Rich formatting** — run/paragraph shading, character borders, text effects (shadow / emboss / imprint / outline), small caps, drop caps, tab leaders
 - **Hanko / Inkan** — Japanese digital stamp generation + PAdES PDF signatures
 - **100% client-side** — all processing runs in WebAssembly; nothing leaves your browser
+- **VS Code extension** — open .docx / .xlsx / .pptx inside the editor, rendered by the same WebAssembly build ([editors/vscode](editors/vscode))
 
 These share the IR and the font engines, but they are not where Oxi's measured differentiation lives — the rendering fidelity above is.
 
@@ -363,7 +364,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 - **Performance** — native-speed document parsing and layout in the browser
 - **Memory safety** — no buffer overflows, no use-after-free, no data races
-- **Small binary** — the compiled .wasm is ~1.4 MB for the entire suite
+- **One artifact** — a single ~24 MB .wasm (9.8 MB gzipped over the wire) carries the whole suite: four format engines, layout, PDF export and the bundled font metric tables
 - **Zero server cost** — all processing runs client-side, no backend needed
 - **Privacy** — documents never leave the user's device
 

@@ -1,0 +1,57 @@
+{
+  "name": "oxi-office-viewer",
+  "displayName": "Oxi — Word / Excel / PowerPoint viewer",
+  "description": "Open .docx, .xlsx and .pptx files inside VS Code, rendered by the Oxi engine — a Rust + WebAssembly Office renderer measured page-by-page against Microsoft Office itself. Nothing is uploaded.",
+  "version": "0.8.0",
+  "publisher": "ryujiyasu",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "docx",
+    "xlsx",
+    "pptx",
+    "word",
+    "office",
+    "japanese"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/Ryujiyasu/oxi.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://gitlab.com/Ryujiyasu/oxi",
+  "bugs": {
+    "url": "https://gitlab.com/Ryujiyasu/oxi/-/issues"
+  },
+  "main": "./extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "oxi.officeViewer",
+        "displayName": "Oxi Office viewer",
+        "selector": [
+          { "filenamePattern": "*.docx" },
+          { "filenamePattern": "*.xlsx" },
+          { "filenamePattern": "*.pptx" }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "oxi.openWithDefaultEditor",
+        "title": "Oxi: Reopen this file with VS Code's default editor"
+      }
+    ]
+  },
+  "scripts": {
+    "sync-web": "node scripts/sync-web.js",
+    "package": "npm run sync-web && vsce package"
+  }
+}
