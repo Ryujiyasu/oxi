@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+"""Whose font size is the "character" of a *Chars indent?
+
+`_pb_indchars_gen.py` varied the paragraph mark's size and the run's size
+TOGETHER, so it could only say that `firstLineChars` shrank with the size while
+`leftChars` did not. Three candidates are still tangled: the STYLE's size, the
+PARAGRAPH MARK's size (the rPr inside pPr) and the FIRST RUN's size.
+
+So vary them one at a time. Style "a" is 10.5pt in the base document; every arm
+carries a single *Chars indent so the unit can be read straight off the first
+glyph's origin.
+
+    python _pb_charunit_gen.py
+"""
+import os
+import re
+import shutil
+import sys
+import zipfile
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+OUT = os.path.join(REPO, "pipeline_data", "_pb_charunit")
+SRC = os.path.join(REPO, "tools", "golden-test", "documents", "docx",
+                   "tokyoshugyo_000599795.docx")
+CELL_TW, MAR_TW = 6000, 108
+W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"')
+# (mark size, run size) in half-points; None = the attribute is absent
+COMBOS = [(18, 18), (18, 21), (21, 18), (None, 18), (None, 21)]
+INDS = [("leftChars", '<w:ind w:leftChars="100"/>'),
+        ("firstLineChars", '<w:ind w:firstLineChars="100"/>')]
+
+
+def sz(v):
+    return '<w:sz w:val="%d"/>' % v if v else ""
+
+
+def build():
+    os.makedirs(OUT, exist_ok=True)
+    blocks, index = [], []
+    for kind, ind in INDS:
+        for mark, run in COMBOS:
+            index.append((kind, mark, run))
+            blocks.append(
+                '<w:tbl><w:tblPr><w:tblW w:w="%d" w:type="dxa"/>'
+                '<w:tblLayout w:type="fixed"/><w:tblCellMar>'
+                '<w:left w:w="%d" w:type="dxa"/><w:right w:w="%d" w:type="dxa"/>'
+                '</w:tblCellMar><w:tblBorders>'
+                '<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                '</w:tblBorders></w:tblPr>'
+                '<w:tblGrid><w:gridCol w:w="%d"/></w:tblGrid>'
+                '<w:tr><w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/></w:tcPr>'
+                '<w:p><w:pPr><w:pStyle w:val="a"/><w:jc w:val="left"/>%s'
+                '<w:rPr><w:rFonts w:hint="eastAsia"/>%s</w:rPr></w:pPr>'
+                '<w:r><w:rPr><w:rFonts w:hint="eastAsia"/>%s</w:rPr>'
+                '<w:t>甲亜亜亜</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+                '<w:p><w:pPr><w:rPr><w:sz w:val="16"/></w:rPr></w:pPr></w:p>'
+                % (CELL_TW, MAR_TW, MAR_TW, CELL_TW, CELL_TW, ind, sz(mark), sz(run)))
+    doc = zipfile.ZipFile(SRC).read("word/document.xml").decode("utf-8")
+    sect = re.search(r"<w:sectPr[^>]*>.*?</w:sectPr>", doc, re.S).group(0)
+    sect = re.sub(r"<w:footerReference[^>]*/>", "", sect)
+    body = "<w:body>" + "".join(blocks) + sect + "</w:body>"
+    new = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+           '<w:document %s>%s</w:document>' % (W_NS, body))
+    dst = os.path.join(OUT, "charunit.docx")
+    shutil.copyfile(SRC, dst)
+    zin = zipfile.ZipFile(SRC)
+    zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+        if item.filename == "word/document.xml":
+            data = new.encode("utf-8")
+        zout.writestr(item, data)
+    zout.close()
+    return dst, index
+
+
+def export(docx):
+    import win32com.client as wc
+    pdf = os.path.splitext(docx)[0] + ".pdf"
+    app = wc.Dispatch("Word.Application")
+    app.Visible = False
+    try:
+        d = app.Documents.Open(os.path.abspath(docx), ReadOnly=True)
+        d.ExportAsFixedFormat(OutputFileName=os.path.abspath(pdf),
+                              ExportFormat=17, OpenAfterExport=False)
+        d.Close(False)
+    finally:
+        app.Quit()
+    return pdf
+
+
+def measure(pdf, index):
+    import fitz
+    doc = fitz.open(pdf)
+    heads, rules = [], []
+    for page in doc:
+        for d in page.get_drawings():
+            for it in d["items"]:
+                if it[0] == "l" and abs(it[1].x - it[2].x) < 0.4 and abs(it[1].y - it[2].y) > 3:
+                    rules.append(round((it[1].x + it[2].x) / 2, 2))
+                elif it[0] == "re" and it[1].width < 0.9 and it[1].height > 3:
+                    rules.append(round(it[1].x0, 2))
+        rows = []
+        for b in page.get_text("rawdict")["blocks"]:
+            if b["type"] != 0:
+                continue
+            for l in b["lines"]:
+                ch = sorted([c for s in l["spans"] for c in s["chars"]],
+                            key=lambda c: c["origin"][0])
+                if ch:
+                    rows.append((round(l["bbox"][1], 1), ch))
+        for _, ch in sorted(rows, key=lambda t: t[0]):
+            if ch[0]["c"] == "甲":
+                heads.append(ch[0]["origin"][0])
+    inner = (min(rules) if rules else 0.0) + MAR_TW / 20.0
+    print("cell inner edge %.2f   style size 10.5" % inner)
+    print("   attribute        mark   run    x0      unit    follows")
+    for (kind, mark, run), x in zip(index, heads):
+        u = x - inner - 0.24            # 0.24 = the zero-indent baseline
+        who = ("style/mark 10.5" if abs(u - 10.5) < 0.35 else
+               "9pt" if abs(u - 9.0) < 0.35 else "?")
+        print("   %-15s %-6s %-5s %7.2f  %6.2f  %s"
+              % (kind, mark / 2 if mark else "-", run / 2, x, u, who))
+
+
+if __name__ == "__main__":
+    docx, index = build()
+    measure(export(docx), index)

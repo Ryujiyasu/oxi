@@ -21038,8 +21038,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     ///   no character grid  -> the FONT SIZE (sz=21 gives 10.56pt, sz=18 gives 9.00)
     ///   docGrid charSpace  -> the GRID PITCH, fs + charSpace/4096 (10.80 / 9.36 at
     ///                         charSpace=1453) -- the same additive law as S1210.
-    /// `firstLineChars` scales with the FIRST RUN's size; `leftChars` follows the
-    /// paragraph's own default size (it stayed 10.56 in both size arms).
+    /// WHOSE size (`_pb_charunit_gen.py`, 10 arms varying the paragraph MARK's
+    /// rPr and the first RUN's rPr independently, style "a" = 10.5pt):
+    ///   `leftChars`      10.56 in all five combinations -> the STYLE's size,
+    ///                    neither the mark's nor the run's
+    ///   `firstLineChars` 9.00 whenever the RUN is 9pt and 10.56 whenever it is
+    ///                    10.5pt, whatever the mark says -> the FIRST RUN's size
     /// Oxi resolved every `*Chars` at a hardcoded 10.5 before this.
     fn s1214_chars_unit(
         para: &Paragraph,
