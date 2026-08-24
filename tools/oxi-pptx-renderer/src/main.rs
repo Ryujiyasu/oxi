@@ -679,8 +679,8 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     use windows::Win32::Graphics::Gdi::*;
 
     let prst = match sh.shape_type.as_deref() {
-        Some(p @ ("ellipse" | "roundRect" | "homePlate" | "teardrop" | "pie"))
-            if p != "pie" || pie_on() =>
+        Some(p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"))
+            if (p != "pie" || pie_on()) && (p != "chevron" || chevron_on()) =>
         {
             p
         }
@@ -733,6 +733,23 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             let p = map(0.0, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
             line(map(w - d, 0.0)); line(map(w, h / 2.0));
             line(map(w - d, h)); line(map(0.0, h));
+        }
+        "chevron" => {
+            // ECMA-376's `chevron`: `homePlate` with the SAME notch cut out of
+            // its left edge, so a row of them interlocks. `adj` (default 50000)
+            // is the horizontal run of the point as a fraction of the SHORTER
+            // side, exactly as homePlate reads it.
+            //
+            // d35 s17's three process arrows are two of these and one
+            // homePlate, all at 50% alpha -- and a translucent preset used to
+            // lose its outline entirely, so PowerPoint's interlocking arrows
+            // arrived as three plain boxes.
+            let adj = sh.adjustments.get("adj").copied().unwrap_or(50_000.0);
+            let d = (w.min(h) * (adj / 100_000.0)).clamp(0.0, w);
+            let p = map(0.0, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(w - d, 0.0)); line(map(w, h / 2.0));
+            line(map(w - d, h)); line(map(0.0, h));
+            line(map(d, h / 2.0));
         }
         "pie" => {
             // ECMA-376's `pie`: a wedge of the box's ellipse from `adj1` to
@@ -2389,6 +2406,29 @@ fn cellblock_on() -> bool {
     std::env::var("OXI_CELLBLOCK_DISABLE").is_err()
 }
 
+/// A translucent PRESET shape is stroked along its own outline unless this is
+/// set, which restores a rectangle around its box.
+fn presetstroke_on() -> bool {
+    std::env::var("OXI_PRESETSTROKE_DISABLE").is_err()
+}
+
+/// `a:prstGeom prst="chevron"` — ECMA-376's homePlate with the same notch cut
+/// out of its left edge — is implemented and HELD OPT-IN (`OXI_CHEVRON_ENABLE`).
+///
+/// It is right where it is measurable: d35 s17's three process arrows go
+/// **0.9669 -> 0.9912**, past LibreOffice's 0.9853. But d15 s17 is the SAME
+/// template at a different aspect (260.3x52.7 against 202.5x104.3, adj 50000
+/// against 29853) and LOSES 0.0050, and the reason is not understood: with the
+/// chevron in place the three bands tile SEAMLESSLY, while PowerPoint keeps a
+/// visible edge at 256.3 / 469.0 / 680.6 -- exactly where the homePlate's own
+/// sloped edge predicts one (257.25 at y=140). So PowerPoint is not compositing
+/// these three translucent shapes the way stacking them implies, and until that
+/// is measured the geometry stays off. Corpus with it: +0.000064, 4 slides up
+/// and 1 down; without: +0.000034, 2 up and none down.
+fn chevron_on() -> bool {
+    std::env::var("OXI_CHEVRON_ENABLE").is_ok()
+}
+
 /// A cell centres on its line's VISIBLE width unless this is set, which restores
 /// counting a trailing space as ink.
 fn celltrim_on() -> bool {
@@ -3093,6 +3133,20 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 }
                                 let _ = EndPath(mem_dc);
                                 StrokePath(mem_dc).as_bool()
+                            }
+                            // ★A PRESET outline is an outline too. The fill
+                            // above is already clipped to it, so leaving the
+                            // stroke as a rectangle drew a box around a shape
+                            // that had just been cut to an arrow -- d35 s17's
+                            // three process chevrons at 50% alpha came out as
+                            // boxes with a faint wedge inside them. 132 non-rect
+                            // presets over 8 dev decks carry a translucent fill
+                            // and reach this path.
+                            None if presetstroke_on() => {
+                                let _ = BeginPath(mem_dc);
+                                let ok = emit_shape_path(mem_dc, sh, scale);
+                                let _ = EndPath(mem_dc);
+                                ok && StrokePath(mem_dc).as_bool()
                             }
                             None => false,
                         }
