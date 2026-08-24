@@ -1,3 +1,48 @@
+# Oxi CI — the gates the README promises, run on every push.
+#
+# The pixel-fidelity gates (SSIM against Word/PowerPoint's own renders) need a
+# Windows machine with Microsoft Office installed and are run locally before a
+# change is committed; what runs here is everything that does not need Office:
+# the unit/integration suite, clippy, and the WebAssembly build.
+
+stages:
+  - test
+  - deploy
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  CARGO_TERM_COLOR: always
+
+default:
+  image: rust:1.93
+  cache:
+    key: cargo
+    paths:
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - target/
+
+test:
+  stage: test
+  script:
+    - cargo test --workspace --locked
+
+clippy:
+  stage: test
+  script:
+    - rustup component add clippy
+    - cargo clippy --workspace --all-targets --locked
+
+wasm:
+  stage: test
+  script:
+    - curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+    - cd crates/oxidocs-wasm && wasm-pack build --target web --release
+  artifacts:
+    paths:
+      - crates/oxidocs-wasm/pkg/
+    expire_in: 1 week
+
 pages:
   stage: deploy
   script:
