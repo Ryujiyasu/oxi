@@ -3220,6 +3220,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 continue;
                             }
                         }
+                        // S-TEXTROT (2026-08-24): the text of a turned shape is
+                        // laid out in the shape's OWN box, exactly as if `rot`
+                        // were zero, and the whole result is then turned about
+                        // that box's centre. So nothing above this line changes
+                        // -- only the paint does, through one world transform
+                        // that carries the glyphs, the highlight boxes and the
+                        // bullet markers together.
+                        //
+                        // WordArt takes its own path above and stays upright;
+                        // no corpus `prstTxWarp` shape is turned.
+                        let turned_text = begin_turned_text(mem_dc, sh, paragraphs, scale);
                         let (geom_h_ins, geom_v_ins) = geom_text_inset(sh);
                         let left_x =
                             x + ((sh.l_ins + geom_h_ins) as f64 * scale).round() as i32;
@@ -3471,6 +3482,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 }
                             }
                         }
+                        end_turned_text(mem_dc, turned_text);
                     }
                     ShapeContent::Table { table } => {
                         // A DrawingML cell states its own fill, its four
@@ -10107,6 +10119,114 @@ fn gradstroke_on() -> bool {
 /// is set.
 fn presetgrad_on() -> bool {
     std::env::var("OXI_PRESETGRAD_DISABLE").is_err()
+}
+
+/// Turn a shape's TEXT with the shape, for the duration of its text pass.
+///
+/// S-TEXTROT (2026-08-24). `create_font_for_wiu` passes 0 for `CreateFontW`'s
+/// escapement and orientation, so a turned shape's text was always drawn across
+/// the page. d35 slide 34's competitor matrix runs "LOW VALUE 1" / "HIGH VALUE
+/// 1" down each side at -90 degrees, and both reference renderers beat Oxi on
+/// that slide. **174 text shapes over 17 of the 40 dev decks carry a rotation**,
+/// 133 of them exactly +/-90 (d39 56, d40 50, d30 10, d36 9, d19 8, d20 7 ...).
+/// No corpus shape uses `bodyPr@vert` -- this is `a:xfrm@rot` alone.
+///
+/// The model, from the `textrot` probe (17 arms against PowerPoint's own PDF):
+///
+/// * the baseline runs at the shape's `rot`, in the same sense -- read off the
+///   PDF's own span direction at 0 / 90 / 180 / 270, exact.
+/// * the text turns about the UNTURNED box centre. The probe draws a hairline
+///   frame on the same `a:xfrm`, and its ink centre is (360.00, 288.00) at every
+///   angle; rotating each arm's local baseline origin about that point predicts
+///   all 13 measured origins to within 0.13pt.
+/// * ★the text is laid out in the shape's own box FIRST and turned afterwards,
+///   NOT laid out in the turned bounding box. A line too long for the 288pt box
+///   breaks into 2 lines at rot 0 and into 2 lines at rot +/-90 as well -- had
+///   it been wrapping against the turned 72pt width it would have taken many
+///   more. Anchor and alignment likewise stay in the shape's own frame
+///   (`ctr`/`ctr` and `b`/`r` arms both predicted exactly).
+///
+/// Off-axis angles could not be read from the text layer at all: PowerPoint
+/// exports text that is not axis-aligned as vector OUTLINES, so `get_text`
+/// returns nothing for 30 / 45 / 135 / -45. The probe answers those with ink
+/// instead -- turn the rot=0 arm's black pixels about the box centre and the
+/// predicted bounding box must be the one PowerPoint drew. Max error over the
+/// eight turned arms: **0.53pt at 150dpi**, i.e. one device pixel.
+///
+/// So the layout needs no change whatsoever, only the paint. A world transform
+/// carries everything the pass draws -- glyphs, highlight boxes, bullet markers,
+/// underline rules -- where font escapement would have turned only the baseline
+/// of one `TextOut` and left the boxes square.
+#[cfg(windows)]
+unsafe fn begin_turned_text(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    sh: &Shape,
+    paragraphs: &[oxislides_core::ir::SlideParagraph],
+    scale: f64,
+) -> Option<(i32, windows::Win32::Graphics::Gdi::XFORM)> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    if !textrot_on() || sh.rotation == 0.0 || !sh.rotation.is_finite() {
+        return None;
+    }
+    // ★Do not touch the device context for a shape with nothing to draw.
+    // Installing the transform at all moves the shape's own edges by one
+    // SUPERSAMPLED sub-pixel -- d06 slide 31's canvas band is an AutoShape at
+    // rot=180 carrying ZERO paragraphs, and merely bracketing its (empty) text
+    // pass shifted the band's bottom rule and four cell rules by a third of a
+    // final pixel, for -0.0041. Bisected with a scaffold: setting GM_ADVANCED
+    // and restoring it is inert, so it is the transform itself, and a 180-degree
+    // turn maps the box onto itself, leaving only the rounding. Nothing is drawn
+    // for an empty paragraph list, so the guard costs nothing and the question
+    // of what GDI re-rounds does not arise.
+    if paragraphs.is_empty() {
+        return None;
+    }
+    let (sn, cs) = (sh.rotation as f64).to_radians().sin_cos();
+    let cx = (sh.x as f64 + sh.width as f64 / 2.0) * scale;
+    let cy = (sh.y as f64 + sh.height as f64 / 2.0) * scale;
+    // Screen y grows downward, so a clockwise turn is [[c,-s],[s,c]]; GDI reads
+    // the matrix transposed (x' = x*eM11 + y*eM21 + eDx).
+    let m = XFORM {
+        eM11: cs as f32,
+        eM12: sn as f32,
+        eM21: -sn as f32,
+        eM22: cs as f32,
+        eDx: (cx - cs * cx + sn * cy) as f32,
+        eDy: (cy - sn * cx - cs * cy) as f32,
+    };
+    let old_mode = SetGraphicsMode(dc, GM_ADVANCED);
+    if old_mode == 0 {
+        return None;
+    }
+    let mut old = XFORM::default();
+    if !GetWorldTransform(dc, &mut old).as_bool() {
+        SetGraphicsMode(dc, GRAPHICS_MODE(old_mode));
+        return None;
+    }
+    if !SetWorldTransform(dc, &m).as_bool() {
+        SetGraphicsMode(dc, GRAPHICS_MODE(old_mode));
+        return None;
+    }
+    Some((old_mode, old))
+}
+
+/// Put back whatever `begin_turned_text` replaced.
+#[cfg(windows)]
+unsafe fn end_turned_text(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    saved: Option<(i32, windows::Win32::Graphics::Gdi::XFORM)>,
+) {
+    use windows::Win32::Graphics::Gdi::*;
+    if let Some((mode, old)) = saved {
+        let _ = SetWorldTransform(dc, &old);
+        SetGraphicsMode(dc, GRAPHICS_MODE(mode));
+    }
+}
+
+/// A shape's text is turned with the shape unless this is set.
+fn textrot_on() -> bool {
+    std::env::var("OXI_TEXTROT_DISABLE").is_err()
 }
 
 /// A shape gradient rides its shape's rotation unless this is set.
