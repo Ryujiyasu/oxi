@@ -12,6 +12,12 @@ stages:
 variables:
   CARGO_HOME: $CI_PROJECT_DIR/.cargo
   CARGO_TERM_COLOR: always
+  # The shared runners are small; oxidocs-core is a large crate. Debug info off
+  # and a bounded job count keep rustc inside the runner's memory.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_BUILD_JOBS: "2"
 
 default:
   image: rust:1.93
@@ -26,12 +32,14 @@ test:
   stage: test
   script:
     - cargo test --workspace --locked
+  timeout: 1h
 
 clippy:
   stage: test
   script:
     - rustup component add clippy
     - cargo clippy --workspace --all-targets --locked
+  timeout: 1h
 
 wasm:
   stage: test
@@ -43,8 +51,11 @@ wasm:
       - crates/oxidocs-wasm/pkg/
     expire_in: 1 week
 
+# The site is a copy of docs/ and does not depend on the Rust jobs, so it
+# deploys on its own rather than waiting behind (or being skipped by) them.
 pages:
   stage: deploy
+  needs: []
   script:
     - mkdir -p public
     - cp -r docs/* public/
