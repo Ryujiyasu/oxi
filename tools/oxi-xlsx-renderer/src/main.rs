@@ -609,6 +609,30 @@ pub(crate) fn advances(
     })
 }
 
+/// The room a right-aligned italic line keeps past its own advance.
+///
+/// A slanted line sits further left in Excel than its advance alone would put
+/// it. `_xlsx_italic_right.py` reads a LEFT-aligned arm beside every
+/// right-aligned one: the left arms are ink for ink identical, so what differs
+/// is the width Excel reserves, not the rasterising. Swept over twelve sizes of
+/// ＭＳ Ｐゴシック with one glyph in the cell, the reservation is
+///
+///     floor(em / 6)      8, 11, 12, 13, 15, 16, 19, 21, 27, 32, 37, 48 px em
+///                        1(0), 1, 2, 2, 2, 2, 3, 3, 4, 5, 6, 8
+///
+/// — every size but the smallest, where Excel keeps none. It is a property of
+/// the FONT and not of the last glyph: `R6kessan` sets 「〈386,904,389〉」 whose
+/// last character has no right bearing at all, and Excel still keeps the two
+/// pixels. (Century, メイリオ and 游ゴシック keep one more at every size; none
+/// of them is italic anywhere in the corpus.)
+#[cfg(windows)]
+pub(crate) fn slant_room(points: f32, italic: bool) -> i32 {
+    if !italic {
+        return 0;
+    }
+    ((points * 96.0 / 72.0).round() / 6.0).floor() as i32
+}
+
 /// Where each character of a shape's text lands, from the left of the line.
 ///
 /// The advances are the font's own, scaled by the exact em rather than the
@@ -5502,9 +5526,13 @@ mod windows_draw {
                             let spread =
                                 placed == Align::Spread && pieces.len() > 1 && room > width;
                             let middle = area.left + super::halfway(room - width, cell.style.wrap_text);
+                            // An italic line leans past its advance, and Excel
+                            // keeps room for the lean when the line is put
+                            // against the right edge.
+                            let lean = super::slant_room(points, cell.style.italic);
                             let left = match placed {
                                 Align::Left => area.left + reserved.0,
-                                Align::Right => area.right - width - reserved.1,
+                                Align::Right => area.right - width - lean - reserved.1,
                                 Align::Centre => middle + (reserved.0 - reserved.1) / 2,
                                 Align::Spread if room > width => middle,
                                 Align::Spread => area.left,
