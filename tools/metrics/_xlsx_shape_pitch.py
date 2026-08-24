@@ -41,10 +41,8 @@ WORD = "A"
 # pinned pitch, so it is swept at four sizes against three faces that do (and
 # against 游ゴシック, which the earlier note called a mild deviant). The
 # question is what metric of the face predicts the residual.
-FONTS = [("メイリオ", 9.0), ("メイリオ", 11.0), ("メイリオ", 14.0), ("メイリオ", 20.0),
-         ("Meiryo UI", 11.0), ("Meiryo UI", 14.0),
-         ("ＭＳ Ｐゴシック", 11.0), ("ＭＳ Ｐゴシック", 14.0),
-         ("游ゴシック", 11.0), ("游ゴシック", 14.0)]
+FONTS = [("Yu Gothic UI", 12.0), ("Yu Gothic UI", 11.0), ("メイリオ", 11.0),
+         ("ＭＳ Ｐゴシック", 11.0), ("游ゴシック", 11.0)]
 # The two anchors gave the same first baseline in every one of the earlier
 # thirty-two rows, so only the top one is worth the rows.
 ANCHORS = ["t"]
@@ -53,7 +51,11 @@ SPACINGS = [("none", "")]
 # A fine sweep of the pinned pitch: the slope of the first baseline against
 # the pitch is what says where in the line Excel puts it.
 SPACINGS += [(f"pts {value}", f'<a:lnSpc><a:spcPts val="{value}"/></a:lnSpc>')
-             for value in (1200, 1500, 1800, 2100, 2400, 2700, 3000, 3300)]
+             for value in (1500, 2100, 3000)]
+# `glossary_05` sets its flowchart in Yu Gothic UI 12pt at 80% — a PERCENTAGE,
+# which the pinned sweep never covered.
+SPACINGS += [(f"pct {value}", f'<a:lnSpc><a:spcPct val="{value}"/></a:lnSpc>')
+             for value in (70000, 80000, 90000, 100000, 115000, 150000)]
 
 
 def cases():

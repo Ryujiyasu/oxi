@@ -3875,6 +3875,7 @@ mod windows_draw {
             // it from the whole box: `glossary_05`'s flowchart sets every one
             // of its boxes at four fifths, which is 22 pixels a line where
             // Yu Gothic UI's own is 28.
+            let own = tall;
             let tall = tall * paragraph.line_scale.unwrap_or(1.0);
             // A paragraph that pins its pitch outright does NOT centre its
             // glyphs in it: Excel puts the baseline three quarters of the way
@@ -3933,7 +3934,20 @@ mod windows_draw {
                         // exactly what a pinned pitch is usually for.
                         ((0.75 * tall - lift - ascent) * scale).round() as i32
                     }
-                    None => (((tall - natural) / 2.0) * scale).round().max(0.0) as i32,
+                    // A paragraph that asks for a SHARE of the font's own
+                    // pitch moves its baseline three quarters of the CHANGE —
+                    // the same slope a pinned pitch has. Over six percentages
+                    // in four faces `_xlsx_shape_pitch.py` reads Excel's first
+                    // line against 0.75 x pitch and the remainder is dead
+                    // constant per face (メイリオ 19.9, ＭＳ Ｐゴシック 21.9,
+                    // 游ゴシック 20.9). Leaving the line where the font's own
+                    // pitch puts it — which is what centring in the scaled box
+                    // does below 100% — is what put `glossary_05`'s flowchart
+                    // four pixels out at 80%.
+                    None => {
+                        let settled = ((own - natural) / 2.0).max(0.0);
+                        ((settled + 0.75 * (tall - own)) * scale).round() as i32
+                    }
                 });
             }
         }
