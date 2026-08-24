@@ -194,6 +194,9 @@ fn the_typeface_a_cell_names_is_read_and_saved() {
     assert_eq!(style.font_size, Some(9.0));
 }
 
+// Reads a workbook from the golden corpus, which is not redistributed with
+// the source; compiled only where that corpus is present (see build.rs).
+#[cfg(golden_corpus)]
 #[test]
 fn how_a_cell_places_and_breaks_its_text_is_read() {
     // A statistics table from the corpus: every cell centres its text
@@ -219,6 +222,9 @@ fn how_a_cell_places_and_breaks_its_text_is_read() {
     assert!(wrapped > 0, "no cell said it breaks its text");
 }
 
+// Reads a workbook from the golden corpus, which is not redistributed with
+// the source; compiled only where that corpus is present (see build.rs).
+#[cfg(golden_corpus)]
 #[test]
 fn a_cell_wears_the_font_of_the_style_it_is_built_on() {
     // The hyperlinks in this workbook name no font of their own: their format
@@ -237,6 +243,9 @@ fn a_cell_wears_the_font_of_the_style_it_is_built_on() {
     assert!(underlined > 0, "no cell inherited the underlined link font");
 }
 
+// Reads a workbook from the golden corpus, which is not redistributed with
+// the source; compiled only where that corpus is present (see build.rs).
+#[cfg(golden_corpus)]
 #[test]
 fn a_colour_the_theme_names_is_resolved() {
     // The hyperlinks in this workbook state no colour of their own: their font
@@ -257,6 +266,9 @@ fn a_colour_the_theme_names_is_resolved() {
     assert!(blue > 0, "no link came out the theme's link blue");
 }
 
+// Reads a workbook from the golden corpus, which is not redistributed with
+// the source; compiled only where that corpus is present (see build.rs).
+#[cfg(golden_corpus)]
 #[test]
 fn a_sheet_says_how_far_it_reaches() {
     // This sheet declares B2:F149 while its last filled cell stops short of
@@ -268,6 +280,9 @@ fn a_sheet_says_how_far_it_reaches() {
     assert_eq!(workbook.sheets[0].declared_range, Some((2, 1, 149, 5)));
 }
 
+// Reads a workbook from the golden corpus, which is not redistributed with
+// the source; compiled only where that corpus is present (see build.rs).
+#[cfg(golden_corpus)]
 #[test]
 fn a_table_is_read_with_the_colour_its_style_dresses_it_in() {
     // TableStyleMedium7 is the seventh of the Medium family, which walk the
