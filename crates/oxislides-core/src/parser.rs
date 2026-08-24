@@ -1039,6 +1039,10 @@ fn parse_slide(
     let mut shape_image_alpha: Option<f32> = None;
     // a:gradFill on the shape itself (same ramp model as the background).
     let s_shapegrad = std::env::var("OXI_SHAPEGRAD_DISABLE").is_err();
+    // `<a:lin>` / `<a:fillToRect>` inside a shape gradient are read from the
+    // Empty branch (they are always self-closing) unless this is set, which
+    // restores every shape ramp running at angle 0.
+    let s_gradlin = std::env::var("OXI_GRADLIN_DISABLE").is_err();
     let mut sg_in = false;
     let mut sg_in_gs = false;
     let mut sg_in_path = false;
@@ -2002,6 +2006,33 @@ fn parse_slide(
                                 tbl_row_heights.push(v / 12700.0);
                             }
                         }
+                    }
+                    // ★`<a:lin>` and `<a:fillToRect>` are ALWAYS self-closing,
+                    // so the Start-branch handlers for them never ran and every
+                    // shape gradient in the corpus came out at angle 0 -- the
+                    // ramp mirrored. d15 s17's three process bands are white
+                    // washes at `ang="10800025"` (180 degrees), brightest at
+                    // each shape's RIGHT edge in PowerPoint and at its LEFT in
+                    // Oxi. 302 shape-level gradients over 4 dev decks. Same trap
+                    // as the cell properties below, and the third time this file
+                    // has paid for it.
+                    "lin" if sg_in && s_gradlin => {
+                        sg_angle = get_attr(&e, "ang")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .map(|v| v / 60_000.0);
+                        sg_scaled = get_attr(&e, "scaled").as_deref() == Some("1");
+                    }
+                    "path" if sg_in && s_gradlin => {
+                        if get_attr(&e, "path").as_deref() == Some("circle") {
+                            sg_focus = Some((0.5, 0.5));
+                        }
+                    }
+                    "fillToRect" if sg_in_path && s_gradlin => {
+                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        sg_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
                     }
                     // Self-closing forms of the cell properties. quick-xml
                     // routes <a:alpha val=".."/> and <a:srgbClr val=".."/> to

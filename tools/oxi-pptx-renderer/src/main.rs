@@ -631,6 +631,16 @@ fn shape_json(sh: &Shape) -> Value {
         "tail_end": sh.tail_end.as_ref().map(|e| json!([e.kind, e.w, e.len])),
         "text_warp": sh.text_warp,
         "anchor": sh.anchor,
+        // The gradient was ABSENT from this dump, so every question asked of it
+        // came back `null` and read as "the parser lost it" -- it had not.
+        "gradient": sh.gradient.as_ref().map(|g| json!({
+            "angle_deg": g.angle_deg,
+            "scaled": g.scaled,
+            "focus": g.focus,
+            "stops": g.stops.iter().map(|s| json!({
+                "pos": s.pos, "color": s.color, "alpha": s.alpha
+            })).collect::<Vec<_>>(),
+        })),
         "l_ins": sh.l_ins,
         "r_ins": sh.r_ins,
         "t_ins": sh.t_ins,
