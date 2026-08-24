@@ -1120,8 +1120,8 @@ mod tests {
         let (obj, _) = parse_number_or_ref(b"42 ", 0).unwrap();
         assert_eq!(obj, PdfObject::Integer(42));
 
-        let (obj, _) = parse_number_or_ref(b"3.14 ", 0).unwrap();
-        assert_eq!(obj, PdfObject::Real(3.14));
+        let (obj, _) = parse_number_or_ref(b"1.23 ", 0).unwrap();
+        assert_eq!(obj, PdfObject::Real(1.23));
     }
 
     #[test]
