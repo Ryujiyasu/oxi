@@ -24,7 +24,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 REPO = Path(__file__).resolve().parents[2]
-OUT = REPO / "pipeline_data" / "pptx_probes" / "italface"
+OUT = REPO / "pipeline_data" / "pptx_derive" / "italface"
 
 
 def postscript_name(buf: bytes) -> str | None:

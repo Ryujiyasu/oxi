@@ -10942,6 +10942,95 @@ fn fits_line(
     measure_wrap(dc, text, fs, family, bold, italic, scale) <= width_px
 }
 
+/// Exact width of `text` in POINTS with every character measured at its own
+/// run's size, weight and slant.
+///
+/// S-RUNALIGN (2026-08-25). The WRAP has measured per run since S-RUNMEASURE
+/// (`master_units_runs` behind `fits_line`), but the width that CENTRES or
+/// RIGHT-ALIGNS the finished line did not: it took `bold` as "any run in the
+/// paragraph is bold" and measured the whole line in that one style. One bold
+/// word therefore made every line of its paragraph measure bold, and a centred
+/// paragraph started from a width that is never drawn.
+///
+/// d16 slide 5 is the specimen: a 4-line centred quotation whose second line
+/// carries one bold run. Every line measured in `Source Sans Pro #BI` -- which
+/// that deck embeds as **Black** Italic -- so line 1 came out 531.36pt against a
+/// 514.22pt text area, wider than the box, and `(area_w - line_w).max(0.0)`
+/// clamped its offset to zero: the line was not centred at all.
+///
+/// **76 multi-run paragraphs over 13 of the 40 dev decks mix weights** (d24 11,
+/// d11 10, d15 10, d19 10, d16 8, d06 7, d35 7 ...), and every one was aligned
+/// from a width measured in a face half of it is not drawn in.
+///
+/// Master units are deliberately NOT used here: those are the BREAK model
+/// (1/8pt per glyph, `pptx-master-unit-break-law`), while alignment is judged on
+/// the exact advance sum, which is what the single-style path already used.
+/// Returns None if any segment's advance is unknown, so the caller keeps its
+/// existing fallbacks, and a single-run paragraph never reaches this at all.
+#[cfg(windows)]
+fn line_width_pt_runs(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+    styles: RunStyles<'_>,
+) -> Option<f32> {
+    let style_at = |at: usize| -> (u32, bool, bool) {
+        let mut seen = 0usize;
+        for run in styles.runs {
+            let n = run.text.chars().count();
+            if at < seen + n {
+                // f32 has no Eq, and the segment walk needs one; the size is a
+                // half-point value, so hundredths of a point are lossless.
+                let size = run.font_size.unwrap_or(fs);
+                return ((size * 100.0).round() as u32, run.bold, run.italic || italic);
+            }
+            seen += n;
+        }
+        ((fs * 100.0).round() as u32, bold, italic)
+    };
+    let measure = |seg: &str, st: (u32, bool, bool)| -> Option<f32> {
+        if seg.is_empty() {
+            return Some(0.0);
+        }
+        let (sz, sb, si) = st;
+        let sfs = sz as f32 / 100.0;
+        font_adv::line_hmtx_width_pt(seg, sfs, family).or_else(|| {
+            runtime_width_px(dc, seg, sfs, family, sb, si, scale)
+                .map(|px| px as f32 / scale as f32)
+        })
+    };
+    // Walk maximal same-style segments and measure each with the single-style
+    // path, so this cannot disagree with it on a uniform paragraph.
+    let mut total = 0.0f32;
+    let mut seg = String::new();
+    let mut cur: Option<(u32, bool, bool)> = None;
+    for (i, ch) in text.chars().enumerate() {
+        let st = style_at(styles.line_start + i);
+        if let Some(c) = cur {
+            if c != st {
+                total += measure(&seg, c)?;
+                seg.clear();
+            }
+        }
+        cur = Some(st);
+        seg.push(ch);
+    }
+    if let Some(c) = cur {
+        total += measure(&seg, c)?;
+    }
+    Some(total)
+}
+
+/// A line is aligned on a width measured per RUN unless this is set (which
+/// restores measuring the whole line in the paragraph's heaviest style).
+fn runalign_on() -> bool {
+    std::env::var("OXI_RUNALIGN_DISABLE").is_err()
+}
+
 /// WordArt text fitting is applied unless this is set.
 fn txwarp_on() -> bool {
     std::env::var("OXI_TXWARP_DISABLE").is_err()
@@ -12691,6 +12780,7 @@ fn layout_paragraph_baselines(
     };
 
     let mut out = Vec::with_capacity(n_lines);
+    let mut align_at = 0usize; // char offset of this line within the paragraph
     for (i, line) in lines.iter().enumerate() {
         let baseline = if mixed_lines {
             mixed_baselines[i]
@@ -12707,7 +12797,25 @@ fn layout_paragraph_baselines(
         // A line that ends on a soft break carries the newline for the
         // caller's accounting; it is not ink and must not be measured.
         let ink = line.trim_end_matches('\n');
-        let line_w = font_adv::line_hmtx_width_pt(ink, fs, &family)
+        // S-RUNALIGN: measure the line the way it is DRAWN -- each run at its
+        // own size, weight and slant -- exactly as the wrap already does.
+        let per_run = if runalign_on() && para.runs.len() > 1 {
+            line_width_pt_runs(
+                dc,
+                ink.trim_end(),
+                fs,
+                &family,
+                bold,
+                italic,
+                scale,
+                RunStyles { runs: &para.runs, line_start: align_at },
+            )
+        } else {
+            None
+        };
+        align_at += line.chars().count();
+        let line_w = per_run
+            .or_else(|| font_adv::line_hmtx_width_pt(ink, fs, &family))
             .or_else(|| {
                 runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale)
                     .map(|px| px as f32 / scale as f32)

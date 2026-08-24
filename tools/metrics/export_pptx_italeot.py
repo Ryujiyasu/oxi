@@ -11,7 +11,7 @@ from pathlib import Path
 import win32com.client
 
 REPO = Path(__file__).resolve().parents[2]
-OUT = REPO / "pipeline_data" / "pptx_probes" / "italeot"
+OUT = REPO / "pipeline_data" / "pptx_derive" / "italeot"
 
 app = win32com.client.Dispatch("PowerPoint.Application")
 try:

@@ -46,9 +46,13 @@ from pptx.util import Emu, Pt
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+# These live under `pptx_derive`, NOT `pptx_probes`: each arm deck is a
+# 50-slide copy of a corpus deck, and the probe corpus is a byte-identity
+# gate that renders every deck twice. Five of these would add ~500 renders
+# per gate run for no regression value the corpus does not already give.
 REPO = Path(__file__).resolve().parents[2]
 DEV = REPO / "pipeline_data" / "pptx_benchmark" / "dev" / "pptx"
-OUT = REPO / "pipeline_data" / "pptx_probes" / "italface"
+OUT = REPO / "pipeline_data" / "pptx_derive" / "italface"
 
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 P = "http://schemas.openxmlformats.org/presentationml/2006/main"

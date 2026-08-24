@@ -24,9 +24,18 @@ Arms (each a copy of the Barlow probe with its two italic parts patched):
     eotpan    PANOSE Letterform (byte 7) 0 -> 9
     eotboth   both
 
-If PowerPoint starts using `Barlow-Italic` under one of these, that field is the
-gate. If none of them changes anything, the gate is elsewhere and this rules two
-candidates out, which is worth as much.
+★ANSWERED, and the answer is NEITHER FIELD. Run all three arms in one COM
+session and `eotital` and `eotpan` both appear to work while `eotboth` does not
+-- which is not a font rule, it is an ordering artifact: `eotboth` ran first
+alphabetically. Export each arm in its OWN session and all three give
+`Barlow-Regular`, exactly like the unpatched deck. The patches do nothing.
+
+What is actually going on is `pptx-truth-pdf-first-open-is-cold`: PowerPoint uses
+a deck's embedded ITALIC parts only from the SECOND open of a session, and the
+control that proves it is opening the SAME UNPATCHED file twice in one session
+(6 of these 10 arms flip). This generator is kept because the two fields were
+worth ruling out and the patching machinery is reusable -- not because either
+field is the gate.
 
 Usage:
     python tools/metrics/gen_pptx_italeot.py
@@ -47,8 +56,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 REPO = Path(__file__).resolve().parents[2]
-SRC = REPO / "pipeline_data" / "pptx_probes" / "italface" / "italface_Barlow.pptx"
-OUT = REPO / "pipeline_data" / "pptx_probes" / "italeot"
+SRC = REPO / "pipeline_data" / "pptx_derive" / "italface" / "italface_Barlow.pptx"
+OUT = REPO / "pipeline_data" / "pptx_derive" / "italeot"
 
 P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
