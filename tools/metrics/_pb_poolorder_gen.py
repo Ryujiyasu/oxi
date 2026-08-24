@@ -49,6 +49,14 @@ R_TW = list(range(700, 1201, 5))               # 35..60pt in 0.25pt steps
 W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"')
 
+# FACE=<font name> puts the arms in that face. The default (unset) inherits the
+# base document's ＭＳ 明朝 -- MONOSPACED. S1207 found a proportional Japanese
+# face gets no 約物 pool at all; this lets the same arms ask whether the line-end
+# HANG dies with it.
+FACE = os.environ.get("FACE") or ""
+RPR = ('<w:rFonts w:ascii="%s" w:eastAsia="%s" w:hAnsi="%s" w:hint="eastAsia"/>'
+       % (FACE, FACE, FACE)) if FACE else '<w:rFonts w:hint="eastAsia"/>'
+
 ARMS = {
     "NOMARK":   "甲" + "亜" * (NCH - 1),
     "TAILPAIR": "甲" + "亜" * (NCH - 2) + "。",
@@ -66,16 +74,17 @@ def build():
             paras.append(
                 '<w:p><w:pPr><w:pStyle w:val="a"/><w:jc w:val="both"/>'
                 '<w:ind w:left="0" w:right="%d"/>'
-                '<w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr>'
-                '<w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr>'
-                '<w:t xml:space="preserve">%s</w:t></w:r></w:p>' % (r, txt))
+                '<w:rPr>%s</w:rPr></w:pPr>'
+                '<w:r><w:rPr>%s</w:rPr>'
+                '<w:t xml:space="preserve">%s</w:t></w:r></w:p>'
+                % (r, RPR, RPR, txt))
     doc = zipfile.ZipFile(SRC).read("word/document.xml").decode("utf-8")
     sect = re.search(r"<w:sectPr[^>]*>.*?</w:sectPr>", doc, re.S).group(0)
     sect = re.sub(r"<w:footerReference[^>]*/>", "", sect)
     body = "<w:body>" + "".join(paras) + sect + "</w:body>"
     new = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
            '<w:document %s>%s</w:document>' % (W_NS, body))
-    dst = os.path.join(OUT, "poolorder.docx")
+    dst = os.path.join(OUT, "poolorder%s.docx" % ("_" + FACE if FACE else ""))
     shutil.copyfile(SRC, dst)
     zin = zipfile.ZipFile(SRC)
     zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
@@ -85,7 +94,8 @@ def build():
             data = new.encode("utf-8")
         zout.writestr(item, data)
     zout.close()
-    with open(os.path.join(OUT, "arms.txt"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(OUT, "arms%s.txt" % ("_" + FACE if FACE else "")),
+              "w", encoding="utf-8") as fh:
         for a in arms:
             fh.write("%s\t%d\n" % a)
     print("built %s (%d paragraphs)" % (dst, len(paras)))
@@ -93,8 +103,9 @@ def build():
 
 def to_pdf():
     import win32com.client as wc
-    docx = os.path.join(OUT, "poolorder.docx")
-    pdf = os.path.join(OUT, "poolorder.pdf")
+    tag = "_" + FACE if FACE else ""
+    docx = os.path.join(OUT, "poolorder%s.docx" % tag)
+    pdf = os.path.join(OUT, "poolorder%s.pdf" % tag)
     app = wc.Dispatch("Word.Application")
     app.Visible = False
     try:
@@ -132,7 +143,8 @@ def measure():
     by = {}
     for (name, r), n in zip(arms, heads):
         by.setdefault(name, []).append((int(r) / 20.0, n))
-    print("NCH=%d  em=%.2f  content=%.1fpt" % (NCH, EM, CONTENT_PT))
+    print("NCH=%d  em=%.2f  content=%.1fpt  face=%s"
+          % (NCH, EM, CONTENT_PT, FACE or "(inherited MS Mincho)"))
     print("   arm        last r holding all %d   natural needs r <=   credit (em)" % NCH)
     for name in ("NOMARK", "TAILPAIR", "MIDMARK"):
         rows = by[name]
