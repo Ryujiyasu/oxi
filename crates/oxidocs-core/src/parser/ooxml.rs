@@ -4272,6 +4272,44 @@ fn parse_paragraph_properties(
                         // causing Oxi to fit 2 extra chars on line 1 vs Word
                         // (wrap_point_diff num_hang_chars test, 2026-05-01).
                         // Now: only skip when twip `left` is also present (twip wins).
+                        // S1214 (2026-08-24, opt-in `OXI_S1214=1`): a NON-ZERO *Chars
+                        // attribute wins over the twip it sits next to, and a *Chars of
+                        // ZERO falls back to the twip. MEASURED with
+                        // `tools/metrics/_pb_indchars_gen.py` -- 14 arms in a fixed cell
+                        // whose own left rule anchors the reading, indents relative to
+                        // the cell's inner edge:
+                        //     <w:ind left=81/>                      4.08pt = the twips
+                        //     left=81 firstLine=199                14.04 = 4.05 + 9.95
+                        //     left=81 firstLineChars=100 fl=199    14.52 = 4.05 + ONE CHAR
+                        //     leftChars=100 left=81                10.56 = ONE CHAR
+                        //     firstLineChars=100 alone             10.56 = ONE CHAR
+                        //     leftChars=0 left=81                   4.08 = the twips again
+                        // and the character is the FONT SIZE: the same arms at sz=18 give
+                        // firstLineChars 9.00 (leftChars stayed 10.56 -- the paragraph's
+                        // style size, not the run's; recorded, not yet explained).
+                        // Oxi had it inverted here ("twip wins", 2026-05-01) and drops
+                        // leftChars whenever a twip left exists; the layout sites then
+                        // reach the *Chars only via `.or_else`, so firstLineChars is dead
+                        // wherever firstLine is written too -- which is 29dc6e8943fe's
+                        // cell (left=81 firstLineChars=100 firstLine=199).
+                        let s1214 = std::env::var("OXI_S1214").ok().as_deref() == Some("1");
+                        if s1214 {
+                            if left_chars.map_or(false, |v| v != 0.0) {
+                                style.indent_left = None;
+                            }
+                            if right_chars.map_or(false, |v| v != 0.0) {
+                                style.indent_right = None;
+                            }
+                            // ★NOT hangingChars. a1d6e4ef's note carries
+                            // `hangingChars="203" hanging="380"` and Word's render
+                            // puts its continuation 19.08pt in -- the TWIP (19.00),
+                            // not 2.03 characters (18.27 at 9pt, 21.32 at 10.5).
+                            // Including it here cost a1d6e4ef / 3a4f9fbe / 04b88e7e
+                            // a PASS each on the first golden chunk.
+                            if first_line_chars.map_or(false, |v| v != 0.0) {
+                                style.indent_first_line = None;
+                            }
+                        }
                         let has_twip_left = style.indent_left.is_some();
                         if let Some(lc) = left_chars {
                             if !has_twip_left {
