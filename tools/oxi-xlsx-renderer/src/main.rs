@@ -5228,15 +5228,33 @@ mod windows_draw {
                     // a pixel deeper than the baseline asks for.
                     if cell.style.stacked_text && !dressed_runs {
                         let em = -pixels;
-                        // Where the standing character's own box begins: the
-                        // row's baseline, less the face's ascent. The turned
-                        // face has neither, and keeps the padding it had.
-                        let sit = super::held(|counter| {
+                        // Where each of the two boxes begins. The standing one
+                        // starts at the row's baseline less the ascent, which
+                        // is to say the character sits on the row's own
+                        // baseline. The turned one starts the face's DESCENT
+                        // higher — `top + baseline - em`, since a face's ascent
+                        // and descent together are its em.
+                        //
+                        // `_xlsx_stack_turnpen.py` swept 25 sizes in both faces
+                        // with the standing character and the mark in ONE cell,
+                        // so the cell's centring cancels: every arm read the
+                        // descent up, for （ ー and 、 alike. ACROSS is not
+                        // settled — Excel's turned pen is one to four pixels
+                        // right of the standing one and neither the em less the
+                        // turned ascent nor either descent predicts all of it,
+                        // so it is left where it was rather than tabulated.
+                        let (sit, lay) = super::held(|counter| {
                             counter.shape_of(name, points, bold, cell.style.italic)
                         })
-                        .map_or((line_px - em).max(0), |(ascent, _, _)| {
-                            ((baseline - ascent) * scale).round() as i32
-                        });
+                        .map_or(
+                            ((line_px - em).max(0), (line_px - em).max(0)),
+                            |(ascent, descent, _)| {
+                                (
+                                    ((baseline - ascent) * scale).round() as i32,
+                                    ((baseline - ascent - descent) * scale).round() as i32,
+                                )
+                            },
+                        );
                         let turned = wide(&format!("@{name}"));
                         let font = CreateFontW(
                             pixels,
@@ -5293,11 +5311,7 @@ mod windows_draw {
                             if letters.is_empty() {
                                 continue;
                             }
-                            // The pen of a turned face sits at the top left of
-                            // the character, not on a baseline, so the line
-                            // box's own padding is what puts it in place.
                             let head = top + step as i32 * line_px;
-                            let down = head + (line_px - em).max(0);
                             let stands =
                                 line.chars().all(|letter| !super::turned_in_a_stack(letter));
                             if stands {
@@ -5315,7 +5329,7 @@ mod windows_draw {
                                 SetTextAlign(dc, TA_BASELINE | TA_LEFT);
                                 SelectObject(dc, font);
                             } else {
-                                let _ = TextOutW(dc, left, down, letters);
+                                let _ = TextOutW(dc, left, head + lay, letters);
                             }
                         }
                         SelectObject(dc, held);

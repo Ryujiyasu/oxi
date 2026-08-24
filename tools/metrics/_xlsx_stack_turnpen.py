@@ -40,8 +40,9 @@ TURNED = ["（", "ー", "、"]
 # Each column holds the reference character and then the mark, so both are
 # placed by ONE cell's centring and it cancels out of the difference.
 STACKS = [STANDING + STANDING] + [STANDING + mark for mark in TURNED]
-SIZES = [6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 20.0, 28.0, 36.0]
-FACES = ["ＭＳ 明朝", "ＭＳ ゴシック"]
+SIZES = [6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0,
+         12.5, 13.0, 13.5, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 22.0, 24.0]
+FACES = ["ＭＳ 明朝"]
 ROW_PT = 60.0
 COLUMN = 9.0
 
@@ -140,27 +141,26 @@ def main() -> int:
         for at, size in enumerate(SIZES):
             px = round(size * 96 / 72)
             band = truth[at * tall:(at + 1) * tall]
-            guide = offset(face, px, STANDING, False, TA_TOP)
             ascU, descU, _ = metrics(face, px, False)
             ascT, descT, tmH = metrics(face, px, True)
-            pitch = None
-            first = ink(band[:, :wide])
-            if first is not None:
-                second = ink(band[first[1] + guide[3]:, :wide])
-                pitch = None if second is None else second[1] + guide[3]
+            pitch = line_box_px(size)
             told = ""
             for which, letter in enumerate(TURNED, start=1):
                 cell = band[:, which * wide:(which + 1) * wide]
-                head = ink(cell)
+                # Each character is read inside ITS OWN line box. Reading the
+                # cell whole takes the leftmost ink of BOTH characters for the
+                # first one's, which is what made a turned mark look a pixel
+                # further right than it is.
+                head = ink(cell[:pitch])
+                mark = ink(cell[pitch:2 * pitch + 5])
+                guide = offset(face, px, STANDING, False, TA_TOP)
                 turn_off = offset(face, px, letter, True, TA_BASELINE)
-                mark = None if head is None else ink(cell[head[1] + guide[3]:])
-                if head is None or mark is None or turn_off is None or pitch is None:
+                if head is None or mark is None or turn_off is None:
                     told += "        -   -"
                     continue
                 # Both characters stand in ONE cell, so its centring cancels.
                 pen_up = (head[0] - guide[0], head[1] - guide[1])
-                pen_turn = (mark[0] - turn_off[0],
-                            mark[1] + head[1] + guide[3] - turn_off[1])
+                pen_turn = (mark[0] - turn_off[0], mark[1] + pitch - turn_off[1])
                 told += f"   {pen_turn[0] - pen_up[0]:+4d} {pen_turn[1] - pen_up[1] - pitch:+3d}"
             print(f"  {size:>5} {px:>3} {line_box_px(size):>4} {'':>4} | {descU:>5} {ascT:>4}"
                   f" {descT:>5} {str(pitch):>5} |{told}")
