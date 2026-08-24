@@ -44,6 +44,10 @@ test:
 
 clippy:
   stage: test
+  # Clippy's extra passes over the largest crate are the memory peak of the
+  # whole pipeline; one codegen unit at a time keeps the runner from killing it.
+  variables:
+    CARGO_BUILD_JOBS: "1"
   script:
     - set -o pipefail
     - mkdir -p ci-logs
