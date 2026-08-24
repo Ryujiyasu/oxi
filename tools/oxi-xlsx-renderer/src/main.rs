@@ -1080,6 +1080,40 @@ pub(crate) fn anchored_room(
     Some(right - left)
 }
 
+/// Both of a drawing's side edges before they are put on whole pixels.
+///
+/// Excel adds the inset to the EXACT edge and rounds once: a box whose left
+/// falls at 26.667 pixels sets its text from `round(26.667 + 9.6) = 36`, where
+/// rounding the box first and the inset second gives 37. Swept a quarter-point
+/// at a time on both sides by `_xlsx_shape_origin.py`, with a filled box beside
+/// the text so the box's own rounding cancels out of the reading.
+#[cfg(windows)]
+pub(crate) fn drawing_edges(
+    drawn: &oxicells_core::ir::Drawing,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<(f32, f32)> {
+    let at = |anchor: &oxicells_core::ir::Anchor| -> Option<f32> {
+        let left = match anchor.col.checked_sub(layout.first_column) {
+            Some(column) => match layout.columns.get(column as usize) {
+                Some(edge) => *edge,
+                None => *layout
+                    .after_columns
+                    .get(column as usize - layout.columns.len())?,
+            },
+            None => *layout.before_columns.get(anchor.col as usize)?,
+        };
+        Some(left + anchor.col_off as f32 / EMU * scale)
+    };
+    let left = at(&drawn.from)?;
+    let right = match (drawn.to.as_ref(), drawn.extent) {
+        (Some(to), _) => at(to).unwrap_or(*layout.columns.last().unwrap_or(&0.0)),
+        (None, Some((cx, _))) => left + cx as f32 / EMU * scale,
+        (None, None) => return None,
+    };
+    Some((left, right))
+}
+
 /// The face Excel draws when the workbook asks for one this machine has not.
 ///
 /// Not the name, and not the PANOSE the file carries: `_xlsx_missing_face_map.py`
@@ -2439,6 +2473,9 @@ mod windows_draw {
         // The box's width before its edges were rounded, which is what a line
         // is broken against (see `drawing_room`).
         room: Option<f32>,
+        // And the side edges themselves, which is where the text starts from
+        // (see `drawing_edges`).
+        edges: Option<(f32, f32)>,
         scale: f32,
         normal: Option<&(String, f32)>,
     ) {
@@ -2915,6 +2952,7 @@ mod windows_draw {
                         box_,
                         exact: room,
                         pull: preset_pull(&shape.geometry, box_),
+                        edges,
                     },
                     scale,
                     normal,
@@ -3549,12 +3587,12 @@ mod windows_draw {
                 right: box_.left + ((frame.x + frame.w) * across as f64).round() as i32,
                 bottom: box_.top + ((frame.y + frame.h) * down as f64).round() as i32,
             };
-            shape(dc, held, over, None, scale, normal);
+            shape(dc, held, over, None, None, scale, normal);
             if let Some(said) = &held.text {
                 says(
                     dc,
                     said,
-                    Frame { box_: over, exact: None, pull: 0.0 },
+                    Frame { box_: over, exact: None, pull: 0.0, edges: None },
                     scale,
                     normal,
                     false,
@@ -3670,6 +3708,9 @@ mod windows_draw {
         box_: RECT,
         exact: Option<f32>,
         pull: f32,
+        /// The box's own side edges before they were put on whole pixels.
+        /// Excel adds the inset to these and rounds ONCE (`drawing_edges`).
+        edges: Option<(f32, f32)>,
     }
 
     unsafe fn says(
@@ -3684,13 +3725,33 @@ mod windows_draw {
         // and size in a shape is 36.5.
         note: bool,
     ) {
-        let Frame { box_, exact, pull } = frame;
+        let Frame { box_, exact, pull, edges } = frame;
         let inset = |emu: i64| (emu as f32 / super::EMU * scale).round() as i32;
+        let room_of = |emu: i64| emu as f32 / super::EMU * scale;
         let pulled = pull.round() as i32;
+        // Excel sets the text from the EXACT edge plus the exact inset, put on
+        // a whole pixel once. Rounding the box first and the inset second
+        // costs a pixel wherever the box's own edge falls two thirds of the way
+        // across one — `_xlsx_shape_origin.py`, both sides, eight lefts.
+        // Only where the preset pulls nothing in: a rounded box's own text
+        // rectangle carries a third fraction (`preset_pull`), and which of the
+        // three Excel rounds together is not measured yet — `002`'s pink
+        // roundRect wants the old arithmetic where its plain rectangles want
+        // this one.
+        let (from_left, from_right) = match edges.filter(|_| pull == 0.0) {
+            Some((left, right)) => (
+                (left + room_of(said.insets.0)).round() as i32 + pulled,
+                (right - room_of(said.insets.2)).round() as i32 - pulled,
+            ),
+            None => (
+                box_.left + inset(said.insets.0) + pulled,
+                box_.right - inset(said.insets.2) - pulled,
+            ),
+        };
         let area = RECT {
-            left: box_.left + inset(said.insets.0) + pulled,
+            left: from_left,
             top: box_.top + inset(said.insets.1) + pulled,
-            right: box_.right - inset(said.insets.2) - pulled,
+            right: from_right,
             bottom: box_.bottom - inset(said.insets.3) - pulled,
         };
         if area.right <= area.left {
@@ -5590,8 +5651,15 @@ mod windows_draw {
                 match &drawn.kind {
                     DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
                     DrawingKind::Shape(held) => {
-                        shape(dc, held, box_, super::drawing_room(drawn, layout, scale), scale,
-                              sheet.normal_font.as_ref())
+                        shape(
+                            dc,
+                            held,
+                            box_,
+                            super::drawing_room(drawn, layout, scale),
+                            super::drawing_edges(drawn, layout, scale),
+                            scale,
+                            sheet.normal_font.as_ref(),
+                        )
                     }
                     DrawingKind::Chart(held) => {
                         graph(dc, held, box_, scale, sheet.normal_font.as_ref())
@@ -5687,7 +5755,7 @@ mod windows_draw {
                 says(
             dc,
             &note.text,
-            Frame { box_, exact: None, pull: 0.0 },
+            Frame { box_, exact: None, pull: 0.0, edges: None },
             scale,
             sheet.normal_font.as_ref(),
             true,
