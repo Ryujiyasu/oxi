@@ -33661,8 +33661,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // em. Adding the terms is what let tokyoshugyo p30
                                                 // take a 7.725pt overflow on 5.25 (約物) + 3.94
                                                 // (three joints) where Word takes none.
-                                                let pool_terms = if std::env::var("OXI_S1206_DISABLE")
-                                                    .is_ok()
+                                                // S1207 (2026-08-24, opt-out
+                                                // `OXI_S1207_DISABLE`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): a PROPORTIONAL Japanese
+                                                // face gets NO 約物 credit at all.
+                                                //
+                                                // `_cw_yaku_joint.py` run twice over the same arm,
+                                                // once per face (the sweep font had been hardcoded
+                                                // to ＭＳ 明朝, so every 約物 measurement ever taken
+                                                // here was a monospaced one). Lines ending in an
+                                                // ordinary character:
+                                                //   ＭＳ 明朝   0.502 / 0.508 / 0.503 em
+                                                //   ＭＳ Ｐ明朝 0.008 / -0.001 / 0.004 / -0.005 em
+                                                // i.e. half an em against nothing. That is what
+                                                // 3a4f9fbe p20 needs -- a proportional cell where
+                                                // Word refuses an overflow of only 0.212em.
+                                                let s1207_proportional = std::env::var(
+                                                    "OXI_S1207_DISABLE",
+                                                )
+                                                .is_err()
+                                                    && matches!(
+                                                        cm.family.as_str(),
+                                                        "MS PMincho" | "MS PGothic" | "HGPGothicM"
+                                                    );
+                                                let pool_terms = if s1207_proportional {
+                                                    0.0
+                                                } else if std::env::var("OXI_S1206_DISABLE").is_ok()
                                                 {
                                                     yaku + joints + spaces
                                                 } else {

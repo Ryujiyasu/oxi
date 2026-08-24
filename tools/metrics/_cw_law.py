@@ -97,7 +97,12 @@ def widths():
 
 
 def build(out, marl, marr, bd, layout, jc, grid, compat, cpunct=""):
-    font = "ＭＳ 明朝"      # ＭＳ 明朝
+    # ★the face was hardcoded, which quietly made every 約物 sweep a MONOSPACED
+    # measurement. The corpus cells that the sweeps are meant to explain are
+    # PROPORTIONAL (ＭＳ Ｐ明朝: の 10.0 / と 7.5 / な 9.5), and Word treats them
+    # differently enough that PROPCELL OIKOMI exists as its own rule. Set
+    # CW_FONT to sweep the other face.
+    font = os.environ.get("CW_FONT", "ＭＳ 明朝")
     rpr = (f'<w:rFonts w:ascii="{font}" w:eastAsia="{font}" w:hAnsi="{font}"/>'
            f'<w:sz w:val="{SZ}"/>')
     if bd:
