@@ -1300,8 +1300,17 @@ fn broken_at(letters: &[char], advances: &[f32], width: f32, hang: bool) -> Vec<
             take = fill;
         }
         // The spaces at a break belong to the line they end. Excel starts the
-        // next line at the first character past them, however many there are.
-        while start + take < letters.len() && letters[start + take] == ' ' {
+        // next line at the first character past them, however many there are
+        // — and that means every space `may_break` already counts as one, not
+        // the ASCII space alone. `_xlsx_break_space.py` breaks a wrapped cell
+        // on each kind in turn and reads where the second line's ink starts:
+        // U+0020, U+3000, U+00A0 and the first two doubled all leave the new
+        // line flush with the first. `data_A22` wraps a 791-character merged
+        // cell whose separators are every one U+3000, and carrying one down
+        // indented a line by 12px — the book's worst tile.
+        while start + take < letters.len()
+            && matches!(letters[start + take], ' ' | '\u{3000}' | '\t')
+        {
             take += 1;
         }
         start += take.max(1);
