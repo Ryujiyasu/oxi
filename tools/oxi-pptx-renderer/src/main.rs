@@ -1371,6 +1371,16 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             for (w, it) in [(400, false), (400, true), (700, false), (700, true)] {
                 debug_face(name, w, it);
             }
+            // ...and the renamed parts the italic path actually asks for, which
+            // the bare-family probe above can never reach.
+            for suffix in [" #I", " #BI"] {
+                let renamed = format!("{name}{suffix}");
+                let known = EMBEDDED_FACES.with(|f| f.borrow().contains(&renamed));
+                eprintln!("EMBED   registered({renamed:?}) = {known}");
+                if known {
+                    debug_face(&renamed, 400, false);
+                }
+            }
         }
     }
     loaded
@@ -1621,13 +1631,22 @@ fn debug_face(family: &str, weight: i32, italic: bool) {
         let n = GetTextFaceW(dc, Some(&mut name));
         let mut tm = TEXTMETRICW::default();
         let _ = GetTextMetricsW(dc, &mut tm);
+        // A face name and a slant flag do not say whether the ADVANCES are the
+        // ones the deck's own part carries, and that is the thing a wrong face
+        // gets wrong. So measure a real string at a real size too: a synthesised
+        // oblique keeps the upright widths, a genuine italic part does not.
+        let probe: Vec<u16> = "invoke philosophical thoughts ".encode_utf16().collect();
+        let mut sz = windows::Win32::Foundation::SIZE::default();
+        let _ = GetTextExtentPoint32W(dc, &probe, &mut sz);
         SelectObject(dc, old);
         let _ = DeleteObject(font);
         eprintln!(
-            "EMBED {family:24} w={weight} i={italic} -> face={:?} tmWeight={} tmItalic={}",
+            "EMBED {family:24} w={weight} i={italic} -> face={:?} tmWeight={} tmItalic={}              width64={} ({:.2}pt at 36)",
             String::from_utf16_lossy(&name[..(n as usize).saturating_sub(1)]),
             tm.tmWeight,
-            tm.tmItalic
+            tm.tmItalic,
+            sz.cx,
+            f64::from(sz.cx) * 36.0 / 64.0
         );
     }
 }
@@ -9513,8 +9532,15 @@ fn create_font_for_wiu(
     let height = (font_size as f64 * scale).round() as i32;
     // An embedded part registered for this exact style IS the bold / italic
     // face, so it is asked for plain.
+    let asked = family;
+    let want_italic = italic;
     let (family, weight, italic) =
         styled_face(family, weight >= 700, italic && paraitalic_on());
+    if want_italic && std::env::var("OXI_DEBUG_EMBED").is_ok() {
+        eprintln!(
+            "FACE asked={asked:?} want_i=true -> {family:?} w={weight} i={italic} sz={font_size}"
+        );
+    }
     let wide: Vec<u16> = family.encode_utf16().collect();
     let mut family_buf = vec![0u16; wide.len() + 1];
     family_buf[..wide.len()].copy_from_slice(&wide);
@@ -10222,6 +10248,28 @@ unsafe fn end_turned_text(
         let _ = SetWorldTransform(dc, &old);
         SetGraphicsMode(dc, GRAPHICS_MODE(mode));
     }
+}
+
+/// Position italic text by the italic face's own advances.
+///
+/// ★PARKED OPT-IN (`OXI_ITALADV=1`), because the rule is INCOMPLETE, not wrong.
+/// It is exactly right on d16 -- the line widths become PowerPoint's to the
+/// pixel (1026/1021/910/483 against 1026/1020/910/483, from 1057/1024/940/496)
+/// and s5 gains +0.0058, s17 +0.0076. But d15 s5 LOSES 0.0112, and the reason
+/// is that PowerPoint itself does not always use the embedded italic part:
+///
+///   d16  level-italic, regular run -> `SourceSansPro-Italic`      (embedded)
+///   d16  level-italic, bold run    -> `SourceSansPro-BlackItalic` (embedded)
+///   d15  level-italic, bold        -> `Barlow-Bold`, SKEWED       (upright!)
+///
+/// Both decks embed all four parts of the family in question, and d15's
+/// `Barlow #BI` registers fine here (tmWeight 700, 471.38pt against the upright
+/// bold's 487.12pt) -- PowerPoint simply declined it and synthesised the slant,
+/// keeping the upright advances. Until the rule that DECIDES between those two
+/// is measured, shipping this would be stacking an exception on a spec that is
+/// not yet derived. Corpus with it on: **+0.000011, 2 decks up / 2 down**.
+fn italadv_on() -> bool {
+    std::env::var("OXI_ITALADV").ok().as_deref() == Some("1")
 }
 
 /// A shape's text is turned with the shape unless this is set.
@@ -12442,7 +12490,19 @@ fn layout_paragraph_baselines(
     // included -- measuring d11's titles at 400 and drawing them at 700 would
     // break them a word later than PowerPoint.
     let bold = para.runs.iter().any(|r| r.bold) || (lvlbold_on() && m.bold.unwrap_or(false));
-    let italic = para.runs.iter().any(|r| r.italic);
+    // S-ITALADV (2026-08-24): and at the SLANT it is drawn at, level italic
+    // included -- the same argument as the bold line above, which this one was
+    // missing. The draw loop resolves italic as
+    // `phl.is_some_and(|l| l.italic) || any run`, so measuring it as "any run"
+    // alone measured d16's quotation UPRIGHT (Source Sans Pro, 464.62pt for the
+    // line) and drew it in the deck's own italic part (446.06pt). The centred
+    // line was then started from a width 4% too large -- every line about 20px
+    // left of PowerPoint, even once the drawn advances were exact.
+    let lvl_italic = italadv_on()
+        && lvlitalic_on()
+        && !ph_levels.is_empty()
+        && ph_levels[(para.lvl as usize).min(ph_levels.len() - 1)].italic;
+    let italic = para.runs.iter().any(|r| r.italic) || lvl_italic;
     let area_w = effective_width;
     let adv = fs * 1.2 * n;
     let first_off = first_baseline_off(&family, fs, n);
@@ -13048,8 +13108,37 @@ fn draw_text_baseline_wiu(
     // them (and where PowerPoint puts them). The measured `font_adv` tables win
     // when they cover the family; otherwise the advances come from the font GDI
     // resolved, which is what makes embedded faces work.
-    let dx = font_adv::line_hmtx_dx_px(text, font_size, family, scale).or_else(|| {
-        runtime_dx_px(dc, text, font_size, family, weight >= 700, false, scale)
+    // S-ITALADV (2026-08-24): the glyphs were drawn in the ITALIC face while
+    // their positions came from the UPRIGHT one -- `runtime_dx_px` was handed a
+    // hardcoded `false`, and `line_hmtx_dx_px` takes no style at all.
+    //
+    // d16 slide 5's quotation is Source Sans Pro Italic at 36pt, and the deck
+    // embeds that exact part. Asking GDI for the string's width:
+    //     "Source Sans Pro"    italic=1  ->  464.62pt   (a synthesised oblique,
+    //                                        i.e. the UPRIGHT advances)
+    //     "Source Sans Pro #I"           ->  446.06pt   (the deck's own part)
+    //     PowerPoint's own span          ->  446.12pt
+    // The right face was already being selected to DRAW with -- 0.06pt from
+    // PowerPoint -- but the dx array came from the upright measurement, so every
+    // line came out **+3.3%** wide, and a centred line therefore started left of
+    // where PowerPoint starts it. The error is a clean scale, not accumulated
+    // rounding: the last word of the line sits at 428.16pt against PowerPoint's
+    // 414.72pt, a ratio of 1.032 that matches the ink ratio 1.033.
+    //
+    // The hmtx table is skipped outright for italic because it holds no italic
+    // data (Arial / Arial Bold / Calibri only); `runtime_dx_px` then measures
+    // the face that is actually drawn, through the same `styled_face` the font
+    // selection uses. For Arial this changes nothing -- Arial Italic carries the
+    // same advances as Arial -- so only families with a genuinely narrower
+    // italic move.
+    let dx = if italic && italadv_on() {
+        None
+    } else {
+        font_adv::line_hmtx_dx_px(text, font_size, family, scale)
+    }
+    .or_else(|| {
+        let it = italic && italadv_on();
+        runtime_dx_px(dc, text, font_size, family, weight >= 700, it, scale)
     });
     if let Some(dx) = dx {
         unsafe {
