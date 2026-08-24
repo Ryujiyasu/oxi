@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oxicells — Free Online Excel (.xlsx) Viewer in Your Browser</title>
+<meta name="description" content="Open and view Excel .xlsx files directly in your browser. Free, open-source, Rust + WebAssembly — no upload, no account, nothing leaves your device.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Oxicells — Free Online Excel (.xlsx) Viewer">
+<meta property="og:description" content="Open and view .xlsx files in the browser. Free, open-source, no upload.">
+<meta property="og:image" content="https://oxi-dd65f4.gitlab.io/oxi-logo.png">
+<meta property="og:url" content="https://oxi-dd65f4.gitlab.io/sheets.html">
+<meta property="og:site_name" content="Oxi">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://oxi-dd65f4.gitlab.io/sheets.html">
+<link rel="icon" type="image/x-icon" href="./favicon.ico">
+<script src="./analytics.js" defer></script>
+<style>
+:root {
+  --accent: #217346;
+  --accent-h: #1A5C38;
+  --accent-l: #E9F3ED;
+  --txt: #333;
+  --bg: #E8E8E8;
+  --rail: #F3F3F3;
+  --border: #E1E1E1;
+  --shad: 0 1px 4px rgba(0,0,0,.18);
+}
+* { margin: 0; padding: 0; box-sizing: border-box }
+html, body { height: 100% }
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg); color: var(--txt);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* Title bar */
+.tb {
+  display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0;
+  background: #fff; padding: 0 14px; font-size: 13px; user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px }
+.logo-mark {
+  width: 22px; height: 22px; border-radius: 5px; background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
+}
+.dn { color: #555; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tb .sp { flex: 1 }
+.tb button, .tb a.btn {
+  font: inherit; border: 1px solid var(--border); background: #fff; color: var(--txt);
+  border-radius: 5px; padding: 5px 12px; cursor: pointer; text-decoration: none;
+}
+.tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
+.tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
+.tb button.primary:hover { background: var(--accent-h) }
+.lang { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden }
+.lang button { border: 0; border-radius: 0; padding: 5px 9px; font-size: 12px }
+.lang button.on { background: var(--accent); color: #fff }
+
+/* Stage */
+.stage { flex: 1; display: flex; min-height: 0 }
+.rail {
+  width: 172px; flex-shrink: 0; background: var(--rail); border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 10px 8px; display: none;
+}
+.rail.on { display: block }
+.tab {
+  display: block; width: 100%; text-align: left; font: inherit; font-size: 13px;
+  border: 1px solid transparent; background: transparent; color: var(--txt);
+  border-radius: 5px; padding: 7px 9px; cursor: pointer; margin-bottom: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tab:hover { background: #fff }
+.tab.on { background: #fff; border-color: var(--accent); color: var(--accent-h); font-weight: 600 }
+.canvas { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 22px 20px }
+.paper { background: #fff; box-shadow: 0 2px 14px rgba(0,0,0,.22); line-height: 0 }
+.counter { margin-top: 12px; font-size: 13px; color: #777; line-height: 1.5 }
+.opts { display: flex; gap: 14px; align-items: center; margin-top: 10px; font-size: 12px; color: #666 }
+.opts label { display: flex; gap: 5px; align-items: center; cursor: pointer }
+
+/* Drop zone */
+.drop {
+  margin: auto; max-width: 620px; text-align: center; padding: 46px 30px;
+  border: 2px dashed #BDBDBD; border-radius: 12px; background: #fff; color: #666;
+}
+.drop.hot { border-color: var(--accent); background: var(--accent-l) }
+.drop h1 { font-size: 21px; color: var(--txt); margin-bottom: 8px; font-weight: 600 }
+.drop p { font-size: 14px; line-height: 1.65; margin-bottom: 18px }
+.drop .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
+.drop button {
+  font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  border-radius: 6px; padding: 9px 20px; cursor: pointer;
+}
+.drop button.ghost { background: #fff; color: var(--accent) }
+.drop button:disabled { opacity: .5; cursor: default }
+.note { font-size: 12px; color: #888; margin-top: 16px; line-height: 1.6 }
+.note a { color: var(--accent) }
+.msg { padding: 8px 14px; font-size: 13px; background: var(--accent-l); color: var(--accent-h); flex-shrink: 0 }
+.msg.err { background: #FDECEA; color: #B3261E }
+.msg[hidden] { display: none }
+@media (max-width: 720px) { .rail { display: none !important } }
+</style>
+</head>
+<body>
+
+<div class="tb">
+  <span class="logo"><span class="logo-mark">O</span><span>Oxicells</span></span>
+  <span class="dn" id="docName" data-i18n="noFile">No workbook open</span>
+  <span class="sp"></span>
+  <button id="btnOpen" data-i18n="open">Open</button>
+  <a class="btn" href="./slides.html" data-i18n="slidesApp">Slides app</a>
+  <a class="btn" href="./docs.html" data-i18n="wordApp">Word app</a>
+  <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
+  <span class="lang">
+    <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
+  </span>
+</div>
+
+<div class="msg" id="msg" hidden></div>
+
+<div class="stage">
+  <div class="rail" id="rail"></div>
+  <div class="canvas" id="canvas">
+    <div class="drop" id="drop">
+      <h1 data-i18n="title">Open an Excel file right now</h1>
+      <p data-i18n="lede">Drop a .xlsx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.</p>
+      <div class="row">
+        <button id="btnChoose" data-i18n="choose">Choose a .xlsx</button>
+        <button id="btnSample" class="ghost" disabled data-i18n="sample">Try a sample</button>
+      </div>
+      <p class="note" data-i18n="note">Oxi is open source. The rendering engine behind this page is measured cell by cell against Excel’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.</p>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileIn" accept=".xlsx" hidden>
+
+<script type="module">
+import init, { parse_spreadsheet } from './oxidocs_wasm.js';
+import { drawSheet } from './sheet-view.js';
+
+const I18N = {
+  en: {
+    noFile: 'No workbook open', open: 'Open', slidesApp: 'Slides app',
+    wordApp: 'Word app', about: 'About Oxi',
+    title: 'Open an Excel file right now',
+    lede: 'Drop a .xlsx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.',
+    choose: 'Choose a .xlsx', sample: 'Try a sample',
+    note: 'Oxi is open source. The rendering engine behind this page is measured cell by cell against Excel’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
+    loading: 'Loading the engine…', parsing: 'Parsing…',
+    grid: 'Gridlines', shapes: 'Drawings',
+    parsed: (sheets, cells, ms) => `${sheets} sheets, ${cells} cells — parsed in ${ms} ms`,
+    sheetOf: (name, rows, cols) => `${name} — ${rows} rows × ${cols} columns`,
+    badType: 'That is not a .xlsx file.',
+    failed: 'Could not open the workbook: ',
+    empty: 'The workbook holds no sheets.',
+  },
+  ja: {
+    noFile: 'ファイル未選択', open: '開く', slidesApp: 'Slides アプリ',
+    wordApp: 'Word アプリ', about: 'Oxi について',
+    title: 'Excel ファイルをその場で開く',
+    lede: '.xlsx をここにドロップするか、選んでください。解析も描画も WebAssembly でブラウザの中だけで行われ、ファイルは端末から出ません。',
+    choose: '.xlsx を選ぶ', sample: 'サンプルを開く',
+    note: 'Oxi はオープンソースです。このページの描画エンジンは Excel 自身の出力とセル単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
+    loading: 'エンジンを読み込み中…', parsing: '解析中…',
+    grid: 'グリッド線', shapes: '図形',
+    parsed: (sheets, cells, ms) => `${sheets} シート / ${cells} セル — ${ms} ms で解析`,
+    sheetOf: (name, rows, cols) => `${name} — ${rows} 行 × ${cols} 列`,
+    badType: '.xlsx ファイルではありません。',
+    failed: 'ブックを開けませんでした: ',
+    empty: 'このブックにはシートがありません。',
+  },
+};
+let lang = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+const t = k => I18N[lang][k];
+
+let book = null;
+let shown = 0;
+let heights = {};
+let showGrid = true;
+let showShapes = true;
+let parsedFacts = null;
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const v = I18N[lang][el.dataset.i18n];
+    if (typeof v === 'string') el.innerHTML = v;
+  });
+  document.getElementById('langEn').className = lang === 'en' ? 'on' : '';
+  document.getElementById('langJa').className = lang === 'ja' ? 'on' : '';
+  if (book) { tabs(); render(); }
+}
+document.getElementById('langEn').onclick = () => { lang = 'en'; applyLang(); };
+document.getElementById('langJa').onclick = () => { lang = 'ja'; applyLang(); };
+
+const msgEl = document.getElementById('msg');
+function say(text, isErr) {
+  msgEl.textContent = text;
+  msgEl.className = isErr ? 'msg err' : 'msg';
+  msgEl.hidden = false;
+}
+
+const SAMPLE = './sample.xlsx';
+const canvasBox = document.getElementById('canvas');
+const railBox = document.getElementById('rail');
+
+say(t('loading'));
+await init();
+try {
+  heights = await (await fetch('./row-heights.json')).json();
+} catch {
+  // The table only sharpens the row heights; without it the device's own
+  // metrics stand in.
+}
+msgEl.hidden = true;
+document.getElementById('btnSample').disabled = false;
+
+/// One button per sheet, down the rail.
+function tabs() {
+  railBox.replaceChildren(...book.sheets.map((sheet, index) => {
+    const button = document.createElement('button');
+    button.className = index === shown ? 'tab on' : 'tab';
+    button.textContent = sheet.name || `Sheet${index + 1}`;
+    button.onclick = () => { shown = index; tabs(); render(); };
+    return button;
+  }));
+  railBox.className = book.sheets.length > 1 ? 'rail on' : 'rail';
+}
+
+function render() {
+  const sheet = book.sheets[shown];
+  let drawn;
+  try {
+    drawn = drawSheet({ book, index: shown, heights, grid: showGrid, shapes: showShapes });
+  } catch (error) {
+    say(t('failed') + (error.message ?? error), true);
+    return;
+  }
+  const paper = document.createElement('div');
+  paper.className = 'paper';
+  paper.appendChild(drawn.canvas);
+
+  const counter = document.createElement('div');
+  counter.className = 'counter';
+  counter.textContent = I18N[lang].sheetOf(
+    sheet.name || `Sheet${shown + 1}`, drawn.rows.length, Math.max(sheet.col_count || 0, 1));
+
+  const opts = document.createElement('div');
+  opts.className = 'opts';
+  for (const [key, on, set] of [
+    ['grid', showGrid, v => { showGrid = v; }],
+    ['shapes', showShapes, v => { showShapes = v; }],
+  ]) {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = on;
+    box.onchange = () => { set(box.checked); render(); };
+    label.append(box, document.createTextNode(t(key)));
+    opts.appendChild(label);
+  }
+
+  canvasBox.replaceChildren(paper, counter, opts);
+  if (parsedFacts) say(parsedFacts());
+}
+
+function open(name, bytes) {
+  say(t('parsing'));
+  const began = performance.now();
+  try {
+    book = parse_spreadsheet(new Uint8Array(bytes));
+  } catch (error) {
+    book = null;
+    say(t('failed') + (error.message ?? error), true);
+    return;
+  }
+  if (!book.sheets?.length) { book = null; say(t('empty'), true); return; }
+  const took = Math.round(performance.now() - began);
+  const cells = book.sheets.reduce((sum, sheet) =>
+    sum + (sheet.rows || []).reduce((n, row) => n + (row.cells?.length || 0), 0), 0);
+  parsedFacts = () => I18N[lang].parsed(book.sheets.length, cells, took);
+  document.getElementById('docName').textContent = name;
+  shown = 0;
+  tabs();
+  render();
+}
+
+async function openFile(file) {
+  if (!/\.xlsx$/i.test(file.name)) { say(t('badType'), true); return; }
+  open(file.name, await file.arrayBuffer());
+}
+
+const fileIn = document.getElementById('fileIn');
+fileIn.onchange = () => { if (fileIn.files?.[0]) openFile(fileIn.files[0]); };
+document.getElementById('btnOpen').onclick = () => fileIn.click();
+document.getElementById('btnChoose').onclick = () => fileIn.click();
+document.getElementById('btnSample').onclick = async () => {
+  try {
+    const response = await fetch(SAMPLE);
+    if (!response.ok) throw new Error(String(response.status));
+    open('sample.xlsx', await response.arrayBuffer());
+  } catch (error) {
+    say(t('failed') + (error.message ?? error), true);
+  }
+};
+
+const drop = document.getElementById('drop');
+document.addEventListener('dragover', e => { e.preventDefault(); drop && drop.classList.add('hot'); });
+document.addEventListener('dragleave', () => drop && drop.classList.remove('hot'));
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  drop && drop.classList.remove('hot');
+  const file = e.dataTransfer?.files?.[0];
+  if (file) openFile(file);
+});
+
+applyLang();
+</script>
+</body>
+</html>
