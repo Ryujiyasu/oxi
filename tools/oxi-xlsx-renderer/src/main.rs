@@ -350,11 +350,28 @@ fn row_pixels(
         };
         // A cell that names a LATIN face keeps the workbook's Japanese face
         // beside it — xlsx has one slot and a Japanese cell wears two — and
-        // the row has to hold whichever is taller (`speaks_japanese`).
-        let font_px = match sheet.normal_font.as_ref() {
-            Some((normal, size)) if !speaks_japanese(face) => {
-                row_defaults::font_default_row_px(normal, *size)
-                    .map_or(font_px, |theirs| theirs.max(font_px))
+        // the row holds a line built from BOTH: the deeper baseline, and the
+        // longer descent under it.
+        //
+        //     line = max(baseline, その baseline - 1) + max(descent, その descent)
+        //
+        // `_xlsx_row_companion2.py` reads eleven faces and sizes against
+        // `fies_t2`'s own Terminal 14 (row 21, baseline 18) and every one of
+        // them lands here: Century 9 and 10 give 21 and 20 where the taller of
+        // the two rows alone would give 21 for both, and Century 14 keeps its
+        // own 24 because its baseline is the deeper one. The pixel off the
+        // Japanese baseline is measured, not derived — a row set in that face
+        // ALONE keeps it, and a row that mixes the two does not.
+        let font_px = match (sheet.normal_font.as_ref(), line_box_of(face, size, cell.style.bold)) {
+            (Some((normal, normal_size)), Some((own, own_base))) if !speaks_japanese(face) => {
+                match line_box_of(normal, *normal_size, false) {
+                    Some((theirs, their_base)) => {
+                        let base = own_base.max(their_base.saturating_sub(1));
+                        let under = (own - own_base).max(theirs - their_base);
+                        base + under
+                    }
+                    None => font_px,
+                }
             }
             _ => font_px,
         };
@@ -1422,6 +1439,11 @@ pub(crate) fn line_box(face: &str, points: f32, bold: bool, italic: bool) -> Opt
             Some((height, height - descent))
         }
     }
+}
+
+/// The row a face asks for, and how far down it its baseline sits.
+fn line_box_of(face: &str, points: f32, bold: bool) -> Option<(u16, u16)> {
+    row_defaults::font_line_box(face, points, bold)
 }
 
 /// Where one paragraph breaks in a box this wide, given what each character
