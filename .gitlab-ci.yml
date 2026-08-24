@@ -31,14 +31,29 @@ default:
 test:
   stage: test
   script:
-    - cargo test --workspace --locked
+    - set -o pipefail
+    - mkdir -p ci-logs
+    - (rustc --version; cargo --version; nproc; free -m) 2>&1 | tee ci-logs/env.log
+    - cargo test --workspace --locked 2>&1 | tee ci-logs/test.log
+  artifacts:
+    when: always
+    paths:
+      - ci-logs/
+    expire_in: 1 week
   timeout: 1h
 
 clippy:
   stage: test
   script:
+    - set -o pipefail
+    - mkdir -p ci-logs
     - rustup component add clippy
-    - cargo clippy --workspace --all-targets --locked
+    - cargo clippy --workspace --all-targets --locked 2>&1 | tee ci-logs/clippy.log
+  artifacts:
+    when: always
+    paths:
+      - ci-logs/
+    expire_in: 1 week
   timeout: 1h
 
 wasm:
