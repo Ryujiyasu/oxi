@@ -207,13 +207,23 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 
   <section id="demo">
     <div class="wrap">
-      <h2>いますぐ Word 文書を開く</h2>
+      <h2>いますぐ文書を開く</h2>
       <p class="sub">ファイルを選ぶだけ。解析からレイアウト、描画、編集まで、すべてブラウザの中だけで動きます。アップロードも登録もありません。</p>
-      <div class="cards" style="grid-template-columns: minmax(260px, 620px); justify-content: center;">
+      <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
         <a class="card" href="../docs.html">
           <span class="tag docs">W</span>
           <h3>Oxidocs — Word (.docx) ビューア / エディタ</h3>
           <p>.docx を開くと、下のグラフで実測しているのと同じレイアウトエンジンがその場で描画します。編集して保存しても元のファイル構造はそのまま。変更した箇所だけを書き換えます。</p>
+        </a>
+        <a class="card" href="../sheets.html">
+          <span class="tag cells">X</span>
+          <h3>Oxicells — Excel (.xlsx) ビューア</h3>
+          <p>.xlsx を開くと、Excel が描くとおりにシートが出ます。列幅、Excel が各行に与える高さ、折り返しの改行位置、結合セル、罫線、表示形式、図形まで、Excel 自身の出力とセル単位で比較して実測したエンジンが解決します。閲覧のみ — 編集は Word アプリです。</p>
+        </a>
+        <a class="card" href="../slides.html">
+          <span class="tag slides">P</span>
+          <h3>Oxislides — PowerPoint (.pptx) ビューア</h3>
+          <p>.pptx を開いて順に送れます。テーマ色、プレースホルダの継承、グラデーションと画像の背景、図形の塗り、回転、文字の蛍光ペンまで、PowerPoint 自身の書き出しとスライド単位で比較して実測したエンジンが解決します。閲覧のみ — 編集は Word アプリです。</p>
         </a>
       </div>
     </div>
