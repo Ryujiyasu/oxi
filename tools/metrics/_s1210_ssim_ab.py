@@ -40,8 +40,10 @@ REPO=str(_REPO)
 # concurrent `cargo build --release` cannot swap the binary mid-run.
 DW=os.environ.get("OXI_DWRITE_EXE") or os.path.join(REPO,"tools","oxi-dwrite-renderer","target","release","oxi-dwrite-renderer.exe")
 DOCS=os.path.join(REPO,"tools","golden-test","documents","docx")
-BASE={"OXI_CELLLAW":"1","OXI_YAKUCOMP":"1","OXI_AUTOSPACE2":"1",
-      "OXI_S1201":"1","OXI_S1155":"1"}
+# OXI_SSIM_BASE overrides the base set, so one member can be attributed by
+# holding the OTHER four: base = bundle minus X, flag = X.
+BASE=dict((k,"1") for k in (os.environ.get("OXI_SSIM_BASE") or
+      "OXI_CELLLAW,OXI_YAKUCOMP,OXI_AUTOSPACE2,OXI_S1201,OXI_S1155").split(",") if k)
 ARG=sys.argv[1] if len(sys.argv)>1 else "OXI_S1210"
 # "VAR" -> A sets VAR=1, B unsets. "VAR=VAL" -> A sets VAR=VAL, B unsets.
 # COMMA-SEPARATED -> A sets them all, B unsets them all; that is how a bundle
