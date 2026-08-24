@@ -640,6 +640,52 @@ pub(crate) fn shape_widths(
     })
 }
 
+/// How far Excel lets a shape's run wander from its exact place before it
+/// gives a pixel back — ahead of it, and behind it.
+///
+/// A shape steps by `round(design)` a character, so the run drifts by the
+/// rounding a character. Excel does NOT re-round the running total the way a
+/// naive accumulator would: it keeps stepping until the drift passes a limit
+/// and then spends one pixel. `_xlsx_shape_phase.py` reads the limit off
+/// Excel's own picture over ten faces and four sizes, and
+/// `_xlsx_shape_phase2.py` fits it arm by arm:
+///
+///     ＭＳ 明朝 / ＭＳ ゴシック / BIZ UDゴシック   ahead 1.05..1.30  behind 0.05..0.30
+///     メイリオ / 游 / ＭＳ Ｐ / Meiryo UI / HGS   ahead 3.35..3.65  behind 5.05..5.30
+///
+/// The two groups are told apart by the device's own hinted advance: where it
+/// is WIDER than `round(design)` — the ＭＳ faces report `round(design) + 1`
+/// for every character — the run is held tight; everywhere else it wanders.
+fn phase_room(
+    counter: &LineCounter,
+    face: &str,
+    points: f32,
+    bold: bool,
+    italic: bool,
+    letters: &[char],
+    shares: &[f32],
+) -> (f32, f32) {
+    let em = points * 96.0 / 72.0;
+    // Read the face on one FULL-WIDTH character: a proportional face reports a
+    // wider hinted advance for some of its narrow marks, and that is not what
+    // tells the two groups apart.
+    let at = shares
+        .iter()
+        .position(|share| *share >= 0.9)
+        .unwrap_or_default();
+    let tight = letters
+        .get(at)
+        .and_then(|letter| counter.advances_of(face, points, bold, italic, &[*letter]))
+        .and_then(|whole| whole.first().copied())
+        .zip(shares.get(at))
+        .is_some_and(|(whole, share)| whole > (share * em).round() as i32);
+    if tight {
+        (1.2, 0.2)
+    } else {
+        (3.5, 5.2)
+    }
+}
+
 pub(crate) fn shape_run(
     face: &str,
     points: f32,
@@ -651,14 +697,22 @@ pub(crate) fn shape_run(
         let letters: Vec<char> = text.chars().collect();
         let shares = counter.design_advances(face, bold, italic, &letters)?;
         let em = points * 96.0 / 72.0;
-        let mut at = 0.0f32;
+        let (ahead, behind) = phase_room(counter, face, points, bold, italic, &letters, &shares);
+        let mut exact = 0.0f32;
+        let mut drawn = 0i32;
         let mut held = Vec::with_capacity(shares.len());
         let mut was = 0;
         for share in shares {
-            at += share * em;
-            let now = at.round() as i32;
-            held.push(now - was);
-            was = now;
+            let advance = share * em;
+            exact += advance;
+            drawn += advance.round() as i32;
+            if drawn as f32 - exact > ahead {
+                drawn -= 1;
+            } else if drawn as f32 - exact < -behind {
+                drawn += 1;
+            }
+            held.push(drawn - was);
+            was = drawn;
         }
         Some(held)
     })
@@ -679,20 +733,32 @@ pub(crate) fn shape_run_worn(
 ) -> Option<Vec<i32>> {
     held(|counter| {
         let em = points * 96.0 / 72.0;
-        let mut at = 0.0f32;
+        let mut exact = 0.0f32;
+        let mut drawn = 0i32;
         let mut was = 0;
         let mut steps = Vec::new();
+        let mut room: Option<(f32, f32)> = None;
         for (bold, text) in worn {
             let letters: Vec<char> = text.chars().collect();
             let shares = counter.design_advances(face, *bold, italic, &letters)?;
+            // The line's own limits, read once off its first run.
+            let (ahead, behind) = *room.get_or_insert_with(|| {
+                phase_room(counter, face, points, *bold, italic, &letters, &shares)
+            });
             for (letter, share) in letters.iter().zip(shares) {
-                at += share * em;
-                let now = at.round() as i32;
+                let advance = share * em;
+                exact += advance;
+                drawn += advance.round() as i32;
+                if drawn as f32 - exact > ahead {
+                    drawn -= 1;
+                } else if drawn as f32 - exact < -behind {
+                    drawn += 1;
+                }
                 // One `dx` a UTF-16 unit, as `ExtTextOutW` wants them.
                 for unit in 0..letter.len_utf16() {
-                    steps.push(if unit == 0 { now - was } else { 0 });
+                    steps.push(if unit == 0 { drawn - was } else { 0 });
                 }
-                was = now;
+                was = drawn;
             }
         }
         Some(steps)
