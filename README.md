@@ -7,7 +7,7 @@ Word (.docx) layout is scored against Microsoft Word page by page, PowerPoint (.
 
 [Live Demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Layout Accuracy](#layout-accuracy-vs-microsoft-word) · [Contributing](#contributing)
 
-![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
+![release v0.8.0](https://img.shields.io/badge/release-v0.8.0-8a2be2) ![MPL-2.0 License](https://img.shields.io/badge/license-MPL--2.0-blue) ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange) ![wasm-pack 0.14](https://img.shields.io/badge/wasm--pack-0.14-green)
 
 > **Canonical repository:** [GitLab — Ryujiyasu/oxi](https://gitlab.com/Ryujiyasu/oxi) (issues, merge requests, CI).
 > The [GitHub repository](https://github.com/Ryujiyasu/oxi) is a mirror kept in sync with GitLab `main`.
@@ -88,7 +88,7 @@ The same measurement discipline, applied to real-world `.pptx` files. 50 files a
 | LibreOffice 26.2.1.2 | 0.913 | 48 / 48 |
 | ONLYOFFICE 9.3.1.8 | 0.908 | 48 / 48 |
 
-Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxi all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. **Oxi now leads both suites on this frozen set** (paired difference vs LibreOffice +0.040 ± 0.005, |t| = 8.7, ahead on 44 of the 48 documents; LibreOffice and ONLYOFFICE remain statistically tied with each other). The set was first measured at **0.679** (2026-08-13, the renderer's first PPTX measurement) — the week of renderer work since (slide-master placeholder inheritance, group transforms under mirroring, embedded fonts, color emoji, mixed-face line boxes) moved it to 0.953, with **every one of the 48 documents improving and none regressing**; the worst document now scores 0.880. As with the Word tables, the set is frozen, never anatomized, and re-measured as the engine improves. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Details and per-document scores: [REPORT_pptx_hf50_3way_v1.md](REPORT_pptx_hf50_3way_v1.md), raw results in `pipeline_data/pptx_benchmark/ssim_pptx/_result.json`.
+Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxi all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. **Oxi now leads both suites on this frozen set** (paired difference vs LibreOffice +0.040 ± 0.005, |t| = 8.7, ahead on 44 of the 48 documents; LibreOffice and ONLYOFFICE remain statistically tied with each other). The set was first measured at **0.679** (2026-08-13, the renderer's first PPTX measurement) — the week of renderer work since (slide-master placeholder inheritance, group transforms under mirroring, embedded fonts, color emoji, mixed-face line boxes) moved it to 0.953, with **every one of the 48 documents improving and none regressing**; the worst document now scores 0.880. As with the Word tables, the set is frozen, never anatomized, and re-measured as the engine improves. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Per-document scores, the paired statistics and the full method: [docs/benchmarks/pptx-hf50.md](docs/benchmarks/pptx-hf50.md); raw scores as JSON: [docs/benchmarks/pptx-hf50-results.json](docs/benchmarks/pptx-hf50-results.json).
 
 ### The internal gates (development corpus)
 
@@ -185,7 +185,7 @@ Most Word-compatible renderers treat Japanese layout as an afterthought. For Oxi
 
 **Oxi's unique combination:** OSS (MPL-2.0 core + permissive bindings — embeddable in proprietary products, unlike AGPL) + Rust/WASM client-side + a format-agnostic IR (no proprietary "Oxi format") + externally-gated Word fidelity + zero server cost. No other project occupies this intersection.
 
-The comparative claims are measured, not asserted — see the blind-set tables above, where ONLYOFFICE and LibreOffice currently beat Oxi on English pixel similarity (Oxi leads both on English page-count accuracy).
+The comparative claims are measured, not asserted — see the blind-set tables above, where ONLYOFFICE still beats Oxi on English pixel similarity and LibreOffice is a statistical tie there (Oxi leads both on English page-count accuracy, and leads outright on the Japanese and PowerPoint sets).
 
 LibreOffice treats ODF as native and OOXML as an import (round-trip degrades). Microsoft Word inverts that. Oxi's IR is format-agnostic from the start — neither format owns it, so neither degrades on round-trip.
 
@@ -318,11 +318,18 @@ Oxi treats every document as untrusted input. A hostile file can render wrong �
 
 ## Roadmap
 
-- **v1 — Foundation (current):** Word-compatible .docx rendering; the measurement loop (dev gates + rotating blind benchmarks); .xlsx/.pptx/PDF parsing and basic rendering; round-trip editing; WASM + Canvas editor
-- **v1.x — Word parity:** close the English blind-set gap (0.825 → ahead of the mature suites; page counts already lead, the residual is within-page pixel placement), lift the Japanese blind set toward 0.9+, IME (Japanese/CJK input) and editor polish, .xlsx/.pptx layout engines
-- **v2 — Format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level
+The version number is the **fidelity floor of the development corpus**, not a maturity
+label: `0.8` means every document in it renders at SSIM ≥ 0.80 against Word's own output.
+It moves only when the *worst* document moves, so it cannot be improved by polishing the
+documents that already score well — and `1.0` is the project's stop condition rather than
+its finish line. Per-release detail: [CHANGELOG.md](CHANGELOG.md).
 
-The measurement loop (deterministic reference output, falsifiable hypotheses, external merge gate, blind holdout) transfers to ODF once the v2 baseline lands — only the reference renderer changes.
+- **0.8 — current:** Word-compatible .docx rendering; the measurement loop (dev gates + rotating blind benchmarks); .pptx and .xlsx rendering, formula engine and browser VBA host; PDF; round-trip editing; WASM + Canvas editor, CLI, desktop app, Python bindings
+- **0.9 — lift the floor:** the families still under 0.85 in the dev corpus are Latin justified wrap, form-heavy tables and vector shape groups; close the remaining English pixel gap to ONLYOFFICE (page counts already lead), lift the Japanese blind set toward 0.9, IME (Japanese/CJK input) and editor polish
+- **1.0 — indistinguishable from Word:** no document in the corpus below 1.0. This is the falsifiable claim the whole loop exists to serve; counterexamples are the contribution most wanted
+- **Beyond 1.0 — format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level
+
+The measurement loop (deterministic reference output, falsifiable hypotheses, external merge gate, blind holdout) transfers to ODF unchanged — only the reference renderer changes.
 
 ---
 

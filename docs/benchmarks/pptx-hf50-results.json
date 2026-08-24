@@ -1,0 +1,1207 @@
+{
+ "method": {
+  "corpus": "HuggingFace noxneural/pptx_collection_templates",
+  "sampling": "random.sample(pool_of_999_pptx, 50) with seed 20260809, frozen before any measurement",
+  "ground_truth": "Microsoft PowerPoint (Microsoft 365 16.0.20131.20154) COM export to PDF",
+  "score": "SSIM at 150 DPI over same-index slides, LANCZOS resize-to-match, structural_similarity(channel_axis=2, data_range=255)",
+  "excluded": "2 of 50 files are corrupt zip containers that PowerPoint COM, LibreOffice, ONLYOFFICE x2t and Oxi all reject; 48 measured",
+  "measured": {
+   "oxi": "2026-08-20",
+   "libreoffice": "2026-08-20 (26.2.1.2)",
+   "onlyoffice": "2026-08-13 (x2t 9.3.1.8)"
+  }
+ },
+ "overall": {
+  "n": 48,
+  "oxi": {
+   "mean_ssim": 0.95266,
+   "slide_count_match": 48
+  },
+  "libreoffice": {
+   "mean_ssim": 0.912877,
+   "slide_count_match": 48
+  },
+  "onlyoffice": {
+   "mean_ssim": 0.907537,
+   "slide_count_match": 48
+  },
+  "oxi_first_measurement_2026_08_13": 0.678811
+ },
+ "paired_differences": {
+  "oxi_vs_libreoffice": {
+   "mean_diff": 0.039782,
+   "std_error": 0.00457,
+   "abs_t": 8.71,
+   "oxi_ahead_on": 44,
+   "n": 48
+  },
+  "oxi_vs_onlyoffice": {
+   "mean_diff": 0.045123,
+   "std_error": 0.007799,
+   "abs_t": 5.79,
+   "oxi_ahead_on": 46,
+   "n": 48
+  },
+  "libreoffice_vs_onlyoffice": {
+   "mean_diff": 0.005341,
+   "std_error": 0.008473,
+   "abs_t": 0.63,
+   "libreoffice_ahead_on": 28,
+   "n": 48
+  }
+ },
+ "docs": [
+  {
+   "idx": 47,
+   "hf_path": "Salisbury · SlidesCarnival.pptx",
+   "ppt_slides": 39,
+   "oxi": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.880148,
+    "page_min": 0.65481
+   },
+   "libreoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.863965,
+    "page_min": 0.751291
+   },
+   "onlyoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.834449,
+    "page_min": 0.676791
+   },
+   "oxi_first_measurement_2026_08_13": 0.380214
+  },
+  {
+   "idx": 12,
+   "hf_path": "Ethics of Artificial Intelligence.pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.911747,
+    "page_min": 0.861488
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.857216,
+    "page_min": 0.800642
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.870285,
+    "page_min": 0.811977
+   },
+   "oxi_first_measurement_2026_08_13": 0.235849
+  },
+  {
+   "idx": 49,
+   "hf_path": "Cruise Ship Line Company Profile.pptx",
+   "ppt_slides": 21,
+   "oxi": {
+    "pages": 21,
+    "page_delta": 0,
+    "common_mean": 0.914664,
+    "page_min": 0.368571
+   },
+   "libreoffice": {
+    "pages": 21,
+    "page_delta": 0,
+    "common_mean": 0.884578,
+    "page_min": 0.766255
+   },
+   "onlyoffice": {
+    "pages": 21,
+    "page_delta": 0,
+    "common_mean": 0.903965,
+    "page_min": 0.822837
+   },
+   "oxi_first_measurement_2026_08_13": 0.799984
+  },
+  {
+   "idx": 4,
+   "hf_path": "Adrian · SlidesCarnival.pptx",
+   "ppt_slides": 39,
+   "oxi": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.924939,
+    "page_min": 0.796868
+   },
+   "libreoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.927928,
+    "page_min": 0.773683
+   },
+   "onlyoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.915229,
+    "page_min": 0.759195
+   },
+   "oxi_first_measurement_2026_08_13": 0.759737
+  },
+  {
+   "idx": 28,
+   "hf_path": "Dentist Career Day Presentation.pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.928079,
+    "page_min": 0.835904
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.922579,
+    "page_min": 0.888641
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.87409,
+    "page_min": 0.710181
+   },
+   "oxi_first_measurement_2026_08_13": 0.547716
+  },
+  {
+   "idx": 50,
+   "hf_path": "June Calendar Planner.pptx",
+   "ppt_slides": 5,
+   "oxi": {
+    "pages": 5,
+    "page_delta": 0,
+    "common_mean": 0.928791,
+    "page_min": 0.906272
+   },
+   "libreoffice": {
+    "pages": 5,
+    "page_delta": 0,
+    "common_mean": 0.905578,
+    "page_min": 0.854993
+   },
+   "onlyoffice": {
+    "pages": 5,
+    "page_delta": 0,
+    "common_mean": 0.918242,
+    "page_min": 0.877891
+   },
+   "oxi_first_measurement_2026_08_13": 0.775835
+  },
+  {
+   "idx": 15,
+   "hf_path": "Futuristic Engineering Center Modern Presentation(2).pptx",
+   "ppt_slides": 18,
+   "oxi": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.930237,
+    "page_min": 0.899219
+   },
+   "libreoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.842405,
+    "page_min": 0.745026
+   },
+   "onlyoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.823703,
+    "page_min": 0.67987
+   },
+   "oxi_first_measurement_2026_08_13": 0.631354
+  },
+  {
+   "idx": 44,
+   "hf_path": "Feeble · SlidesCarnival(2).pptx",
+   "ppt_slides": 39,
+   "oxi": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.93752,
+    "page_min": 0.70538
+   },
+   "libreoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.90389,
+    "page_min": 0.738564
+   },
+   "onlyoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.915423,
+    "page_min": 0.739264
+   },
+   "oxi_first_measurement_2026_08_13": 0.788219
+  },
+  {
+   "idx": 24,
+   "hf_path": "Agribusiness Newsletter Modern Minimal Presentation.pptx",
+   "ppt_slides": 18,
+   "oxi": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.938262,
+    "page_min": 0.825754
+   },
+   "libreoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.903621,
+    "page_min": 0.724179
+   },
+   "onlyoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.915311,
+    "page_min": 0.783318
+   },
+   "oxi_first_measurement_2026_08_13": 0.859853
+  },
+  {
+   "idx": 20,
+   "hf_path": "Canadian Thanksgiving Day Background Slides.pptx",
+   "ppt_slides": 18,
+   "oxi": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.939316,
+    "page_min": 0.866264
+   },
+   "libreoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.902088,
+    "page_min": 0.847733
+   },
+   "onlyoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.903116,
+    "page_min": 0.863097
+   },
+   "oxi_first_measurement_2026_08_13": 0.755897
+  },
+  {
+   "idx": 38,
+   "hf_path": "Elegant New Year's Eve MiniTheme Presentation(3).pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.9395,
+    "page_min": 0.869329
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.912684,
+    "page_min": 0.828159
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.899103,
+    "page_min": 0.80915
+   },
+   "oxi_first_measurement_2026_08_13": 0.670436
+  },
+  {
+   "idx": 1,
+   "hf_path": "Biology Subject for Elementary_ Tropical Rainforest Wildlife Pink and Green Color Blocks Presentation(1).pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.942696,
+    "page_min": 0.731062
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.916499,
+    "page_min": 0.843417
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.917197,
+    "page_min": 0.838009
+   },
+   "oxi_first_measurement_2026_08_13": 0.72962
+  },
+  {
+   "idx": 36,
+   "hf_path": "Colourful Playful Infographic Presentation(1).pptx",
+   "ppt_slides": 22,
+   "oxi": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.943027,
+    "page_min": 0.866373
+   },
+   "libreoffice": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.951686,
+    "page_min": 0.89355
+   },
+   "onlyoffice": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.952548,
+    "page_min": 0.892332
+   },
+   "oxi_first_measurement_2026_08_13": 0.766065
+  },
+  {
+   "idx": 37,
+   "hf_path": "Colourful Playful Infographic Presentation.pptx",
+   "ppt_slides": 22,
+   "oxi": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.943027,
+    "page_min": 0.866373
+   },
+   "libreoffice": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.951686,
+    "page_min": 0.89355
+   },
+   "onlyoffice": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.952548,
+    "page_min": 0.892332
+   },
+   "oxi_first_measurement_2026_08_13": 0.766065
+  },
+  {
+   "idx": 34,
+   "hf_path": "Back to School Open to Registration Poster.pptx",
+   "ppt_slides": 4,
+   "oxi": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.944821,
+    "page_min": 0.903408
+   },
+   "libreoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.873348,
+    "page_min": 0.755992
+   },
+   "onlyoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.923602,
+    "page_min": 0.885881
+   },
+   "oxi_first_measurement_2026_08_13": 0.696243
+  },
+  {
+   "idx": 31,
+   "hf_path": "Green and Beige Retail Startup Pitch Deck.pptx",
+   "ppt_slides": 33,
+   "oxi": {
+    "pages": 33,
+    "page_delta": 0,
+    "common_mean": 0.945028,
+    "page_min": 0.871362
+   },
+   "libreoffice": {
+    "pages": 33,
+    "page_delta": 0,
+    "common_mean": 0.934595,
+    "page_min": 0.88949
+   },
+   "onlyoffice": {
+    "pages": 33,
+    "page_delta": 0,
+    "common_mean": 0.927483,
+    "page_min": 0.88194
+   },
+   "oxi_first_measurement_2026_08_13": 0.498416
+  },
+  {
+   "idx": 10,
+   "hf_path": "Boho Autumn Leaves Personal Organizer.pptx",
+   "ppt_slides": 18,
+   "oxi": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.94509,
+    "page_min": 0.877364
+   },
+   "libreoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.920134,
+    "page_min": 0.842575
+   },
+   "onlyoffice": {
+    "pages": 18,
+    "page_delta": 0,
+    "common_mean": 0.913298,
+    "page_min": 0.856975
+   },
+   "oxi_first_measurement_2026_08_13": 0.670113
+  },
+  {
+   "idx": 13,
+   "hf_path": "Family Feud Answer Board Background(1).pptx",
+   "ppt_slides": 4,
+   "oxi": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.945845,
+    "page_min": 0.912902
+   },
+   "libreoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.935766,
+    "page_min": 0.895764
+   },
+   "onlyoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.942525,
+    "page_min": 0.899024
+   },
+   "oxi_first_measurement_2026_08_13": 0.810922
+  },
+  {
+   "idx": 42,
+   "hf_path": "Family Feud Answer Board Background.pptx",
+   "ppt_slides": 4,
+   "oxi": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.945845,
+    "page_min": 0.912902
+   },
+   "libreoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.935766,
+    "page_min": 0.895764
+   },
+   "onlyoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.942525,
+    "page_min": 0.899024
+   },
+   "oxi_first_measurement_2026_08_13": 0.810922
+  },
+  {
+   "idx": 6,
+   "hf_path": "Illustrated Pattern April Daily Calendar 2024 Presentation(1).pptx",
+   "ppt_slides": 19,
+   "oxi": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.946105,
+    "page_min": 0.913896
+   },
+   "libreoffice": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.806464,
+    "page_min": 0.574323
+   },
+   "onlyoffice": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.915849,
+    "page_min": 0.880601
+   },
+   "oxi_first_measurement_2026_08_13": 0.575389
+  },
+  {
+   "idx": 8,
+   "hf_path": "Illustrated Pattern April Daily Calendar 2024 Presentation.pptx",
+   "ppt_slides": 19,
+   "oxi": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.946176,
+    "page_min": 0.913896
+   },
+   "libreoffice": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.806478,
+    "page_min": 0.574526
+   },
+   "onlyoffice": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.915876,
+    "page_min": 0.880601
+   },
+   "oxi_first_measurement_2026_08_13": 0.575426
+  },
+  {
+   "idx": 9,
+   "hf_path": "Isabella · SlidesCarnival.pptx",
+   "ppt_slides": 39,
+   "oxi": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.948815,
+    "page_min": 0.868072
+   },
+   "libreoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.921522,
+    "page_min": 0.766137
+   },
+   "onlyoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.569758,
+    "page_min": 0.089853
+   },
+   "oxi_first_measurement_2026_08_13": 0.677988
+  },
+  {
+   "idx": 3,
+   "hf_path": "Fun Illustrative Happy Indian Independence Day!.pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.949669,
+    "page_min": 0.876789
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.920208,
+    "page_min": 0.876601
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.911631,
+    "page_min": 0.879123
+   },
+   "oxi_first_measurement_2026_08_13": 0.572665
+  },
+  {
+   "idx": 25,
+   "hf_path": "Christmas Giveaway Poster.pptx",
+   "ppt_slides": 4,
+   "oxi": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.952868,
+    "page_min": 0.935158
+   },
+   "libreoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.867195,
+    "page_min": 0.78662
+   },
+   "onlyoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.917186,
+    "page_min": 0.896655
+   },
+   "oxi_first_measurement_2026_08_13": 0.560464
+  },
+  {
+   "idx": 27,
+   "hf_path": "Simple Minimal Formal Research Poster(1).pptx",
+   "ppt_slides": 4,
+   "oxi": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.956909,
+    "page_min": 0.915084
+   },
+   "libreoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.959207,
+    "page_min": 0.951137
+   },
+   "onlyoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.927602,
+    "page_min": 0.879046
+   },
+   "oxi_first_measurement_2026_08_13": 0.774926
+  },
+  {
+   "idx": 21,
+   "hf_path": "Eleanor · SlidesCarnival(2).pptx",
+   "ppt_slides": 39,
+   "oxi": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.958003,
+    "page_min": 0.878257
+   },
+   "libreoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.937336,
+    "page_min": 0.749707
+   },
+   "onlyoffice": {
+    "pages": 39,
+    "page_delta": 0,
+    "common_mean": 0.927504,
+    "page_min": 0.739824
+   },
+   "oxi_first_measurement_2026_08_13": 0.412463
+  },
+  {
+   "idx": 33,
+   "hf_path": "Modern Abstract Trip Planning Infographic.pptx",
+   "ppt_slides": 21,
+   "oxi": {
+    "pages": 21,
+    "page_delta": 0,
+    "common_mean": 0.959109,
+    "page_min": 0.770588
+   },
+   "libreoffice": {
+    "pages": 21,
+    "page_delta": 0,
+    "common_mean": 0.909532,
+    "page_min": 0.632744
+   },
+   "onlyoffice": {
+    "pages": 21,
+    "page_delta": 0,
+    "common_mean": 0.903486,
+    "page_min": 0.693748
+   },
+   "oxi_first_measurement_2026_08_13": 0.704104
+  },
+  {
+   "idx": 2,
+   "hf_path": "Self Introduction for High School Students(1).pptx",
+   "ppt_slides": 19,
+   "oxi": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.959462,
+    "page_min": 0.924118
+   },
+   "libreoffice": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.895885,
+    "page_min": 0.819848
+   },
+   "onlyoffice": {
+    "pages": 19,
+    "page_delta": 0,
+    "common_mean": 0.888567,
+    "page_min": 0.783217
+   },
+   "oxi_first_measurement_2026_08_13": 0.258317
+  },
+  {
+   "idx": 39,
+   "hf_path": "Cupid God of Love Storybook.pptx",
+   "ppt_slides": 12,
+   "oxi": {
+    "pages": 12,
+    "page_delta": 0,
+    "common_mean": 0.959964,
+    "page_min": 0.918216
+   },
+   "libreoffice": {
+    "pages": 12,
+    "page_delta": 0,
+    "common_mean": 0.889676,
+    "page_min": 0.735433
+   },
+   "onlyoffice": {
+    "pages": 12,
+    "page_delta": 0,
+    "common_mean": 0.900143,
+    "page_min": 0.747432
+   },
+   "oxi_first_measurement_2026_08_13": 0.738594
+  },
+  {
+   "idx": 7,
+   "hf_path": "Real Estate Agent CV Resume.pptx",
+   "ppt_slides": 4,
+   "oxi": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.961911,
+    "page_min": 0.95269
+   },
+   "libreoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.901112,
+    "page_min": 0.834198
+   },
+   "onlyoffice": {
+    "pages": 4,
+    "page_delta": 0,
+    "common_mean": 0.900951,
+    "page_min": 0.831573
+   },
+   "oxi_first_measurement_2026_08_13": 0.850501
+  },
+  {
+   "idx": 43,
+   "hf_path": "Simple Illustrative Science Lesson for Elementary_ Ozone Layer.pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.962329,
+    "page_min": 0.937287
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.925843,
+    "page_min": 0.885349
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.918008,
+    "page_min": 0.874878
+   },
+   "oxi_first_measurement_2026_08_13": 0.648761
+  },
+  {
+   "idx": 40,
+   "hf_path": "Illustrated Landscape Marketing Christmas Background(1).pptx",
+   "ppt_slides": 24,
+   "oxi": {
+    "pages": 24,
+    "page_delta": 0,
+    "common_mean": 0.963057,
+    "page_min": 0.910758
+   },
+   "libreoffice": {
+    "pages": 24,
+    "page_delta": 0,
+    "common_mean": 0.942535,
+    "page_min": 0.890846
+   },
+   "onlyoffice": {
+    "pages": 24,
+    "page_delta": 0,
+    "common_mean": 0.916202,
+    "page_min": 0.809618
+   },
+   "oxi_first_measurement_2026_08_13": 0.705697
+  },
+  {
+   "idx": 48,
+   "hf_path": "Roadmap Infographics.pptx",
+   "ppt_slides": 15,
+   "oxi": {
+    "pages": 15,
+    "page_delta": 0,
+    "common_mean": 0.964326,
+    "page_min": 0.931478
+   },
+   "libreoffice": {
+    "pages": 15,
+    "page_delta": 0,
+    "common_mean": 0.913104,
+    "page_min": 0.856414
+   },
+   "onlyoffice": {
+    "pages": 15,
+    "page_delta": 0,
+    "common_mean": 0.905077,
+    "page_min": 0.816811
+   },
+   "oxi_first_measurement_2026_08_13": 0.682727
+  },
+  {
+   "idx": 35,
+   "hf_path": "Retro Y2K SEO Specialist Resume Presentation.ppt(1).pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.964899,
+    "page_min": 0.934723
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.935179,
+    "page_min": 0.870556
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.914606,
+    "page_min": 0.836513
+   },
+   "oxi_first_measurement_2026_08_13": 0.597426
+  },
+  {
+   "idx": 18,
+   "hf_path": "Fall October Marketing Calendar(1).pptx",
+   "ppt_slides": 22,
+   "oxi": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.965505,
+    "page_min": 0.94067
+   },
+   "libreoffice": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.881773,
+    "page_min": 0.783977
+   },
+   "onlyoffice": {
+    "pages": 22,
+    "page_delta": 0,
+    "common_mean": 0.887113,
+    "page_min": 0.802375
+   },
+   "oxi_first_measurement_2026_08_13": 0.689797
+  },
+  {
+   "idx": 14,
+   "hf_path": "Classroom Seating Chart .pptx",
+   "ppt_slides": 3,
+   "oxi": {
+    "pages": 3,
+    "page_delta": 0,
+    "common_mean": 0.967607,
+    "page_min": 0.964753
+   },
+   "libreoffice": {
+    "pages": 3,
+    "page_delta": 0,
+    "common_mean": 0.9148,
+    "page_min": 0.909624
+   },
+   "onlyoffice": {
+    "pages": 3,
+    "page_delta": 0,
+    "common_mean": 0.917484,
+    "page_min": 0.90468
+   },
+   "oxi_first_measurement_2026_08_13": 0.79796
+  },
+  {
+   "idx": 41,
+   "hf_path": "January Calendar Planner.pptx",
+   "ppt_slides": 5,
+   "oxi": {
+    "pages": 5,
+    "page_delta": 0,
+    "common_mean": 0.969423,
+    "page_min": 0.961045
+   },
+   "libreoffice": {
+    "pages": 5,
+    "page_delta": 0,
+    "common_mean": 0.961668,
+    "page_min": 0.939649
+   },
+   "onlyoffice": {
+    "pages": 5,
+    "page_delta": 0,
+    "common_mean": 0.958691,
+    "page_min": 0.929269
+   },
+   "oxi_first_measurement_2026_08_13": 0.722908
+  },
+  {
+   "idx": 45,
+   "hf_path": "Volumes of Composite Solids Lesson for High School.pptx",
+   "ppt_slides": 13,
+   "oxi": {
+    "pages": 13,
+    "page_delta": 0,
+    "common_mean": 0.972574,
+    "page_min": 0.955061
+   },
+   "libreoffice": {
+    "pages": 13,
+    "page_delta": 0,
+    "common_mean": 0.915208,
+    "page_min": 0.856887
+   },
+   "onlyoffice": {
+    "pages": 13,
+    "page_delta": 0,
+    "common_mean": 0.929942,
+    "page_min": 0.903071
+   },
+   "oxi_first_measurement_2026_08_13": 0.617698
+  },
+  {
+   "idx": 32,
+   "hf_path": "Colorful Geometric Company Founder About Me Creative Presentation · SlidesCarnival.pptx",
+   "ppt_slides": 28,
+   "oxi": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.973069,
+    "page_min": 0.914715
+   },
+   "libreoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.947497,
+    "page_min": 0.862798
+   },
+   "onlyoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.927959,
+    "page_min": 0.841423
+   },
+   "oxi_first_measurement_2026_08_13": 0.72386
+  },
+  {
+   "idx": 26,
+   "hf_path": "Impacted Wisdom Teeth Slides.pptx",
+   "ppt_slides": 15,
+   "oxi": {
+    "pages": 15,
+    "page_delta": 0,
+    "common_mean": 0.973574,
+    "page_min": 0.961825
+   },
+   "libreoffice": {
+    "pages": 15,
+    "page_delta": 0,
+    "common_mean": 0.930746,
+    "page_min": 0.844141
+   },
+   "onlyoffice": {
+    "pages": 15,
+    "page_delta": 0,
+    "common_mean": 0.929523,
+    "page_min": 0.840961
+   },
+   "oxi_first_measurement_2026_08_13": 0.732172
+  },
+  {
+   "idx": 11,
+   "hf_path": "Colorful Cute Simple Illustrative Doodles Funny About Me Creative Presentation · SlidesCarnival.pptx",
+   "ppt_slides": 28,
+   "oxi": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.974206,
+    "page_min": 0.956626
+   },
+   "libreoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.930681,
+    "page_min": 0.850472
+   },
+   "onlyoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.924838,
+    "page_min": 0.847293
+   },
+   "oxi_first_measurement_2026_08_13": 0.667638
+  },
+  {
+   "idx": 29,
+   "hf_path": "Cute Scrapbook Baby Milestones Photo Album.pptx",
+   "ppt_slides": 10,
+   "oxi": {
+    "pages": 10,
+    "page_delta": 0,
+    "common_mean": 0.975065,
+    "page_min": 0.957241
+   },
+   "libreoffice": {
+    "pages": 10,
+    "page_delta": 0,
+    "common_mean": 0.920312,
+    "page_min": 0.867372
+   },
+   "onlyoffice": {
+    "pages": 10,
+    "page_delta": 0,
+    "common_mean": 0.946842,
+    "page_min": 0.926118
+   },
+   "oxi_first_measurement_2026_08_13": 0.713501
+  },
+  {
+   "idx": 30,
+   "hf_path": "Volunteer Onboarding Presentation.pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.976691,
+    "page_min": 0.947567
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.926253,
+    "page_min": 0.883816
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.918903,
+    "page_min": 0.856306
+   },
+   "oxi_first_measurement_2026_08_13": 0.852103
+  },
+  {
+   "idx": 19,
+   "hf_path": "Pre-K Outdoor Activities to Celebrate National Play Outside Day Presentation.pptx",
+   "ppt_slides": 20,
+   "oxi": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.977963,
+    "page_min": 0.961281
+   },
+   "libreoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.928148,
+    "page_min": 0.851683
+   },
+   "onlyoffice": {
+    "pages": 20,
+    "page_delta": 0,
+    "common_mean": 0.926226,
+    "page_min": 0.830059
+   },
+   "oxi_first_measurement_2026_08_13": 0.723001
+  },
+  {
+   "idx": 23,
+   "hf_path": "Red, Blue and Yellow Cute Doodle Science Subject for Elementary School Magnetism Presentation.pptx",
+   "ppt_slides": 26,
+   "oxi": {
+    "pages": 26,
+    "page_delta": 0,
+    "common_mean": 0.978379,
+    "page_min": 0.936071
+   },
+   "libreoffice": {
+    "pages": 26,
+    "page_delta": 0,
+    "common_mean": 0.938583,
+    "page_min": 0.845147
+   },
+   "onlyoffice": {
+    "pages": 26,
+    "page_delta": 0,
+    "common_mean": 0.931443,
+    "page_min": 0.831249
+   },
+   "oxi_first_measurement_2026_08_13": 0.791156
+  },
+  {
+   "idx": 46,
+   "hf_path": "Soft Green and Beige Simple Doodles Product Timeline Presentation.pptx",
+   "ppt_slides": 31,
+   "oxi": {
+    "pages": 31,
+    "page_delta": 0,
+    "common_mean": 0.978839,
+    "page_min": 0.919935
+   },
+   "libreoffice": {
+    "pages": 31,
+    "page_delta": 0,
+    "common_mean": 0.950114,
+    "page_min": 0.898056
+   },
+   "onlyoffice": {
+    "pages": 31,
+    "page_delta": 0,
+    "common_mean": 0.939038,
+    "page_min": 0.873645
+   },
+   "oxi_first_measurement_2026_08_13": 0.857378
+  },
+  {
+   "idx": 17,
+   "hf_path": "Blue Red and Yellow Cute Simple Illustrative Doodles Pretty Social Media Creative Presentation · SlidesCarnival.pptx",
+   "ppt_slides": 28,
+   "oxi": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.979513,
+    "page_min": 0.959684
+   },
+   "libreoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.957593,
+    "page_min": 0.865015
+   },
+   "onlyoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.924853,
+    "page_min": 0.811192
+   },
+   "oxi_first_measurement_2026_08_13": 0.78883
+  },
+  {
+   "idx": 5,
+   "hf_path": "Black Purple and Green Geometric Corporate Resume Creative Presentation · SlidesCarnival.pptx",
+   "ppt_slides": 28,
+   "oxi": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.983081,
+    "page_min": 0.959252
+   },
+   "libreoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.937453,
+    "page_min": 0.873323
+   },
+   "onlyoffice": {
+    "pages": 28,
+    "page_delta": 0,
+    "common_mean": 0.921827,
+    "page_min": 0.829478
+   },
+   "oxi_first_measurement_2026_08_13": 0.616028
+  }
+ ]
+}
