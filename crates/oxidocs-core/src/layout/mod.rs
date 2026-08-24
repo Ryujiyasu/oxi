@@ -7995,14 +7995,20 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                     para.style
                                         .indent_left
                                         .or_else(|| {
-                                            para.style.indent_left_chars.map(|c| c / 100.0 * 10.5)
+                                            para.style.indent_left_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, page.grid_char_pitch, page.grid_char_cw_ratio)
+                                            })
                                         })
                                         .unwrap_or(0.0)
                                         .max(0.0),
                                     para.style
                                         .indent_right
                                         .or_else(|| {
-                                            para.style.indent_right_chars.map(|c| c / 100.0 * 10.5)
+                                            para.style.indent_right_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, page.grid_char_pitch, page.grid_char_cw_ratio)
+                                            })
                                         })
                                         .unwrap_or(0.0)
                                         .max(0.0),
@@ -8061,7 +8067,10 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                     .style
                                     .indent_left
                                     .or_else(|| {
-                                        para.style.indent_left_chars.map(|c| c / 100.0 * 10.5)
+                                        para.style.indent_left_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, page.grid_char_pitch, page.grid_char_cw_ratio)
+                                            })
                                     })
                                     .unwrap_or(0.0)
                                     .max(0.0);
@@ -8069,7 +8078,10 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                     .style
                                     .indent_right
                                     .or_else(|| {
-                                        para.style.indent_right_chars.map(|c| c / 100.0 * 10.5)
+                                        para.style.indent_right_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, page.grid_char_pitch, page.grid_char_cw_ratio)
+                                            })
                                     })
                                     .unwrap_or(0.0)
                                     .max(0.0);
@@ -14221,17 +14233,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         let indent_left = para
             .style
             .indent_left
-            .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
+            .or_else(|| para.style.indent_left_chars.map(|c| {
+                c / 100.0
+                    * Self::s1214_chars_unit(
+                        para,
+                        false,
+                        page.grid_char_pitch,
+                        page.grid_char_cw_ratio,
+                    )
+            }))
             .unwrap_or(0.0);
         let indent_right = para
             .style
             .indent_right
-            .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
+            .or_else(|| para.style.indent_right_chars.map(|c| {
+                c / 100.0
+                    * Self::s1214_chars_unit(
+                        para,
+                        false,
+                        page.grid_char_pitch,
+                        page.grid_char_cw_ratio,
+                    )
+            }))
             .unwrap_or(0.0);
         let first_line_indent_raw = para
             .style
             .indent_first_line
-            .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
+            .or_else(|| para.style.indent_first_line_chars.map(|c| {
+                c / 100.0
+                    * Self::s1214_chars_unit(
+                        para,
+                        true,
+                        page.grid_char_pitch,
+                        page.grid_char_cw_ratio,
+                    )
+            }))
             .unwrap_or(0.0);
         // COM-confirmed (2026-04-25, e3c545 P1 "3．基本的な考え方" + 3a4f + NH_A..F
         // repros): for numbered list paragraphs with hanging indent and tab suffix
@@ -20994,6 +21030,49 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         }
         out
+    }
+
+    /// S1214 (2026-08-25, opt-in `OXI_S1214=1`): the width of ONE character unit
+    /// for a `*Chars` indent. MEASURED with `tools/metrics/_pb_indchars_gen.py`
+    /// (20 arms in a cell whose own rule anchors the reading):
+    ///   no character grid  -> the FONT SIZE (sz=21 gives 10.56pt, sz=18 gives 9.00)
+    ///   docGrid charSpace  -> the GRID PITCH, fs + charSpace/4096 (10.80 / 9.36 at
+    ///                         charSpace=1453) -- the same additive law as S1210.
+    /// `firstLineChars` scales with the FIRST RUN's size; `leftChars` follows the
+    /// paragraph's own default size (it stayed 10.56 in both size arms).
+    /// Oxi resolved every `*Chars` at a hardcoded 10.5 before this.
+    fn s1214_chars_unit(
+        para: &Paragraph,
+        first_run: bool,
+        pitch: Option<f32>,
+        ratio: Option<f32>,
+    ) -> f32 {
+        if std::env::var("OXI_S1214").ok().as_deref() != Some("1") {
+            return 10.5;
+        }
+        let base = if first_run {
+            para.runs
+                .first()
+                .and_then(|r| r.style.font_size)
+                .or_else(|| {
+                    para.style
+                        .default_run_style
+                        .as_ref()
+                        .and_then(|rs| rs.font_size)
+                })
+                .unwrap_or(10.5)
+        } else {
+            para.style
+                .default_run_style
+                .as_ref()
+                .and_then(|rs| rs.font_size)
+                .or_else(|| para.runs.first().and_then(|r| r.style.font_size))
+                .unwrap_or(10.5)
+        };
+        match (pitch, ratio) {
+            (Some(p), Some(r)) if r > 0.0 && p > 0.0 => base + (p - p / r),
+            _ => base,
+        }
     }
 
     fn break_into_lines(
@@ -31696,14 +31775,20 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         .style
                                         .indent_left
                                         .or_else(|| {
-                                            para.style.indent_left_chars.map(|c| c / 100.0 * 10.5)
+                                            para.style.indent_left_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, grid_char_pitch, grid_char_cw_ratio)
+                                            })
                                         })
                                         .unwrap_or(0.0);
                                     let p_indent_right = para
                                         .style
                                         .indent_right
                                         .or_else(|| {
-                                            para.style.indent_right_chars.map(|c| c / 100.0 * 10.5)
+                                            para.style.indent_right_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, grid_char_pitch, grid_char_cw_ratio)
+                                            })
                                         })
                                         .unwrap_or(0.0);
                                     // When both firstLine (twip) and firstLineChars exist,
@@ -31714,7 +31799,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         .or_else(|| {
                                             para.style
                                                 .indent_first_line_chars
-                                                .map(|c| c / 100.0 * 10.5)
+                                                .map(|c| {
+                                                    c / 100.0
+                                                        * Self::s1214_chars_unit(
+                                                            para,
+                                                            true,
+                                                            grid_char_pitch,
+                                                            grid_char_cw_ratio,
+                                                        )
+                                                })
                                         })
                                         .unwrap_or(0.0);
                                     // COM-confirmed (2026-04-25): numbered list + hanging + suff=tab/default
@@ -40976,17 +41069,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             let indent_l = para
                 .style
                 .indent_left
-                .or_else(|| para.style.indent_left_chars.map(|c| c / 100.0 * 10.5))
+                .or_else(|| para.style.indent_left_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, grid_char_pitch, grid_char_cw_ratio)
+                                            }))
                 .unwrap_or(0.0);
             let indent_r = para
                 .style
                 .indent_right
-                .or_else(|| para.style.indent_right_chars.map(|c| c / 100.0 * 10.5))
+                .or_else(|| para.style.indent_right_chars.map(|c| {
+                                                c / 100.0
+                                                    * Self::s1214_chars_unit(para, false, grid_char_pitch, grid_char_cw_ratio)
+                                            }))
                 .unwrap_or(0.0);
             let first_indent_raw = para
                 .style
                 .indent_first_line
-                .or_else(|| para.style.indent_first_line_chars.map(|c| c / 100.0 * 10.5))
+                .or_else(|| para.style.indent_first_line_chars.map(|c| {
+                        c / 100.0
+                            * Self::s1214_chars_unit(para, true, None, None)
+                    }))
                 .unwrap_or(0.0);
             // COM-confirmed (2026-04-25): numbered list + hanging + suff=tab/default
             // => marker consumes hanging, text starts at `left`. See body path.
