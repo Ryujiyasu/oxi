@@ -33956,9 +33956,50 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     .is_ok()
                                                     || ((line_x + buf_w + cw) - effective_wrap)
                                                         <= 0.5 * cw + 0.01;
+                                                // S1213 (2026-08-24, opt-out
+                                                // `OXI_S1213_DISABLE`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): a line that carries a TAB
+                                                // does not hang its last mark at all.
+                                                //
+                                                // `_pb_poolorder_gen.py` runs the same three arms
+                                                // (36 characters, right indent swept in 0.25pt
+                                                // steps) through five switches. The line-final mark
+                                                // buys, over the mark-free control:
+                                                //     body                        +1.00em (the
+                                                //                                 whole advance)
+                                                //     cell                        +0.50em
+                                                //     cell, ＭＳ Ｐゴシック        +0.50 x 6.98pt
+                                                //     cell + hanging indent       the same 3.5pt
+                                                //     cell + marker AND TAB       +0.00 -- nothing
+                                                // compat 11 and 15 read identically, and the pool a
+                                                // DIFFERENT mark on the line lends (0.5em) survives
+                                                // the tab -- only the hang dies.
+                                                //
+                                                // d77a58 p9 is the case: 「カ<tab>本利用ルールは…
+                                                // あります。」 overflows its budget by 0.78pt, Oxi
+                                                // hangs the 。 for 3.49pt of allowance and keeps
+                                                // す。 on the line, Word drops them both. The budget
+                                                // itself is already right on both sides -- the
+                                                // column sweep in `_pb_d77a_budget.py` puts Word's
+                                                // flip at +1.00pt and Oxi's own [CELLX] trace reads
+                                                // first_line_wrap_w=415.60, the same number.
+                                                //
+                                                // ENVELOPE: measured with the tab LEADING the line
+                                                // (a marker, then a tab, then the text), which is
+                                                // the corpus shape. A tab in the middle of a line is
+                                                // not covered by any arm.
+                                                let s1213_tabbed_line = std::env::var(
+                                                    "OXI_S1213_DISABLE",
+                                                )
+                                                .is_err()
+                                                    && current_line_chars
+                                                        .iter()
+                                                        .chain(buf_chars.iter())
+                                                        .any(|c| c.ch == char::from(9u8));
                                                 if s1174_yakucomp
                                                     && kinsoku::cell_yaku_type_a(ch)
                                                     && !s1199_run_of_closers
+                                                    && !s1213_tabbed_line
                                                     && s1205_hang_ok
                                                     && matches!(
                                                         para.alignment,
