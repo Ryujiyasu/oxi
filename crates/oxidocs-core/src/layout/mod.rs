@@ -14338,7 +14338,44 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // for both charGrid and non-charGrid (full indent applied, no cell-based
         // tolerance). Combined with fn attribution fix below, b837 pagination
         // score improved 0.9524 → 0.9744 (Phase 1 gate). Other docs unchanged.
-        let available_width = content_width - indent_left - indent_right;
+        //
+        // S1211 (2026-08-24, opt-in `OXI_S1211=1`): under a linesAndChars grid a
+        // BODY line may only use a WHOLE number of grid cells -- the remainder
+        // (always less than one pitch) is unusable. MEASURED two ways with
+        // `tools/metrics/_pb_gridpitch_gen.py` and `_pb_gridfloor_gen.py`:
+        //   break  -- charSpace 1966 / 1453 / 532 / none x sizes 9..12, right
+        //             indent swept in 0.25pt steps: 18 of 20 arms break exactly
+        //             where floor(content/pitch)*pitch - indents predicts, the
+        //             other two within 0.03pt over 44-49 characters.
+        //   justify - a jc=both paragraph's justified lines END at that width:
+        //             charSpace 1966 (pitch 10.98, 38 cells of a 425.2pt measure)
+        //             ends 8.5pt short of the right margin and 0.6pt short of the
+        //             floored 417.24; charSpace 532 (40 cells, remainder 0.004)
+        //             ends at the margin.
+        // So the text area really is narrower -- this is not a break-only rule.
+        // NOT covered by the measurement: what a CENTERED line centres in, and
+        // whether a cell floors (it does NOT -- `_pb_cellpitch_gen.py`, 9 of 9
+        // arms break against the cell's own inner width), so only this body
+        // site is gated here.
+        // The measured domain is charSpace != 0. A `linesAndChars` grid with NO
+        // charSpace still yields a pitch here (= the default size), and flooring
+        // THAT costs b837808d / harassmanual / parttime a page each (1.0000 ->
+        // 0.9577 / 0.9836 / 0.9970) -- all three are outside every arm measured
+        // above. Left alone until it is measured on its own.
+        let s1211 = std::env::var("OXI_S1211").ok().as_deref() == Some("1");
+        let grid_has_char_space = match (page.grid_char_pitch, page.grid_char_cw_ratio) {
+            (Some(pitch), Some(ratio)) if ratio > 0.0 => (pitch - pitch / ratio).abs() > 0.01,
+            _ => false,
+        };
+        let grid_content_width = match effective_char_pitch {
+            Some(pitch)
+                if s1211 && grid_has_char_space && pitch > 0.0 && content_width > pitch =>
+            {
+                (content_width / pitch).floor() * pitch
+            }
+            _ => content_width,
+        };
+        let available_width = grid_content_width - indent_left - indent_right;
 
         // Render list marker if present
         // S517 (2026-06-09): index of the emitted list-marker element so the
