@@ -1043,6 +1043,10 @@ fn parse_slide(
     // Empty branch (they are always self-closing) unless this is set, which
     // restores every shape ramp running at angle 0.
     let s_gradlin = std::env::var("OXI_GRADLIN_DISABLE").is_err();
+    // A gradient stop's colour is read from the Empty branch too unless this
+    // is set, which restores dropping every stop written without an alpha.
+    let s_gradstop = std::env::var("OXI_GRADSTOP_DISABLE").is_err();
+    let mut sg_rot_with_shape = true;
     let mut sg_in = false;
     let mut sg_in_gs = false;
     let mut sg_in_path = false;
@@ -1509,6 +1513,10 @@ fn parse_slide(
                         sg_angle = None;
                         sg_scaled = false;
                         sg_focus = None;
+                        // Absent behaves as "1" -- measured, not assumed
+                        // (`gradrot` probe block B, absent == rws "1" on 6 of 6
+                        // arms while rws "0" pinned the ramp to the page).
+                        sg_rot_with_shape = get_attr(&e, "rotWithShape").as_deref() != Some("0");
                     }
                     "gs" if sg_in => {
                         sg_in_gs = true;
@@ -1961,6 +1969,37 @@ fn parse_slide(
                             if let Ok(p) = v.parse::<f32>() {
                                 shape_fill_alpha = Some((p / 100000.0).clamp(0.0, 1.0));
                             }
+                        }
+                    }
+                    // S-GRADSTOP (2026-08-24): a stop whose colour carries no
+                    // child -- `<a:gs pos="0"><a:srgbClr val="000000"/></a:gs>`
+                    // -- reaches quick-xml on the Empty arm, and only the Start
+                    // arm was reading it. The stop was dropped, and a ramp left
+                    // with fewer than two stops is discarded whole, so the shape
+                    // fell back to a flat fill or to nothing at all.
+                    //
+                    // **386 stops over 12 of the 40 dev decks are written this
+                    // way, and 178 gradFills lose their second stop because of
+                    // it** (d24 85, d15 32, d16 29, d09 23). It is invisible in
+                    // the corpus decks that DO have alpha on every stop, which
+                    // is why the ramp work up to here never tripped over it: an
+                    // `<a:srgbClr>` with an `<a:alpha>` inside is a Start
+                    // element. The gradrot probe -- authored with bare colours
+                    // -- rendered as a blank page and gave it away.
+                    //
+                    // Same Start/Empty split as prstDash, prstTxWarp, run alpha,
+                    // the line ends, the cell properties and a:lin before it.
+                    "srgbClr" if sg_in_gs && sg_color.is_none() && s_gradstop => {
+                        sg_color = get_attr(&e, "val");
+                    }
+                    "schemeClr" if sg_in_gs && sg_color.is_none() && s_gradstop => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            sg_color = Some(
+                                theme_colors
+                                    .get(&v)
+                                    .cloned()
+                                    .unwrap_or_else(|| scheme_color_to_hex(&v)),
+                            );
                         }
                     }
                     // A field with no cached `<a:t>` is self-closing, so it
@@ -2775,6 +2814,7 @@ fn parse_slide(
                                     angle_deg: sg_angle,
                                     scaled: sg_scaled,
                                     focus: sg_focus,
+                                    rot_with_shape: sg_rot_with_shape,
                                 })
                             } else {
                                 sg_stops.clear();
@@ -3197,6 +3237,8 @@ fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Optio
         angle_deg,
         scaled,
         focus,
+        // A page background has no shape transform to ride.
+        rot_with_shape: true,
     })
 }
 
@@ -3508,6 +3550,7 @@ fn parse_inherited_shapes(
     let mut gr_stops: Vec<SlideGradientStop> = Vec::new();
     let mut gr_angle: Option<f32> = None;
     let mut gr_scaled = false;
+    let mut gr_rot_with_shape = true;
     let mut gr_focus: Option<(f32, f32)> = None;
 
     let pct = |v: Option<String>| -> f32 {
@@ -3748,6 +3791,7 @@ fn parse_inherited_shapes(
                                                 angle_deg: gr_angle,
                                                 scaled: gr_scaled,
                                                 focus: gr_focus,
+                                                rot_with_shape: gr_rot_with_shape,
                                             })
                                         } else {
                                             gr_stops.clear();
@@ -4098,6 +4142,7 @@ fn parse_inherited_shapes(
                 gr_angle = None;
                 gr_scaled = false;
                 gr_focus = None;
+                gr_rot_with_shape = get_attr(&e, "rotWithShape").as_deref() != Some("0");
             }
             "gs" if gr_in => {
                 gr_in_gs = true;
@@ -5484,6 +5529,84 @@ mod tests {
         let t = sh.tail_end.as_ref().expect("tailEnd (start/end form)");
         // Absent @w / @len mean "med", not "missing".
         assert_eq!((t.kind.as_str(), t.w.as_str(), t.len.as_str()), ("triangle", "med", "med"));
+    }
+
+    /// A slide holding one rectangle whose `p:spPr` body is `sp_pr`.
+    fn rect_shape_with(xfrm_attrs: &str, sp_pr: &str) -> Slide {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+ <p:cSld><p:spTree>
+  <p:sp>
+   <p:nvSpPr><p:cNvPr id="2" name="r"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+   <p:spPr>
+    <a:xfrm {xfrm_attrs}><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+    {sp_pr}
+   </p:spPr>
+  </p:sp>
+ </p:spTree></p:cSld>
+</p:sld>"#
+        );
+        let mut ar = archive_of("ppt/slides/slide1.xml", &xml);
+        parse_slide(
+            &xml,
+            SlidePos { index: 0, first_slide_num: 1 },
+            &mut ar,
+            "ppt/slides/_rels/slide1.xml.rels",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("slide must parse")
+    }
+
+    #[test]
+    fn gradient_stop_colours_are_read_in_both_element_forms() {
+        // A stop's colour is self-closing whenever it carries no modifier, so
+        // it reaches quick-xml on the EMPTY arm; with only the Start-arm
+        // handler the stop was dropped, and a ramp short of two stops is
+        // discarded whole. 138 shape gradients over 5 dev decks are written
+        // this way. Both spellings are stated here so neither arm can go.
+        let s = rect_shape_with(
+            "",
+            r#"<a:gradFill>
+                 <a:gsLst>
+                   <a:gs pos="0"><a:srgbClr val="000000"/></a:gs>
+                   <a:gs pos="100000"><a:srgbClr val="FFFFFF"><a:alpha val="50000"/></a:srgbClr></a:gs>
+                 </a:gsLst>
+                 <a:lin ang="5400000" scaled="0"/>
+               </a:gradFill>"#,
+        );
+        let g = s.shapes[0].gradient.as_ref().expect("gradient with a bare stop colour");
+        assert_eq!(g.stops.len(), 2);
+        assert_eq!(g.stops[0].color, "000000");
+        assert!((g.stops[0].alpha - 1.0).abs() < 1e-6);
+        assert_eq!(g.stops[1].color, "FFFFFF");
+        assert!((g.stops[1].alpha - 0.5).abs() < 1e-6);
+        // `a:lin` is itself always self-closing -- the same trap, one element up.
+        assert!((g.angle_deg.expect("a:lin@ang") - 90.0).abs() < 1e-3);
+        // Absent `rotWithShape` means the ramp turns with the shape (gradrot
+        // probe block B: absent behaved as "1" on 6 of 6 arms).
+        assert!(g.rot_with_shape);
+    }
+
+    #[test]
+    fn gradient_rot_with_shape_zero_pins_the_ramp() {
+        let s = rect_shape_with(
+            r#"rot="10800000""#,
+            r#"<a:gradFill rotWithShape="0">
+                 <a:gsLst>
+                   <a:gs pos="0"><a:srgbClr val="112233"/></a:gs>
+                   <a:gs pos="100000"><a:srgbClr val="445566"/></a:gs>
+                 </a:gsLst>
+                 <a:lin ang="0" scaled="0"/>
+               </a:gradFill>"#,
+        );
+        let sh = &s.shapes[0];
+        assert!((sh.rotation - 180.0).abs() < 1e-3);
+        assert!(!sh.gradient.as_ref().expect("gradient").rot_with_shape);
     }
 
     #[test]

@@ -256,6 +256,12 @@ pub struct SlideGradient {
     /// focus, r=826.09 = the distance to the opposite corner).
     #[serde(default)]
     pub focus: Option<(f32, f32)>,
+    /// `a:gradFill/@rotWithShape`: whether the ramp turns with the shape's own
+    /// `a:xfrm/@rot`. Measured absent / "0" / "1" against PowerPoint's own PDF
+    /// (`gradrot` probe, 38 arms): ABSENT BEHAVES AS "1", and "0" pins the ramp
+    /// to the page. Every gradFill in the dev corpus omits it.
+    #[serde(default = "default_true")]
+    pub rot_with_shape: bool,
 }
 
 fn default_true() -> bool {

@@ -831,6 +831,23 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     {
         return false;
     }
+    // S-PRESETGRAD (2026-08-24): a PRESET whose only fill is a gradient has no
+    // solid brush either. `draw_custom_geometry_gdi` has declined that case
+    // since S-GEOMGRAD so `paint_shape_gradient` can clip the ramp to the
+    // outline; the preset painter never learned it, and instead traced the
+    // path with NULL_BRUSH, painted nothing, and reported SUCCESS -- which
+    // stops the gradient painter from running at all.
+    //
+    // It was invisible until S-GRADSTOP because the generic `a:srgbClr`
+    // handler used to catch a self-closing gradient STOP colour and leave it
+    // in `fill_color`, so these shapes were painted flat in their last stop's
+    // colour. d24 slide 30's SWOT circle is four `pie` wedges built exactly
+    // that way: reading the stops properly turned the accidental flat fill off
+    // and the circle vanished. Every non-rect preset with a gradient fill is
+    // affected (`rect` never reaches the preset painter).
+    if presetgrad_on() && sh.fill_color.is_none() && sh.gradient.is_some() {
+        return false;
+    }
     let w = sh.width.max(0.0);
     let h = sh.height.max(0.0);
     if w == 0.0 || h == 0.0 { return true; }
@@ -897,12 +914,20 @@ unsafe fn draw_custom_geometry_gdi(
     // report success -- which stops `paint_shape_gradient`, the one painter
     // that clips a ramp to this very geometry, from ever running. d24's three
     // full-height layout bands are exactly that shape, and the deck rendered
-    // bare background where PowerPoint draws half the slide. Handing over
-    // costs the outline, so keep the path when there is one to draw.
+    // bare background where PowerPoint draws half the slide.
+    //
+    // S-GRADSTROKE (2026-08-24): the `border_width <= 0` half of this test is
+    // obsolete. It was written when handing the shape over lost its outline;
+    // since S-GEOMALPHA and S-PRESETSTROKE the border pass below strokes the
+    // real geometry (custGeom path, else `emit_shape_path`), so a shape can
+    // have BOTH its ramp and its outline. d16 slide 13's iceberg is 28 custGeom
+    // triangles filled white -> accent6 and outlined 0.75pt in `lt1`: the
+    // outline kept the path here, the path had no brush, and the iceberg was
+    // drawn as 28 white lines on a white page.
     if geomgrad_on()
         && sh.fill_color.is_none()
         && sh.gradient.is_some()
-        && sh.border_width.unwrap_or(0.0) <= 0.0
+        && (gradstroke_on() || sh.border_width.unwrap_or(0.0) <= 0.0)
     {
         return false;
     }
@@ -10013,13 +10038,80 @@ unsafe fn paint_shape_gradient(
         (sh.y as f64 * scale).round() as i32,
         Some(&mut old_org),
     );
-    paint_bg_gradient(dc, w, h, g);
+    let turned = gradient_turned_with_shape(sh, g);
+    paint_bg_gradient(dc, w, h, turned.as_ref().unwrap_or(g));
     let _ = SetViewportOrgEx(dc, old_org.x, old_org.y, None);
     let _ = SelectClipRgn(dc, None);
     if let Some(rgn) = clip_rgn {
         let _ = DeleteObject(rgn);
     }
     true
+}
+
+/// Turn a shape's linear ramp by the shape's own `a:xfrm`.
+///
+/// S-GRADROT (2026-08-24). `paint_shape_gradient` ran the ramp at the declared
+/// `a:lin@ang` and ignored `rot` / `flipH` / `flipV` entirely, so d06's layout
+/// wash -- `ang="5400012"` on a band at `rot="10800000"` -- came out mirrored
+/// top-for-bottom: same amplitude, exactly reversed, on 15 of the deck's 39
+/// slides. Both reference renderers beat Oxi on three of them.
+///
+/// The `gradrot` probe (38 arms, PowerPoint's own PDF, a black->white ramp fit
+/// by least squares over each shape) measured the whole composition:
+///
+/// * `ang` maps 1:1 to the screen direction (0 = brightening rightward,
+///   growing clockwise) -- 8 arms, every one within 0.02 degrees.
+/// * the shape's `rot` is ADDED -- 12 arms.
+/// * `rotWithShape="0"` pins the ramp to the page and drops the `rot` term;
+///   ABSENT behaves as `"1"` -- 6 arms each. (Every gradFill in the dev corpus
+///   omits the attribute, so the default is the load-bearing half.)
+/// * a flip MIRRORS the ramp axis: `flipH` gives `180 - ang`, `flipV` gives
+///   `-ang`, both give `180 + ang` -- 6 arms.
+/// * the two compose in the DrawingML xfrm order, FLIP FIRST then rotate.
+///   Every corpus shape is at `rot=180`, where the two orders agree, so this
+///   was the one part the corpus could not settle: block E was authored with
+///   both predictions written down first and PowerPoint answered
+///   flip-then-rotate 4 times out of 4 (225 / 45 / 45 / 315 against the other
+///   reading's 45 / 225 / 225 / 135).
+///
+/// A radial ramp is left alone: its focus would have to move with the shape,
+/// and the corpus has no rotated one to measure against.
+fn gradient_turned_with_shape(sh: &Shape, g: &SlideGradient) -> Option<SlideGradient> {
+    if !gradrot_on() || g.focus.is_some() {
+        return None;
+    }
+    let rot = if g.rot_with_shape { sh.rotation as f64 } else { 0.0 };
+    if rot == 0.0 && !sh.flip_h && !sh.flip_v {
+        return None;
+    }
+    let ang = g.angle_deg.unwrap_or(0.0) as f64;
+    let flipped = match (sh.flip_h, sh.flip_v) {
+        (true, false) => 180.0 - ang,
+        (false, true) => -ang,
+        (true, true) => 180.0 + ang,
+        (false, false) => ang,
+    };
+    Some(SlideGradient {
+        angle_deg: Some((flipped + rot).rem_euclid(360.0) as f32),
+        ..g.clone()
+    })
+}
+
+/// A shape with BOTH a gradient fill and an outline keeps its ramp unless this
+/// is set (which restores losing the fill to the stroke).
+fn gradstroke_on() -> bool {
+    std::env::var("OXI_GRADSTROKE_DISABLE").is_err()
+}
+
+/// A preset shape hands a gradient-only fill to the ramp painter unless this
+/// is set.
+fn presetgrad_on() -> bool {
+    std::env::var("OXI_PRESETGRAD_DISABLE").is_err()
+}
+
+/// A shape gradient rides its shape's rotation unless this is set.
+fn gradrot_on() -> bool {
+    std::env::var("OXI_GRADROT_DISABLE").is_err()
 }
 
 /// Shape gradients are painted unless this is set.
