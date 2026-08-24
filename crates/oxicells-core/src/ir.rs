@@ -233,6 +233,16 @@ pub struct TextRun {
     pub underline: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Whether the run carried an `<rPr>` of its own.
+    ///
+    /// It is not the same question as whether any of the fields above are
+    /// set. An `<rPr>` REPLACES the cell's font rather than overriding parts
+    /// of it, so a run that carries one and does not say `<b/>` is NOT bold
+    /// even in a bold cell — while a run with no `<rPr>` at all wears the
+    /// cell's font whole. Both look identical in the fields above, so the
+    /// fact that the element was there has to be kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dressed: bool,
     /// "superscript" or "subscript" when the run is raised or lowered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<String>,

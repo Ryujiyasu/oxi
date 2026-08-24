@@ -161,7 +161,10 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                         in_run = true;
                         current_run = crate::ir::TextRun::default();
                     }
-                    "rPr" if in_run => in_run_props = true,
+                    "rPr" if in_run => {
+                        in_run_props = true;
+                        current_run.dressed = true;
+                    }
                     "sz" if in_run_props => {
                         current_run.size = get_attr(&e, "val").and_then(|v| v.parse().ok());
                     }
@@ -195,7 +198,8 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                         // A string whose runs are all dressed the same as the
                         // cell is no richer than a plain one.
                         if current.runs.iter().all(|run| {
-                            run.size.is_none()
+                            !run.dressed
+                                && run.size.is_none()
                                 && run.font.is_none()
                                 && run.vert_align.is_none()
                                 && !run.bold

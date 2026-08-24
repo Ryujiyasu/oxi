@@ -4737,6 +4737,27 @@ mod windows_draw {
                         }
                         _ => (0, 0),
                     };
+                    // A run's `<rPr>` REPLACES the cell's font; it does not
+                    // override parts of it. `_xlsx_run_props.py` puts a bold
+                    // 20pt cell behind five hand-written second runs and reads
+                    // the ink: no `<rPr>` comes out bold at 20pt like the cell,
+                    // an `<rPr>` naming a size and a face but not `<b/>` comes
+                    // out REGULAR at 20pt, and an `<rPr>` holding `<b/>` alone
+                    // comes out bold at the DEFAULT size rather than the
+                    // cell's. So a dressed run wears only what it names.
+                    // 1161 of the corpus's 1211 dressed runs leave `<b/>` out
+                    // while sitting in a bold cell — `glossary_05` is nine
+                    // strings of them — and every one of the 1211 names both
+                    // its size and its face, so the fall-back for those two is
+                    // not reachable from any workbook here and is left on the
+                    // cell rather than guessed at.
+                    let worn = |run: &oxicells_core::ir::TextRun| {
+                        (
+                            run.bold || (bold && !run.dressed),
+                            run.italic || (cell.style.italic && !run.dressed),
+                            run.underline || (cell.style.underline && !run.dressed),
+                        )
+                    };
                     let dressed_runs = !cell.runs.is_empty() && lines.len() == 1;
                     if dressed_runs {
                         let piece = |run: &oxicells_core::ir::TextRun| {
@@ -4749,9 +4770,9 @@ mod windows_draw {
                                 0,
                                 0,
                                 0,
-                                if run.bold || bold { 700 } else { 400 },
-                                u32::from(run.italic || cell.style.italic),
-                                u32::from(run.underline || cell.style.underline),
+                                if worn(run).0 { 700 } else { 400 },
+                                u32::from(worn(run).1),
+                                u32::from(worn(run).2),
                                 0,
                                 DEFAULT_CHARSET.0 as u32,
                                 OUT_DEFAULT_PRECIS.0 as u32,
@@ -4862,12 +4883,13 @@ mod windows_draw {
                             let raised = run.vert_align.is_some();
                             let size = run.size.unwrap_or(points);
                             let size = if raised { size * 0.65 } else { size };
+                            let (heavy, leaning, ruled) = worn(run);
                             (
                                 run.font.clone().unwrap_or_else(|| name.to_string()),
                                 size,
-                                run.bold || bold,
-                                run.italic || cell.style.italic,
-                                run.underline || cell.style.underline,
+                                heavy,
+                                leaning,
+                                ruled,
                             )
                         };
                         let font_of = |index: usize| {
