@@ -33597,16 +33597,55 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // different engine, so the arms are rebuilt here.
                                                 let s1198 =
                                                     std::env::var("OXI_S1198_DISABLE").is_err();
+                                                // S1208 (2026-08-24, opt-out `OXI_S1208_DISABLE`;
+                                                // reachable only under the opt-in `OXI_YAKUCOMP`): the
+                                                // flat half em is the pool a line gets when the character
+                                                // it is squeezing in follows an ORDINARY one. When the
+                                                // character immediately before it is a FULLWIDTH SPACE,
+                                                // every mark on the line lends its own half em instead, up
+                                                // to one and a half. And a fullwidth space lends NOTHING on
+                                                // its own, so it stops counting as a mark at all.
+                                                // DERIVED with `_pb_bodyyaku{,2,3,4,6}_gen.py` and confirmed
+                                                // cell-side, arm for arm, with `_pb_cellyaku_gen.py` (Word
+                                                // COM, the paragraph's right indent swept in 0.25pt steps,
+                                                // MS Mincho 10.5pt, jc=both, compat 11; 19 arms, each one
+                                                // monotone with a one-step flip bracket, body and cell
+                                                // readings IDENTICAL):
+                                                //     marks only, n = 1..4                 0.50em
+                                                //     fullwidth spaces only, 1..4          0.00em
+                                                //     n marks + a fullwidth space
+                                                //       immediately before the last char   0.50em*min(n,3)
+                                                //     the same space 1..6 characters back  0.50em
+                                                //     a comma / period / closing bracket
+                                                //       in that same position              0.50em
+                                                // The render says the same thing glyph by glyph: at the
+                                                // released widths EVERY mark carries its full half em; at
+                                                // the flat width two of them share one half em between them.
+                                                // tokyoshugyo p76's marked item is exactly this line, and
+                                                // Word compresses BOTH of its commas by 3.9pt to keep the
+                                                // last character on it, which a flat half em cannot pay for.
+                                                // MEASURED BUT NOT IMPLEMENTED: an OPENING bracket in that
+                                                // position releases the pool too AND adds its own half em
+                                                // (1.50em for two marks). No corpus line reaches it, so it
+                                                // is recorded here rather than coded.
+                                                let s1208 =
+                                                    std::env::var("OXI_S1208_DISABLE").is_err();
                                                 let yaku = if s1174_yakucomp {
                                                     let mut has_a = false;
                                                     let mut b = 0.0f32;
                                                     let mut last_a = false;
                                                     let mut saw_mark = false;
+                                                    let mut n_a = 0.0f32;
+                                                    let mut last_ch: Option<char> = None;
                                                     for (i, c) in current_line_chars
                                                         .iter()
                                                         .chain(buf_chars.iter())
                                                         .enumerate()
                                                     {
+                                                        last_ch = Some(c.ch);
+                                                        if s1208 && c.ch == '\u{3000}' {
+                                                            continue;
+                                                        }
                                                         if kinsoku::cell_yaku_type_b(c.ch) {
                                                             saw_mark = true;
                                                             last_a = false;
@@ -33627,9 +33666,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             has_a = true;
                                                             saw_mark = true;
                                                             last_a = true;
+                                                            n_a += 1.0;
                                                         }
                                                     }
-                                                    if s1198 {
+                                                    if s1208 && last_ch == Some('\u{3000}') {
+                                                        (0.5 * font_size * n_a).min(1.5 * font_size) + b
+                                                    } else if s1198 {
                                                         if !saw_mark {
                                                             0.0
                                                         } else if last_a {
@@ -39403,17 +39445,65 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         0.0
                     };
                     // S1174 refined -- estimate mirror.
+                    // S1208 (2026-08-24, opt-out `OXI_S1208_DISABLE`, inside the
+                    // opt-in `OXI_YAKUCOMP` = default byte-identical): on a BODY
+                    // line the flat half-em is only the pool the line gets when the
+                    // character it is squeezing in follows an ORDINARY one. When the
+                    // character immediately before it is a FULLWIDTH SPACE, every
+                    // closing mark on the line lends its own half em instead, up to
+                    // one and a half.
+                    // DERIVED with `_pb_bodyyaku{,2,3,4,6}_gen.py` (Word COM, the
+                    // paragraph's right indent swept in 0.25pt steps, MS Mincho
+                    // 10.5pt, jc=both, compat 11; every reading is monotone and its
+                    // flip bracket is one step wide):
+                    //     marks only, n = 1..4                0.50em  (flat)
+                    //     fullwidth spaces only, 1..4         0.00em
+                    //     n marks + a fullwidth space
+                    //       immediately before the last char  0.50em * min(n, 3)
+                    //     the same space 1..6 chars back      0.50em  (no release)
+                    //     a comma / period / closing bracket
+                    //       in that same position             0.50em  (no release)
+                    // and the render confirms the accounting glyph by glyph: at the
+                    // released widths EVERY mark carries its full half em, at the
+                    // flat width two of them share one half em between them.
+                    // A fullwidth space does NOT open the pool by itself -- the
+                    // no-mark arms sit exactly on the natural width -- so it stops
+                    // counting as a type-A mark here as well.
+                    // tokyoshugyo p76's marked item is this line: ...をとり、 plus
+                    // four underlined fullwidth spaces plus に, where Word compresses
+                    // BOTH commas by 3.9pt to keep に on the line, and the flat half
+                    // em cannot pay for it.
+                    // MEASURED BUT NOT IMPLEMENTED: an opening bracket in that
+                    // position releases the pool too AND adds its own half em (1.50em
+                    // for two marks). No corpus line reaches it, so it is recorded
+                    // here rather than coded.
                     let yaku = if s1174_yakucomp {
+                        let s1208 = std::env::var("OXI_S1208_DISABLE").is_err();
                         let mut has_a = false;
+                        let mut n_a = 0.0f32;
                         let mut b = 0.0f32;
+                        let mut last_ch: Option<char> = None;
                         for c in current_line_chars.iter().chain(buf_chars.iter()) {
                             if kinsoku::cell_yaku_type_b(c.ch) {
                                 b += 0.5 * c.natural_advance;
                             } else if kinsoku::cell_yaku_type_a(c.ch) {
                                 has_a = true;
+                                if c.ch != '\u{3000}' {
+                                    n_a += 1.0;
+                                }
                             }
+                            last_ch = Some(c.ch);
                         }
-                        (if has_a { 0.5 * font_size } else { 0.0 }) + b
+                        let a = if !s1208 {
+                            if has_a { 0.5 * font_size } else { 0.0 }
+                        } else if last_ch == Some('\u{3000}') {
+                            (0.5 * font_size * n_a).min(1.5 * font_size)
+                        } else if n_a > 0.0 {
+                            0.5 * font_size
+                        } else {
+                            0.0
+                        };
+                        a + b
                     } else {
                         0.0
                     };
