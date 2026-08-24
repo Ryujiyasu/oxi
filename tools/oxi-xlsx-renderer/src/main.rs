@@ -1985,6 +1985,44 @@ pub(crate) fn stacked_text(text: &str) -> String {
     held
 }
 
+/// The marks Excel lays on their side inside a stacked cell.
+///
+/// Everything else it leaves standing, and draws through the UPRIGHT face —
+/// which matters, because ＭＳ 明朝 and ＭＳ ゴシック carry embedded bitmaps at
+/// the sizes a sheet uses and the turned face cannot reach them, so the two put
+/// down visibly different ink at the same pixel size.
+///
+/// Derived by `_xlsx_stack_class.py`, which predicts the ink the upright face
+/// would leave at Excel's own pen — `top + baseline - ascent`, read from a
+/// reference character in the same column — and asks whether Excel's picture is
+/// that, to the pixel. Over the CJK punctuation block, the full-width forms, the
+/// half-width katakana and the dashes, 205 characters were the upright
+/// prediction exactly and these 50 were not, identically for both faces.
+///
+/// Note what is NOT here: 〜 U+301C, ： ； ＜ ＞ ／ ＼ － and every dash but
+/// U+2010 and U+2015 stand, though the turned face has a rotated shape for
+/// several of them — Excel's class is its own, not the font's.
+pub(crate) fn turned_in_a_stack(letter: char) -> bool {
+    matches!(
+        letter,
+        '\u{2010}' | '\u{2015}' | '\u{2025}' | '\u{2026}'      // ‐ ― ‥ …
+        | '\u{3001}' | '\u{3002}'                              // 、 。
+        | '\u{3008}'..='\u{3011}'                              // 〈〉《》「」『』【】
+        | '\u{3013}'..='\u{3017}'                              // 〓〔〕〖〗
+        | '\u{3021}'..='\u{3029}'                              // 〡..〩
+        | '\u{302E}' | '\u{302F}'
+        | '\u{3038}'..='\u{303A}'                              // 〸〹〺
+        | '\u{303E}' | '\u{303F}'
+        | '\u{30FC}'                                           // ー
+        | '\u{FF08}' | '\u{FF09}'                              // （ ）
+        | '\u{FF1D}'                                           // ＝
+        | '\u{FF3B}' | '\u{FF3D}' | '\u{FF3F}'                 // ［ ］ ＿
+        | '\u{FF5B}'..='\u{FF5E}'                              // ｛ ｜ ｝ ～
+        | '\u{FF62}' | '\u{FF63}'                              // ｢ ｣
+        | '\u{FF70}'                                           // ｰ
+    )
+}
+
 /// Where the text sits across a cell. Excel puts numbers to the right and text
 /// to the left unless the cell says otherwise.
 /// How a table dresses one of its cells: Excel paints this, and no cell inside
@@ -4711,7 +4749,17 @@ mod windows_draw {
                             (box_.bottom - box_.top) as f32 / scale >= ascent + 3.0
                         });
                     let cut = if spills { height as i32 } else { box_.bottom };
-                    let clip = CreateRectRgn(area.left, box_.top + 1, area.right, cut);
+                    // A stacked character is not kept inside the gutters: in
+                    // `data_B01` a 15-pixel em stands in a 17-pixel column and
+                    // Excel lets its first stroke sit a pixel inside the border,
+                    // where the left gutter is three. It is the cell's own edges
+                    // that cut it.
+                    let (walled, walls) = if cell.style.stacked_text {
+                        (box_.left, box_.right)
+                    } else {
+                        (area.left, area.right)
+                    };
+                    let clip = CreateRectRgn(walled, box_.top + 1, walls, cut);
                     SelectClipRgn(dc, clip);
                     SetTextAlign(dc, TA_BASELINE | TA_LEFT);
                     let mut at = top + (baseline * scale).round() as i32;
@@ -5159,15 +5207,36 @@ mod windows_draw {
                         }
                     }
 
-                    // A stacked cell is drawn through the vertical face —
-                    // "@ＭＳ ゴシック" turned a quarter turn — because that is
-                    // the face Excel takes its shapes from: measured character
-                    // by character, ー ｰ ～ （ ） 「 」 【 】 ＝ come out on
-                    // their side and everything else upright, exactly as the
-                    // "@" face draws them. The character sits at the top of
-                    // its own line box, the em's width across.
+                    // A stacked cell is drawn through TWO faces. The marks
+                    // Excel lays on their side — ー ～ （ ） 「 」 【 】 ＝ 、
+                    // 。 and the rest of `turned_in_a_stack` — go through the
+                    // vertical face, "@ＭＳ 明朝" turned a quarter turn, which
+                    // is where their turned shapes live. Everything standing
+                    // goes through the UPRIGHT face, because that is what
+                    // Excel draws it with: ＭＳ 明朝 carries an embedded bitmap
+                    // at the sizes a sheet uses and a turned face cannot reach
+                    // it, so the same 相 comes out 13 pixels across upright and
+                    // 10 through the turned face — which is what left every
+                    // stacked heading in the `data_*` family with the wrong
+                    // glyph, two pixels left and one high, its leading stroke
+                    // clipped away at the gutter (`_xlsx_stack_place.py`).
+                    //
+                    // A standing character sits on the row's own baseline,
+                    // `top + baseline - ascent`, measured over seven sizes from
+                    // 6 to 36 point by `_xlsx_stack_pen.py`. That is the line
+                    // box's padding at every size but 6 point, where the box is
+                    // a pixel deeper than the baseline asks for.
                     if cell.style.stacked_text && !dressed_runs {
                         let em = -pixels;
+                        // Where the standing character's own box begins: the
+                        // row's baseline, less the face's ascent. The turned
+                        // face has neither, and keeps the padding it had.
+                        let sit = super::held(|counter| {
+                            counter.shape_of(name, points, bold, cell.style.italic)
+                        })
+                        .map_or((line_px - em).max(0), |(ascent, _, _)| {
+                            ((baseline - ascent) * scale).round() as i32
+                        });
                         let turned = wide(&format!("@{name}"));
                         let font = CreateFontW(
                             pixels,
@@ -5185,12 +5254,11 @@ mod windows_draw {
                             (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
                             PCWSTR(turned.as_ptr()),
                         );
-                        // A letter or a digit is not turned at all: Excel
-                        // stacks `01糖尿病` as an upright 0 over an upright 1
-                        // over the kanji, and the turned face has no rotated
-                        // shape for them — drawn through it they come out on
-                        // their side. Only what the "@" face itself turns is
-                        // drawn through it.
+                        // The face everything standing is drawn through —
+                        // every kanji and kana, the letters and digits Excel
+                        // stacks upright in `01糖尿病`, and the marks its own
+                        // class leaves standing even where the turned face has
+                        // a rotated shape for them.
                         let plain = CreateFontW(
                             pixels,
                             0,
@@ -5228,18 +5296,22 @@ mod windows_draw {
                             // The pen of a turned face sits at the top left of
                             // the character, not on a baseline, so the line
                             // box's own padding is what puts it in place.
-                            let down = top + step as i32 * line_px + (line_px - em).max(0);
-                            if line.chars().all(|letter| letter.is_ascii_graphic()) {
+                            let head = top + step as i32 * line_px;
+                            let down = head + (line_px - em).max(0);
+                            let stands =
+                                line.chars().all(|letter| !super::turned_in_a_stack(letter));
+                            if stands {
                                 SelectObject(dc, plain);
                                 SetTextAlign(dc, TA_TOP | TA_LEFT);
                                 let mut measured = SIZE::default();
                                 let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
-                                let _ = TextOutW(
-                                    dc,
-                                    left + ((em - measured.cx) as f32 / 2.0).round() as i32,
-                                    down,
-                                    letters,
-                                );
+                                // A character narrower than the em is centred
+                                // on it — a half-width kana, a letter, a digit.
+                                // A full-width one advances a pixel more than
+                                // the em at these sizes and is not moved at all.
+                                let across =
+                                    ((em - measured.cx).max(0) as f32 / 2.0).round() as i32;
+                                let _ = TextOutW(dc, left + across, head + sit, letters);
                                 SetTextAlign(dc, TA_BASELINE | TA_LEFT);
                                 SelectObject(dc, font);
                             } else {
@@ -5632,6 +5704,26 @@ mod tests {
         assert_eq!(stacked_text("A1"), "A\n1");
         assert_eq!(stacked_text("あ\nい"), "あ\nい");
         assert_eq!(stacked_text(""), "");
+    }
+
+    /// Which of a stack's characters Excel lays on their side, and which it
+    /// leaves standing. Every character named here was read out of Excel's own
+    /// picture by `_xlsx_stack_class.py`, in ＭＳ 明朝 and ＭＳ ゴシック alike:
+    /// a standing one is the upright face's ink at the upright face's pen, to
+    /// the pixel, and a turned one is not.
+    #[test]
+    fn a_stack_turns_the_brackets_and_leaves_the_rest_standing() {
+        for letter in "、。「」『』（）【】〔〕〈〉《》ー～＝｜［］｛｝＿｢｣ｰ‐―‥…".chars() {
+            assert!(super::turned_in_a_stack(letter), "{letter} is turned");
+        }
+        // Marks the turned face has a rotated shape for, which Excel stands up
+        // anyway — the class is Excel's, not the font's.
+        for letter in "〜：；＜＞／＼－ｱ".chars() {
+            assert!(!super::turned_in_a_stack(letter), "{letter} stands");
+        }
+        for letter in "相談あウ一二・！？＋Ａａ01①⑧ⅠⅡ々〆".chars() {
+            assert!(!super::turned_in_a_stack(letter), "{letter} stands");
+        }
     }
 
     /// Every pair here was read off a worksheet Excel drew: the stored width on
