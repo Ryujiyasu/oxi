@@ -10478,7 +10478,39 @@ unsafe fn end_turned_text(
 
 /// Position italic text by the italic face's own advances.
 ///
-/// ★PARKED OPT-IN (`OXI_ITALADV=1`), because the rule is INCOMPLETE, not wrong.
+/// ★UNPARKED 2026-08-25 (was `OXI_ITALADV=1`, now opt-out). Kept the old note
+/// below because it is the reasoning that held it back; what changed is that
+/// BOTH of its blockers were removed by later work:
+///
+///   * d17 s4 (-0.0037) was never about italic at all -- S-HMTXSTYLE fixed it
+///     (the plain-weight advance table was answering for bold text). It no
+///     longer appears in the diff.
+///   * d16 s5 went from +0.0058 to **+0.0767** once S-RUNALIGN made the line
+///     centre on the width it is actually drawn at. The two fixes compound: the
+///     right advances are only worth having if the alignment uses them too.
+///
+/// Re-measured on the four decks that carry italic:
+///
+///     d16 s5    0.8907 -> 0.9674   (+0.0767)
+///     d35 s25   0.9529 -> 0.9646   (+0.0116)
+///     d16 s17   0.9624 -> 0.9699   (+0.0076)
+///     d15 s5    0.9192 -> 0.9079   (-0.0112)   <- see below
+///
+/// **3 up / 1 down, net +0.0847 = corpus +0.000096.**
+///
+/// ★The one loss is a REFERENCE artifact, not a regression. d15 s5's stored
+/// truth PDF is a COLD export: PowerPoint uses a deck's embedded italic parts
+/// only from the SECOND open of a session, and the first falls back to the
+/// upright part with a synthetic slant. Measured on that very deck --
+/// open #1 `Barlow-Bold` width 360.06, opens #2 AND #3 `Barlow-BoldItalic`
+/// width 347.85. Oxi now matches the WARM answer, which is the reproducible
+/// one; the cold state is the one-off. See `pptx-truth-pdf-first-open-is-cold`.
+/// If the corpus references are ever re-exported warm, this slide flips to a
+/// gain.
+///
+/// The original parking note follows.
+///
+/// PARKED OPT-IN (`OXI_ITALADV=1`), because the rule was INCOMPLETE, not wrong.
 /// It is exactly right on d16 -- the line widths become PowerPoint's to the
 /// pixel (1026/1021/910/483 against 1026/1020/910/483, from 1057/1024/940/496)
 /// and s5 gains +0.0058, s17 +0.0076. But d15 s5 LOSES 0.0112, and the reason
@@ -10495,7 +10527,7 @@ unsafe fn end_turned_text(
 /// is measured, shipping this would be stacking an exception on a spec that is
 /// not yet derived. Corpus with it on: **+0.000011, 2 decks up / 2 down**.
 fn italadv_on() -> bool {
-    std::env::var("OXI_ITALADV").ok().as_deref() == Some("1")
+    std::env::var("OXI_ITALADV_DISABLE").is_err()
 }
 
 /// A shape's text is turned with the shape unless this is set.
