@@ -27,7 +27,11 @@ Image.MAX_IMAGE_PIXELS = None
 REPO = Path(__file__).resolve().parents[2]
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 SCRATCH = Path(r"C:\tmp\xlsx_italic_right")
-WORDS = "0"   # one round glyph: its ink edges are the least ambiguous
+# One round glyph reads the RESERVATION; a whole figure reads whether the
+# advances accumulate a difference as well. `R6kessan`'s own cells hold
+# numbers of this shape.
+import os as _os
+WORDS = _os.environ.get("OXI_ITALIC_WORDS", "0")
 # Each size twice: against the right edge, where the width Excel reserves
 # shows, and against the left, where only the ink can differ.
 ARMS = []
@@ -35,6 +39,12 @@ for _face in ("ＭＳ Ｐゴシック", "ＭＳ 明朝", "Century", "Times New R
               "メイリオ", "游ゴシック", "Calibri", "Arial"):
     for _size in (11.0, 20.0):
         ARMS += [(_face, _size, False, True), (_face, _size, False, True)]
+# `R6kessan` — the workbook this rule was derived FOR — sets its figures BOLD
+# italic, and the first sweep only ever asked the plain italic. Its own arm
+# comes first, then the rest of the faces at both sizes.
+for _face in ("ＭＳ Ｐゴシック", "ＭＳ 明朝", "メイリオ", "游ゴシック", "Century", "Arial"):
+    for _size in (11.0, 20.0):
+        ARMS += [(_face, _size, True, True), (_face, _size, True, True)]
 ROW_PT = 18.0
 COLUMN = 40.0
 
@@ -54,8 +64,16 @@ def build(made: Path) -> int | None:
             # A number, not text: a text number wears Excel's green
             # "stored as text" triangle, which is ink in the top-left corner
             # and would be read as the line's own start.
-            cell.Value = 0
-            cell.NumberFormat = "0"
+            # A number goes in as a number (a text number wears the green
+            # "stored as text" corner, which is ink of its own); anything else
+            # goes in as text.
+            plain = WORDS.replace(",", "")
+            if plain.isdigit():
+                cell.Value = int(plain)
+                cell.NumberFormat = "#,##0" if "," in WORDS else "0"
+            else:
+                cell.NumberFormat = "@"
+                cell.Value = WORDS
             cell.Font.Name = face
             cell.Font.Size = points
             cell.Font.Bold = bold
