@@ -691,11 +691,12 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     let prst = match sh.shape_type.as_deref() {
         Some(
             p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"
-                | "star10" | "wedgeRectCallout"),
+                | "star10" | "wedgeRectCallout" | "blockArc"),
         ) if (p != "pie" || pie_on())
             && (p != "chevron" || chevron_on())
             && (p != "star10" || star10_on())
-            && (p != "wedgeRectCallout" || wedgecallout_on()) =>
+            && (p != "wedgeRectCallout" || wedgecallout_on())
+            && (p != "blockArc" || blockarc_on()) =>
         {
             p
         }
@@ -903,6 +904,51 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             let p = map(pts[0].0, pts[0].1);
             let _ = MoveToEx(dc, p.x, p.y, None);
             for &(px, py) in &pts[1..] {
+                line(map(px, py));
+            }
+        }
+        // S-BLOCKARC (2026-08-25): the LAST preset in the corpus with no path.
+        // d24 slide 17 is three of them at rot 60 / 180 / -60 forming a donut,
+        // and with no geometry Oxi filled the whole 218x218 box with the first
+        // segment's orange -- a solid square where a ring belongs (0.9397).
+        //
+        // A ring sector: `adj1` / `adj2` are the start and end angles in
+        // 60000ths of a degree (the same units and screen sense as `pie`), and
+        // ★`adj3` is the ring's THICKNESS, not its inner radius:
+        //
+        //     inner radius = wd2 * (1 - adj3/50000)
+        //
+        // Measured off PowerPoint's own raster rather than guessed -- a scan
+        // through the donut's centre row puts the coloured band at
+        // **0.5835..0.9965** of the half-width, against 1 - 20773/50000 =
+        // 0.58454 for the inner edge and 1.0 for the outer. The three segments
+        // span 119.3 degrees each and, once each shape's own `rot` is applied,
+        // tile 0..360 with the small gaps the deck draws.
+        "blockArc" => {
+            let st = sh.adjustments.get("adj1").copied().unwrap_or(10_800_000.0);
+            let en = sh.adjustments.get("adj2").copied().unwrap_or(0.0);
+            let a3 = sh.adjustments.get("adj3").copied().unwrap_or(25_000.0) / 50_000.0;
+            let mut sw = en - st;
+            if sw <= 0.0 {
+                sw += 21_600_000.0;
+            }
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let (irx, iry) = (rx * (1.0 - a3).max(0.0), ry * (1.0 - a3).max(0.0));
+            let at = |units: f32, ax: f32, ay: f32| {
+                let a = (units / 60_000.0).to_radians();
+                (rx + ax * a.cos(), ry + ay * a.sin())
+            };
+            // One segment per degree, the same resolution the `pie` arm uses.
+            let steps = ((sw / 60_000.0).abs().ceil() as usize).clamp(2, 720);
+            let (sx, sy) = at(st, rx, ry);
+            let p0 = map(sx, sy);
+            let _ = MoveToEx(dc, p0.x, p0.y, None);
+            for i in 1..=steps {
+                let (px, py) = at(st + sw * i as f32 / steps as f32, rx, ry);
+                line(map(px, py));
+            }
+            for i in 0..=steps {
+                let (px, py) = at(st + sw * (steps - i) as f32 / steps as f32, irx, iry);
                 line(map(px, py));
             }
         }
@@ -11195,6 +11241,12 @@ fn line_width_pt_runs(
         total += measure(&seg, c)?;
     }
     Some(total)
+}
+
+/// `blockArc` is drawn as its ring sector unless this is set (which restores
+/// painting it as its bounding box).
+fn blockarc_on() -> bool {
+    std::env::var("OXI_BLOCKARC_DISABLE").is_err()
 }
 
 /// `wedgeRectCallout` keeps its tail unless this is set (which restores drawing
