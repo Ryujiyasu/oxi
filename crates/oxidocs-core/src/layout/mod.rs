@@ -30937,15 +30937,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 let cell_end_grid = (cell_start_grid + span).min(col_widths.len());
                 let mut cell_w: f32 = col_widths[cell_start_grid..cell_end_grid].iter().sum();
 
+                // S1215 (2026-08-25, opt-out `OXI_S1215_DISABLE`): a row's `w:tblPrEx`
+                // may override the table's cell margins, and the parser already
+                // carries it (`TableRow::cell_margins_override`) -- nothing ever
+                // read it, so such a row got the table default instead.
+                // 29dc6e8943fe's ③ row is the case: its tblPrEx says
+                // `tblCellMar left/right = 12` (0.60pt) where the table default
+                // is 108 (5.40pt), and every paragraph in that cell renders
+                // 4.45pt right of Word's. Sliced out and measured against Word:
+                // with no indent at all the text sits 0.84pt inside the cell's
+                // own rule, not 5.4pt.
+                let s1215_row_mar = if std::env::var("OXI_S1215_DISABLE").is_err() {
+                    row.cell_margins_override.as_ref()
+                } else {
+                    None
+                };
                 let pad_l = cell
                     .margins
                     .as_ref()
                     .and_then(|m| m.left)
+                    .or_else(|| s1215_row_mar.and_then(|m| m.left))
                     .unwrap_or(default_pad_l);
                 let pad_r = cell
                     .margins
                     .as_ref()
                     .and_then(|m| m.right)
+                    .or_else(|| s1215_row_mar.and_then(|m| m.right))
                     .unwrap_or(default_pad_r);
                 let mut pad_t = cell
                     .margins
