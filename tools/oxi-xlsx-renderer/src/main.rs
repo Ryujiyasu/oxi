@@ -5199,6 +5199,7 @@ mod windows_draw {
                     // fifteen lengths, Excel comes down a whole pixel of em at
                     // a time and stops at the first that fits.
                     let asked = cell.style.font_size.unwrap_or(11.0);
+                    let points_before = asked;
                     let points = if cell.style.shrink_to_fit && !cell.style.wrap_text {
                         // The room the test is made in is the room the line is
                         // actually PLACED in — which for a slanted line is
@@ -5220,6 +5221,21 @@ mod windows_draw {
                     } else {
                         asked
                     };
+                    // A cell that came down a size keeps the room its DRAWN
+                    // size asks for, not the room it asked for before it
+                    // shrank: `barrier_free`'s addresses are 11pt cells that
+                    // Excel draws at about six, and its gutter is the small
+                    // font's two where ours was the asked font's three. The
+                    // area was gutted above with the asked size, so only the
+                    // difference is taken back here.
+                    if points < points_before {
+                        let (was_left, was_right) =
+                            super::gutters(name, points_before, bold, cell.style.italic);
+                        let (now_left, now_right) =
+                            super::gutters(name, points, bold, cell.style.italic);
+                        area.left -= ((was_left - now_left) * scale).round() as i32;
+                        area.right += ((was_right - now_right) * scale).round() as i32;
+                    }
                     let pixels = -((points * scale * 96.0 / 72.0).round() as i32);
                     let font = CreateFontW(
                         pixels,
