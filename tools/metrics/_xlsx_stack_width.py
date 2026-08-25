@@ -100,6 +100,32 @@ def first_ink(band: np.ndarray) -> int | None:
     return int(lit.min()) if len(lit) else None
 
 
+def per_line(band: np.ndarray) -> list[int]:
+    """Each stacked character's own first ink, read in its own row band.
+
+    Reading the cell as a whole gives the MINIMUM over both characters, and in
+    a narrow cell the standing one and the turned one overlap — so a stack put
+    at 0 and 2 reads the same as one put at 1 and 1. The two characters are on
+    different LINES, so the answer is one band each.
+    """
+    rows = np.where(band.any(axis=1))[0]
+    if not len(rows):
+        return []
+    groups, start, last = [], rows[0], rows[0]
+    for y in rows[1:]:
+        if y - last > 2:
+            groups.append((start, last))
+            start = y
+        last = y
+    groups.append((start, last))
+    out = []
+    for top, foot in groups:
+        lit = np.where(band[top:foot + 1].any(axis=0))[0]
+        if len(lit):
+            out.append(int(lit.min()))
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
@@ -111,22 +137,22 @@ def main() -> int:
     mine, columns = ours(made)
     truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L")) < 140
     print(f"  {FACE} {SIZE}pt, stack {STACK!r} (one standing, one turned)")
-    print("  cell px | ink from the cell's left: Excel Oxi | centred on em / on em+2")
+    print("  cell px | each character's own first ink, and the gap between them")
     walked = 0
     for at in range(len(WIDTHS)):
         if at + 1 not in columns:
             continue
         left, right = columns[at + 1]
         wide = right - left
-        theirs = first_ink(truth[:, walked + 1:walked + wide - 1])
-        ours_at = first_ink(mine[:, left + 1:left + wide - 1])
+        theirs = per_line(truth[:, walked + 1:walked + wide - 1])
+        ours_at = per_line(mine[:, left + 1:left + wide - 1])
         walked += wide
-        if theirs is None or ours_at is None:
+        if len(theirs) != 2 or len(ours_at) != 2:
+            print(f"  {wide:>7} | read {len(theirs)}/{len(ours_at)} lines, not two")
             continue
-        on_em = round((wide - 15) / 2)
-        on_box = round((wide - 17) / 2)
-        print(f"  {wide:>7} | {theirs + 1:>24} {ours_at + 1:>3} |"
-              f" {on_em:>16} {on_box:>7}"
+        print(f"  {wide:>7} | 相 E {theirs[0] + 1:>2} O {ours_at[0] + 1:<2}"
+              f"   （ E {theirs[1] + 1:>2} O {ours_at[1] + 1:<2}"
+              f"   gap E {theirs[1] - theirs[0]:>2} O {ours_at[1] - ours_at[0]:<2}"
               f"  {'' if theirs == ours_at else '<<'}")
     return 0
 
