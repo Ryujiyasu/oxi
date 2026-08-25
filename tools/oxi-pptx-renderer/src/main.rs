@@ -10795,6 +10795,14 @@ const ADVANCE_PROBE_EM: i32 = 2048;
 /// on whole units there -- and only quantises a 1000-unit CFF em, so probing
 /// finer is opt-in until a corpus measurement says it is worth the cache churn:
 /// on d09 it moved the deck +0.0001 with the per-slide signs mixed.
+///
+/// ★RE-MEASURED 2026-08-25 (trap #86: a parked flag must be re-checked when the
+/// ground under it moves, and a great deal moved that day -- S-RUNALIGN,
+/// S-HMTXSTYLE, S-ITALADV and S-SUBTITLE all changed how text is measured or
+/// which face it resolves to). The answer did NOT change: over d09 / d13 / d05
+/// it is **22 slides up / 27 down, net +0.0024**, still mixed signs for a
+/// negligible net. Stays parked -- re-measuring is for finding out, not for
+/// unparking.
 #[cfg(windows)]
 fn advance_probe_em() -> i32 {
     if std::env::var("OXI_ADVPREC_ENABLE").is_ok() {
