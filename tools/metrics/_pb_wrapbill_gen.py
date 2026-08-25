@@ -59,7 +59,8 @@ def build():
            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
            'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">'
            '<w:body>%s%s</w:body></w:document>' % ("".join(paras), sect))
-    dst = os.path.join(OUT, "wb.docx")
+    tag = ("pm" if "Ｐ" in FACE else "m") + ("15" if COMPAT15 else "11")
+    dst = os.path.join(OUT, "wb_%s.docx" % tag)
     shutil.copyfile(SRC, dst)
     zin = zipfile.ZipFile(SRC)
     zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
@@ -134,7 +135,7 @@ def main():
             seen = key
     # dump for offline algebra
     import io
-    w = io.open(os.path.join(OUT, "regimes.txt"), "w", encoding="utf-8")
+    w = io.open(os.path.join(OUT, "regimes_%s.txt" % (("pm" if "Ｐ" in FACE else "m") + ("15" if COMPAT15 else "11"))), "w", encoding="utf-8")
     for (name, r), lines in zip(index, paras):
         w.write("%s\t%d\t%s\n" % (name, r, "|".join(lines)))
     w.close()
