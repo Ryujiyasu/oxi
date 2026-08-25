@@ -307,6 +307,8 @@ struct FontInfo {
     size: Option<f32>,
     color: Option<String>,
     name: Option<String>,
+    charset: Option<i32>,
+    family: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -858,6 +860,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "name" | "rFont" if in_font => {
                         current_font.name = get_attr(&e, "val");
                     }
+                    "charset" if in_font => {
+                        current_font.charset =
+                            get_attr(&e, "val").and_then(|v| v.parse().ok());
+                    }
+                    "family" if in_font => {
+                        current_font.family =
+                            get_attr(&e, "val").and_then(|v| v.parse().ok());
+                    }
                     "scheme" if in_font => {
                         current_font_scheme = get_attr(&e, "val");
                     }
@@ -1094,6 +1104,8 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         underline: font.underline,
         font_size: font.size,
         font_name: font.name.clone(),
+        font_charset: font.charset,
+        font_family: font.family,
         font_color: font.color,
         bg_color: fill.bg_color,
         number_format,
@@ -3259,6 +3271,37 @@ mod tests {
         assert_eq!(named.font_size, Some(10.0));
         let denied = resolve_cell_style(2, &sheet);
         assert!(denied.underline, "should wear the style's own font");
+    }
+
+    /// A face the machine has not got is answered from the two numbers beside
+    /// the name, not from the name: `sanko_tool` asks for `AR P丸ゴシック体E`
+    /// with `family 3` (fixed pitch) and `charset 128` (Japanese), and Excel
+    /// draws ＭＳ ゴシック. Drop either number in the reader and the renderer
+    /// has nothing to answer with.
+    #[test]
+    fn a_font_keeps_the_family_and_charset_beside_its_name() {
+        let xml = r##"<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><sz val="11"/><color rgb="FFFF0000"/><name val="AR P丸ゴシック体E"/><family val="3"/><charset val="128"/></font>
+  </fonts>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+  </cellXfs>
+</styleSheet>"##;
+        let sheet = parse_styles_xml(xml, &Theme::default()).unwrap();
+        let asked = resolve_cell_style(1, &sheet);
+        assert_eq!(asked.font_name.as_deref(), Some("AR P丸ゴシック体E"));
+        assert_eq!(asked.font_family, Some(3));
+        assert_eq!(asked.font_charset, Some(128));
+        let plain = resolve_cell_style(0, &sheet);
+        assert_eq!(plain.font_family, None);
+        assert_eq!(plain.font_charset, None);
     }
 
     /// A generated header row is written as `<font><b/></font>` — bold, and

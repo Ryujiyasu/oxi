@@ -663,6 +663,14 @@ pub struct CellStyle {
     /// The typeface a cell asks for, when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_name: Option<String>,
+    /// The charset the font record states beside the face, and the family.
+    /// A workbook that asks for a face this machine has not got is answered
+    /// from these two and not from the name, so both have to survive as far
+    /// as the renderer (`cell_face_in_place`).
+    #[serde(default)]
+    pub font_charset: Option<i32>,
+    #[serde(default)]
+    pub font_family: Option<i32>,
     pub font_color: Option<String>,
     pub bg_color: Option<String>,
     pub number_format: Option<String>,

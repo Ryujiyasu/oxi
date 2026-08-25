@@ -1186,6 +1186,68 @@ pub(crate) fn face_in_place(face: &str, charset: Option<i32>) -> String {
     }
 }
 
+/// The face Excel draws for a missing one in a CELL, which is not the answer
+/// it gives in a shape.
+///
+/// `face_in_place` above is the shape rule, and it is a table: whatever the
+/// pitchFamily says, a Japanese charset draws 游ゴシック and everything else
+/// ＭＳ ゴシック. A cell is answered differently, and not by a table at all —
+/// Excel hands the name to the device with the charset and the family the
+/// `<font>` record states, and draws what the mapper gives back.
+///
+/// `_xlsx_cell_missing_face.py` reads twenty arms, a workbook each (a name
+/// resolves once per document, so arms cannot share one): the four names the
+/// corpus asks for and has not got, one invented, and the dressings swept
+/// separately. Eighteen are the mapper's own answer, asked with the file's
+/// charset — a charset the file omits counted as ANSI — and `family << 4`,
+/// which is where GDI keeps FF_ROMAN, FF_SWISS and FF_MODERN:
+///
+/// | dressing | Excel draws |
+/// |---|---|
+/// | family 1 + charset 128 | ＭＳ Ｐ明朝 |
+/// | family 2 + charset 128 | ＭＳ Ｐゴシック |
+/// | family 3 + charset ±128 | ＭＳ ゴシック |
+/// | charset ±128, no family | ＭＳ Ｐゴシック |
+/// | family 3, no charset | Courier New |
+/// | family 2, no charset | Arial |
+///
+/// The two the mapper does not account for are the ones where the file states
+/// NOTHING — no family, and no Japanese charset. There Excel does not ask: it
+/// draws ＭＳ ゴシック, which is what SX54 read for the same case in shapes.
+///
+/// The name itself makes no difference: an invented one, a vendor face, and
+/// the corpus's own near-misses of installed names (`MS P ゴシック` with
+/// spaces, `MS　Pゴシック` with an ideographic one) all answer alike.
+pub(crate) fn cell_face_in_place(
+    face: &str,
+    charset: Option<i32>,
+    family: Option<i32>,
+) -> String {
+    if face.is_empty() || known_face(face) {
+        return face.to_string();
+    }
+    let japanese = matches!(charset, Some(-128) | Some(128));
+    if family.unwrap_or(0) <= 0 && !japanese {
+        return "ＭＳ ゴシック".to_string();
+    }
+    stood_in(face, charset.unwrap_or(0), family.unwrap_or(0))
+}
+
+#[cfg(windows)]
+fn stood_in(face: &str, charset: i32, family: i32) -> String {
+    physical_face_asked(
+        face,
+        (charset & 0xFF) as u32,
+        ((family.max(0) as u32) & 0x0F) << 4,
+    )
+    .unwrap_or_else(|| "ＭＳ ゴシック".to_string())
+}
+
+#[cfg(not(windows))]
+fn stood_in(_face: &str, _charset: i32, _family: i32) -> String {
+    "ＭＳ ゴシック".to_string()
+}
+
 /// Whether the device has this face, or is quietly drawing something else.
 ///
 /// GDI has no way to say "I have not got that": it hands back a face of its
@@ -1214,6 +1276,66 @@ fn installed(face: &str) -> bool {
 
 #[cfg(not(windows))]
 fn installed(_face: &str) -> bool {
+    true
+}
+
+/// Whether the device knows a face by this name — by enumeration, not by what
+/// the mapper hands back.
+///
+/// `installed()` asks the mapper twice and calls a face missing when its answer
+/// is the answer to a name nothing can have. That test cannot see a face whose
+/// own answer IS that fallback: this machine answers ＭＳ Ｐゴシック to an
+/// impossible name, so `MS PGothic` — the English name of a face it has —
+/// reads as missing. Enumeration answers the question the way it was asked,
+/// aliases and all.
+#[cfg(windows)]
+fn known_face(face: &str) -> bool {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::Graphics::Gdi::*;
+    thread_local! {
+        static SEEN: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(held) = SEEN.with(|seen| seen.borrow().get(face).copied()) {
+        return held;
+    }
+    unsafe extern "system" fn count(
+        _font: *const LOGFONTW,
+        _metrics: *const TEXTMETRICW,
+        _kind: u32,
+        held: LPARAM,
+    ) -> i32 {
+        unsafe { *(held.0 as *mut i32) += 1 };
+        0
+    }
+    let held = unsafe {
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(screen);
+        let mut asked = LOGFONTW {
+            lfCharSet: DEFAULT_CHARSET,
+            ..Default::default()
+        };
+        for (at, letter) in face.encode_utf16().take(31).enumerate() {
+            asked.lfFaceName[at] = letter;
+        }
+        let mut found: i32 = 0;
+        EnumFontFamiliesExW(
+            dc,
+            &asked,
+            Some(count),
+            LPARAM(&mut found as *mut i32 as isize),
+            0,
+        );
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        found > 0
+    };
+    SEEN.with(|seen| seen.borrow_mut().insert(face.to_string(), held));
+    held
+}
+
+#[cfg(not(windows))]
+fn known_face(_face: &str) -> bool {
     true
 }
 
@@ -1293,6 +1415,21 @@ fn speaks_japanese(_face: &str) -> bool {
 /// that was actually realised, which is the one worth comparing.
 #[cfg(windows)]
 fn physical_face(face: &str) -> Option<String> {
+    use windows::Win32::Graphics::Gdi::*;
+    physical_face_asked(
+        face,
+        DEFAULT_CHARSET.0 as u32,
+        (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+    )
+}
+
+/// The same question, with the charset and the family the file states.
+///
+/// GDI's mapper takes both: a name it cannot match is answered from the
+/// charset (which alphabet) and the family (serif, sans, fixed). Excel asks
+/// it the same way, so this is how its answer is read rather than tabulated.
+#[cfg(windows)]
+fn physical_face_asked(face: &str, charset: u32, pitch: u32) -> Option<String> {
     use windows::core::PCWSTR;
     use windows::Win32::Graphics::Gdi::*;
     unsafe {
@@ -1311,11 +1448,11 @@ fn physical_face(face: &str) -> Option<String> {
             0,
             0,
             0,
-            DEFAULT_CHARSET.0 as u32,
+            charset,
             OUT_DEFAULT_PRECIS.0 as u32,
             CLIP_DEFAULT_PRECIS.0 as u32,
             DEFAULT_QUALITY.0 as u32,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            pitch,
             PCWSTR(name.as_ptr()),
         );
         let previous = SelectObject(dc, font);
@@ -4801,8 +4938,21 @@ mod windows_draw {
                         continue;
                     }
                     // A cell names its own typeface; Calibri is only the
-                    // fallback for one that does not.
-                    let name = cell.style.font_name.as_deref().unwrap_or("Calibri");
+                    // fallback for one that does not. A face this machine has
+                    // not got is answered the way Excel answers it, from the
+                    // charset and the family the font record states
+                    // (`cell_face_in_place`) — `sanko_tool` asks for
+                    // AR P丸ゴシック体E with family 3, and Excel draws it in
+                    // fixed-pitch ＭＳ ゴシック where the device's own default
+                    // mapper hands back a proportional face whose full-width
+                    // marks are narrow.
+                    let asked = cell.style.font_name.as_deref().unwrap_or("Calibri");
+                    let held = super::cell_face_in_place(
+                        asked,
+                        cell.style.font_charset,
+                        cell.style.font_family,
+                    );
+                    let name = held.as_str();
                     let face = wide(name);
                     // A table's header row is bold, and no cell inside the
                     // range says so in its own style.
