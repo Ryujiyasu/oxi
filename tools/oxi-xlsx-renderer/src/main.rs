@@ -1547,6 +1547,16 @@ pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32
         .and_then(|held| held.first().copied())
         .unwrap_or(7) as f32;
     let extra = (((digit - 5.0) / 4.0).floor()).max(0.0);
+    if std::env::var("OXI_XLSX_DUMP_GUTTER").is_ok() {
+        let plain = advances(face, points, false, italic, "0")
+            .and_then(|held| held.first().copied())
+            .unwrap_or(7);
+        eprintln!(
+            "gutter {face} {points} bold={bold} digit={digit} plain={plain} left={} right={}",
+            3.0 + extra,
+            2.0 + extra
+        );
+    }
     (3.0 + extra, 2.0 + extra)
 }
 
@@ -4758,25 +4768,44 @@ mod windows_draw {
                     // thin fills the double's white gap so a two-line rule
                     // reads as a solid three-pixel one.
                     //
-                    // A neighbour that is COVERED by a merge never draws its
-                    // own top or left rule — the block it belongs to draws
-                    // one at its own edge instead — so giving way to it loses
-                    // the line altogether. That is what cost the `28C0*`
-                    // family, whose sheets are largely merged blocks.
-                    // …and a neighbour outside the drawn range does not draw
-                    // one either, though the file still holds it.
+                    // A neighbour outside the drawn range draws no rule of
+                    // its own, though the file still holds one, so there is
+                    // nothing there to give way to either.
                     let inside = |row_at: u32, column: u32| {
                         let down = (row_at as usize).checked_sub(layout.first_row as usize);
                         let across = (column as usize).checked_sub(layout.first_column as usize);
                         matches!(down, Some(down) if down + 1 < layout.rows.len())
                             && matches!(across, Some(across) if across + 1 < layout.columns.len())
                     };
-                    let drawn_itself = |row_at: u32, column: u32| {
-                        inside(row_at, column)
-                            && !matches!(
-                                merged.get(&(row_at, column)),
-                                Some(super::Merged::Covered)
-                            )
+                    // Which cell's rule is actually drawn along an edge, for
+                    // the neighbour that shares it. Usually that cell itself.
+                    // When a merge COVERS it, the block draws one rule along
+                    // its own top (or left) edge instead — so the rule to give
+                    // way to is the ANCHOR's, and only when the block BEGINS
+                    // at this boundary. A block that straddles the boundary
+                    // draws nothing along it, and there is nothing to give way
+                    // to.
+                    let holder = |row_at: u32, column: u32, horizontal: bool| {
+                        if !inside(row_at, column) {
+                            return None;
+                        }
+                        match merged.get(&(row_at, column)) {
+                            Some(super::Merged::Covered) => {
+                                let held = sheet.merge_cells.iter().find(|merge| {
+                                    merge.start_row <= row_at
+                                        && row_at <= merge.end_row
+                                        && merge.start_col <= column
+                                        && column <= merge.end_col
+                                })?;
+                                let begins = if horizontal {
+                                    held.start_row == row_at
+                                } else {
+                                    held.start_col == column
+                                };
+                                begins.then_some((held.start_row, held.start_col))
+                            }
+                            _ => Some((row_at, column)),
+                        }
                     };
                     // Giving way is only WORTH it where drawing both can be
                     // seen. For a solid rule the winner is laid down after the
@@ -4790,12 +4819,12 @@ mod windows_draw {
                     let hollow = |line: &Option<BorderLine>| {
                         line.as_ref().is_some_and(|line| super::rule_for(&line.style).hollow)
                     };
-                    let below = drawn_itself(row.index + spans_rows + 1, cell.col)
-                        && beside(row.index + spans_rows + 1, cell.col)
-                            .is_some_and(|held| hollow(&held.style.border_top));
-                    let after = drawn_itself(row.index, cell.col + spans_columns + 1)
-                        && beside(row.index, cell.col + spans_columns + 1)
-                            .is_some_and(|held| hollow(&held.style.border_left));
+                    let below = holder(row.index + spans_rows + 1, cell.col, true)
+                        .and_then(|(row_at, column)| beside(row_at, column))
+                        .is_some_and(|held| hollow(&held.style.border_top));
+                    let after = holder(row.index, cell.col + spans_columns + 1, false)
+                        .and_then(|(row_at, column)| beside(row_at, column))
+                        .is_some_and(|held| hollow(&held.style.border_left));
                     let edges: [(&Option<BorderLine>, bool, i32); 4] = [
                         (&cell.style.border_top, true, box_.top),
                         (if below { &None } else { foot }, true, box_.bottom),
