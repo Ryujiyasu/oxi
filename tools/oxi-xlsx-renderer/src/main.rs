@@ -720,7 +720,7 @@ fn phase_room(
     italic: bool,
     letters: &[char],
     shares: &[f32],
-) -> (f32, f32) {
+) -> (f32, f32, bool) {
     let em = points * 96.0 / 72.0;
     // Read the face on one FULL-WIDTH character: a proportional face reports a
     // wider hinted advance for some of its narrow marks, and that is not what
@@ -735,10 +735,17 @@ fn phase_room(
         .and_then(|whole| whole.first().copied())
         .zip(shares.get(at))
         .is_some_and(|(whole, share)| whole > (share * em).round() as i32);
+    // The third is `tight` itself, which also says which advance the run
+    // STEPS by. A face whose hinted advance is wider than the rounded design
+    // for every character — ＭＳ 明朝 and ＭＳ ゴシック — is stepped by the
+    // design: `_xlsx_shape_yakumono.py` reads ＭＳ ゴシック's `A` at 14pt as 9
+    // where its device says 10. Every other face is stepped by the DEVICE,
+    // which is what ＭＳ Ｐゴシック's marks need — its `（` at the same size
+    // designs 9.334 and Excel draws 10.
     if tight {
-        (1.2, 0.2)
+        (1.2, 0.2, true)
     } else {
-        (3.5, 5.2)
+        (3.5, 5.2, false)
     }
 }
 
@@ -753,15 +760,32 @@ pub(crate) fn shape_run(
         let letters: Vec<char> = text.chars().collect();
         let shares = counter.design_advances(face, bold, italic, &letters)?;
         let em = points * 96.0 / 72.0;
-        let (ahead, behind) = phase_room(counter, face, points, bold, italic, &letters, &shares);
+        let (ahead, behind, tight) = phase_room(counter, face, points, bold, italic, &letters, &shares);
+        // The step is the DEVICE advance, not the design one rounded. The two
+        // are the same for a full-width character, which is what the phase
+        // sweeps were made of, and they part company on a MARK: ＭＳ Ｐゴシック
+        // at 14pt designs its （ 9.334 wide, which rounds to 9, and the device
+        // hints it to 10 — and Excel steps 10. `_xlsx_shape_yakumono.py` reads
+        // four arms where the two readings differ and Excel follows the device
+        // every time: （ at 14pt (round 9, device 10, Excel 10), Ａ at 10pt
+        // (round 10, device 9, Excel 9), ａ at 10pt (8 / 7 / 7), A at 16pt
+        // (14 / 13 / 13). The drift is still measured against the exact design
+        // sum, which is what makes a long run of kanji give a pixel back.
+        let devices = (!tight)
+            .then(|| counter.advances_of(face, points, bold, italic, &letters))
+            .flatten()
+            .unwrap_or_default();
         let mut exact = 0.0f32;
         let mut drawn = 0i32;
         let mut held = Vec::with_capacity(shares.len());
         let mut was = 0;
-        for share in shares {
+        for (at, share) in shares.iter().enumerate() {
             let advance = share * em;
             exact += advance;
-            drawn += advance.round() as i32;
+            drawn += match devices.get(at) {
+                Some(device) if *device > 0 => *device,
+                _ => advance.round() as i32,
+            };
             if drawn as f32 - exact > ahead {
                 drawn -= 1;
             } else if drawn as f32 - exact < -behind {
@@ -769,6 +793,9 @@ pub(crate) fn shape_run(
             }
             held.push(drawn - was);
             was = drawn;
+        }
+        if std::env::var("OXI_XLSX_DUMP_RUN").is_ok() {
+            eprintln!("run {face} {points} {text:?} devices {devices:?} steps {held:?}");
         }
         Some(held)
     })
@@ -793,18 +820,27 @@ pub(crate) fn shape_run_worn(
         let mut drawn = 0i32;
         let mut was = 0;
         let mut steps = Vec::new();
-        let mut room: Option<(f32, f32)> = None;
+        let mut room: Option<(f32, f32, bool)> = None;
         for (bold, text) in worn {
             let letters: Vec<char> = text.chars().collect();
             let shares = counter.design_advances(face, *bold, italic, &letters)?;
             // The line's own limits, read once off its first run.
-            let (ahead, behind) = *room.get_or_insert_with(|| {
+            let (ahead, behind, tight) = *room.get_or_insert_with(|| {
                 phase_room(counter, face, points, *bold, italic, &letters, &shares)
             });
-            for (letter, share) in letters.iter().zip(shares) {
+            // The step is the DEVICE advance, unless the face is one of the
+            // tight ones; see `shape_run`.
+            let devices = (!tight)
+                .then(|| counter.advances_of(face, points, *bold, italic, &letters))
+                .flatten()
+                .unwrap_or_default();
+            for (at, (letter, share)) in letters.iter().zip(shares).enumerate() {
                 let advance = share * em;
                 exact += advance;
-                drawn += advance.round() as i32;
+                drawn += match devices.get(at) {
+                    Some(device) if *device > 0 => *device,
+                    _ => advance.round() as i32,
+                };
                 if drawn as f32 - exact > ahead {
                     drawn -= 1;
                 } else if drawn as f32 - exact < -behind {
