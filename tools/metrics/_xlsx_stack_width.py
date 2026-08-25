@@ -40,6 +40,56 @@ ROW_PT = 45.0
 # under a pixel: this walks the column's pixel width one at a time from the
 # turned box (17px) up past `_xlsx_stack_centre.py`'s own 53.
 WIDTHS = [1.0 + step / 8.0 for step in range(0, 40)]
+# `--faces` asks the same question the other way round: ONE wide column, where
+# nothing is clipped against the cell's edge, and the face and size varied.
+# The narrow sweep cannot separate the turned character's own offset from the
+# clipping, and reading a pen off ink keeps confusing the two.
+FACES = [("ＭＳ 明朝", 11.0), ("ＭＳ 明朝", 8.0), ("ＭＳ 明朝", 14.0),
+         ("ＭＳ ゴシック", 11.0), ("ＭＳ ゴシック", 16.0),
+         ("ＭＳ Ｐゴシック", 11.0), ("游ゴシック", 11.0), ("游ゴシック", 14.0),
+         ("メイリオ", 11.0), ("メイリオ", 14.0)]
+WIDE_COLUMN = 8.0
+
+
+def build_faces(made: Path) -> bool:
+    """One wide column an arm, the face and size varied."""
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = True
+    excel.DisplayAlerts = False
+    book = excel.Workbooks.Add()
+    try:
+        sheet = book.Worksheets(1)
+        sheet.Range("A1:BZ8").Interior.Color = 0xFFFFFF
+        for at, (face, size) in enumerate(FACES, start=2):
+            sheet.Columns(at).ColumnWidth = WIDE_COLUMN
+            sheet.Columns(at).NumberFormat = "@"
+            cell = sheet.Cells(2, at)
+            cell.Value = STACK
+            cell.Font.Name = face
+            cell.Font.Size = size
+            cell.Orientation = -4166
+            cell.VerticalAlignment = -4160
+            cell.HorizontalAlignment = -4108
+        sheet.Rows(2).RowHeight = ROW_PT
+        book.SaveAs(str(made), FileFormat=51)
+        used = sheet.Range(sheet.Cells(2, 2), sheet.Cells(2, 1 + len(FACES)))
+        for _ in range(12):
+            try:
+                sheet.Activate()
+                used.CopyPicture(Appearance=1, Format=2)
+            except Exception:
+                time.sleep(0.8)
+                continue
+            time.sleep(0.8)
+            grabbed = ImageGrab.grabclipboard()
+            if grabbed is not None:
+                grabbed.save(SCRATCH / "excel.png")
+                return True
+        return False
+    finally:
+        book.Close(SaveChanges=False)
+        excel.Quit()
 
 
 def build(made: Path) -> bool:
@@ -129,17 +179,22 @@ def per_line(band: np.ndarray) -> list[int]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
+    parser.add_argument("--faces", action="store_true",
+                        help="one wide column an arm, the face and size varied")
     args = parser.parse_args()
-    made = SCRATCH / "stackwidth.xlsx"
-    if not args.reuse and not build(made):
-        print("  Excel would not hand over a picture")
-        return 1
+    made = SCRATCH / ("stackfaces.xlsx" if args.faces else "stackwidth.xlsx")
+    if not args.reuse:
+        made_ok = build_faces(made) if args.faces else build(made)
+        if not made_ok:
+            print("  Excel would not hand over a picture")
+            return 1
     mine, columns = ours(made)
     truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L")) < 140
-    print(f"  {FACE} {SIZE}pt, stack {STACK!r} (one standing, one turned)")
-    print("  cell px | each character's own first ink, and the gap between them")
+    print(f"  stack {STACK!r} (one standing, one turned)")
+    print("  arm     | each character's own first ink, and the gap between them")
     walked = 0
-    for at in range(len(WIDTHS)):
+    arms = FACES if args.faces else [(FACE, SIZE)] * len(WIDTHS)
+    for at in range(len(arms)):
         if at + 1 not in columns:
             continue
         left, right = columns[at + 1]
@@ -148,9 +203,10 @@ def main() -> int:
         ours_at = per_line(mine[:, left + 1:left + wide - 1])
         walked += wide
         if len(theirs) != 2 or len(ours_at) != 2:
-            print(f"  {wide:>7} | read {len(theirs)}/{len(ours_at)} lines, not two")
+            print(f"  arm {at:<4}| read {len(theirs)}/{len(ours_at)} lines, not two")
             continue
-        print(f"  {wide:>7} | 相 E {theirs[0] + 1:>2} O {ours_at[0] + 1:<2}"
+        label = (f"{arms[at][0][:8]} {arms[at][1]:.0f}" if args.faces else f"{wide}px")
+        print(f"  {label:<8}| 相 E {theirs[0] + 1:>2} O {ours_at[0] + 1:<2}"
               f"   （ E {theirs[1] + 1:>2} O {ours_at[1] + 1:<2}"
               f"   gap E {theirs[1] - theirs[0]:>2} O {ours_at[1] - ours_at[0]:<2}"
               f"  {'' if theirs == ours_at else '<<'}")
