@@ -573,11 +573,16 @@ fn may_break(before: char, after: char) -> bool {
 /// piece even between two of them: `A B` is spread to the cell's two edges.
 /// Returns how many characters are in each piece.
 pub(crate) fn distribution(line: &str) -> Vec<usize> {
+    // A run of spaces is ONE piece, the way a Latin word is:
+    // `_xlsx_distributed_spaces.py` sets `"  有業人員"` beside `" 有業人員"`
+    // and Excel starts the kanji four pixels further along — a space's own
+    // advance — where giving the second space a share of the spread would
+    // move it twenty.
     let clustered = |before: char, after: char| {
         before.is_ascii()
             && after.is_ascii()
-            && !before.is_ascii_whitespace()
-            && !after.is_ascii_whitespace()
+            && ((!before.is_ascii_whitespace() && !after.is_ascii_whitespace())
+                || (before == ' ' && after == ' '))
     };
     let mut pieces = Vec::new();
     let mut held = 0usize;
@@ -5686,7 +5691,13 @@ mod windows_draw {
                                 .iter()
                                 .filter(|letter| **letter != '\n')
                                 .collect();
-                            let pieces = super::distribution(&shown);
+                            // The spaces at a distributed line's end are
+                            // not spread; see the plain path below.
+                            let pieces = super::distribution(if placed == Align::Spread {
+                                shown.trim_end_matches(' ')
+                            } else {
+                                shown.as_str()
+                            });
                             let spread =
                                 placed == Align::Spread && pieces.len() > 1 && room > width;
                             let mut extra: Vec<i32> = vec![0; *stop - *from];
@@ -5703,6 +5714,17 @@ mod windows_draw {
                                     left_in_piece -= 1;
                                     if left_in_piece == 0 && piece + 1 < pieces.len() {
                                         piece += 1;
+                                        // The running total is rounded UP, so
+                                        // the spare pixels fall in the EARLY
+                                        // gaps: `_xlsx_distributed_round.py`
+                                        // spreads three, four and five
+                                        // identical glyphs over sixteen cell
+                                        // widths and Excel reads [56,55],
+                                        // [37,37,36], [28,28,28,27]. (Inferred
+                                        // from a real workbook's mixed glyphs
+                                        // it looks like the opposite: each
+                                        // glyph's own side bearing is in the
+                                        // gap you measure that way.)
                                         let want = (spare * piece as i32 + gaps - 1) / gaps;
                                         extra[n] = want - given;
                                         given = want;
@@ -5935,7 +5957,19 @@ mod windows_draw {
                         let held = wide(line);
                         let letters = &held[..held.len() - 1];
                         if !letters.is_empty() {
-                            let width = width_of(line);
+                            // A distributed line drops the spaces at its end
+                            // before it is spread: Excel puts the last glyph
+                            // of `"有業人員  "` against the right edge, where
+                            // `"有業人員"` puts it. They go from the WIDTH as
+                            // well as from the pieces, or the spread comes out
+                            // short by their advance
+                            // (`_xlsx_distributed_spaces.py`).
+                            let spread_line = if placed == Align::Spread {
+                                line.trim_end_matches(' ')
+                            } else {
+                                line.as_str()
+                            };
+                            let width = width_of(spread_line);
                             let room = area.right - area.left;
                             // A distributed cell fills its whole width, which
                             // is how a Japanese sheet sets a heading: 第 ３ 表,
@@ -5945,9 +5979,18 @@ mod windows_draw {
                             // the last against the right, with nothing kept
                             // back at either end. A single piece is centred
                             // instead — measured on _xlsx_distributed.py.
-                            let pieces = super::distribution(line);
+                            let pieces = super::distribution(spread_line);
                             let spread =
                                 placed == Align::Spread && pieces.len() > 1 && room > width;
+                            if spread && std::env::var("OXI_XLSX_DUMP_SPREAD").is_ok() {
+                                eprintln!(
+                                    "spread row {} col {} room {room} width {width} spare {} pieces {:?}",
+                                    row.index,
+                                    cell.col,
+                                    room - width,
+                                    pieces
+                                );
+                            }
                             let middle = area.left + super::halfway(room - width, cell.style.wrap_text);
                             // An italic line leans past its advance, and Excel
                             // keeps room for the lean when the line is put
@@ -5988,6 +6031,17 @@ mod windows_draw {
                                     let mut gap = 0;
                                     if left_in_piece == 0 && piece + 1 < pieces.len() {
                                         piece += 1;
+                                        // The running total is rounded UP, so
+                                        // the spare pixels fall in the EARLY
+                                        // gaps: `_xlsx_distributed_round.py`
+                                        // spreads three, four and five
+                                        // identical glyphs over sixteen cell
+                                        // widths and Excel reads [56,55],
+                                        // [37,37,36], [28,28,28,27]. (Inferred
+                                        // from a real workbook's mixed glyphs
+                                        // it looks like the opposite: each
+                                        // glyph's own side bearing is in the
+                                        // gap you measure that way.)
                                         let want = (spare * piece as i32 + gaps - 1) / gaps;
                                         gap = want - given;
                                         given = want;
