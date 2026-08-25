@@ -5218,6 +5218,13 @@ mod windows_draw {
                     // and several lines with no room to spare lose it again.
                     let merged_block = spans_columns > 0 || spans_rows > 0;
                     let one_line = shown == 1;
+                    // How far the cell's own bottom rule reaches inside it.
+                    let sunk_foot = i32::from(
+                        cell.style
+                            .border_bottom
+                            .as_ref()
+                            .is_some_and(|line| super::rule_for(&line.style).before > 0),
+                    );
                     let top = box_.top
                         + match cell.style.vertical_align.as_deref() {
                             Some("top") => 0,
@@ -5258,8 +5265,19 @@ mod windows_draw {
                                 }
                             }
                             // Sat on the bottom, only a block of several
-                            // lines gives the pixel up.
-                            _ => slack - i32::from(merged_block && !one_line),
+                            // lines gives the pixel up — and a heavy bottom
+                            // rule takes one more. `_xlsx_border_room.py`
+                            // sweeps the eight styles under a cell sat on its
+                            // foot: `medium`, `thick` and `double`, the three
+                            // whose ink reaches a pixel INSIDE the cell, lift
+                            // the text one pixel; `hair`, `thin`, `dotted`
+                            // and `dashed`, which sit on the boundary alone,
+                            // do not. The same sweep centred moves for none
+                            // of them, so the rule takes the pixel from the
+                            // FOOT and not from the box. It is what puts the
+                            // `1c*zbd` nine — figures against the foot of
+                            // rows ruled with a double — a pixel low.
+                            _ => slack - i32::from(merged_block && !one_line) - sunk_foot,
                         };
 
                     // Nothing is drawn outside the cell, or outside the room
@@ -5627,7 +5645,14 @@ mod windows_draw {
                                         slack / 2
                                     }
                                 }
-                                _ => slack - i32::from(merged_block && !alone),
+                                _ => {
+                                    let sunk = i32::from(
+                                        cell.style.border_bottom.as_ref().is_some_and(|line| {
+                                            super::rule_for(&line.style).before > 0
+                                        }),
+                                    );
+                                    slack - i32::from(merged_block && !alone) - sunk
+                                }
                             };
                         for ((from, stop), (tall, base)) in stretches.iter().zip(&boxes) {
                             let width: i32 = steps[*from..*stop].iter().sum();
