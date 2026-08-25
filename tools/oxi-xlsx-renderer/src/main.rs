@@ -4237,16 +4237,31 @@ mod windows_draw {
             leading.truncate(fits);
         }
 
-        let block: i32 = pitch.iter().sum::<f32>().round() as i32;
-        let slack = (area.bottom - area.top) - block;
         // The pitch is kept as it is measured and rounded only where a line
-        // lands, so a block of many lines does not drift from Excel's.
-        let mut at = (area.top
+        // lands, so a block of many lines does not drift from Excel's — and
+        // the leftover the anchor divides is kept the same way. Rounding the
+        // block to whole pixels first and halving THAT throws away the half
+        // pixel that decides which side the odd one falls: it read a pixel
+        // high on `001`'s five-line note and a pixel low on `zuhyo`'s
+        // three-line one, which no single rounding of a whole-pixel block
+        // can satisfy at once.
+        let block: f32 = pitch.iter().sum();
+        let slack = (area.bottom - area.top) as f32 - block;
+        let mut at = area.top as f32
             + match said.anchor.as_deref() {
-                Some("ctr") => (slack as f32 / 2.0).floor() as i32,
+                Some("ctr") => slack / 2.0,
                 Some("b") => slack,
-                _ => 0,
-            }) as f32;
+                _ => 0.0,
+            };
+        if std::env::var("OXI_XLSX_DUMP_BLOCK").is_ok() {
+            eprintln!(
+                "block area {}..{} anchor={:?} block={block:.3} slack={slack:.3} at={at:.3} pitch={:?}",
+                area.top,
+                area.bottom,
+                said.anchor.as_deref(),
+                pitch.iter().map(|one| (one * 1000.0).round() / 1000.0).collect::<Vec<_>>(),
+            );
+        }
 
         // A line of a shape's text is placed by its top, not its baseline.
         // Nothing follows this on the sheet, so the alignment stays as it is
