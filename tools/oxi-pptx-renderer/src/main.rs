@@ -1473,11 +1473,121 @@ fn slot_face_name(typeface: &str, bold: bool) -> Option<String> {
     (name.chars().count() <= 31).then_some(name)
 }
 
+/// One embedded part, by what it actually IS rather than the slot it sits in.
+#[cfg(windows)]
+struct PartId {
+    /// The unique GDI family this part alone is reachable under.
+    address: String,
+    /// The family the part's own EOT header claims.
+    family: String,
+    weight: u32,
+    italic: bool,
+}
+
+#[cfg(windows)]
+thread_local! {
+    static PART_IDS: std::cell::RefCell<Vec<PartId>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
+
+/// Comparable form of a family name: case and separators carry no meaning here.
+fn norm_family(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// What one `.fntdata` part claims to be: (family, weight, italic).
+///
+/// The EOT header is NOT compressed -- only the font data after it is -- so a
+/// part's real identity is readable without decompressing anything. Layout:
+/// Italic at 27, Weight at 28, and at 82 a length-prefixed UTF-16LE FamilyName.
+#[cfg(windows)]
+fn eot_identity(data: &[u8]) -> Option<(String, u32, bool)> {
+    if data.len() < 86 {
+        return None;
+    }
+    let weight = u32::from_le_bytes([data[28], data[29], data[30], data[31]]);
+    let italic = data[27] != 0;
+    let n = u16::from_le_bytes([data[82], data[83]]) as usize;
+    let start = 84;
+    let units: Vec<u16> = data
+        .get(start..start + n)?
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let family = String::from_utf16_lossy(&units).trim().to_string();
+    (!family.is_empty()).then_some((family, weight, italic))
+}
+
+/// The part that actually answers a (family, bold, italic) request.
+///
+/// S-SLOTFACE branch 2 (2026-08-26). PowerPoint does not pick a part by the
+/// slot it is filed under -- it builds a private font table from what the parts
+/// CLAIM and resolves against that. Verified on the dev corpus: of the 19
+/// mismatched parts whose content no honest part accounts for, 17 never appear
+/// in PowerPoint's own output at all, and both that do are this rule's later
+/// branches (d24 reaches a local Fira Sans, d16 has no alternative to fall to).
+///
+/// The branches, in order:
+///   1. a part whose own family IS the requested one, at the requested style
+///   2. for a bold request with no honest bold part, that family's REGULAR
+///      part with the weight faked -- NOT the base family's bold, which was
+///      measured and falsified (see below). The deck's own mismatched bold
+///      SLOT is not used by anyone.
+///   3. a local font of that name -- NOT implemented here: every part is still
+///      registered under its plain typeface as well, so the plain name cannot
+///      reach past them to a cloud font. d10 wants this branch.
+///   4. otherwise the mismatched part, which is what falling through to the
+///      plain typeface already does.
+#[cfg(windows)]
+fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)> {
+    if !slotface_on() {
+        return None;
+    }
+    let pick = |want: &str, want_bold: bool| -> Option<(String, i32)> {
+        let want = norm_family(want);
+        PART_IDS.with(|ids| {
+            ids.borrow()
+                .iter()
+                .find(|p| {
+                    norm_family(&p.family) == want
+                        && p.italic == italic
+                        && (p.weight >= 600) == want_bold
+                })
+                // Ask for the part's OWN weight so GDI has no reason to
+                // synthesise a heavier face over it.
+                .map(|p| (p.address.clone(), p.weight.clamp(1, 1000) as i32))
+        })
+    };
+    if let Some(hit) = pick(family, bold) {
+        return Some(hit);
+    }
+    // No honest part at this weight. PowerPoint does NOT borrow the base
+    // family's bold -- it keeps this family's regular ADVANCES and fakes the
+    // weight. Measured on d15 slide 2 from PowerPoint's own PDF: the "bold"
+    // run is one span in Barlow Light at 12pt with no bold flag, and the
+    // quoted phrase is drawn 179.34pt wide, which is Barlow-Light's 181.91pt
+    // advance less the two quote side-bearings. Barlow-Bold would be 191.72pt.
+    // So ask for the regular part at weight 700 and let GDI thicken it.
+    if bold {
+        return pick(family, false).map(|(face, _)| (face, 700));
+    }
+    None
+}
+
 /// The face to actually create for a (family, bold, italic) request, and the
 /// weight and slant to ask GDI for. An embedded part carries its own style, so
 /// it is requested at weight 400 upright; anything else keeps the request.
 #[cfg(windows)]
 fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
+    if let Some((face, weight)) = resolve_part(family, bold, italic) {
+        // The part carries its own style; asking for a slant on top would make
+        // GDI skew a face that is already slanted.
+        return (face, weight, false);
+    }
     if embedstyle_on() && italic {
         let name = embedded_face_name(family, bold, italic);
         if name != family && EMBEDDED_FACES.with(|f| f.borrow().contains(&name)) {
@@ -1611,15 +1721,33 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         };
         if rc == 0 {
             loaded += 1;
+            let mut address: Option<String> = None;
             if face != font.typeface {
-                EMBEDDED_FACES.with(|f| f.borrow_mut().insert(face));
+                EMBEDDED_FACES.with(|f| f.borrow_mut().insert(face.clone()));
+                address = Some(face);
             } else if let Some(slot) = slot_face_name(&font.typeface, font.bold) {
                 // Upright parts get a second, slot-unique name so a request can
                 // name the SLOT instead of asking GDI to weight-match between
                 // parts that may not hold what their slot says.
                 if !font.italic && load_font_as(&font.data, &slot) {
-                    EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot));
+                    EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
+                    address = Some(slot);
                 }
+            }
+            // Whatever unique name this part ended up reachable under, remember
+            // what the part itself claims to be, so a request can be resolved
+            // against its identity instead of its slot.
+            if let (Some(address), Some((fam, weight, ital))) =
+                (address, eot_identity(&font.data))
+            {
+                PART_IDS.with(|ids| {
+                    ids.borrow_mut().push(PartId {
+                        address,
+                        family: fam,
+                        weight,
+                        italic: ital,
+                    })
+                });
             }
             std::mem::forget(stream); // t2embed keeps no reference, but the
                                       // font must outlive this scope anyway
