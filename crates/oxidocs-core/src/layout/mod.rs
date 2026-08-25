@@ -33960,7 +33960,51 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         cm.family.as_str(),
                                                         "MS PMincho" | "MS PGothic" | "HGPGothicM"
                                                     );
-                                                let pool_terms = if s1207_proportional {
+                                                // S1216 (2026-08-25, opt-in
+                                                // `OXI_S1216=1`; reachable only under the
+                                                // opt-in `OXI_YAKUCOMP`): a docGrid that COMPRESSES
+                                                // (negative charSpace) leaves no 約物 credit -- the
+                                                // aki is already spent by the grid.
+                                                //
+                                                // `_pb_yakudist_gen.py`, 576 arms: one 、 placed 1,
+                                                // 2, 3, 5, 8, 10, 12 and 16 characters before the
+                                                // squeeze, right indent swept in 0.25pt steps, in a
+                                                // cell at ＭＳ 明朝 10.5pt.
+                                                //     no character grid  0.500em at EVERY distance
+                                                //     charSpace = +1453  0.524em at EVERY distance
+                                                //     charSpace = -2714  **0.000em**, every distance
+                                                // (The sweep also kills the "the pool decays with
+                                                // distance" reading that b35123 first suggested --
+                                                // distance does not enter it at all.)
+                                                //
+                                                // b35123fe8efc p2 is the case: charSpace=-2714, its
+                                                // 、 ten characters back, Oxi granting 5.25pt and
+                                                // packing one more character than Word.
+                                                // ★HELD OPT-IN: the corpus contradicts the arms.
+                                                // Turning this on makes b35123fe8efc WORSE
+                                                // (p1 +0.0010 -> -0.0079, p2 -0.0126 -> -0.0387):
+                                                // its 「…電気通信回線に接続している場合、不正ア」
+                                                // line does want the pool killed, but three other
+                                                // lines on the same page, same grid, same face --
+                                                // 「…キャビネット等に保」 among them -- match Word
+                                                // only WITH the pool. Those lines carry FOUR marks
+                                                // (（ ） 。 、) against the first line's one, so the
+                                                // arms (one mark, one distance sweep) do not cover
+                                                // what varies. Next: sweep the mark COUNT under a
+                                                // compressing grid.
+                                                let s1216_compressing_grid =
+                                                    std::env::var("OXI_S1216").ok().as_deref()
+                                                        == Some("1")
+                                                        && match (grid_char_pitch, grid_char_cw_ratio)
+                                                        {
+                                                            (Some(p), Some(r)) if r > 0.0 => {
+                                                                (p - p / r) < -0.01
+                                                            }
+                                                            _ => false,
+                                                        };
+                                                let pool_terms = if s1216_compressing_grid {
+                                                    0.0
+                                                } else if s1207_proportional {
                                                     0.0
                                                 } else if std::env::var("OXI_S1206_DISABLE").is_ok()
                                                 {
