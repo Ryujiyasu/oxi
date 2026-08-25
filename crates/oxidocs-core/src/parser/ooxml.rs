@@ -4274,7 +4274,7 @@ fn parse_paragraph_properties(
                         // causing Oxi to fit 2 extra chars on line 1 vs Word
                         // (wrap_point_diff num_hang_chars test, 2026-05-01).
                         // Now: only skip when twip `left` is also present (twip wins).
-                        // S1214 (2026-08-24, opt-in `OXI_S1214=1`): a NON-ZERO *Chars
+                        // S1214 (2026-08-24, opt-out `OXI_S1214_DISABLE`): a NON-ZERO *Chars
                         // attribute wins over the twip it sits next to, and a *Chars of
                         // ZERO falls back to the twip. MEASURED with
                         // `tools/metrics/_pb_indchars_gen.py` -- 14 arms in a fixed cell
@@ -4308,8 +4308,7 @@ fn parse_paragraph_properties(
                         // 0.2pt of both readings (24.45-19.00 = 5.45 against 0.5 char =
                         // 5.25), and only the CONTINUATION line separates them.
                         let saw_hanging = hanging_chars.is_some() || saw_hanging_tw;
-                        let s1214 = std::env::var("OXI_S1214").ok().as_deref() == Some("1")
-                            && !saw_hanging;
+                        let s1214 = std::env::var("OXI_S1214_DISABLE").is_err() && !saw_hanging;
                         if s1214 {
                             if left_chars.map_or(false, |v| v != 0.0) {
                                 style.indent_left = None;

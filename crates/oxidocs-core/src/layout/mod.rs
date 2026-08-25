@@ -20996,7 +20996,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         out
     }
 
-    /// S1214 (2026-08-25, opt-in `OXI_S1214=1`): the width of ONE character unit
+    /// S1214 (2026-08-25, opt-out `OXI_S1214_DISABLE`): the width of ONE character unit
     /// for a `*Chars` indent. MEASURED with `tools/metrics/_pb_indchars_gen.py`
     /// (20 arms in a cell whose own rule anchors the reading):
     ///   no character grid  -> the FONT SIZE (sz=21 gives 10.56pt, sz=18 gives 9.00)
@@ -21031,7 +21031,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         pitch: Option<f32>,
         ratio: Option<f32>,
     ) -> f32 {
-        if std::env::var("OXI_S1214").ok().as_deref() != Some("1") {
+        if std::env::var("OXI_S1214_DISABLE").is_ok() {
             return 10.5;
         }
         let base = if first_run {
@@ -21058,17 +21058,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // and 8pt at -1.00 gives 6.00. 04b88e7e settles the form on its own --
         // its firstLineChars=200 and =300 paragraphs (sz=16, spacing=-20) sit
         // exactly 6.00pt apart, so the PER-CHARACTER step is 8 - 2, not 8 - 1.
+        // ...and ONLY for `firstLineChars`. a1d6e4ef's style `ac` carries
+        // `w:spacing w:val="-1"` (-0.05pt); folding that into `leftChars` gives
+        // 10.75 where the file's own pair says 217tw = 10.85 (= 10.5 + the grid's
+        // 0.3547, no tracking at all). The run's tracking was measured to double;
+        // the STYLE's is not in any arm, and the corpus says it does not apply.
         let track = if first_run {
             para.runs
                 .first()
                 .and_then(|r| r.style.character_spacing)
                 .unwrap_or(0.0)
         } else {
-            para.style
-                .default_run_style
-                .as_ref()
-                .and_then(|rs| rs.character_spacing)
-                .unwrap_or(0.0)
+            0.0
         };
         let base = base + 2.0 * track;
         match (pitch, ratio) {

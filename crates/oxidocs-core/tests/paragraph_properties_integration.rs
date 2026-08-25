@@ -124,25 +124,32 @@ fn v1_pp_jc_aliases_cover_all_alignment_variants() {
 }
 
 #[test]
-fn v1_pp_ind_twip_priority_and_hanging_sign_flip() {
+fn v1_pp_ind_chars_priority_and_hanging_sign_flip() {
     let Some(doc) = load("v1_pp_ind_twip_priority.docx") else { return };
 
-    // Paragraph 1: BOTH `left="720"` AND `leftChars="200"`. Twip
-    // wins — leftChars is NOT stored (CLAUDE.md 2026-04-10 rule).
-    let twip_wins = find_para(&doc, "twip-wins-over-chars");
-    let il = twip_wins
-        .style
-        .indent_left
-        .expect("left=720 must populate indent_left");
+    // Paragraph 1: BOTH `left="720"` AND `leftChars="200"`, and NO hanging
+    // indent. S1214 (2026-08-25) measured Word directly: the *Chars value wins
+    // there, and the twip is consulted only when the paragraph HANGS or when
+    // the *Chars value is zero. `tools/metrics/_pb_indchars_gen.py` (20 arms in
+    // a cell whose own rule anchors the reading -- `leftChars=100 left=600`
+    // still renders one character, so it is not "the larger of the two") and
+    // `_pb_a1d6_ind.py` (15 arms cut from a1d6e4ef's own row, where adding a
+    // hanging indent flips the same attributes back to the twip). The rule
+    // reproduces all 102 of a1d6e4ef's *Chars/twip pairs.
+    // This test previously pinned the opposite ("twip wins", 2026-04-10).
+    let chars_win = find_para(&doc, "twip-wins-over-chars");
     assert!(
-        (il - 36.0).abs() < 0.001,
-        "left=720 → 36pt (twips/20), got {}",
-        il
+        chars_win.style.indent_left.is_none(),
+        "S1214: a non-zero leftChars suppresses the twip left when the paragraph does not hang"
     );
+    let lcw = chars_win
+        .style
+        .indent_left_chars
+        .expect("leftChars is what survives");
     assert!(
-        twip_wins.style.indent_left_chars.is_none(),
-        "twip-priority: leftChars SUPPRESSED when twip left also present \
-         (CLAUDE.md 2026-04-10 rule, parser/ooxml.rs:2175-2180)"
+        (lcw - 200.0).abs() < 0.001,
+        "leftChars stored raw (hundredths of a character), got {}",
+        lcw
     );
 
     // Paragraph 2: ONLY leftChars (no twip). Now stored — there's
