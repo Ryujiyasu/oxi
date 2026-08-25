@@ -6046,6 +6046,12 @@ mod windows_draw {
                                 box_.left + ((box_.right - box_.left - em) as f32 / 2.0).round() as i32
                             }
                         };
+                        if std::env::var("OXI_XLSX_DUMP_STACK").is_ok() {
+                            eprintln!(
+                                "stack row {} col {} box {}..{} em {em} sit {sit} lay {lay} left {left} lines {lines:?}",
+                                row.index, cell.col, box_.left, box_.right
+                            );
+                        }
                         for (step, line) in lines.iter().enumerate() {
                             let letters = wide(line);
                             let letters = &letters[..letters.len() - 1];
