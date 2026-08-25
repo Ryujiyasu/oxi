@@ -26,6 +26,10 @@ SRC = os.path.join(REPO, "tools", "golden-test", "documents", "docx",
                    "tokyoshugyo_000599795.docx")
 CS = int(os.environ.get("CS") or 0)
 SZ = int(os.environ.get("SZ") or 21)
+# CELL=1 puts each arm in a fixed-width cell. The pair-compression code lives in
+# break_into_lines and in the justify pass -- both BODY paths -- so ask whether a
+# cell compresses adjacent marks at all.
+CELL = os.environ.get("CELL") == "1"
 EM = SZ / 2.0
 W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"')
@@ -47,11 +51,20 @@ def build():
     os.makedirs(OUT, exist_ok=True)
     paras = []
     for _, txt in ARMS:
-        paras.append(
+        para = (
             '<w:p><w:pPr><w:pStyle w:val="a"/><w:jc w:val="left"/>'
             '<w:rPr><w:rFonts w:hint="eastAsia"/><w:sz w:val="%d"/></w:rPr></w:pPr>'
             '<w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:sz w:val="%d"/></w:rPr>'
             '<w:t xml:space="preserve">%s</w:t></w:r></w:p>' % (SZ, SZ, txt))
+        if CELL:
+            para = ('<w:tbl><w:tblPr><w:tblW w:w="6000" w:type="dxa"/>'
+                    '<w:tblLayout w:type="fixed"/><w:tblCellMar>'
+                    '<w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/>'
+                    '</w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="6000"/></w:tblGrid>'
+                    '<w:tr><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr>'
+                    + para + '</w:tc></w:tr></w:tbl>'
+                    '<w:p><w:pPr><w:rPr><w:sz w:val="16"/></w:rPr></w:pPr></w:p>')
+        paras.append(para)
     doc = zipfile.ZipFile(SRC).read("word/document.xml").decode("utf-8")
     sect = re.search(r"<w:sectPr[^>]*>.*?</w:sectPr>", doc, re.S).group(0)
     sect = re.sub(r"<w:footerReference[^>]*/>", "", sect)
@@ -62,7 +75,7 @@ def build():
     new = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
            '<w:document %s><w:body>%s%s</w:body></w:document>'
            % (W_NS, "".join(paras), sect))
-    tag = ("_cs%d" % CS if CS else "") + ("_sz%d" % SZ)
+    tag = ("_cs%d" % CS if CS else "") + ("_sz%d" % SZ) + ("_cell" if CELL else "")
     dst = os.path.join(OUT, "yakuw%s.docx" % tag)
     shutil.copyfile(SRC, dst)
     zin = zipfile.ZipFile(SRC)

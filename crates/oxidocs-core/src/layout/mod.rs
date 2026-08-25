@@ -22983,7 +22983,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             v[i] = true;
                         }
                     } else if kinsoku::is_yakumono_opening(c) {
-                        if i > 0 && kinsoku::is_yakumono_trigger(chars_vec[i - 1]) && !v[i - 1] {
+                        // S1217 (2026-08-25, opt-out `OXI_S1217_DISABLE`): an opening
+                        // bracket followed by ANOTHER opening bracket compresses --
+                        // and it is the FIRST of the pair that gives up its half em,
+                        // exactly like the closing side. MEASURED with
+                        // `tools/metrics/_pb_yakuwidth_gen.py` (10 arms, jc=left short
+                        // lines, glyph origins out of Word's own PDF): 「（（」 puts the
+                        // brackets at 106.22 and 111.39 -- a 5.164pt advance on the
+                        // first, half of the 10.56 every solitary mark gets. The same
+                        // reading at 9pt under charSpace=-2714 gives 4.077 of 8.337.
+                        if std::env::var("OXI_S1217_DISABLE").is_err()
+                            && i + 1 < n
+                            && kinsoku::is_yakumono_opening(chars_vec[i + 1])
+                        {
+                            v[i] = true;
+                        } else if i > 0
+                            && kinsoku::is_yakumono_trigger(chars_vec[i - 1])
+                            && !v[i - 1]
+                        {
                             v[i] = true;
                         }
                     }
@@ -23221,7 +23238,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     ch,
                     '（' | '「' | '『' | '〔' | '【' | '《' | '〈' | '｛' | '［'
                 );
-                if yakumono_compressed[char_index] && !is_opening_bracket {
+                // S1217: the 2026-04-20 carve-out above is about an opening bracket
+                // whose INK sits in the right half of its box being overrun by the
+                // next character. That cannot happen when the next character is
+                // itself an opening bracket: Word's own origins for 「（（」 (106.22 /
+                // 111.39) put the first bracket's ink in the second bracket's left
+                // half, and the second's ink follows it. So the carve-out is lifted
+                // for exactly that pair.
+                let s1217_next_open = std::env::var("OXI_S1217_DISABLE").is_err()
+                    && chars_vec
+                        .get(char_index + 1)
+                        .map_or(false, |c| kinsoku::is_yakumono_opening(*c));
+                if yakumono_compressed[char_index] && (!is_opening_bracket || s1217_next_open) {
                     char_width *= 0.5;
                 } else if yakumono_enabled {
                     // S532 (2026-06-10): the former "expand pair" rule (a yakumono
@@ -25308,7 +25336,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             v[k] = true;
                         }
                     } else if kinsoku::is_yakumono_opening(c) {
-                        if k > 0 && kinsoku::is_yakumono_trigger(line_chars[k - 1].1) && !v[k - 1] {
+                        // S1217: mirror of the break-side rule -- an opening bracket
+                        // followed by another opening bracket compresses ITSELF.
+                        if std::env::var("OXI_S1217_DISABLE").is_err()
+                            && k + 1 < n
+                            && kinsoku::is_yakumono_opening(line_chars[k + 1].1)
+                        {
+                            v[k] = true;
+                        } else if k > 0
+                            && kinsoku::is_yakumono_trigger(line_chars[k - 1].1)
+                            && !v[k - 1]
+                        {
                             v[k] = true;
                         }
                     }
@@ -25323,7 +25361,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // Only the FIRST char of an adjacent pair compresses (S532
                     // measurement); the second keeps natural advance, so only
                     // v[k] members need revert protection.
-                    if v[k] && !is_opening {
+                    // S1217: an opening bracket that gave up its half em to a
+                    // following opening bracket needs the same revert protection as
+                    // a closing one.
+                    let s1217_next_open = std::env::var("OXI_S1217_DISABLE").is_err()
+                        && k + 1 < n
+                        && kinsoku::is_yakumono_opening(line_chars[k + 1].1);
+                    if v[k] && (!is_opening || s1217_next_open) {
                         mask[fi] = true;
                     }
                 }
@@ -33294,6 +33338,42 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             };
                                                         }
                                                     }
+                                                }
+                                            }
+                                            // S1218 (2026-08-25, opt-in `OXI_S1218=1`, HELD): adjacent-mark pair
+                                            // compression, which the CELL breaker never had.
+                                            // The body has done this since S532 (the FIRST of
+                                            // an adjacent pair gives up half an em); a cell
+                                            // paid both marks in full.
+                                            // MEASURED with `_pb_yakuwidth_gen.py CELL=1`
+                                            // (10 arms in a fixed cell, glyph origins out of
+                                            // Word's PDF): 「。）」「）。」「。。」「（（」 all put
+                                            // the second mark 5.164pt after the first, exactly
+                                            // as in the body, while Oxi rendered every arm at
+                                            // the full 63.00pt line width.
+                                            // ENVELOPE: the pair must sit inside ONE run --
+                                            // a mark split across runs is not caught here.
+                                            // ★HELD OPT-IN (`OXI_S1218=1`): the arms match Word
+                                            // exactly, but switching it on costs tokyoshugyo
+                                            // NINE paragraphs (1.0000 -> 0.9943) -- and that is
+                                            // the document the probe's own settings come from.
+                                            // Something in the cell path already pays for these
+                                            // pairs at BREAK time (the S473/S475 capacity), so
+                                            // halving the advance too counts them twice. Find
+                                            // that first, then turn this on.
+                                            if std::env::var("OXI_S1218").ok().as_deref()
+                                                == Some("1")
+                                            {
+                                                let paired = s586_run_chars
+                                                    .get(s586_ci + 1)
+                                                    .map_or(false, |&n2| {
+                                                        (kinsoku::is_yakumono_closing(ch)
+                                                            && kinsoku::is_yakumono_trigger(n2))
+                                                            || (kinsoku::is_yakumono_opening(ch)
+                                                                && kinsoku::is_yakumono_opening(n2))
+                                                    });
+                                                if paired {
+                                                    cw *= 0.5;
                                                 }
                                             }
                                             if let Some(scale) = run.style.text_scale {
