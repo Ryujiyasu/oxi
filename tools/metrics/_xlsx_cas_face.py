@@ -73,7 +73,8 @@ def build(made: Path, faces: list[tuple[str, str, bool, bool, float]]) -> list[f
             except Exception:
                 pass
             frame.TextRange.Font.Fill.ForeColor.RGB = 0
-            frame.TextRange.ParagraphFormat.Alignment = 2 if centred else 1
+            frame.TextRange.ParagraphFormat.Alignment = (
+                3 if centred == "right" else 2 if centred else 1)
             shape.Fill.Visible = True
             shape.Fill.ForeColor.RGB = 0xFFFFFF
             shape.Line.Visible = False
@@ -186,6 +187,17 @@ def main() -> int:
              ("df all three", DF, True, True, 167.0),
              ("meiryo", "メイリオ", False, False, 260.0),
              ("ms p", "ＭＳ Ｐゴシック", False, False, 260.0),
+             # A left-aligned and a right-aligned twin of the same dressed run:
+             # the gap between where their lines START is `room - width`, so
+             # Excel's own width for the line falls out without trusting any of
+             # our own arithmetic.
+             ("left twin", DF, False, False, 260.0),
+             ("right twin", DF, "right", False, 260.0),
+             # The same pair for a LOOSE run (an installed name, no give-backs
+             # in eight glyphs): if Excel's width is the rounded EXACT sum it
+             # reads 149 here too, where the drawn steps sum to 152.
+             ("yu left twin", "游ゴシック", False, False, 260.0),
+             ("yu right twin", "游ゴシック", "right", False, 260.0),
 ]
     # The missing name ITSELF is the control: if its ruler draws the title's
     # own ink then the substitution is behaving as it does in the title, and
@@ -224,6 +236,25 @@ def main() -> int:
         if told:
             scored.append((told[0], label, got.shape))
     scored.sort()
+    twins, loose = {}, {}
+    for (label, _face, _centred, _wraps, wide), top in zip(faces, tops):
+        if "twin" not in label:
+            continue
+        got = ink_at(shot, top, wide)
+        if got is None:
+            continue
+        # Where the ink starts inside the ruler's own box.
+        left = round(18.0 * 96 / 72) + 2
+        band = shot[round(top * 96 / 72) + 2:round((top + HIGH) * 96 / 72) - 2,
+                    left:round((18.0 + wide) * 96 / 72) - 2] < 128
+        columns = np.flatnonzero(band.any(axis=0))
+        (loose if label.startswith("yu") else twins)[label] = int(columns[0])
+    if len(twins) == 2:
+        print(f"  dressed twins {twins}; room - width = "
+              f"{twins['right twin'] - twins['left twin']}")
+    if len(loose) == 2:
+        print(f"  loose twins   {loose}; room - width = "
+              f"{loose['yu right twin'] - loose['yu left twin']}")
     for off, face, shape in scored[:8]:
         print(f"    {face:<24} unlike {off:>5}  ink {shape}"
               f"{'   <== the same ink' if off == 0 else ''}")
