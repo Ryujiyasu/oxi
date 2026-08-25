@@ -5173,8 +5173,29 @@ mod windows_draw {
                         super::line_box(name, points, bold, cell.style.italic)
                             .unwrap_or(((-pixels) as f32, (-pixels) as f32));
                     let line_px = (line_px * scale).round() as i32;
-                    let block = line_px * lines.len() as i32;
+                    // A row too short for the whole block does not hold a
+                    // clipped one: Excel drops the lines that will not start
+                    // inside the row, and centres what is left.
+                    // `_xlsx_wrap_center_round.py` reads the count off the
+                    // picture — a two-line cell shows ONE line until the row
+                    // reaches 19 pixels and a three-line one shows two until
+                    // it reaches 37, where the line box is 18 — which is one
+                    // line for every whole line box the row holds, counting
+                    // from its first pixel.
+                    let shown = if line_px > 0 {
+                        (((box_.bottom - box_.top - 1) / line_px) + 1)
+                            .clamp(1, lines.len() as i32) as usize
+                    } else {
+                        lines.len()
+                    };
+                    let block = line_px * shown as i32;
                     let slack = (box_.bottom - box_.top) - block;
+                    if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
+                        eprintln!(
+                            "   row {} col {} box {}..{} line_px {line_px} lines {} shown {shown} block {block} slack {slack}",
+                            row.index, cell.col, box_.top, box_.bottom, lines.len()
+                        );
+                    }
                     // A merged block carries a pixel of leading under its
                     // text that a plain cell does not, so its text sits a
                     // pixel higher: measured over thirteen row heights and
@@ -5183,7 +5204,7 @@ mod windows_draw {
                     // keeps it when centred but not when sat on the bottom,
                     // and several lines with no room to spare lose it again.
                     let merged_block = spans_columns > 0 || spans_rows > 0;
-                    let one_line = lines.len() == 1;
+                    let one_line = shown == 1;
                     let top = box_.top
                         + match cell.style.vertical_align.as_deref() {
                             Some("top") => 0,
@@ -5206,16 +5227,18 @@ mod windows_draw {
                                 // `C29`, two lines of 11pt in a 25pt row, a
                                 // pixel high.
                                 //
-                                // A SINGLE line keeps the floor, and so does a
-                                // merged block. `--tight` walks rows 10 to 29,
-                                // too short to hold even one line, and the
-                                // single-line arm matches the floor at every
-                                // one of the twenty; the merged block's own
-                                // pixel of leading was measured on that path
-                                // (`_xlsx_valign_pixels.py`). Halving either
-                                // toward zero costs `001904852/3` 0.0259 each
-                                // and the `h2daa*kre` trio 0.036.
-                                if merged_block || one_line {
+                                // A cell that does NOT wrap keeps the floor,
+                                // and so does a merged block. It is the same
+                                // split SX85 found across the cell: wrapping
+                                // rounds one way and not wrapping the other.
+                                // `001904852/3` are rows of 13pt holding an
+                                // 11pt line — a leftover of -1, no wrapping —
+                                // and truncating there costs them 0.0259
+                                // each; the merged block's own pixel of
+                                // leading was measured on that path
+                                // (`_xlsx_valign_pixels.py`) and truncating
+                                // costs the `h2daa*kre` trio 0.036.
+                                if merged_block || !cell.style.wrap_text {
                                     ((slack - leading) as f32 / 2.0).floor() as i32
                                 } else {
                                     slack / 2
@@ -5582,9 +5605,10 @@ mod windows_draw {
                                 Some("center") | Some("centre") => {
                                     let leading =
                                         i32::from(merged_block && (alone || slack > 0));
-                                    // Toward zero for a plain cell, down for
-                                    // a merged block, as above.
-                                    if merged_block || alone {
+                                    // Toward zero for a wrapping cell, down
+                                    // for one that does not wrap and for a
+                                    // merged block, as above.
+                                    if merged_block || !cell.style.wrap_text {
                                         ((slack - leading) as f32 / 2.0).floor() as i32
                                     } else {
                                         slack / 2
