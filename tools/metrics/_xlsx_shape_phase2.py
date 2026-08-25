@@ -15,8 +15,8 @@ So the first give-back lands at
 
 This declares N for arms the first sweep never saw, and then reads Excel's
 picture to see whether N is where it was said to be. Both readings of the cap
-are printed — 3.5 allowed, and 3.5 not allowed — because the first sweep's two
-HGP arms disagreed by one about the boundary.
+are printed — the cap allowed, and the cap not allowed — because the first
+sweep's two HGP arms disagreed by one about the boundary.
 
     python tools\\metrics\\_xlsx_shape_phase2.py
 """
@@ -86,18 +86,29 @@ def advance(face: str, height: int) -> int:
 
 
 def said(face: str, points: float) -> tuple[float, int, float, int, int]:
-    """design, round(design), cap, N if 3.5 is allowed, N if it is not."""
+    """design, round(design), cap, N if the cap is allowed, N if it is not.
+
+    The run does not only get AHEAD. Where `round(design)` is SMALLER than the
+    design advance the run falls BEHIND instead, and the give-back is a pixel
+    ADDED rather than taken. The renderer has carried a cap for each direction
+    since SX83 — `phase_room` returns (1.2, 0.2) where the device's own advance
+    is wider than `round(design)` and (3.5, 5.2) where it is not — and this
+    read only the ahead one, so every behind arm printed "0 / 0 said" and was
+    marked NEITHER however well it agreed. Both directions are declared here.
+    """
     em = points * 96 / 72
     design = advance(face, -2048) / 2048 * em
     whole = advance(face, -round(em))
     step = round(design)
-    cap = 1.0 if whole > step else 3.5
+    wider = whole > step
     lead = step - design
-    if lead <= 1e-6:
-        return design, step, cap, 0, 0
+    if abs(lead) <= 1e-6:
+        return design, step, 0.0, 0, 0
+    cap = (1.2 if wider else 3.5) if lead > 0 else (0.2 if wider else 5.2)
+    drift = abs(lead)
     # N = the first k whose lead passes the cap.
-    inclusive = math.floor(cap / lead) + 1          # cap itself allowed
-    exclusive = math.ceil(cap / lead)               # cap itself not allowed
+    inclusive = math.floor(cap / drift) + 1          # cap itself allowed
+    exclusive = math.ceil(cap / drift)               # cap itself not allowed
     return design, step, cap, inclusive, max(exclusive, 1)
 
 
@@ -171,7 +182,8 @@ def main() -> int:
         return 1
     truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L"))
     print("  face                size  design  step  cap   N said (3.5 in / out)   N read   verdict")
-    tally = {"3.5 allowed": 0, "3.5 refused": 0, "neither": 0, "no give-back": 0}
+    tally = {"both agree": 0, "cap allowed": 0, "cap refused": 0,
+             "NEITHER": 0, "no give-back": 0}
     for face, points, top in placed:
         design, step, cap, inclusive, exclusive = said(face, points)
         seen = positions(truth, top)
@@ -185,9 +197,9 @@ def main() -> int:
         elif fix == inclusive == exclusive:
             verdict = "both agree"
         elif fix == inclusive:
-            verdict = "3.5 allowed"
+            verdict = "cap allowed"
         elif fix == exclusive:
-            verdict = "3.5 refused"
+            verdict = "cap refused"
         else:
             verdict = "NEITHER"
         tally[verdict if verdict in tally else "neither"] = \
