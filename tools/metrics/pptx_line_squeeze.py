@@ -1,30 +1,29 @@
 # -*- coding: utf-8 -*-
-"""How far will PowerPoint SQUEEZE a line rather than move its last word down?
+"""Compare a drawn line's extent against the font's own advances -- CAUTIOUSLY.
 
-d15 slide 2 is the case that exposed this. Its right column sets
+★READ THIS BEFORE TRUSTING A NUMBER FROM HERE. The per-character `origin`
+values pymupdf reports are RECONSTRUCTED, not read off the page, and on a page
+that carries two subsets answering to the SAME name they can be reconstructed
+from the wrong one. That is not hypothetical: d15 page 2 has both
+`BCDFEE+Barlow Light` and `BCDGEE+Barlow Light`, and origin-derived extents
+there disagree with the PDF's own `/Widths` array by ~1%. Three sessions'
+worth of "PowerPoint squeezes lines to fit" came out of exactly that gap and
+were WRONG -- `/Widths` for the disputed line sums to 275.40pt, the subset's
+`hmtx` agrees to the unit, and Oxi computes 275.25pt. Nothing is compressed.
 
-    that says "Download as PowerPoint template". You will
+So:
+  * `/Widths` (or `/W` for a Type0 font) is what POSITIONS the glyphs and is
+    the authority. The embedded file's `hmtx` normally agrees with it.
+  * origin-derived extents are a cross-check, never evidence on their own.
+  * a name shared by two subsets makes every line using it unmeasurable here;
+    those lines are dropped rather than guessed at.
+  * a PDF usually omits space glyphs, so a space's origin is synthesised
+    outright -- per-character deltas on spaces are meaningless.
 
-whose natural advance sum is 275.40pt in a 273.47pt box -- 1.93pt too wide --
-and PowerPoint keeps it anyway, drawing it at 272.44pt. The squeeze is not
-uniform: spaces give up 15% (2.400pt -> 2.040pt) while letters give up 2-3%.
-Every OTHER line in the same shape is drawn +0.1..+0.3% WIDER than its design
-sum, so this is not a measurement offset -- it is applied to the one line that
-would not otherwise fit.
-
-Oxi has no such allowance, so it breaks before "will" and re-flows the rest of
-the paragraph. Before an allowance can be implemented its CAP has to be known,
-which is what this measures: for every line PowerPoint drew, the ratio of the
-drawn pen-advance sum to the design sum of the same characters.
-
-Design advances come from the SUBSET PowerPoint embedded in its own PDF, so
-they are the advances that font really has -- not a guess from a font of the
-same name, which for these decks is often a different cut
-([[pptx-embedded-part-slot-law]]).
-
-★A line is only evidence about the cap if it was under pressure. A line with
-room to spare is drawn at its natural width and says nothing, so the summary
-reports the squeezed tail separately from the bulk.
+What it still answers honestly: whether a deck's drawn lines depart from its
+own font metrics anywhere, once the ambiguous names are removed. Median ratio
+per (deck, font, size) came out 0.993..1.002 across six dev decks, i.e. no
+systematic departure -- which is the useful negative result.
 
 Usage:
     python tools/metrics/pptx_line_squeeze.py [d15 d20 ...]
