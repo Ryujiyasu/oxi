@@ -36,8 +36,14 @@ ARMS = [
     ("pair_cc", "」）"),
     ("pair_pp", "。。"),
     ("triple", "。」）"),
+    # discriminators for the run law: a fourth mark; an ordinary char between the
+    # fullwidth body and the pair (the pair still ends the line); and a mark that
+    # does NOT end the line (control -- expect one em like any fullwidth char).
+    ("quad", "。、」）"),
+    ("ord_pair", "亜。）"),
+    ("mark_ord", "。亜"),
 ]
-R_TW = list(range(600, 1351, 5))
+R_TW = list(range(600, 1501, 5))
 
 
 def build(face, compat15):
@@ -98,9 +104,12 @@ def export(docx):
 def natural_advances(face):
     """Word's own natural advances for the marks, measured once per face."""
     import _pb_pmincho as PM
+    # ★ISOLATED between 甲 -- the first calibration put the four marks adjacent
+    # and the pair compression contaminated every "natural" (明朝 。 read 5.28).
     marks = "。、）」"
-    adv = PM.advances("甲" + marks + "甲", face=face)
-    return dict(zip(marks, adv[1:5]))
+    probe = "甲" + "甲".join(marks) + "甲"
+    adv = PM.advances(probe, face=face)
+    return {m: adv[2 * i + 1] for i, m in enumerate(marks)}
 
 
 def report(face, compat15, pdf, index):
@@ -143,15 +152,16 @@ def report(face, compat15, pdf, index):
         if flip is None:
             print("   %-12s (no 2-line window)" % name)
             continue
-        nfull = NCH - len(tail)
+        marks_only = [c for c in tail if c != "亜"]
+        nfull = NCH - len(marks_only)
         w_tail = (2 * MEASURE - 2 * flip) - 10.5 * nfull
         if name == "none":
             base = flip
             print("   %-12s %6.2f    (baseline)" % (name, flip))
             continue
-        full = 10.5 * len(tail)
-        natw = sum(nat[c] for c in tail)
-        half = sum(nat[c] / 2 for c in tail)
+        full = 10.5 * len(marks_only)
+        natw = sum(nat[c] for c in marks_only)
+        half = sum(nat[c] / 2 for c in marks_only)
         tags = []
         for lbl, v in (("full-em", full), ("natural", natw), ("half", half)):
             if abs(w_tail - v) <= 0.6:
