@@ -33945,6 +33945,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     std::env::var("OXI_S1208_DISABLE").is_err();
                                                 let s1209 =
                                                     std::env::var("OXI_S1209_DISABLE").is_err();
+                                                let mut s1216_n_a = 0.0f32;
+                                                let mut s1216_sum_a = 0.0f32;
                                                 let yaku = if s1174_yakucomp {
                                                     let mut has_a = false;
                                                     let mut b = 0.0f32;
@@ -33985,6 +33987,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             last_a = true;
                                                             n_a += 1.0;
                                                             n_marks += 1.0;
+                                                            s1216_n_a += 1.0;
+                                                            s1216_sum_a += c.natural_advance;
                                                         }
                                                     }
                                                     // S1209 (2026-08-24, opt-out `OXI_S1209_DISABLE`; reachable
@@ -34127,7 +34131,24 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             _ => false,
                                                         };
                                                 let pool_terms = if s1216_compressing_grid {
-                                                    0.0
+                                                    // S1216 v2 (2026-08-26): not zero -- the mark's
+                                                    // credit is its CURRENT advance minus half an
+                                                    // un-gridded em. The one formula reproduces
+                                                    // every pool reading taken so far:
+                                                    //   no grid   10.5  - 5.25 = 5.25 (S1209's 0.5em)
+                                                    //   cs +1453  10.85 - 5.25 = 5.60 (poolorder 0.524em)
+                                                    //   cs -2714  9.837 - 5.25 = 4.59 -- measured
+                                                    //     T in (4.37, 4.62] on b35123's own row
+                                                    //     (_pb_b35_ablate.py), and the SAME credit
+                                                    //     splits its twin lines correctly: p1
+                                                    //     overflow 0.96 <= 4.59 packs 39, p2
+                                                    //     overflow 4.66 > 4.59 wraps to 38 -- the
+                                                    //     v1 zero got p2 right and p1 wrong.
+                                                    // (v1's zero came from the synthetic probe's
+                                                    // fixed-layout cell; fixed genuinely lowers the
+                                                    // credit (T ~2.75) and is rare in the corpus --
+                                                    // not modeled yet.)
+                                                    (s1216_sum_a - s1216_n_a * 0.5 * font_size).max(0.0)
                                                 } else if s1207_proportional {
                                                     0.0
                                                 } else if std::env::var("OXI_S1206_DISABLE").is_ok()
