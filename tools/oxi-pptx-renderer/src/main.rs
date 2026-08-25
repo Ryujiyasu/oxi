@@ -689,8 +689,12 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     use windows::Win32::Graphics::Gdi::*;
 
     let prst = match sh.shape_type.as_deref() {
-        Some(p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"))
-            if (p != "pie" || pie_on()) && (p != "chevron" || chevron_on()) =>
+        Some(
+            p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"
+                | "star10"),
+        ) if (p != "pie" || pie_on())
+            && (p != "chevron" || chevron_on())
+            && (p != "star10" || star10_on()) =>
         {
             p
         }
@@ -790,6 +794,48 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
                 line(map(px, py));
             }
             line(map(rx, ry));
+        }
+        // S-STAR10 (2026-08-25): 14 of these are the snowflakes on d04 slide 13,
+        // and with no path they were painted as their bounding box -- fourteen
+        // white squares scattered over a world map, which is exactly the
+        // "incorrect ink is worse than none" case this file keeps meeting.
+        //
+        // Read out of PowerPoint's own PDF vectors (a 20-point polyline per
+        // star) and normalised to the box, the geometry is:
+        //
+        //     outer vertex k   theta = -90 + 36k   (hf*cos, sin)
+        //     inner vertex k   phi   = -72 + 36k   (hf*r*cos, r*sin),  r = adj/50000
+        //
+        // in box coordinates where the box spans -1..1 in each axis. Every
+        // measured point matches to about 0.1%: the outer u/cos ratios come out
+        // 1.0524 / 1.0514 against the declared `hf` of 1.05146, and the inner
+        // radius 0.5934 against `adj` 29731 / 50000 = 0.59462.
+        //
+        // ★The default `hf` is 105146 = 1/cos(18 degrees), which is precisely
+        // what makes the outermost pair of points touch the left and right box
+        // edges -- so the preset is self-consistent and the factor is not a
+        // fudge. `adj`'s default (42533) is ECMA's; d04 states its own, so only
+        // `hf` is confirmed by measurement here.
+        "star10" => {
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let hf = sh.adjustments.get("hf").copied().unwrap_or(105_146.0) / 100_000.0;
+            let r = sh.adjustments.get("adj").copied().unwrap_or(42_533.0) / 50_000.0;
+            let vertex = |deg: f32, rad: f32| {
+                let t = deg.to_radians();
+                (rx + hf * rad * t.cos() * rx, ry + rad * t.sin() * ry)
+            };
+            let (sx, sy) = vertex(-90.0, 1.0);
+            let p = map(sx, sy);
+            let _ = MoveToEx(dc, p.x, p.y, None);
+            for k in 0..10 {
+                let kf = k as f32;
+                if k > 0 {
+                    let (ox, oy) = vertex(-90.0 + 36.0 * kf, 1.0);
+                    line(map(ox, oy));
+                }
+                let (ix, iy) = vertex(-72.0 + 36.0 * kf, r);
+                line(map(ix, iy));
+            }
         }
         "teardrop" => {
             // Default adj=100000: an ellipse whose upper-right quadrant is
@@ -11080,6 +11126,12 @@ fn line_width_pt_runs(
         total += measure(&seg, c)?;
     }
     Some(total)
+}
+
+/// `star10` is drawn as its ten-pointed outline unless this is set (which
+/// restores painting it as its bounding box).
+fn star10_on() -> bool {
+    std::env::var("OXI_STAR10_DISABLE").is_err()
 }
 
 /// `bentConnector3` is drawn as its elbow unless this is set (which restores
