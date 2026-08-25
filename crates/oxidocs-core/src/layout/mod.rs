@@ -33960,8 +33960,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         cm.family.as_str(),
                                                         "MS PMincho" | "MS PGothic" | "HGPGothicM"
                                                     );
-                                                // S1216 (2026-08-25, opt-in
-                                                // `OXI_S1216=1`; reachable only under the
+                                                // S1216 (2026-08-25, opt-out
+                                                // `OXI_S1216_DISABLE`; reachable only under the
                                                 // opt-in `OXI_YAKUCOMP`): a docGrid that COMPRESSES
                                                 // (negative charSpace) leaves no 約物 credit -- the
                                                 // aki is already spent by the grid.
@@ -33980,21 +33980,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // b35123fe8efc p2 is the case: charSpace=-2714, its
                                                 // 、 ten characters back, Oxi granting 5.25pt and
                                                 // packing one more character than Word.
-                                                // ★HELD OPT-IN: the corpus contradicts the arms.
-                                                // Turning this on makes b35123fe8efc WORSE
-                                                // (p1 +0.0010 -> -0.0079, p2 -0.0126 -> -0.0387):
-                                                // its 「…電気通信回線に接続している場合、不正ア」
-                                                // line does want the pool killed, but three other
-                                                // lines on the same page, same grid, same face --
-                                                // 「…キャビネット等に保」 among them -- match Word
-                                                // only WITH the pool. Those lines carry FOUR marks
-                                                // (（ ） 。 、) against the first line's one, so the
-                                                // arms (one mark, one distance sweep) do not cover
-                                                // what varies. Next: sweep the mark COUNT under a
-                                                // compressing grid.
+                                                // The first cut of this (no snapToGrid test) made
+                                                // b35123fe8efc WORSE -- p2 -0.0126 -> -0.0387 --
+                                                // because it took the credit from the non-snapping
+                                                // paragraphs too. Scoped, it gives +0.0017 there
+                                                // and touches no other document.
+                                                // REFINED (2026-08-25): the grid only spends the
+                                                // aki of a paragraph that SNAPS to it. b35123fe8efc
+                                                // carries both kinds on one page --
+                                                // 「…接続している場合、不正ア」 snaps (Word gives no
+                                                // credit) while 「…キャビネット等に保」 carries
+                                                // `w:snapToGrid w:val="0"` (Word gives the half em).
+                                                // The 576 arms all snap, which is why they read a
+                                                // flat zero and the corpus refused it.
                                                 let s1216_compressing_grid =
-                                                    std::env::var("OXI_S1216").ok().as_deref()
-                                                        == Some("1")
+                                                    std::env::var("OXI_S1216_DISABLE").is_err()
+                                                        && para.style.snap_to_grid
                                                         && match (grid_char_pitch, grid_char_cw_ratio)
                                                         {
                                                             (Some(p), Some(r)) if r > 0.0 => {
