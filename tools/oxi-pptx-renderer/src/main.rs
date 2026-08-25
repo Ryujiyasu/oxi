@@ -3054,6 +3054,49 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 ((cy + dx * sn + dy * cs) * scale).round() as i32,
                             )
                         };
+                        // S-BENTCONN (2026-08-25): `bentConnector3` is an ELBOW,
+                        // not a diagonal. Its local path is
+                        //     (0,0) -> (adj*w, 0) -> (adj*w, h) -> (w, h)
+                        // with `adj = adj1/100000` (default 0.5), flipped and
+                        // turned about the box centre by the same `map` a
+                        // straight connector uses. Read straight out of
+                        // PowerPoint's own PDF vectors on d11 slide 12 and
+                        // matched on ALL FOUR points of both flip states to
+                        // 0.01pt -- e.g. the unflipped 55.77x109.37 box at
+                        // rot=-90 gives (149.09,217.95) (149.09,190.06)
+                        // (258.46,190.06) (258.46,162.18), exactly what
+                        // PowerPoint drew.
+                        //
+                        // 18 of them in the corpus (d11 / d19 / d24, six each),
+                        // and each sits on an org-chart slide where the
+                        // connectors ARE the diagram: Oxi drew six diagonals
+                        // across three trees.
+                        let bent = bentconn_on()
+                            && sh.shape_type.as_deref() == Some("bentConnector3");
+                        let elbow: Vec<(i32, i32)> = if bent {
+                            let adj = sh
+                                .adjustments
+                                .get("adj1")
+                                .copied()
+                                .unwrap_or(50_000.0)
+                                / 100_000.0;
+                            let (w, h) = (sh.width, sh.height);
+                            let xb = w * adj;
+                            [(0.0, 0.0), (xb, 0.0), (xb, h), (w, h)]
+                                .iter()
+                                .map(|&(mut lx, mut ly)| {
+                                    if sh.flip_h {
+                                        lx = w - lx;
+                                    }
+                                    if sh.flip_v {
+                                        ly = h - ly;
+                                    }
+                                    map(sh.x + lx, sh.y + ly)
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         let (ax, ay) = map(x0, y0);
                         let (bx, by) = map(x1, y1);
                         let pen = outline_pen(
@@ -3064,17 +3107,31 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             Some(sh.line_cap.as_deref().unwrap_or("flat")),
                         );
                         let old_pen = SelectObject(mem_dc, pen);
-                        let _ = MoveToEx(mem_dc, ax, ay, None);
-                        let _ = LineTo(mem_dc, bx, by);
+                        if elbow.len() == 4 {
+                            let _ = MoveToEx(mem_dc, elbow[0].0, elbow[0].1, None);
+                            for pt in &elbow[1..] {
+                                let _ = LineTo(mem_dc, pt.0, pt.1);
+                            }
+                        } else {
+                            let _ = MoveToEx(mem_dc, ax, ay, None);
+                            let _ = LineTo(mem_dc, bx, by);
+                        }
                         SelectObject(mem_dc, old_pen);
                         let _ = DeleteObject(pen);
                         if line_ends_on() {
                             let lw = f64::from(bw);
+                            // A decoration points along the segment it sits on,
+                            // which for an elbow is the first / last one.
+                            let (ha, hb, ta, tb) = if elbow.len() == 4 {
+                                (elbow[0], elbow[1], elbow[3], elbow[2])
+                            } else {
+                                ((ax, ay), (bx, by), (bx, by), (ax, ay))
+                            };
                             if let Some(h) = sh.head_end.as_ref() {
-                                draw_line_end(mem_dc, h, ax, ay, bx, by, lw, scale, col);
+                                draw_line_end(mem_dc, h, ha.0, ha.1, hb.0, hb.1, lw, scale, col);
                             }
                             if let Some(t) = sh.tail_end.as_ref() {
-                                draw_line_end(mem_dc, t, bx, by, ax, ay, lw, scale, col);
+                                draw_line_end(mem_dc, t, ta.0, ta.1, tb.0, tb.1, lw, scale, col);
                             }
                         }
                     }
@@ -11023,6 +11080,12 @@ fn line_width_pt_runs(
         total += measure(&seg, c)?;
     }
     Some(total)
+}
+
+/// `bentConnector3` is drawn as its elbow unless this is set (which restores
+/// drawing it as a diagonal between the box corners).
+fn bentconn_on() -> bool {
+    std::env::var("OXI_BENTCONN_DISABLE").is_err()
 }
 
 /// A line is aligned on a width measured per RUN unless this is set (which
