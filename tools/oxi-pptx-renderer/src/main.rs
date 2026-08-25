@@ -2628,20 +2628,28 @@ fn presetstroke_on() -> bool {
 }
 
 /// `a:prstGeom prst="chevron"` — ECMA-376's homePlate with the same notch cut
-/// out of its left edge — is implemented and HELD OPT-IN (`OXI_CHEVRON_ENABLE`).
+/// out of its left edge.
 ///
-/// It is right where it is measurable: d35 s17's three process arrows go
-/// **0.9669 -> 0.9912**, past LibreOffice's 0.9853. But d15 s17 is the SAME
-/// template at a different aspect (260.3x52.7 against 202.5x104.3, adj 50000
-/// against 29853) and LOSES 0.0050, and the reason is not understood: with the
-/// chevron in place the three bands tile SEAMLESSLY, while PowerPoint keeps a
-/// visible edge at 256.3 / 469.0 / 680.6 -- exactly where the homePlate's own
-/// sloped edge predicts one (257.25 at y=140). So PowerPoint is not compositing
-/// these three translucent shapes the way stacking them implies, and until that
-/// is measured the geometry stays off. Corpus with it: +0.000064, 4 slides up
-/// and 1 down; without: +0.000034, 2 up and none down.
+/// ★UNPARKED 2026-08-25. It was held opt-in on 2026-08-24 because d35 s17's
+/// three process arrows went 0.9669 -> 0.9912 (past LibreOffice's 0.9853) while
+/// **d15 s17, the same template at a different aspect, LOST 0.0050** for reasons
+/// that were not understood. The note at the time read "PowerPoint is not
+/// compositing these three translucent shapes the way stacking them implies".
+///
+/// That was never a compositing rule -- it was Oxi's own GRADIENT rendering.
+/// These arrows are translucent gradient fills, and S-GRADLIN / S-GRADSTOP /
+/// S-GRADROT / S-PRESETGRAD / S-GRADSTROKE all landed after that measurement.
+/// Re-measured on the same two slides with the same flag:
+///
+///     d35 s17   0.9708 -> 0.9912   (+0.0204)
+///     d15 s17   0.9437 -> 0.9472   (+0.0035)   <- was -0.0050
+///
+/// Both slides now improve, so the reason to hold it is gone. ★The lesson is
+/// about the PARK, not the shape: a change held back "until the failure is
+/// explained" has to be RE-MEASURED when anything under it moves, or it stays
+/// parked on evidence that has expired.
 fn chevron_on() -> bool {
-    std::env::var("OXI_CHEVRON_ENABLE").is_ok()
+    std::env::var("OXI_CHEVRON_DISABLE").is_err()
 }
 
 /// A cell centres on its line's VISIBLE width unless this is set, which restores
