@@ -21073,6 +21073,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .or_else(|| para.runs.first().and_then(|r| r.style.font_size))
                 .unwrap_or(10.5)
         };
+        // TRACKING counts TWICE. `_pb_charunit_gen.py` again, with `w:spacing` on
+        // the run: 10.5pt at -1.00 gives 8.52 (10.5 - 2), at -2.00 gives 6.48,
+        // and 8pt at -1.00 gives 6.00. 04b88e7e settles the form on its own --
+        // its firstLineChars=200 and =300 paragraphs (sz=16, spacing=-20) sit
+        // exactly 6.00pt apart, so the PER-CHARACTER step is 8 - 2, not 8 - 1.
+        let track = if first_run {
+            para.runs
+                .first()
+                .and_then(|r| r.style.character_spacing)
+                .unwrap_or(0.0)
+        } else {
+            para.style
+                .default_run_style
+                .as_ref()
+                .and_then(|rs| rs.character_spacing)
+                .unwrap_or(0.0)
+        };
+        let base = base + 2.0 * track;
         match (pitch, ratio) {
             (Some(p), Some(r)) if r > 0.0 && p > 0.0 => base + (p - p / r),
             _ => base,

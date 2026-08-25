@@ -29,20 +29,26 @@ W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" 
         'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"')
 # (mark size, run size) in half-points; None = the attribute is absent
 COMBOS = [(18, 18), (18, 21), (21, 18), (None, 18), (None, 21)]
+# 04b88e7e renders `firstLineChars` at 6.00pt per character with runs at sz=16
+# (8pt) and w:spacing=-20 (-1pt tracking): 8 - 1 = 7, but 8 + 2x(-1) = 6. So put
+# the tracking in the arms and read the unit off it. (run size, spacing twips)
+TRACK = [(21, 0), (21, -20), (21, -40), (16, -20), (16, 0)]
 INDS = [("leftChars", '<w:ind w:leftChars="100"/>'),
         ("firstLineChars", '<w:ind w:firstLineChars="100"/>')]
 
 
-def sz(v):
-    return '<w:sz w:val="%d"/>' % v if v else ""
+def sz(v, track=0):
+    out = '<w:sz w:val="%d"/>' % v if v else ""
+    return ('<w:spacing w:val="%d"/>' % track if track else "") + out
 
 
 def build():
     os.makedirs(OUT, exist_ok=True)
     blocks, index = [], []
-    for kind, ind in INDS:
-        for mark, run in COMBOS:
-            index.append((kind, mark, run))
+    arms = [(k, i, m, r, 0) for k, i in INDS for m, r in COMBOS]
+    arms += [(k, i, None, r, t) for k, i in INDS for r, t in TRACK]
+    for kind, ind, mark, run, track in arms:
+            index.append((kind, mark, run, track))
             blocks.append(
                 '<w:tbl><w:tblPr><w:tblW w:w="%d" w:type="dxa"/>'
                 '<w:tblLayout w:type="fixed"/><w:tblCellMar>'
@@ -57,7 +63,8 @@ def build():
                 '<w:r><w:rPr><w:rFonts w:hint="eastAsia"/>%s</w:rPr>'
                 '<w:t>甲亜亜亜</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
                 '<w:p><w:pPr><w:rPr><w:sz w:val="16"/></w:rPr></w:pPr></w:p>'
-                % (CELL_TW, MAR_TW, MAR_TW, CELL_TW, CELL_TW, ind, sz(mark), sz(run)))
+                % (CELL_TW, MAR_TW, MAR_TW, CELL_TW, CELL_TW, ind, sz(mark),
+                   sz(run, track)))
     doc = zipfile.ZipFile(SRC).read("word/document.xml").decode("utf-8")
     sect = re.search(r"<w:sectPr[^>]*>.*?</w:sectPr>", doc, re.S).group(0)
     sect = re.sub(r"<w:footerReference[^>]*/>", "", sect)
@@ -117,13 +124,14 @@ def measure(pdf, index):
                 heads.append(ch[0]["origin"][0])
     inner = (min(rules) if rules else 0.0) + MAR_TW / 20.0
     print("cell inner edge %.2f   style size 10.5" % inner)
-    print("   attribute        mark   run    x0      unit    follows")
-    for (kind, mark, run), x in zip(index, heads):
+    print("   attribute        mark   run   track    x0      unit   size+track  size+2track")
+    for (kind, mark, run, track), x in zip(index, heads):
         u = x - inner - 0.24            # 0.24 = the zero-indent baseline
-        who = ("style/mark 10.5" if abs(u - 10.5) < 0.35 else
-               "9pt" if abs(u - 9.0) < 0.35 else "?")
-        print("   %-15s %-6s %-5s %7.2f  %6.2f  %s"
-              % (kind, mark / 2 if mark else "-", run / 2, x, u, who))
+        base = run / 2.0
+        t = track / 20.0
+        print("   %-15s %-6s %-5s %-6.2f %7.2f  %6.2f   %6.2f      %6.2f"
+              % (kind, mark / 2 if mark else "-", base, t, x, u, base + t,
+                 base + 2 * t))
 
 
 if __name__ == "__main__":
