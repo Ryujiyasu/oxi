@@ -1419,6 +1419,60 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
     format!("{typeface}{suffix}")
 }
 
+/// Parts are selected by SLOT only when this is set.
+///
+/// ★PARKED opt-in, not opt-out. Slot selection is CORRECT but incomplete on
+/// its own: a part whose declared family does not match the typeface it is
+/// filed under is one PowerPoint does not use at all, and 55 of the corpus's
+/// 262 parts (21%) are in that state. d15 shows both halves. Selecting by slot
+/// fixes its body -- the line PowerPoint sets at 260.71pt goes 262.12 -> 260.00
+/// -- but the same paragraph's BOLD run then faithfully uses the "Barlow
+/// Light" bold slot, which holds Barlow REGULAR, and the line grows to
+/// 276.75pt against a 273.47pt box. PowerPoint's own PDF used Barlow-BOLD
+/// there (`a`=0.528, the line measures 266.42pt and fits), i.e. it rejected
+/// that slot. Turning slot selection on without the rejection rule trades one
+/// wrong face for another on every deck that carries a mismatched part, so it
+/// stays off until the rejection rule is derived and both go through the gate
+/// together.
+fn slotface_on() -> bool {
+    std::env::var("OXI_SLOTFACE_ENABLE").is_ok()
+}
+
+/// The extra, slot-unique GDI family one UPRIGHT part is also registered under.
+///
+/// S-SLOTFACE (2026-08-26). `p:embeddedFont` names four parts by SLOT --
+/// regular / bold / italic / boldItalic -- and PowerPoint takes the one the
+/// slot names. Oxi registered every upright part under the SAME family (the
+/// deck's `typeface`) and then let GDI's weight matching choose between them,
+/// which is a different question and gets a different answer whenever a part's
+/// content does not match its slot.
+///
+/// 55 of the dev corpus's 262 embedded parts (21%, across 19 of 40 decks)
+/// declare an internal family that is not the typeface they are filed under,
+/// so this is not a rare shape. d15 is the measured case: its "Barlow Light"
+/// REGULAR slot is a true Barlow-Light (weight 300, `a`=0.506) but its BOLD
+/// slot holds Barlow REGULAR (weight 400). Both land in one GDI family, so a
+/// weight-400 request -- ordinary body text -- matches the BOLD slot's 400
+/// exactly and Oxi draws the body in Barlow Regular: +0.54% per line, and
+/// slide 2 loses the word "will" off the end of a 273.47pt box. PowerPoint
+/// reads 0.506 from the regular slot and keeps the word.
+///
+/// ★The alias is ADDITIVE -- the part stays registered under the plain
+/// typeface too. Moving it instead is what made the earlier bold-split
+/// experiment cost -0.00126 (d01 -0.0288): d01 embeds a "DM Sans" BOLD part
+/// and no regular one, so taking the bold part out of the plain family left
+/// "DM Sans" with no member at all and the deck fell back to a substitute
+/// face. Keeping both names cannot do that. It is also what an earlier attempt
+/// today got wrong in the other direction -- one alias shared by all four
+/// slots just recreates the collision under a new name.
+fn slot_face_name(typeface: &str, bold: bool) -> Option<String> {
+    if !slotface_on() {
+        return None;
+    }
+    let name = format!("{typeface} {}", if bold { "#B" } else { "#R" });
+    (name.chars().count() <= 31).then_some(name)
+}
+
 /// The face to actually create for a (family, bold, italic) request, and the
 /// weight and slant to ask GDI for. An embedded part carries its own style, so
 /// it is requested at weight 400 upright; anything else keeps the request.
@@ -1432,11 +1486,59 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
             return (name, if bold { 700 } else { 400 }, false);
         }
     }
+    if !italic {
+        if let Some(slot) = slot_face_name(family, bold) {
+            if EMBEDDED_FACES.with(|f| f.borrow().contains(&slot)) {
+                return (slot, if bold { 700 } else { 400 }, false);
+            }
+        }
+    }
     (
         family.to_string(),
         if bold { 700 } else { 400 },
         italic,
     )
+}
+
+/// Load one embedded part under `name`, returning whether GDI took it.
+#[cfg(windows)]
+fn load_font_as(data: &[u8], name: &str) -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Graphics::Gdi::{
+        TTLoadEmbeddedFont, EMBEDDED_FONT_PRIV_STATUS, FONT_LICENSE_PRIVS,
+        TTLOAD_EMBEDDED_FONT_STATUS,
+    };
+
+    let mut stream = Box::new(FontStream {
+        data: data.to_vec(),
+        pos: 0,
+    });
+    let mut handle = HANDLE::default();
+    let mut priv_status = EMBEDDED_FONT_PRIV_STATUS::default();
+    let mut status = TTLOAD_EMBEDDED_FONT_STATUS::default();
+    let mut win_name: Vec<u16> = name.encode_utf16().collect();
+    win_name.push(0);
+    let rc = unsafe {
+        TTLoadEmbeddedFont(
+            &mut handle,
+            0x0000_0001, // TTLOAD_PRIVATE
+            &mut priv_status,
+            FONT_LICENSE_PRIVS(0), // LICENSE_INSTALLABLE
+            &mut status,
+            Some(read_embedded_font),
+            stream.as_mut() as *mut FontStream as *const core::ffi::c_void,
+            windows::core::PCWSTR(win_name.as_ptr()),
+            None,
+            None,
+        )
+    };
+    if rc == 0 {
+        // t2embed keeps no reference, but the font must outlive this scope.
+        std::mem::forget(stream);
+        true
+    } else {
+        false
+    }
 }
 
 /// Install the deck's embedded fonts so GDI can resolve them by name.
@@ -1511,6 +1613,13 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             loaded += 1;
             if face != font.typeface {
                 EMBEDDED_FACES.with(|f| f.borrow_mut().insert(face));
+            } else if let Some(slot) = slot_face_name(&font.typeface, font.bold) {
+                // Upright parts get a second, slot-unique name so a request can
+                // name the SLOT instead of asking GDI to weight-match between
+                // parts that may not hold what their slot says.
+                if !font.italic && load_font_as(&font.data, &slot) {
+                    EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot));
+                }
             }
             std::mem::forget(stream); // t2embed keeps no reference, but the
                                       // font must outlive this scope anyway
@@ -11431,6 +11540,7 @@ fn master_units(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> 
     let mut sum: i64 = 0;
     for ch in text.chars() {
         let em = font_adv::hmtx_advance_em(family, ch)
+            .or_else(|| slotface_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, bold, italic, ch))?;
         sum += f64::from(em * fs * 8.0).round() as i64;
     }
@@ -11499,6 +11609,7 @@ fn master_units_runs(
             seen += n;
         }
         let em = font_adv::hmtx_advance_em(family, ch)
+            .or_else(|| slotface_on().then(|| fontdata_advance_em(family, run_bold, run_italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, run_bold, run_italic, ch))?;
         sum += f64::from(em * run_fs * 8.0).round() as i64;
     }
