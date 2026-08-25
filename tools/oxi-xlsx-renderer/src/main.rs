@@ -714,6 +714,10 @@ pub(crate) fn shape_widths(
 /// for every character — the run is held tight; everywhere else it wanders.
 fn phase_room(
     counter: &LineCounter,
+    // The face whose DEVICE advance decides which pair of caps this is. For
+    // an installed face it is the face itself; for one this machine has not
+    // got it is whatever the run's own `pitchFamily` and charset map to,
+    // which is not the face Excel draws with (SX101).
     face: &str,
     points: f32,
     bold: bool,
@@ -810,6 +814,7 @@ pub(crate) fn shape_run(
 /// letters among Japanese text has four of those.
 pub(crate) fn shape_run_worn(
     face: &str,
+    metrics: &str,
     points: f32,
     italic: bool,
     worn: &[(bool, String)],
@@ -826,7 +831,7 @@ pub(crate) fn shape_run_worn(
             let shares = counter.design_advances(face, *bold, italic, &letters)?;
             // The line's own limits, read once off its first run.
             let (ahead, behind, tight) = *room.get_or_insert_with(|| {
-                phase_room(counter, face, points, *bold, italic, &letters, &shares)
+                phase_room(counter, metrics, points, *bold, italic, &letters, &shares)
             });
             // The step is the DEVICE advance, unless the face is one of the
             // tight ones; see `shape_run`.
@@ -1230,6 +1235,39 @@ pub(crate) fn face_in_place(face: &str, charset: Option<i32>) -> String {
         Some(-128) | Some(128) => "游ゴシック".to_string(),
         _ => "ＭＳ ゴシック".to_string(),
     }
+}
+
+/// The face whose metrics a run is laid out with, which is not always the one
+/// it is drawn with.
+///
+/// For an installed face the two are the same. For one this machine has not
+/// got, Excel draws the substitute `face_in_place` names but SPACES the line
+/// by what the run's own `pitchFamily` and charset map to on the device:
+/// `_xlsx_cas_face.py --dress` puts `pitchFamily="49" charset="-128"` on a
+/// ruler that had none and its ink goes from 136 pixels to the title's own
+/// 134, matching it exactly — while centring, wrapping and the box's width
+/// move nothing.
+pub(crate) fn metrics_face(
+    asked: &str,
+    drawn: &str,
+    charset: Option<i32>,
+    pitch_family: Option<i32>,
+) -> String {
+    match pitch_family {
+        Some(pitch) if asked != drawn => stood_in_by(asked, charset.unwrap_or(0), pitch)
+            .unwrap_or_else(|| drawn.to_string()),
+        _ => drawn.to_string(),
+    }
+}
+
+#[cfg(windows)]
+fn stood_in_by(face: &str, charset: i32, pitch_family: i32) -> Option<String> {
+    physical_face_asked(face, (charset & 0xFF) as u32, (pitch_family.max(0) as u32) & 0xFF)
+}
+
+#[cfg(not(windows))]
+fn stood_in_by(_face: &str, _charset: i32, _pitch_family: i32) -> Option<String> {
+    None
 }
 
 /// The face Excel draws for a missing one in a CELL, which is not the answer
@@ -4117,14 +4155,22 @@ mod windows_draw {
         for (index, paragraph) in said.paragraphs.iter().enumerate() {
             // A face this machine has not got is not GDI's business to
             // guess: Excel answers by the run's charset (see `face_in_place`).
-            let face = super::face_in_place(
-                &paragraph
-                    .face
-                    .clone()
-                    .or_else(|| normal.map(|(face, _)| face.clone()))
-                    .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string()),
-                paragraph.charset,
-            );
+            let asked = paragraph
+                .face
+                .clone()
+                .or_else(|| normal.map(|(face, _)| face.clone()))
+                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string());
+            let face = super::face_in_place(&asked, paragraph.charset);
+            // …but the METRICS it lays that face out with are a different
+            // question: they follow the run's own `pitchFamily`, and Excel
+            // asks the device with it. `cas-r*`'s title asks for a missing
+            // face at `pitchFamily="49"`, which maps to ＭＳ ゴシック — a face
+            // whose device advance is wider than the rounded design, so the
+            // run is a TIGHT one and gives a pixel back at the fourth glyph
+            // and the seventh. Drawn with 游ゴシック's own loose caps it gives
+            // none, and the line comes out two pixels wide (SX101).
+            let _metrics = super::metrics_face(&asked, &face, paragraph.charset,
+                                              paragraph.pitch_family);
             let broken = if note {
                 super::wrapped_lines(
                     &face,
@@ -4317,14 +4363,22 @@ mod windows_draw {
             let paragraph = &said.paragraphs[*index];
             // A face this machine has not got is not GDI's business to
             // guess: Excel answers by the run's charset (see `face_in_place`).
-            let face = super::face_in_place(
-                &paragraph
-                    .face
-                    .clone()
-                    .or_else(|| normal.map(|(face, _)| face.clone()))
-                    .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string()),
-                paragraph.charset,
-            );
+            let asked = paragraph
+                .face
+                .clone()
+                .or_else(|| normal.map(|(face, _)| face.clone()))
+                .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string());
+            let face = super::face_in_place(&asked, paragraph.charset);
+            // …but the METRICS it lays that face out with are a different
+            // question: they follow the run's own `pitchFamily`, and Excel
+            // asks the device with it. `cas-r*`'s title asks for a missing
+            // face at `pitchFamily="49"`, which maps to ＭＳ ゴシック — a face
+            // whose device advance is wider than the rounded design, so the
+            // run is a TIGHT one and gives a pixel back at the fourth glyph
+            // and the seventh. Drawn with 游ゴシック's own loose caps it gives
+            // none, and the line comes out two pixels wide (SX101).
+            let metrics = super::metrics_face(&asked, &face, paragraph.charset,
+                                              paragraph.pitch_family);
             let pixels = -((paragraph.size * scale * 96.0 / 72.0).round() as i32);
             let named = wide(&face);
             let dressed = |bold: bool, underline: bool| {
@@ -4395,6 +4449,7 @@ mod windows_draw {
                     .then(|| {
                         super::shape_run_worn(
                             &face,
+                            &metrics,
                             paragraph.size,
                             paragraph.italic,
                             &worn

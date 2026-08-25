@@ -1527,6 +1527,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         italic: false,
                         face: None,
                         charset: None,
+                        pitch_family: None,
                         color: None,
                         line_pitch: None,
                         line_scale: None,
@@ -1620,6 +1621,8 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 // written beside: it is what Excel falls back
                                 // on when the face is not installed.
                                 held.charset = get_attr(e, "charset")
+                                    .and_then(|held| held.parse::<i32>().ok());
+                                held.pitch_family = get_attr(e, "pitchFamily")
                                     .and_then(|held| held.parse::<i32>().ok());
                             }
                         }
@@ -1922,6 +1925,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         italic: false,
         face: None,
         charset: None,
+        pitch_family: None,
         color: None,
         line_pitch: None,
         line_scale: None,

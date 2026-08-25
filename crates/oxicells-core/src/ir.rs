@@ -461,6 +461,11 @@ pub struct ShapeParagraph {
     /// on nothing else — not the name, not the PANOSE the file carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charset: Option<i32>,
+    /// The `pitchFamily` beside it, which chooses the METRICS Excel lays the
+    /// substitute out with — a different question from which face it draws
+    /// (SX101). It travels with the face the same way the charset does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_family: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     /// The line pitch the paragraph pins, in points, when it pins one.
