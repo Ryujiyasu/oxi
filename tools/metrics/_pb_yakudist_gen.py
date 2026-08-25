@@ -28,7 +28,8 @@ OUT = os.path.join(REPO, "pipeline_data", "_pb_yakudist")
 SRC = os.path.join(REPO, "tools", "golden-test", "documents", "docx",
                    "tokyoshugyo_000599795.docx")
 CELL_TW = 8000                     # 400pt
-EM = 10.5
+EM = 10.5          # overridden by SZ below
+
 NCH = 36
 DISTS = [1, 2, 3, 5, 8, 10, 12, 16]
 # CS=<n> gives the section a docGrid with that charSpace. b35123fe8efc's grid is
@@ -40,8 +41,14 @@ CS = int(os.environ.get("CS") or 0)
 # compat 11; b35123fe8efc, whose corpus lines CONTRADICT the CS=-2714 reading, is
 # compat 15.
 COMPAT15 = os.environ.get("COMPAT15") == "1"
+# SZ=<half-points> sets the run size. b35123fe8efc's two contradicting lines are
+# 10.5pt (pool killed, matches the arms) and 9pt (pool needed) -- so sweep it.
+SZ = int(os.environ.get("SZ") or 21)
 W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"')
+
+
+EM = SZ / 2.0
 
 
 def text_for(d):
@@ -73,11 +80,11 @@ def build():
                 '<w:tr><w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/></w:tcPr>'
                 '<w:p><w:pPr><w:pStyle w:val="a"/><w:jc w:val="both"/>'
                 '<w:ind w:left="0" w:right="%d"/>'
-                '<w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr>'
-                '<w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr>'
+                '<w:rPr><w:rFonts w:hint="eastAsia"/><w:sz w:val="%d"/></w:rPr></w:pPr>'
+                '<w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:sz w:val="%d"/></w:rPr>'
                 '<w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
                 '<w:p><w:pPr><w:rPr><w:sz w:val="16"/></w:rPr></w:pPr></w:p>'
-                % (CELL_TW, CELL_TW, CELL_TW, r, txt))
+                % (CELL_TW, CELL_TW, CELL_TW, r, SZ, SZ, txt))
     doc = zipfile.ZipFile(SRC).read("word/document.xml").decode("utf-8")
     sect = re.search(r"<w:sectPr[^>]*>.*?</w:sectPr>", doc, re.S).group(0)
     sect = re.sub(r"<w:footerReference[^>]*/>", "", sect)
@@ -88,7 +95,7 @@ def build():
     new = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
            '<w:document %s><w:body>%s%s</w:body></w:document>'
            % (W_NS, "".join(blocks), sect))
-    dst = os.path.join(OUT, "yakudist%s.docx" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "")))
+    dst = os.path.join(OUT, "yakudist%s.docx" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "") + ("_sz%d" % SZ)))
     shutil.copyfile(SRC, dst)
     zin = zipfile.ZipFile(SRC)
     zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
@@ -102,7 +109,7 @@ def build():
                           r"\g<1>15", t).encode("utf-8")
         zout.writestr(item, data)
     zout.close()
-    with open(os.path.join(OUT, "arms%s.txt" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else ""))), "w", encoding="utf-8") as fh:
+    with open(os.path.join(OUT, "arms%s.txt" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "") + ("_sz%d" % SZ))), "w", encoding="utf-8") as fh:
         for d, r in index:
             fh.write("%d %d\n" % (d, r))
     print("built %s (%d arms)" % (dst, len(index)))
@@ -110,8 +117,8 @@ def build():
 
 def to_pdf():
     import win32com.client as wc
-    docx = os.path.join(OUT, "yakudist%s.docx" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "")))
-    pdf = os.path.join(OUT, "yakudist%s.pdf" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "")))
+    docx = os.path.join(OUT, "yakudist%s.docx" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "") + ("_sz%d" % SZ)))
+    pdf = os.path.join(OUT, "yakudist%s.pdf" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "") + ("_sz%d" % SZ)))
     app = wc.Dispatch("Word.Application")
     app.Visible = False
     try:
@@ -126,8 +133,8 @@ def to_pdf():
 def measure():
     import fitz
     arms = [tuple(int(v) for v in l.split()) for l in
-            open(os.path.join(OUT, "arms%s.txt" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else ""))), encoding="utf-8").read().splitlines()]
-    doc = fitz.open(os.path.join(OUT, "yakudist%s.pdf" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else ""))))
+            open(os.path.join(OUT, "arms%s.txt" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "") + ("_sz%d" % SZ))), encoding="utf-8").read().splitlines()]
+    doc = fitz.open(os.path.join(OUT, "yakudist%s.pdf" % ((("_cs%d" % CS) if CS else "") + ("_c15" if COMPAT15 else "") + ("_sz%d" % SZ))))
     heads = []
     for page in doc:
         rows = []
@@ -150,7 +157,8 @@ def measure():
         by.setdefault(d, []).append((r / 20.0, n))
     top = max(n for v in by.values() for _, n in v)
     base = None
-    print("   charSpace=%d  engine=%s" % (CS, "compat 15" if COMPAT15 else "compat 11"))
+    print("   charSpace=%d  size=%.1fpt  engine=%s"
+          % (CS, EM, "compat 15" if COMPAT15 else "compat 11"))
     print("   marks at distance   flip r      credit (em)")
     for d in [0] + DISTS:
         full = [r for r, n in by[d] if n >= top]
