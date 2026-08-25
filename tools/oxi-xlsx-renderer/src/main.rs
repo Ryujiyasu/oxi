@@ -4859,6 +4859,21 @@ mod windows_draw {
                         (&cell.style.border_left, false, box_.left),
                         (if after { &None } else { far }, false, box_.right),
                     ];
+                    // A vertical rule does not show inside a horizontal
+                    // double's gap. `_xlsx_double_gap.py` rules a pair of
+                    // rows on all four sides and puts a double on the
+                    // boundary between them: where the verticals cross it the
+                    // gap holds the cell's own fill — yellow on a filled
+                    // arm, so the gap is the BACKGROUND and not merely
+                    // unpainted — and the vertical is not there. A cell's own
+                    // rect already stops short of its foot, so the row to
+                    // leave out is its head.
+                    let gap_at_top = hollow(&cell.style.border_top)
+                        || row
+                            .index
+                            .checked_sub(1)
+                            .and_then(|row_at| beside(row_at, cell.col))
+                            .is_some_and(|held| hollow(&held.style.border_bottom));
                     for (line, horizontal, at) in edges {
                         let Some(line) = line else { continue };
                         let rule = super::rule_for(&line.style);
@@ -4871,7 +4886,12 @@ mod windows_draw {
                             let edge = if horizontal {
                                 RECT { top: at + step, bottom: at + step + 1, ..box_ }
                             } else {
-                                RECT { left: at + step, right: at + step + 1, ..box_ }
+                                RECT {
+                                    left: at + step,
+                                    right: at + step + 1,
+                                    top: box_.top + i32::from(gap_at_top),
+                                    bottom: box_.bottom,
+                                }
                             };
                             match rule.broken {
                                 super::Broken::Whole => {
