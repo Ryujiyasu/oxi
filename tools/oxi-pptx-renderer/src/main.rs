@@ -11224,7 +11224,7 @@ fn line_width_pt_runs(
         }
         let (sz, sb, si) = st;
         let sfs = sz as f32 / 100.0;
-        font_adv::line_hmtx_width_pt(seg, sfs, family).or_else(|| {
+        hmtx_width_styled(seg, sfs, family, sb, si).or_else(|| {
             runtime_width_px(dc, seg, sfs, family, sb, si, scale)
                 .map(|px| px as f32 / scale as f32)
         })
@@ -11279,6 +11279,31 @@ fn bentconn_on() -> bool {
 /// restores measuring the whole line in the paragraph's heaviest style).
 fn runalign_on() -> bool {
     std::env::var("OXI_RUNALIGN_DISABLE").is_err()
+}
+
+/// The hmtx design-advance table, but only for text it actually describes.
+///
+/// S-HMTXSTYLE (2026-08-25). `font_adv`'s tables are keyed by FAMILY NAME alone
+/// and hold `arial` / `arialbd` / `calibri` -- no italic, and nothing ever maps a
+/// bold request onto `arialbd`. So every styled run in a table family was
+/// measured with the REGULAR advances while being drawn with the real bold or
+/// italic face.
+///
+/// d17 slide 4's "HAPPY DESIGNING!" is Arial Bold Italic at 24.6pt. PowerPoint
+/// draws it 492px wide; Oxi drew 489 and, once the dx array was corrected,
+/// drew the right 492 but still CENTRED it on the regular-Arial width, landing
+/// the line 2px right. The table has to decline styled text, not answer for it.
+#[cfg(windows)]
+fn hmtx_width_styled(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> Option<f32> {
+    if hmtxstyle_on() && (bold || italic) {
+        return None;
+    }
+    font_adv::line_hmtx_width_pt(text, fs, family)
+}
+
+/// The hmtx table is declined for bold / italic text unless this is set.
+fn hmtxstyle_on() -> bool {
+    std::env::var("OXI_HMTXSTYLE_DISABLE").is_err()
 }
 
 /// WordArt text fitting is applied unless this is set.
@@ -13065,7 +13090,7 @@ fn layout_paragraph_baselines(
         };
         align_at += line.chars().count();
         let line_w = per_run
-            .or_else(|| font_adv::line_hmtx_width_pt(ink, fs, &family))
+            .or_else(|| hmtx_width_styled(ink, fs, &family, bold, italic))
             .or_else(|| {
                 runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale)
                     .map(|px| px as f32 / scale as f32)
@@ -13489,7 +13514,7 @@ fn draw_text_baseline_wiu(
     // selection uses. For Arial this changes nothing -- Arial Italic carries the
     // same advances as Arial -- so only families with a genuinely narrower
     // italic move.
-    let dx = if italic && italadv_on() {
+    let dx = if (italic && italadv_on()) || (weight >= 700 && hmtxstyle_on()) {
         None
     } else {
         font_adv::line_hmtx_dx_px(text, font_size, family, scale)
