@@ -84,6 +84,52 @@ def build(made: Path, faces: list[tuple[str, str, bool, bool, float]]) -> list[f
             tops.append(at)
             at += HIGH + GAP
         book.Save()
+    finally:
+        book.Close(SaveChanges=True)
+        excel.Quit()
+    return tops
+
+
+def dress(made: Path) -> None:
+    """Put the title's own dressing on the rulers COM built bare.
+
+    The file's own title states `pitchFamily="49" charset="-128"` on its
+    typefaces and a COM-built run states neither, which is the last thing that
+    differs between them. Only the bare ones are touched, so the title keeps
+    what it had.
+    """
+    import re
+    import shutil
+    import zipfile
+
+    beside = made.with_name("_dressed_" + made.name)
+    with zipfile.ZipFile(made) as source,             zipfile.ZipFile(beside, "w", zipfile.ZIP_DEFLATED) as out:
+        for item in source.namelist():
+            body = source.read(item)
+            if item.startswith("xl/drawings/drawing") and item.endswith(".xml"):
+                text = body.decode("utf-8")
+                # COM writes a `panose` of its own for a face it knows, so
+                # matching only `<a:latin typeface="…"/>` patches nothing.
+                # Anything that has no pitchFamily yet gets the title's.
+                def wear(found: "re.Match[str]") -> str:
+                    held = found.group(0)
+                    if "pitchFamily" in held:
+                        return held
+                    return held[:-2] + ' pitchFamily="49" charset="-128"/>'
+
+                text = re.sub(r'<a:(?:latin|ea)[^>]*/>', wear, text)
+                body = text.encode("utf-8")
+            out.writestr(item, body)
+    shutil.move(str(beside), str(made))
+
+
+def shoot(made: Path) -> bool:
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = True
+    excel.DisplayAlerts = False
+    book = excel.Workbooks.Open(str(made))
+    try:
+        sheet = book.Worksheets(1)
         for _ in range(10):
             try:
                 sheet.Activate()
@@ -95,8 +141,8 @@ def build(made: Path, faces: list[tuple[str, str, bool, bool, float]]) -> list[f
             held = ImageGrab.grabclipboard()
             if held is not None:
                 held.save(SCRATCH / "excel.png")
-                return tops
-        return None
+                return True
+        return False
     finally:
         book.Close(SaveChanges=False)
         excel.Quit()
@@ -120,6 +166,8 @@ def ink_at(picture: np.ndarray, top: float, wide: float = WIDE) -> np.ndarray | 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
+    parser.add_argument("--dress", action="store_true",
+                        help="put pitchFamily/charset on the rulers COM built bare")
     args = parser.parse_args()
     # The whole installed list would need 2000 points of sheet to stand in,
     # and the capture has to stay inside the book's own used range (A1:H24) or
@@ -148,6 +196,11 @@ def main() -> int:
     else:
         tops = build(made, faces)
         if tops is None:
+            print("  Excel would not build the rulers")
+            return 1
+        if args.dress:
+            dress(made)
+        if not shoot(made):
             print("  Excel would not hand over a picture")
             return 1
     shot = np.asarray(Image.open(SCRATCH / "excel.png").convert("L"))
