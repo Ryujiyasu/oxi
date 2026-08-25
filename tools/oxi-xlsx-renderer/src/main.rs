@@ -5193,7 +5193,33 @@ mod windows_draw {
                                 // cell's would be.
                                 let leading =
                                     i32::from(merged_block && (one_line || slack > 0));
-                                ((slack - leading) as f32 / 2.0).floor() as i32
+                                // A PLAIN cell halves its leftover toward
+                                // zero, not down, and the two only part
+                                // company when the block outgrows its row and
+                                // the leftover goes below zero.
+                                // `_xlsx_wrap_center_round.py` walks the row
+                                // a pixel at a time under a wrapped two-line
+                                // cell — rows 30 to 51, twenty-two arms — and
+                                // every row that cannot hold the block reads
+                                // a pixel lower than flooring gives. It is
+                                // what puts the `h2daa*_dendeba_kmc` trio's
+                                // `C29`, two lines of 11pt in a 25pt row, a
+                                // pixel high.
+                                //
+                                // A SINGLE line keeps the floor, and so does a
+                                // merged block. `--tight` walks rows 10 to 29,
+                                // too short to hold even one line, and the
+                                // single-line arm matches the floor at every
+                                // one of the twenty; the merged block's own
+                                // pixel of leading was measured on that path
+                                // (`_xlsx_valign_pixels.py`). Halving either
+                                // toward zero costs `001904852/3` 0.0259 each
+                                // and the `h2daa*kre` trio 0.036.
+                                if merged_block || one_line {
+                                    ((slack - leading) as f32 / 2.0).floor() as i32
+                                } else {
+                                    slack / 2
+                                }
                             }
                             // Sat on the bottom, only a block of several
                             // lines gives the pixel up.
@@ -5556,7 +5582,13 @@ mod windows_draw {
                                 Some("center") | Some("centre") => {
                                     let leading =
                                         i32::from(merged_block && (alone || slack > 0));
-                                    ((slack - leading) as f32 / 2.0).floor() as i32
+                                    // Toward zero for a plain cell, down for
+                                    // a merged block, as above.
+                                    if merged_block || alone {
+                                        ((slack - leading) as f32 / 2.0).floor() as i32
+                                    } else {
+                                        slack / 2
+                                    }
                                 }
                                 _ => slack - i32::from(merged_block && !alone),
                             };
