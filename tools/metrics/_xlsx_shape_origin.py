@@ -143,7 +143,7 @@ def main() -> int:
     truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L"))
     mine = np.asarray(Image.open(ours_png).convert("L"))
     print(f"  {FACE} {POINTS}pt, one {LETTER!r}, default inset 9.6px")
-    print("  anchor    left pt   left px    box L/R      ink-boxL: Excel Oxi    boxR-ink: Excel Oxi")
+    print("  anchor    left pt   left px   box Excel  box Oxi     ink-boxL: E/O    boxR-ink: E/O")
     for (left, kind), (box_top, text_top, tail_top) in zip(
             [(left, name) for _p, name in PLACEMENTS for left in LEFTS], placed):
         box_they, box_we = first_ink(truth, box_top), first_ink(mine, box_top)
@@ -154,8 +154,9 @@ def main() -> int:
             print(f"  {left:>7}   nothing to read")
             continue
         print(f"  {kind:<9}{left:>7} {left * 96 / 72:>9.3f}   {box_they:>4}/{end_they:<4}"
-              f"      {ink_they - box_they:>5} {ink_we - box_we:>3}"
-              f"          {end_they - tail_they:>5} {end_we - tail_we:>3}")
+              f" {box_we:>4}/{end_we:<4}{'' if (box_they, end_they) == (box_we, end_we) else ' <<':<3}"
+              f"  {ink_they - box_they:>5} {ink_we - box_we:>3}"
+              f"      {end_they - tail_they:>5} {end_we - tail_we:>3}")
     return 0
 
 
