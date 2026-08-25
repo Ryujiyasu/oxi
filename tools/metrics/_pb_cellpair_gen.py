@@ -32,6 +32,19 @@ TEXTS = {
     "no_pair": "甲" + "亜" * 30 + "、亜。亜亜",
     "one_pair": "甲" + "亜" * 30 + "。）亜亜亜",
     "two_pairs": "甲" + "亜" * 27 + "。）亜。）亜亜",
+    # tokyoshugyo's p20 line ends 「…手待ち時間」）」 -- the pair IS the line end.
+    # A line-final mark also HANGS (S1205: half an em in a cell), so read these
+    # three together: `pair_end` carries hang + (pair?), `one_mark_end` carries
+    # the hang alone, and their difference is the pair's contribution.
+    "pair_end": "甲" + "亜" * 33 + "。）",
+    "one_mark_end": "甲" + "亜" * 34 + "。",
+    "pair_then_one": "甲" + "亜" * 32 + "。）亜",
+    # tokyoshugyo's pair is TWO CLOSING BRACKETS (「…時間」）」), not period+paren.
+    # S1199 found a run of closers behaves differently for the HANG (one closer
+    # hangs 441/441, two or more 1/154), so ask the same of the compression.
+    "closers_end": "甲" + "亜" * 33 + "」）",
+    "closers_mid": "甲" + "亜" * 30 + "」）亜亜亜",
+    "quote_pair_end": "甲" + "亜" * 32 + "「亜」）",
 }
 # the flip sits near 400pt - 36 chars x 10.5 = 22pt, plus whatever the pairs
 # save; the first window (0..20pt) ended just short of it and every arm read
