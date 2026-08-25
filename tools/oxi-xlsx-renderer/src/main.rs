@@ -852,6 +852,11 @@ pub(crate) fn shape_run_worn(
                 }
                 was = drawn;
             }
+            if std::env::var("OXI_XLSX_DUMP_RUN").is_ok() {
+                eprintln!(
+                    "worn {face} {points} tight={tight} {text:?} devices {devices:?} steps {steps:?}"
+                );
+            }
         }
         Some(steps)
     })
