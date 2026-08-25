@@ -5380,6 +5380,16 @@ mod windows_draw {
                     let top = box_.top
                         + match cell.style.vertical_align.as_deref() {
                             Some("top") => 0,
+                            // A cell told to spread its lines down the box has
+                            // only one to spread when it holds one, and Excel
+                            // centres it: `shosai_R2`'s `vertical="distributed"`
+                            // heading sits at 73 where sitting it on the foot
+                            // puts it at 78, and centring gives exactly 73.
+                            // Several lines are a different rule and are left
+                            // where they were.
+                            Some("distributed") | Some("justify") if one_line => {
+                                ((slack - i32::from(merged_block)) as f32 / 2.0).floor() as i32
+                            }
                             Some("center") | Some("centre") => {
                                 // Several lines with no room to spare lose
                                 // the pixel again, and are centred as a plain
@@ -5785,6 +5795,11 @@ mod windows_draw {
                         let mut at = box_.top
                             + match cell.style.vertical_align.as_deref() {
                                 Some("top") => 0,
+                                // One line to spread is a centred one; see the
+                                // plain path above.
+                                Some("distributed") | Some("justify") if alone => {
+                                    ((slack - i32::from(merged_block)) as f32 / 2.0).floor() as i32
+                                }
                                 Some("center") | Some("centre") => {
                                     let leading =
                                         i32::from(merged_block && (alone || slack > 0));
