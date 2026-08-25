@@ -4840,6 +4840,19 @@ mod windows_draw {
                     let after = holder(row.index, cell.col + spans_columns + 1, false)
                         .and_then(|(row_at, column)| beside(row_at, column))
                         .is_some_and(|held| hollow(&held.style.border_left));
+                    if std::env::var("OXI_XLSX_DUMP_EDGES").is_ok() {
+                        // `left`/`right` here are the CELL's own; a merged
+                        // block draws its far edges from `foot` and `far`,
+                        // which belong to other members.
+                        eprintln!(
+                            "edge row {} col {} box x {}..{} y {}..{} below={below} after={after} left={:?} right={:?} foot={:?} far={:?}",
+                            row.index, cell.col, box_.left, box_.right, box_.top, box_.bottom,
+                            cell.style.border_left.as_ref().map(|line| line.style.clone()),
+                            cell.style.border_right.as_ref().map(|line| line.style.clone()),
+                            foot.as_ref().map(|line| line.style.clone()),
+                            far.as_ref().map(|line| line.style.clone()),
+                        );
+                    }
                     let edges: [(&Option<BorderLine>, bool, i32); 4] = [
                         (&cell.style.border_top, true, box_.top),
                         (if below { &None } else { foot }, true, box_.bottom),
