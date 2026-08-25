@@ -34,6 +34,11 @@ NCH = 72
 ARMS = {
     "tail_mark": "甲" + "亜" * (NCH - 2) + "。",
     "no_mark": "甲" + "亜" * (NCH - 1),
+    # kojin p1 keeps a COMPRESSED pair 。） 10.4pt past the margin on a
+    # continuation line, while the solo 。 above gets nothing. So: does a pair
+    # hang where a solo does not?
+    "tail_pair": "甲" + "亜" * (NCH - 3) + "。）",
+    "tail_2periods": "甲" + "亜" * (NCH - 3) + "。。",
 }
 R_TW = list(range(700, 1301, 5))
 
