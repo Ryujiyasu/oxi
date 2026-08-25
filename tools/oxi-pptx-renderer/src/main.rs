@@ -9321,6 +9321,27 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .src_rect
                             .map(|(l, t, r, b)| (l, t, r, b))
                             .unwrap_or((0.0, 0.0, 0.0, 0.0));
+                        // S-SRCDEGEN (2026-08-26): a crop that leaves NOTHING
+                        // shows nothing. `a:srcRect` gives each edge as a
+                        // fraction to trim, so `l + r >= 1` (or `t + b >= 1`)
+                        // selects an empty region -- and d37's layout 4 asks for
+                        // exactly that, `l=74246 r=118526` (the right edge
+                        // trimmed by 118%, past the left one).
+                        //
+                        // PowerPoint draws nothing for it. Oxi ignored the
+                        // degeneracy and painted the WHOLE picture, so a
+                        // mostly-opaque 2048x1636 image covered the right half
+                        // of the slide in pale grey where the deck's tan
+                        // background belongs. d37 s5 -- the deck's worst slide
+                        // at 0.8775 -- is that rectangle.
+                        //
+                        // Only 2 of the corpus's 412 srcRects are degenerate and
+                        // both are this one crop (the layout's, and the copy
+                        // slide 5 carries), but the cost of drawing it is half a
+                        // slide.
+                        if srcdegen_on() && (sl + sr >= 1.0 || st + sb >= 1.0) {
+                            continue;
+                        }
                         let (dl, dt, dr, db) = sh
                             .fill_rect
                             .map(|(l, t, r, b)| (l, t, r, b))
@@ -11289,6 +11310,12 @@ fn line_width_pt_runs(
         total += measure(&seg, c)?;
     }
     Some(total)
+}
+
+/// A picture whose `a:srcRect` crops away everything is skipped unless this is
+/// set (which restores drawing the whole image).
+fn srcdegen_on() -> bool {
+    std::env::var("OXI_SRCDEGEN_DISABLE").is_err()
 }
 
 /// `blockArc` is drawn as its ring sector unless this is set (which restores
