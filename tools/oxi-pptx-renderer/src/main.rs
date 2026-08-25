@@ -691,10 +691,11 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     let prst = match sh.shape_type.as_deref() {
         Some(
             p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"
-                | "star10"),
+                | "star10" | "wedgeRectCallout"),
         ) if (p != "pie" || pie_on())
             && (p != "chevron" || chevron_on())
-            && (p != "star10" || star10_on()) =>
+            && (p != "star10" || star10_on())
+            && (p != "wedgeRectCallout" || wedgecallout_on()) =>
         {
             p
         }
@@ -835,6 +836,74 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
                 }
                 let (ix, iy) = vertex(-72.0 + 36.0 * kf, r);
                 line(map(ix, iy));
+            }
+        }
+        // S-WEDGECALL (2026-08-25): a rectangle with a triangular tail. Eight of
+        // them in the corpus, one each on EIGHT different decks (d04 s13,
+        // d06 s14, d11 s14, d15 s14, d16 s15, d19 s14, d24 s14, d35 s14) --
+        // the same map-label template, drawn as a plain box with no tail.
+        //
+        // ECMA's guide chain, confirmed against PowerPoint's own PDF vectors on
+        // three shapes covering BOTH exit branches, with the rule stated before
+        // the last two were measured:
+        //
+        //   dxPos = adj1/100000 * w      dyPos = adj2/100000 * h
+        //   tip   = (hc + dxPos, vc + dyPos)
+        //   dz    = |dyPos| - |dxPos * h / w|
+        //     dz > 0  -> the tail leaves through a HORIZONTAL edge (bottom if
+        //               dyPos > 0 else top), base spanning w*g/12 for
+        //               g = (7,10) if dxPos > 0 else (2,5)
+        //     dz <= 0 -> a VERTICAL edge (right if dxPos > 0 else left), base
+        //               spanning h*g/12 with g chosen the same way off dyPos
+        //
+        // d06 s14 (50.36x14.98, adj -21428/84287) gives tip (181.97,104.70) and
+        // base 175.97..188.56 against PowerPoint's (181.97,104.70) and
+        // 175.98..188.57. d15 s14 is the vertical branch -- predicted LEFT edge,
+        // tip (201.28,135.81), base 132.90..136.88, all three drawn exactly.
+        "wedgeRectCallout" => {
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(-20_833.0) / 100_000.0;
+            let a2 = sh.adjustments.get("adj2").copied().unwrap_or(62_500.0) / 100_000.0;
+            let (dx_pos, dy_pos) = (a1 * w, a2 * h);
+            let (tx, ty) = (w / 2.0 + dx_pos, h / 2.0 + dy_pos);
+            let horizontal = dy_pos.abs() > (dx_pos * h / w.max(1e-6)).abs();
+            let g = |positive: bool| if positive { (7.0, 10.0) } else { (2.0, 5.0) };
+            // The perimeter clockwise from the top-left, with the tail spliced
+            // into whichever edge it leaves by.
+            let mut pts: Vec<(f32, f32)> = Vec::with_capacity(7);
+            let (g1, g2) = if horizontal { g(dx_pos > 0.0) } else { g(dy_pos > 0.0) };
+            let (b1, b2) = if horizontal {
+                (w * g1 / 12.0, w * g2 / 12.0)
+            } else {
+                (h * g1 / 12.0, h * g2 / 12.0)
+            };
+            pts.push((0.0, 0.0));
+            if horizontal && dy_pos <= 0.0 {
+                pts.push((b1, 0.0));
+                pts.push((tx, ty));
+                pts.push((b2, 0.0));
+            }
+            pts.push((w, 0.0));
+            if !horizontal && dx_pos > 0.0 {
+                pts.push((w, b1));
+                pts.push((tx, ty));
+                pts.push((w, b2));
+            }
+            pts.push((w, h));
+            if horizontal && dy_pos > 0.0 {
+                pts.push((b2, h));
+                pts.push((tx, ty));
+                pts.push((b1, h));
+            }
+            pts.push((0.0, h));
+            if !horizontal && dx_pos <= 0.0 {
+                pts.push((0.0, b2));
+                pts.push((tx, ty));
+                pts.push((0.0, b1));
+            }
+            let p = map(pts[0].0, pts[0].1);
+            let _ = MoveToEx(dc, p.x, p.y, None);
+            for &(px, py) in &pts[1..] {
+                line(map(px, py));
             }
         }
         "teardrop" => {
@@ -11126,6 +11195,12 @@ fn line_width_pt_runs(
         total += measure(&seg, c)?;
     }
     Some(total)
+}
+
+/// `wedgeRectCallout` keeps its tail unless this is set (which restores drawing
+/// it as a plain rectangle).
+fn wedgecallout_on() -> bool {
+    std::env::var("OXI_WEDGECALL_DISABLE").is_err()
 }
 
 /// `star10` is drawn as its ten-pointed outline unless this is set (which
