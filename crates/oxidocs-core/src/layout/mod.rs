@@ -17178,7 +17178,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // push@14.5, centered 14.61 inside; natural 13.62 excluded).
                 // compat 11/14/15 all measured IDENTICAL (compat is NOT a
                 // discriminator here).
-                // S1155 (2026-08-16, opt-in OXI_S1155=1 while it is measured):
+                // S1155 (2026-08-16, default ON 2026-08-26 (opt-out `OXI_S1155_DISABLE`), bundle promotion):
                 // the edge condition is not one either. Re-running the whole
                 // _pb_lastline fine sweep with the test paragraph wrapped to
                 // THREE lines -- same cursor, same slack, but the boundary line
@@ -17206,7 +17206,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // Fix that first; this rule is derived and waiting.
                 let s739_edge = (line_idx == 0 && !prev_keep_next)
                     || (line_idx > 0 && line_idx + 1 == lines.len())
-                    || std::env::var("OXI_S1155").ok().as_deref() == Some("1");
+                    || std::env::var("OXI_S1155_DISABLE").is_err();
                 // ★ON-SLOT gate — FALSIFIED 2026-08-16 (S1153, removed by
                 // default, opt-back-in OXI_S1153_DISABLE). Its only evidence was
                 // kojin pi=52 "Word keeps at nat_over −0.35", and that line was
@@ -23467,8 +23467,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // falsifies it. The two forms differ by 0.027pt at fs 10 --
                         // which is why the 2026-05-13 single-size COM check could
                         // not separate them, and picked the wrong one.
-                        // S1210 (2026-08-24, opt-in `OXI_S1210=1` while it is
-                        // measured): with the additive pitch the S141 carve-out
+                        // S1210 (2026-08-24, default ON 2026-08-26 (opt-out `OXI_S1210_DISABLE`), shipped with the derived-cell bundle): with the additive pitch the S141 carve-out
                         // ("Word does not expand a font SMALLER than the grid
                         // default") is unnecessary. The sz=10 cell it was derived
                         // from holds 33 x 10.3547 = 341.7pt in its 345pt cell -- one
@@ -23478,7 +23477,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // column: 8 chars at the natural 9.00 fit where Word breaks
                         // after 7, and the 9th line that follows pushes the ※2 note
                         // onto the next page in Word but not in Oxi.
-                        let s1210 = std::env::var("OXI_S1210").ok().as_deref() == Some("1");
+                        let s1210 = std::env::var("OXI_S1210_DISABLE").is_err();
                         let h8_trigger = char_space_pt > 0.0
                             && (!s466_grid_expand || (font_size < default_fs && !s1210));
                         let h7_trigger =
@@ -26617,7 +26616,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     /// (arms E/F), and only a cell that declares a zero margin shows it (arms
     /// B/G/H: 0.5pt rule -> 0.25pt a side, 3pt rule -> 1.5pt, no rule -> 0).
     fn celllaw(&self) -> bool {
-        std::env::var("OXI_CELLLAW").ok().as_deref() == Some("1")
+        std::env::var("OXI_CELLLAW_DISABLE").is_err()
     }
 
     /// Word does this arithmetic in whole twips, so a cell whose content fits
@@ -32742,7 +32741,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // cells, where Word squeezes 「．」 from 9.599 to 6.125 to
                                     // hold a line 1.02pt over its budget and Oxi wraps instead.
                                     let s1174_yakucomp =
-                                        std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
+                                        std::env::var("OXI_YAKUCOMP_DISABLE").is_err()
                                             && self.compress_punctuation
                                             && (self.compat_mode <= 14
                                                 || matches!(
@@ -33353,10 +33352,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         // = 72.00 overflows by only 0.47em, which the
                                                         // half-em credit DOES cover. That is why the
                                                         // ※2 note sits a page early in Oxi.
-                                                        let s1210 = std::env::var("OXI_S1210")
-                                                            .ok()
-                                                            .as_deref()
-                                                            == Some("1");
+                                                        let s1210 = std::env::var("OXI_S1210_DISABLE").is_err();
                                                         let h8_skip = char_space_pt > 0.0
                                                             && !s1210
                                                             && (!s466cell
@@ -33474,10 +33470,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 if (de_boundary && para.style.auto_space_de)
                                                     || (dn_boundary && para.style.auto_space_dn)
                                                 {
-                                                    if std::env::var("OXI_AUTOSPACE2")
-                                                        .ok()
-                                                        .as_deref()
-                                                        == Some("1")
+                                                    if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
                                                     {
                                                         s1175_autospace(
                                                             font_size,
@@ -33818,10 +33811,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // then wrapped. Unlike the 約物 pool these ARE
                                                 // additive: the probe's two joints both gave way
                                                 // together.
-                                                let joints = if std::env::var("OXI_AUTOSPACE2")
-                                                    .ok()
-                                                    .as_deref()
-                                                    == Some("1")
+                                                let joints = if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err()
                                                 {
                                                     let mut n = 0.0f32;
                                                     let mut prev: Option<char> = None;
@@ -34408,7 +34398,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 // per-line best-fit + a1d6-safe gate = multi-session. Reverted.
                                                 would_overflow_natural
                                             };
-                                            // S1201 (2026-08-23, opt-in `OXI_S1201`): a character that
+                                            // S1201 (2026-08-23, default ON 2026-08-26 (opt-out `OXI_S1201_DISABLE`)): a character that
                                             // would DRAG a run of closing marks with it must fit
                                             // TOGETHER WITH THE WHOLE RUN. 」）cannot begin a line
                                             // (行頭禁則), so taking the character before them commits
@@ -34438,7 +34428,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // tokyoshugyo 0.9906 -> 0.9962, its p20 box breaking
                                             // «…「手待時» / «間」）» exactly as Word does).
                                             let would_overflow = if would_overflow
-                                                || std::env::var("OXI_S1201").is_err()
+                                                || std::env::var("OXI_S1201_DISABLE").is_ok()
                                                 || kinsoku::is_line_start_prohibited(ch)
                                             {
                                                 would_overflow
@@ -39579,7 +39569,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // S1174 estimate mirror -- must match the render loop or pagination and
         // drawing disagree about how many lines a cell holds.
         // Estimate mirror of the corrected gate: alignment first, compatibility second.
-        let s1174_yakucomp = std::env::var("OXI_YAKUCOMP").ok().as_deref() == Some("1")
+        let s1174_yakucomp = std::env::var("OXI_YAKUCOMP_DISABLE").is_err()
             && self.compress_punctuation
             && (self.compat_mode <= 14
                 || matches!(para.alignment, Alignment::Justify | Alignment::Distribute));
@@ -39751,7 +39741,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             // pitch. Leaving this site behind would give a row a
                             // line count its own cell never renders.
                             let s1210 =
-                                std::env::var("OXI_S1210").ok().as_deref() == Some("1");
+                                std::env::var("OXI_S1210_DISABLE").is_err();
                             let h8_skip = char_space_pt > 0.0
                                 && !s1210
                                 && (!s466cell || font_size < default_fs);
@@ -39803,7 +39793,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if (de_boundary && para.style.auto_space_de)
                         || (dn_boundary && para.style.auto_space_dn)
                     {
-                        if std::env::var("OXI_AUTOSPACE2").ok().as_deref() == Some("1") {
+                        if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
                             s1175_autospace(
                                 font_size,
                                 cs,
@@ -39871,7 +39861,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // S1174 estimate mirror -- half an em for the line, plus half an
                     // em more when the character being placed is itself a 約物.
                     // S1175 estimate mirror -- the CJK/Latin joints are aki too.
-                    let joints = if std::env::var("OXI_AUTOSPACE2").ok().as_deref() == Some("1") {
+                    let joints = if std::env::var("OXI_AUTOSPACE2_DISABLE").is_err() {
                         let mut n = 0.0f32;
                         let mut prev: Option<char> = None;
                         for c in current_line_chars
