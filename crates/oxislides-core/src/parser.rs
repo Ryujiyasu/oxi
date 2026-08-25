@@ -4649,6 +4649,20 @@ fn lookup_ph_levels_in(
         if ty == "title" {
             keys.push((Some("ctrTitle".to_string()), ph_idx.cloned()));
         }
+        // S-SUBTITLE (2026-08-25): a `subTitle` inherits from the master's
+        // `body` placeholder, the same way `ctrTitle` inherits from `title`.
+        // Only the title half of that pair was here, so a subTitle whose own
+        // layout does not declare one fell all the way through to the THEME
+        // face. d16 slide 25's "Any questions?" is the specimen: PowerPoint
+        // sets it in Source Sans Pro Bold (the master body placeholder's face,
+        // 496px wide) and Oxi set it in Arial.
+        //
+        // **50 subTitle placeholders carrying text over 8 dev decks** reach
+        // nothing in their own layout or master by exact type (against 51
+        // ctrTitle, which this alias table already rescued).
+        if ty == "subTitle" && subtitle_alias_on() {
+            keys.push((Some("body".to_string()), ph_idx.cloned()));
+        }
         keys.push((Some(ty.clone()), None));
     }
     if let Some(idx) = ph_idx {
@@ -4677,6 +4691,7 @@ fn lookup_ph_levels_in(
                 _ if !phalias_on() => None,
                 "ctrTitle" => Some("title"),
                 "title" => Some("ctrTitle"),
+                "subTitle" if subtitle_alias_on() => Some("body"),
                 _ => None,
             };
             // Deterministic: several entries of one type would otherwise
@@ -4700,6 +4715,12 @@ fn lookup_ph_levels_in(
 /// `title` and `ctrTitle` are matched as the same slot unless this is set.
 fn phalias_on() -> bool {
     std::env::var("OXI_PHALIAS_DISABLE").is_err()
+}
+
+/// A `subTitle` placeholder inherits the master's `body` levels unless this is
+/// set (which restores letting it fall through to the theme face).
+fn subtitle_alias_on() -> bool {
+    std::env::var("OXI_SUBTITLE_ALIAS_DISABLE").is_err()
 }
 
 /// A master placeholder is inherited by type regardless of idx unless this is
