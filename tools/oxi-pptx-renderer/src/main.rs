@@ -1521,6 +1521,20 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             );
         }
     }
+    enum_faces_debug();
+    if std::env::var("OXI_FD_DEBUG").is_ok() {
+        // Ask each family what it is really serving. A deck that labels a part
+        // with one weight's name and another weight's data shows up here as two
+        // families reporting identical advances.
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for font in &pres.embedded_fonts {
+            if seen.insert(font.typeface.as_str()) {
+                for bold in [false, true] {
+                    let _ = fontdata_advance_em(&font.typeface, bold, false, 'a');
+                }
+            }
+        }
+    }
     if std::env::var("OXI_DEBUG_EMBED").is_ok() {
         use std::collections::BTreeSet;
         let names: BTreeSet<&str> = pres
@@ -10851,6 +10865,10 @@ thread_local! {
     static PRECISE_CACHE: std::cell::RefCell<
         std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// (face, weight, italic) -> that face's own design advances.
+    static FACE_ADV_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(String, i32, bool), Option<FaceAdvances>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
     static ADVANCE_CACHE: std::cell::RefCell<
         std::collections::HashMap<(String, i32, bool), std::collections::HashMap<char, Option<f32>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -11020,6 +11038,292 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
             }
         }
         value
+    })
+}
+
+/// Enumerate every registered face whose name contains `OXI_ENUM_DEBUG`,
+/// with the weight and slant GDI records for it. The deck's embedded parts are
+/// private to this process, so nothing outside it can see this list.
+#[cfg(windows)]
+fn enum_faces_debug() {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let Ok(want) = std::env::var("OXI_ENUM_DEBUG") else {
+        return;
+    };
+    unsafe extern "system" fn cb(
+        lf: *const LOGFONTW,
+        tm: *const TEXTMETRICW,
+        _kind: u32,
+        want: windows::Win32::Foundation::LPARAM,
+    ) -> i32 {
+        let name = String::from_utf16_lossy(&(*lf).lfFaceName);
+        let name = name.trim_end_matches(' ');
+        let want = &*(want.0 as *const String);
+        if name.to_lowercase().contains(&want.to_lowercase()) {
+            eprintln!(
+                "ENUM {name:26} lfWeight={:4} lfItalic={} tmWeight={:4} tmItalic={}",
+                (*lf).lfWeight,
+                (*lf).lfItalic,
+                (*tm).tmWeight,
+                (*tm).tmItalic
+            );
+        }
+        1
+    }
+    let dc = probe_dc();
+    let mut lf = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    unsafe {
+        EnumFontFamiliesExW(
+            dc,
+            &mut lf,
+            Some(cb),
+            windows::Win32::Foundation::LPARAM(&want as *const String as isize),
+            0,
+        );
+    }
+}
+
+/// The design advances of one face, keyed by code point, in font units.
+#[cfg(windows)]
+struct FaceAdvances {
+    upem: f32,
+    by_cp: std::collections::HashMap<u32, u16>,
+}
+
+#[cfg(windows)]
+fn be16(b: &[u8], off: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([*b.get(off)?, *b.get(off + 1)?]))
+}
+
+#[cfg(windows)]
+fn be32(b: &[u8], off: usize) -> Option<u32> {
+    Some(u32::from_be_bytes([
+        *b.get(off)?,
+        *b.get(off + 1)?,
+        *b.get(off + 2)?,
+        *b.get(off + 3)?,
+    ]))
+}
+
+/// One `sfnt` table of the font currently selected into `dc`.
+///
+/// `GetFontData` reaches the deck's OWN embedded parts: `TTLoadEmbeddedFont`
+/// registers them privately in this process, and GDI hands their tables back
+/// like any other face's. There is no file on disk to open for those, which is
+/// why the design advance was previously out of reach for them.
+#[cfg(windows)]
+fn font_table(dc: windows::Win32::Graphics::Gdi::HDC, tag: &[u8; 4]) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    // GetFontData takes the tag with its FIRST byte in the LOW byte.
+    let t = u32::from_le_bytes(*tag);
+    unsafe {
+        let n = GetFontData(dc, t, 0, None, 0);
+        // GDI_ERROR, the failure return, is 0xFFFFFFFF.
+        if n == u32::MAX || n == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; n as usize];
+        let got = GetFontData(dc, t, 0, Some(buf.as_mut_ptr().cast()), n);
+        if got == u32::MAX {
+            return None;
+        }
+        Some(buf)
+    }
+}
+
+/// code point -> glyph id, from a `cmap` table (formats 4 and 12).
+#[cfg(windows)]
+fn cmap_by_code_point(cmap: &[u8]) -> Option<std::collections::HashMap<u32, u16>> {
+    let n = be16(cmap, 2)? as usize;
+    let mut best: Option<usize> = None;
+    let mut best_score = -1i32;
+    for i in 0..n {
+        let rec = 4 + 8 * i;
+        let score = match (be16(cmap, rec)?, be16(cmap, rec + 2)?) {
+            (3, 10) => 4,
+            (3, 1) => 3,
+            (0, _) => 2,
+            (3, 0) => 1,
+            _ => 0,
+        };
+        if score > best_score {
+            best_score = score;
+            best = Some(be32(cmap, rec + 4)? as usize);
+        }
+    }
+    let sub = cmap.get(best?..)?;
+    let mut map = std::collections::HashMap::new();
+    match be16(sub, 0)? {
+        4 => {
+            let segx2 = be16(sub, 6)? as usize;
+            let ends = 14;
+            let starts = ends + segx2 + 2;
+            let deltas = starts + segx2;
+            let ranges = deltas + segx2;
+            for s in 0..segx2 / 2 {
+                let end = be16(sub, ends + 2 * s)?;
+                let start = be16(sub, starts + 2 * s)?;
+                if start > end {
+                    continue;
+                }
+                let delta = be16(sub, deltas + 2 * s)?;
+                let ro = be16(sub, ranges + 2 * s)?;
+                for cp in start..=end {
+                    if cp == 0xFFFF {
+                        continue;
+                    }
+                    let g = if ro == 0 {
+                        cp.wrapping_add(delta)
+                    } else {
+                        let at = ranges + 2 * s + ro as usize + 2 * (cp - start) as usize;
+                        match be16(sub, at) {
+                            Some(0) | None => continue,
+                            Some(g) => g.wrapping_add(delta),
+                        }
+                    };
+                    if g != 0 {
+                        map.insert(u32::from(cp), g);
+                    }
+                }
+            }
+        }
+        12 => {
+            let groups = be32(sub, 12)? as usize;
+            for g in 0..groups.min(4096) {
+                let rec = 16 + 12 * g;
+                let (start, end, gid) = (be32(sub, rec)?, be32(sub, rec + 4)?, be32(sub, rec + 8)?);
+                if end < start || end - start > 0xFFFF {
+                    continue;
+                }
+                for cp in start..=end {
+                    map.insert(cp, (gid + (cp - start)) as u16);
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(map)
+}
+
+/// Every code point's design advance for the font selected into `dc`.
+#[cfg(windows)]
+fn read_face_advances(dc: windows::Win32::Graphics::Gdi::HDC) -> Option<FaceAdvances> {
+    let head = font_table(dc, b"head")?;
+    let upem = f32::from(be16(&head, 18)?);
+    if upem <= 0.0 {
+        return None;
+    }
+    let hhea = font_table(dc, b"hhea")?;
+    let num_h = be16(&hhea, 34)? as usize;
+    if num_h == 0 {
+        return None;
+    }
+    let hmtx = font_table(dc, b"hmtx")?;
+    let cmap = font_table(dc, b"cmap")?;
+    let mut by_cp = std::collections::HashMap::new();
+    for (cp, gid) in cmap_by_code_point(&cmap)? {
+        // Glyphs past the last full metric all carry that metric's advance.
+        let g = (gid as usize).min(num_h - 1);
+        if let Some(a) = be16(&hmtx, 4 * g) {
+            by_cp.insert(cp, a);
+        }
+    }
+    if by_cp.is_empty() {
+        return None;
+    }
+    Some(FaceAdvances { upem, by_cp })
+}
+
+/// A glyph's DESIGN advance in EM units, read out of the font GDI actually
+/// selected -- the answer to "which face is being served under this name?".
+///
+/// ★This is a DIAGNOSTIC (`OXI_FD_DEBUG`), not an advance source. It is here
+/// because a wrong face is otherwise undetectable: `GetTextFaceW` echoes the
+/// name that was ASKED for, `EnumFontFamiliesEx` cannot see a privately loaded
+/// part at all, and a face name plus a weight number says nothing about the
+/// advances the glyphs actually carry. Reading the face's own `hmtx` back is
+/// the only thing that does.
+///
+/// What it found (2026-08-26, d15). The deck embeds a part under
+/// `typeface="Barlow Light"` whose data is Barlow REGULAR: asked for "Barlow
+/// Light" GDI returns `a`=0.511 `w`=0.721, byte-identical to what the same
+/// deck's "Barlow" part returns, and not the `a`=0.506 `w`=0.705 a real
+/// Barlow-Light carries. Registering it shadows the genuine Barlow Light in
+/// the Office cloud cache (`CloudFonts/Barlow/25577919585.ttf`, usWeightClass
+/// 300), which is the face PowerPoint's own export used -- its PDF subset says
+/// Barlow-Light, 300, `a`=0.506. So d15 renders its whole body one weight too
+/// heavy, +0.54% per line, and slide 2 loses the word "will" off the end of a
+/// 273.47pt box.
+///
+/// The fix is NOT settled and must not be guessed at. Across the six dev decks
+/// where an embedded part disagrees with the local font of the same name,
+/// PowerPoint's own output follows the LOCAL font on d10 and d15 and the
+/// EMBEDDED part on d35 -- and the corpus PDFs come from at least three export
+/// dates, with `pptx-truth-pdf-first-open-is-cold` already on record. Which of
+/// those two groups is a PowerPoint rule and which is an artefact of when the
+/// reference was exported has to be settled before any precedence changes.
+#[cfg(windows)]
+fn fontdata_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    FACE_ADV_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let entry = cache
+            .entry((face.clone(), weight, italic))
+            .or_insert_with(|| {
+                let dc = probe_dc();
+                let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+                unsafe {
+                    let font = CreateFontW(
+                        -2048,
+                        0,
+                        0,
+                        0,
+                        weight,
+                        u32::from(italic),
+                        0,
+                        0,
+                        DEFAULT_CHARSET.0 as u32,
+                        OUT_DEFAULT_PRECIS.0 as u32,
+                        CLIP_DEFAULT_PRECIS.0 as u32,
+                        CLEARTYPE_QUALITY.0 as u32,
+                        (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                        windows::core::PCWSTR(wide.as_ptr()),
+                    );
+                    if font.is_invalid() {
+                        return None;
+                    }
+                    let old = SelectObject(dc, font);
+                    let read = read_face_advances(dc);
+                    let mut real = [0u16; 64];
+                    let n = GetTextFaceW(dc, Some(&mut real));
+                    SelectObject(dc, old);
+                    let _ = DeleteObject(font);
+                    if std::env::var("OXI_FD_DEBUG").is_ok() {
+                        let real = String::from_utf16_lossy(&real[..(n as usize).saturating_sub(1)]);
+                        match &read {
+                            Some(f) => eprintln!(
+                                "FD {face:22} w={weight} i={italic} -> {real:22} upem={} glyphs={} 'a'={:?} 'w'={:?}",
+                                f.upem,
+                                f.by_cp.len(),
+                                f.by_cp.get(&(97u32)).map(|a| f32::from(*a) / f.upem),
+                                f.by_cp.get(&(119u32)).map(|a| f32::from(*a) / f.upem),
+                            ),
+                            None => eprintln!("FD {face:22} w={weight} i={italic} -> {real:22} NO TABLES"),
+                        }
+                    }
+                    read
+                }
+            });
+        entry
+            .as_ref()
+            .and_then(|f| f.by_cp.get(&(ch as u32)).map(|a| f32::from(*a) / f.upem))
     })
 }
 
@@ -11223,7 +11527,16 @@ fn fits_line(
             None => master_units(text, fs, family, bold, italic),
         };
         if let Some(mu) = mu {
-            return mu as f64 / 8.0 <= f64::from(width_pt) + 1e-6;
+            let fits = mu as f64 / 8.0 <= f64::from(width_pt) + 1e-6;
+            if let Ok(want) = std::env::var("OXI_FIT_DEBUG") {
+                if text.contains(&want) {
+                    eprintln!(
+                        "FIT {:>8.2}pt vs box {width_pt:.2}pt  fits={fits}  {text:?}",
+                        mu as f64 / 8.0
+                    );
+                }
+            }
+            return fits;
         }
     }
     measure_wrap(dc, text, fs, family, bold, italic, scale) <= width_px
