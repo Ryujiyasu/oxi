@@ -53,7 +53,10 @@ else:
     for _face in ("ＭＳ ゴシック", "ＭＳ Ｐゴシック",
                   "游ゴシック", "Yu Gothic UI",
                   "メイリオ", "Calibri", "Arial", "ＭＳ 明朝"):
-        for _size in (8.0, 11.0, 14.0, 18.0, 22.0, 26.0, 36.0):
+        # 5 and 6 point were never swept: the rule's `floor((digit - 5) / 4)`
+        # goes negative there and is clamped, and `barrier_free` sets four of
+        # its fonts at 6pt.
+        for _size in (5.0, 6.0, 7.0, 8.0, 11.0, 14.0, 18.0, 22.0, 26.0, 36.0):
             ARMS.append((_face, _size, False))
             ARMS.append((_face, _size, True))
 

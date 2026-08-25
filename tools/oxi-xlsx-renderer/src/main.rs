@@ -1630,7 +1630,13 @@ pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32
     let digit = advances(face, points, bold, italic, "0")
         .and_then(|held| held.first().copied())
         .unwrap_or(7) as f32;
-    let extra = (((digit - 5.0) / 4.0).floor()).max(0.0);
+    // The step goes BELOW zero for a small digit, and clamping it there was
+    // wrong: `_xlsx_gutter_ink.py` swept 5, 6 and 7 point after `barrier_free`
+    // — which sets four of its fonts at 6pt — and every face whose digit is
+    // four pixels keeps one pixel LESS at each side than a five-pixel one,
+    // while every digit of five or more agrees with the old rule. The gutter
+    // itself cannot go negative.
+    let extra = ((digit - 5.0) / 4.0).floor();
     if std::env::var("OXI_XLSX_DUMP_GUTTER").is_ok() {
         let plain = advances(face, points, false, italic, "0")
             .and_then(|held| held.first().copied())
@@ -1641,7 +1647,7 @@ pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32
             2.0 + extra
         );
     }
-    (3.0 + extra, 2.0 + extra)
+    ((3.0 + extra).max(0.0), (2.0 + extra).max(0.0))
 }
 
 /// The box Excel lays one line of this font in, and how far down that box its
