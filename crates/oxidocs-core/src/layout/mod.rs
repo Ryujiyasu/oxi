@@ -24338,7 +24338,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .unwrap_or(4.0);
                             current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
                         } else if std::env::var("OXI_S601_DISABLE").is_err()
-                            && matches!(ch, '。' | '、' | '，' | '．' | '・')
+                            && (matches!(ch, '。' | '、' | '，' | '．' | '・')
+                                // S1220 (2026-08-25, opt-out `OXI_S1220_DISABLE`): the unified
+                                // break-billing law from the regime probes
+                                // (_pb_wrapbill/_pb_line2bill, 4 conditions):
+                                //   the LINE-FINAL mark is free on every line --
+                                //   including a closing bracket (kojin p1 keeps
+                                //   「含む。）」 with the ） 10.4pt past the margin,
+                                //   compat 15)...
+                                || (std::env::var("OXI_S1220_DISABLE").is_err()
+                                    && self.compat_mode >= 15
+                                    && kinsoku::is_yakumono_closing(ch)))
+                            // ...EXCEPT at compat 11, where a line-final PAIR cannot
+                            // hang (明朝 c11: 。） at 372.95 in a 377.95 budget is
+                            // still pushed, kinsoku dragging the 亜 before it;
+                            // Ｐ明朝 c11 TRAIL=0 arms read the same).
+                            && !(std::env::var("OXI_S1220_DISABLE").is_err()
+                                && self.compat_mode < 15
+                                && char_index > 0
+                                && chars_vec
+                                    .get(char_index - 1)
+                                    .map_or(false, |&pc| {
+                                        kinsoku::is_yakumono_closing(pc)
+                                            || kinsoku::is_yakumono_opening(pc)
+                                    }))
                             // S1219 (2026-08-25, opt-in `OXI_S1219=1`, HELD): the hang
                             // is granted ONLY on the paragraph's FIRST line. MEASURED
                             // with `tools/metrics/_pb_hangline2_gen.py`: a 36-char
