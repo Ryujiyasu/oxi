@@ -24,6 +24,10 @@ OUT = os.path.join(REPO, "pipeline_data", "_pb_hangline2")
 SRC = os.path.join(REPO, "tools", "golden-test", "documents", "docx",
                    "tokyoshugyo_000599795.docx")
 FACE = os.environ.get("FACE") or "ＭＳ Ｐ明朝"
+# COMPAT15=1 rewrites the base (tokyoshugyo, compat 11 + altKinsoku) to the
+# modern engine -- kojin and nedocontract, which the first-line-only gate broke,
+# are the docs to explain.
+COMPAT15 = os.environ.get("COMPAT15") == "1"
 RPR = ('<w:rFonts w:ascii="%s" w:eastAsia="%s" w:hAnsi="%s" w:hint="eastAsia"/>'
        % (FACE, FACE, FACE))
 NCH = 72
@@ -53,7 +57,7 @@ def build():
            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
            'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">'
            '<w:body>%s%s</w:body></w:document>' % ("".join(paras), sect))
-    dst = os.path.join(OUT, "hangline2.docx")
+    dst = os.path.join(OUT, "hangline2%s.docx" % ("_c15" if COMPAT15 else ""))
     shutil.copyfile(SRC, dst)
     zin = zipfile.ZipFile(SRC)
     zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
@@ -61,6 +65,10 @@ def build():
         data = zin.read(item.filename)
         if item.filename == "word/document.xml":
             data = new.encode("utf-8")
+        elif COMPAT15 and item.filename == "word/settings.xml":
+            t = data.decode("utf-8").replace("<w:useAltKinsokuLineBreakRules/>", "")
+            data = re.sub(r'(w:name="compatibilityMode"[^>]*w:val=")[0-9]+',
+                          r"\g<1>15", t).encode("utf-8")
         zout.writestr(item, data)
     zout.close()
     return dst, index
@@ -108,7 +116,8 @@ def main():
     by = {}
     for (name, r), n in zip(index, counts):
         by.setdefault(name, []).append((r / 20.0, n))
-    print("face=%s  NCH=%d" % (FACE, NCH))
+    print("face=%s  NCH=%d  engine=%s"
+          % (FACE, NCH, "compat 15" if COMPAT15 else "compat 11 + altKinsoku"))
     for name, rows in by.items():
         two = [r for r, n in rows if n <= 2]
         flip = max(two) if two else None

@@ -24339,6 +24339,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             current_width_tw + pt_to_tw(char_width) - available_tw - pt_to_tw(tol)
                         } else if std::env::var("OXI_S601_DISABLE").is_err()
                             && matches!(ch, '。' | '、' | '，' | '．' | '・')
+                            // S1219 (2026-08-25, opt-in `OXI_S1219=1`, HELD): the hang
+                            // is granted ONLY on the paragraph's FIRST line. MEASURED
+                            // with `tools/metrics/_pb_hangline2_gen.py`: a 36-char
+                            // one-line arm ending in 。 outlasts its mark-free control
+                            // by the mark's whole advance (both ＭＳ 明朝 and Ｐ明朝),
+                            // but the 72-char two-line arm flips 2->3 lines at EXACTLY
+                            // the control's r (47.00, both faces) -- a continuation
+                            // line gets nothing. tokyoshugyo's two refusals (p20/p21,
+                            // both second lines, overflow 1.8pt) are this: Word wraps
+                            // them, Oxi hung the 。 and kept 38 characters.
+                            // ★HELD OPT-IN (`OXI_S1219=1`): the rule itself is right --
+                            // kojin p1's continuation line ends 「…において同」 in
+                            // Word's own PDF (n=47), exactly what this gate produces,
+                            // and the old behavior packs 「じ。）」 three characters
+                            // past Word -- but the golden gate then loses kojin (9
+                            // paragraphs, 0.9793) and nedocontract (1): the old
+                            // over-pack was COMPENSATING an under-pack elsewhere.
+                            // Same shape as S1218. Find the counter-defect first.
+                            && (lines.is_empty()
+                                || std::env::var("OXI_S1219").ok().as_deref() != Some("1"))
                             && (if s725_final_char {
                                 current_width_tw
                             } else {
