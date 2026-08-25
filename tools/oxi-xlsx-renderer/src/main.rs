@@ -5194,13 +5194,22 @@ mod windows_draw {
                     // a time and stops at the first that fits.
                     let asked = cell.style.font_size.unwrap_or(11.0);
                     let points = if cell.style.shrink_to_fit && !cell.style.wrap_text {
+                        // The room the test is made in is the room the line is
+                        // actually PLACED in — which for a slanted line is
+                        // short by the lean Excel keeps for it (SX87). Testing
+                        // against the whole area lets a line that exactly
+                        // fills it stand at its asked size: `R6kessan`'s
+                        // 「の内数」 measures 48 in ＭＳ Ｐゴシック 11pt bold
+                        // italic against an area of 48, so we leave it alone
+                        // where Excel comes down to 10.25 and draws it 45 wide.
+                        let lean = super::slant_room(asked, cell.style.italic) as f32;
                         super::shrunk_to_fit(
                             name,
                             asked,
                             bold,
                             cell.style.italic,
                             &text,
-                            (area.right - area.left) as f32 / scale,
+                            ((area.right - area.left) as f32 - lean) / scale,
                         )
                     } else {
                         asked
