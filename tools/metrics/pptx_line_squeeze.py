@@ -48,9 +48,18 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def subset_metrics(doc, page):
-    """font name as spans report it -> (cmap, hmtx, unitsPerEm)."""
+    """font name as spans report it -> (cmap, hmtx, unitsPerEm).
+
+    ★A page can carry TWO subsets that report the SAME name -- d15 page 2 has
+    both `BCDFEE+Barlow Light` and `BCDGEE+Barlow Light`. A span only tells us
+    the name, so such a name cannot be attributed to one subset and every line
+    using it must be dropped; keeping the last one silently measures some lines
+    against the wrong glyph table and manufactures outliers.
+    """
     out = {}
+    seen = set()
     for xref, _, _, base, _, _, _ in page.get_fonts(full=True):
+        name = base.split("+")[-1]
         try:
             _, _, _, buf = doc.extract_font(xref)
         except Exception:
@@ -59,10 +68,14 @@ def subset_metrics(doc, page):
             continue
         try:
             t = TTFont(io.BytesIO(buf))
-            out[base.split("+")[-1]] = (t.getBestCmap(), t["hmtx"], t["head"].unitsPerEm)
         except Exception:
             continue
-    return out
+        if name in seen:
+            out[name] = None          # ambiguous: refuse to guess
+            continue
+        seen.add(name)
+        out[name] = (t.getBestCmap(), t["hmtx"], t["head"].unitsPerEm)
+    return {k: v for k, v in out.items() if v is not None}
 
 
 def line_ratio(chars, metrics):
@@ -72,6 +85,10 @@ def line_ratio(chars, metrics):
         keep.pop()
     if len(keep) < 6:
         return None
+    # The line TOTAL is measured between two real glyph origins, so it stands
+    # even though a PDF usually omits space glyphs and the viewer synthesises
+    # their origins. Per-character deltas do NOT stand, which is why this
+    # reports a line ratio and never a per-glyph one.
     # One size and one font for the whole line, else the comparison is muddled.
     if len({round(c["size"], 2) for c in keep}) != 1:
         return None
