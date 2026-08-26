@@ -11476,6 +11476,95 @@ fn read_face_advances(dc: windows::Win32::Graphics::Gdi::HDC) -> Option<FaceAdva
     Some(FaceAdvances { upem, by_cp })
 }
 
+/// Extra stroke weight, in EM, added to a run GDI has to fake bold for.
+///
+/// S-FAUXBOLD (2026-08-26). Where a face carries no real bold, PowerPoint's
+/// synthesised weight is HEAVIER than GDI's. Measured on d32 slide 6 -- "Brand
+/// Messaging", embedded Bebas Neue, 159.8pt, `b="1"`, centred -- by counting
+/// ink runs along one scanline. Both renders produce the SAME 13 runs, so the
+/// glyphs and their positions agree; only the strokes differ:
+///
+///     run        3      4      5      6      7      8      9     10
+///     PPT    19.68  21.12  20.16  36.00  22.08  22.08  19.68  17.76
+///     Oxi    17.76  19.20  18.24  33.60  20.16  20.64  18.24  15.84
+///     ink on that line: PowerPoint 353.76pt, Oxi 333.12pt
+///
+/// About 1.9pt at 159.8pt = 1.2% of the em. Fatter glyphs start their ink
+/// earlier and close the gaps between letters, which is why the line first
+/// looked like an ADVANCE error -- and why replacing the advance source with
+/// the font's own `hmtx` made it worse (6.200 -> 8.227), not better.
+///
+/// At body sizes this is sub-pixel (0.14pt at 12pt) and rounds away, so the
+/// correction reaches display text and leaves ordinary runs alone.
+///
+/// ★PARKED. On the slide it was derived from this works -- d32 s6 goes
+/// 0.874086 -> 0.875534, its 1527px block 27.21 -> 23.04, and the scanline ink
+/// 304.32pt -> 327.36pt against PowerPoint's 323.04pt. The corpus says the
+/// constant does not generalise:
+///
+///     arm A 0.966620   arm B 0.966631   net +0.000010
+///     improved 3 (d31 +0.00084, d18 +0.00006, d09 +0.00000)
+///     regressed 3 (d32 -0.00036, d15 -0.00007, d24 -0.00004)
+///     unchanged 34
+///
+/// d32 REGRESSES overall while the slide the number came from improves, so one
+/// global em fraction is the wrong shape for this: the amount PowerPoint adds
+/// evidently varies with the face and the size. A per-face measurement -- the
+/// stroke-width delta at a known size, the way the d32 scanline was read --
+/// would be the way to derive it properly.
+const FAUX_BOLD_EM: f32 = 0.012;
+
+/// Faked bold is drawn at PowerPoint's weight rather than GDI's only when set.
+fn fauxbold_on() -> bool {
+    std::env::var("OXI_FAUXBOLD_ENABLE").is_ok()
+}
+
+/// The `OS/2` weight class of the face GDI resolves, or None.
+///
+/// `GetTextMetricsW` reports the weight that was ASKED for when GDI is
+/// synthesising, so it cannot answer this; the face's own table can.
+#[cfg(windows)]
+fn face_weight_class(family: &str, bold: bool, italic: bool) -> Option<u16> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    let dc = probe_dc();
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -2048,
+            0,
+            0,
+            0,
+            weight,
+            u32::from(italic),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return None;
+        }
+        let old = SelectObject(dc, font);
+        let os2 = font_table(dc, b"OS/2");
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        be16(&os2?, 4)
+    }
+}
+
+/// Whether drawing `family` bold means GDI faking it, because the face it
+/// resolves is not itself bold.
+#[cfg(windows)]
+fn needs_faux_bold(family: &str, italic: bool) -> bool {
+    face_weight_class(family, true, italic).is_some_and(|w| w < 600)
+}
+
 /// A glyph's DESIGN advance in EM units, read out of the font GDI actually
 /// selected -- the answer to "which face is being served under this name?".
 ///
@@ -14142,18 +14231,34 @@ fn draw_text_baseline_wiu(
         let it = italic && italadv_on();
         runtime_dx_px(dc, text, font_size, family, weight >= 700, it, scale)
     });
+    // A faked bold is drawn twice, a fraction of an em apart, because GDI's own
+    // emboldening is lighter than PowerPoint's (see `FAUX_BOLD_EM`). The second
+    // pass thickens the strokes without moving a single pen position, which is
+    // what the measurement says PowerPoint does.
+    let faux = if fauxbold_on() && weight >= 700 && needs_faux_bold(family, italic) {
+        ((FAUX_BOLD_EM * font_size * scale as f32).round() as i32).max(0)
+    } else {
+        0
+    };
     if let Some(dx) = dx {
         unsafe {
-            let _ = ExtTextOutW(
-                dc,
-                x,
-                y,
-                ETO_OPTIONS(0),
-                None,
-                PCWSTR(wtext.as_ptr()),
-                wtext.len() as u32,
-                Some(dx.as_ptr()),
-            );
+            // Centred: half the widening to each side, because a fattened
+            // outline grows both ways. Offsetting only to the right thickens
+            // the strokes correctly but moves every glyph's ink half a step,
+            // which measured WORSE on d32 s6 (6.200 -> 6.675) even though the
+            // scanline ink matched.
+            for pass in 0..=faux.min(1) {
+                let _ = ExtTextOutW(
+                    dc,
+                    x - faux / 2 + pass * faux,
+                    y,
+                    ETO_OPTIONS(0),
+                    None,
+                    PCWSTR(wtext.as_ptr()),
+                    wtext.len() as u32,
+                    Some(dx.as_ptr()),
+                );
+            }
         }
     } else {
         unsafe {
