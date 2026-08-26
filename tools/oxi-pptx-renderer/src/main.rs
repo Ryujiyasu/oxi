@@ -975,6 +975,58 @@ fn picclip_on() -> bool {
     std::env::var("OXI_PICCLIP_DISABLE").is_err()
 }
 
+/// A rotated plain rectangle is filled as a rotated quad unless this is set.
+fn rectrot_on() -> bool {
+    std::env::var("OXI_RECTROT_DISABLE").is_err()
+}
+
+/// The shape's box as four device-space corners, turned about its centre.
+///
+/// S-RECTROT (2026-08-26). `prstGeom prst="rect"` reaches neither geometry
+/// painter -- custGeom declines it for want of a path and the preset painter
+/// never handled `rect` -- so it lands on the rectangular fallback, which fills
+/// `x, y, w, h` and drops the rotation on the floor.
+///
+/// Blind doc 01 slide 12 is four such bars, each `rot="-5400000"`. The one that
+/// carries the title is 127.7 x 414.1pt at (296.2, -143.2); turned about its
+/// centre it becomes a 414 x 128pt band across the top of the slide, which is
+/// where PowerPoint puts it. Oxi filled the UNROTATED box instead -- a 128pt
+/// wide column running off both ends of the slide -- so the slide showed a
+/// green stripe down its middle and no title band. It was the corpus's lowest
+/// slide at SSIM 0.7240.
+///
+/// Gate (2026-08-26): blind 01 0.936628 -> 0.947458 (+0.010830, entirely
+/// slide 12 going 0.7422 -> 0.9588; no other slide moved), blind 36 and 37
+/// +0.000292 each. Only 3 decks carry a rotated plain-rect fill -- 52 shapes
+/// in all -- and the dev corpus carries NONE, so it renders byte-for-byte as
+/// before there.
+///
+/// ★The BORDER is still stroked unrotated. Every shape in the measured cases
+/// has `a:ln` noFill so it does not show, and a turned outline needs the pen
+/// path rebuilt rather than a quad, which this does not attempt.
+#[cfg(windows)]
+fn rotated_quad_px(sh: &Shape, scale: f64) -> Option<[windows::Win32::Foundation::POINT; 4]> {
+    use windows::Win32::Foundation::POINT;
+
+    if !rectrot_on() || sh.rotation == 0.0 {
+        return None;
+    }
+    let th = (sh.rotation as f64).to_radians();
+    let (sn, cs) = (th.sin(), th.cos());
+    let cx = (sh.x + sh.width / 2.0) as f64 * scale;
+    let cy = (sh.y + sh.height / 2.0) as f64 * scale;
+    let hw = sh.width as f64 * scale / 2.0;
+    let hh = sh.height as f64 * scale / 2.0;
+    let mut out = [POINT::default(); 4];
+    for (i, (dx, dy)) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].iter().enumerate() {
+        out[i] = POINT {
+            x: (cx + dx * cs - dy * sn).round() as i32,
+            y: (cy + dx * sn + dy * cs).round() as i32,
+        };
+    }
+    Some(out)
+}
+
 unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, scale: f64) -> bool {
     use windows::Win32::Foundation::COLORREF;
     use windows::Win32::Graphics::Gdi::*;
@@ -3614,8 +3666,28 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         // custGeom of 154 subpaths at 50%
                                         // alpha -- arrives as a single pink
                                         // slab over the continents.
-                                        let clipped = geomalpha_on()
+                                        let mut clipped = geomalpha_on()
                                             && clip_to_geometry_gdi(mem_dc, sh, scale);
+                                        let mut r2 = r2;
+                                        if !clipped {
+                                            if let Some(quad) = rotated_quad_px(sh, scale) {
+                                                let rgn = CreatePolygonRgn(
+                                                    &quad,
+                                                    WINDING,
+                                                );
+                                                if !rgn.is_invalid() {
+                                                    let _ = SelectClipRgn(mem_dc, rgn);
+                                                    let _ = DeleteObject(rgn);
+                                                    clipped = true;
+                                                }
+                                                // The blend has to cover the
+                                                // turned extent, not the box.
+                                                r2.left = quad.iter().map(|p| p.x).min().unwrap_or(r2.left);
+                                                r2.top = quad.iter().map(|p| p.y).min().unwrap_or(r2.top);
+                                                r2.right = quad.iter().map(|p| p.x).max().unwrap_or(r2.right);
+                                                r2.bottom = quad.iter().map(|p| p.y).max().unwrap_or(r2.bottom);
+                                            }
+                                        }
                                         alpha_fill(mem_dc, &r2, (r, g, b), a);
                                         if clipped {
                                             let _ = SelectClipRgn(mem_dc, None);
@@ -3625,7 +3697,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 _ => {
                                     let brush =
                                         CreateSolidBrush(COLORREF(colorref(r, g, b)));
-                                    FillRect(mem_dc, &r2, brush);
+                                    // A turned box is a quad, not a rect.
+                                    if let Some(quad) = rotated_quad_px(sh, scale) {
+                                        let old_b = SelectObject(mem_dc, brush);
+                                        let old_p = SelectObject(
+                                            mem_dc,
+                                            GetStockObject(NULL_PEN),
+                                        );
+                                        let _ = Polygon(mem_dc, &quad);
+                                        SelectObject(mem_dc, old_p);
+                                        SelectObject(mem_dc, old_b);
+                                    } else {
+                                        FillRect(mem_dc, &r2, brush);
+                                    }
                                     let _ = DeleteObject(brush);
                                 }
                             }
