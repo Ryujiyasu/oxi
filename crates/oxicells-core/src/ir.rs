@@ -656,6 +656,14 @@ pub struct ShapeLine {
     /// "dash", "dashDot", "sysDot" and the rest, when the rule is broken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash: Option<String>,
+    /// What the rule's ends are cut with: "rnd", "sq", or flat when it says
+    /// nothing. It is not decoration — Excel lengthens every dash of a
+    /// FLAT-capped or square-capped rule by a pixel when the rule is an odd
+    /// number of pixels wide, and leaves a round-capped one alone. The two
+    /// `dot` rules a workbook can hold are told apart by this and nothing
+    /// else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

@@ -36,19 +36,22 @@ REPO = Path(__file__).resolve().parents[2]
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 SCRATCH = Path(r"C:\tmp\xlsx_shape_dash")
 
-# msoLine = 9; the dash styles Excel names, in its own numbering.
+# Excel's own dash numbering, and what each one SAVES as — read back out of
+# the workbook rather than guessed at. The numbers are not in the format's
+# order, and two of them are the same preset told apart only by the cap:
+# `dot cap="sq"` and `dot cap="rnd"` are different lines on the page.
 DASHES = [
     ("solid", 1),
-    ("squareDot", 2),
-    ("roundDot", 3),
+    ("dot cap=sq", 2),
+    ("dot cap=rnd", 3),
     ("dash", 4),
     ("dashDot", 5),
-    ("lgDash", 6),
-    ("lgDashDot", 7),
-    ("lgDashDotDot", 8),
-    ("sysDash", 9),
-    ("sysDot", 10),
-    ("sysDashDot", 11),
+    ("sysDashDotDot", 6),
+    ("lgDash", 7),
+    ("lgDashDot", 8),
+    ("lgDashDotDot", 9),
+    ("sysDash", 10),
+    ("sysDot", 11),
 ]
 WIDTHS = [0.75, 1.5, 2.25, 3.0, 3.75, 4.5]
 ARMS = [(name, style, width) for name, style in DASHES for width in WIDTHS]
@@ -140,7 +143,7 @@ def main() -> int:
     theirs = rows_of(truth, 10, truth.shape[1] - 10)
     ours = rows_of(mine, 10, mine.shape[1] - 10)
     print(f"  {len(ARMS)} arms; Excel drew {len(theirs)} line(s), we drew {len(ours)}")
-    print(f"  {'dash':<14}{'pt':>5}   {'Excel: start, runs':<40}{'Oxi: start, runs'}")
+    print(f"  {'dash':<16}{'pt':>5}   {'Excel: start, runs':<40}{'Oxi: start, runs'}")
     agree = 0
     for at, (name, _style, width) in enumerate(ARMS):
         if at >= len(theirs) or at >= len(ours):
@@ -148,11 +151,11 @@ def main() -> int:
         one = pattern(truth, theirs[at], 5, truth.shape[1] - 5)
         two = pattern(mine, ours[at], 5, mine.shape[1] - 5)
         if one is None or two is None:
-            print(f"  {name:<14}{width:>5}   nothing to read")
+            print(f"  {name:<16}{width:>5}   nothing to read")
             continue
         same = one[1][:8] == two[1][:8]
         agree += same
-        print(f"  {name:<14}{width:>5}   {str((one[0], one[1][:7])):<40}"
+        print(f"  {name:<16}{width:>5}   {str((one[0], one[1][:7])):<40}"
               f"{str((two[0], two[1][:7]))}{'' if same else '  <<'}")
     print(f"  {agree} of {min(len(ARMS), len(theirs), len(ours))} patterns match")
     return 0

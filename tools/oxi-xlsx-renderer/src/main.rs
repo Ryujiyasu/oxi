@@ -1642,6 +1642,62 @@ pub(crate) fn indent_room(style: &CellStyle, level: f32) -> (f32, f32) {
     }
 }
 
+/// The dash pattern in whole pixels, as Excel lays it down.
+///
+/// The preset ratios are the format's own — a `dash` is four on and three off,
+/// in multiples of the rule's width — and ours were already right. What was
+/// missing is what Excel does when the rule is an ODD number of pixels wide:
+/// every stretch of ink gains a pixel and the gap behind it loses one. The
+/// period is untouched, so the error is invisible at the first dash and total
+/// by the tenth — `glossary_05`'s flowchart borders scored as if the lines
+/// were absent. `_xlsx_shape_dash.py` reads eleven presets at six widths, and
+/// the rule holds at every one.
+///
+/// A ROUND-capped rule is the exception, and the only exception: `dot cap="rnd"`
+/// and `dot cap="sq"` are the same preset told apart by the cap alone, and
+/// they are drawn differently.
+///
+/// A gap that falls to nothing joins the ink on either side of it, which is
+/// why Excel draws a hairline `sysDot` — one on, one off — as a solid line.
+pub(crate) fn dash_runs(pattern: &[u32], width: i32, cap: Option<&str>) -> Vec<u32> {
+    if pattern.is_empty() {
+        return Vec::new();
+    }
+    let stretch = width.max(1) as u32;
+    let lengthen = width % 2 == 1 && cap != Some("rnd");
+    let mut runs: Vec<i64> = Vec::with_capacity(pattern.len());
+    for (at, part) in pattern.iter().enumerate() {
+        let held = (*part * stretch) as i64;
+        runs.push(match (lengthen, at % 2 == 0) {
+            (true, true) => held + 1,
+            (true, false) => held - 1,
+            _ => held,
+        });
+    }
+    // Join across any gap that has closed. What is left is ink, gap, ink, gap;
+    // a single stretch of ink means the rule is solid.
+    let mut joined: Vec<i64> = Vec::with_capacity(runs.len());
+    let mut at = 0;
+    while at < runs.len() {
+        let mut ink = runs[at];
+        let mut gap = runs.get(at + 1).copied().unwrap_or(0);
+        at += 2;
+        while gap <= 0 && at < runs.len() {
+            ink += gap + runs[at];
+            gap = runs.get(at + 1).copied().unwrap_or(0);
+            at += 2;
+        }
+        joined.push(ink.max(1));
+        if gap > 0 {
+            joined.push(gap);
+        }
+    }
+    if joined.len() < 2 {
+        return Vec::new();
+    }
+    joined.into_iter().map(|held| held.max(1) as u32).collect()
+}
+
 pub(crate) fn gutters(face: &str, points: f32, bold: bool, italic: bool) -> (f32, f32) {
     let digit = advances(face, points, bold, italic, "0")
         .and_then(|held| held.first().copied())
@@ -2896,14 +2952,11 @@ mod windows_draw {
                 Some("sysDashDotDot") => &[3, 1, 1, 1, 1, 1],
                 _ => &[],
             };
-            let pen = if pattern.is_empty() {
+            let runs = super::dash_runs(pattern, width.max(1), line.cap.as_deref());
+            let pen = if runs.len() < 2 {
                 CreatePen(PS_SOLID, width, shade)
             } else {
                 let brush = LOGBRUSH { lbStyle: BS_SOLID, lbColor: shade, lbHatch: 0 };
-                let runs: Vec<u32> = pattern
-                    .iter()
-                    .map(|part| (part * width.max(1) as u32).max(1))
-                    .collect();
                 let held = ExtCreatePen(
                     PEN_STYLE(PS_GEOMETRIC.0 | PS_USERSTYLE.0 | PS_ENDCAP_FLAT.0),
                     width.max(1) as u32,
@@ -3601,6 +3654,7 @@ mod windows_draw {
                 color: "000000".into(),
                 width: 9525,
                 dash: None,
+                cap: None,
                 head_end: None,
                 tail_end: None,
             });
@@ -3672,6 +3726,7 @@ mod windows_draw {
                 color: "000000".into(),
                 width: 3175,
                 dash: None,
+                cap: None,
                 head_end: None,
                 tail_end: None,
             });

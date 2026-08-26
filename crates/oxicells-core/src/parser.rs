@@ -1263,6 +1263,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     };
     let mut shape = blank_shape.clone();
     let mut line_width: i64 = 9525;
+    let mut line_cap: Option<String> = None;
     let mut dash: Option<String> = None;
     let (mut head_end, mut tail_end): (Option<String>, Option<String>) = (None, None);
     let mut embed: Option<String> = None;
@@ -1425,6 +1426,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "ln" if in_sp_pr && in_ext_lst == 0 => {
                     in_ln = true;
                     line_width = get_attr(e, "w").and_then(|w| w.parse().ok()).unwrap_or(9525);
+                    line_cap = get_attr(e, "cap");
                 }
                 "xfrm" if in_sp_pr => {
                     shape.flip_h = is_true(get_attr(e, "flipH").as_deref());
@@ -1692,6 +1694,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                 color: painted,
                                 width: line_width,
                                 dash: dash.clone(),
+                                cap: line_cap.clone(),
                                 head_end: head_end.clone(),
                                 tail_end: tail_end.clone(),
                             })
@@ -1756,6 +1759,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                         color: painted,
                                         width: line_width,
                                         dash: dash.clone(),
+                                        cap: line_cap.clone(),
                                         head_end: head_end.clone(),
                                         tail_end: tail_end.clone(),
                                     })
