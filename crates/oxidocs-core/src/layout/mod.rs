@@ -22899,6 +22899,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // bills its marks NATURAL at break (第25条 stays 3 lines) yet still
             // rescues small overflows (第24条: ・6.84/）5.66 on L1, line-end 。4.26
             // on L2 → 2 lines). |Δ| ≥ 1.5pt = the S1231 regime threshold.
+            // S1237 (2026-08-27, default ON, opt-out OXI_S1237_DISABLE): the
+            // AT-default regime gets NO mid-mark oikomi credit at all — probe C
+            // (、×5, demand 3.55, natural 50) and slice v5 (sz21, demand 5.2,
+            // M=2, natural) both REFUSE where the cap-6 branch packs. With the
+            // opt-out set, at-default counts as ABOVE (the pre-S1237 cap-6).
+            let s1236_regime_delta = fragments
+                .iter()
+                .find(|(t, _, _, _, _)| {
+                    t.chars().any(|c| !c.is_whitespace() && c != '\u{3000}')
+                })
+                .map(|(_, rs, _, _, _)| {
+                    self.resolve_font_size(rs, para_style) - self.doc_regime_fs
+                });
+            let s1237_at_default_refuse = std::env::var("OXI_S1237_DISABLE").is_err()
+                && s568_legacy_oikomi
+                && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
+            let s568_legacy_oikomi = s568_legacy_oikomi && !s1237_at_default_refuse;
             let s1234_offdefault_light = std::env::var("OXI_S1234_DISABLE").is_err()
                 && s568_legacy_oikomi
                 && fragments
