@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use oxicells_core::{parse_xlsx, CellEditValue, XlsxEditor};
 use oxidocs_core::{parse_docx, DocxEditor};
+use oxislides_core::{parse_pptx, PptxEditor};
 
 /// What became of one file.
 enum Verdict {
@@ -88,6 +89,7 @@ fn main() {
         let verdict = match kind(path) {
             Some(Kind::Xlsx) => xlsx(path, keep.as_deref()),
             Some(Kind::Docx) => docx(path, keep.as_deref()),
+            Some(Kind::Pptx) => pptx(path, keep.as_deref()),
             None => continue,
         };
         match &verdict {
@@ -136,6 +138,7 @@ fn main() {
 enum Kind {
     Xlsx,
     Docx,
+    Pptx,
 }
 
 fn kind(path: &Path) -> Option<Kind> {
@@ -147,6 +150,7 @@ fn kind(path: &Path) -> Option<Kind> {
     match path.extension().and_then(|held| held.to_str()) {
         Some("xlsx") | Some("xlsm") => Some(Kind::Xlsx),
         Some("docx") => Some(Kind::Docx),
+        Some("pptx") => Some(Kind::Pptx),
         _ => None,
     }
 }
@@ -368,6 +372,63 @@ fn kept(keep: Option<&Path>, path: &Path, written: &[u8]) {
     let Some(keep) = keep else { return };
     let _ = std::fs::create_dir_all(keep);
     let _ = std::fs::write(keep.join(name(path)), written);
+}
+
+fn pptx(path: &Path, keep: Option<&Path>) -> Verdict {
+    let Ok(bytes) = std::fs::read(path) else {
+        return Verdict::Broken("cannot be read".into());
+    };
+    let before = match parse_pptx(&bytes) {
+        Ok(held) => held,
+        Err(trouble) => return Verdict::Broken(format!("will not open: {trouble}")),
+    };
+    let mut editor = match PptxEditor::new(&bytes) {
+        Ok(held) => held,
+        Err(trouble) => return Verdict::Broken(format!("will not open to edit: {trouble}")),
+    };
+    let addressable = match editor.addressable_runs() {
+        Ok(held) => held,
+        Err(trouble) => return Verdict::Broken(format!("will not say what it holds: {trouble}")),
+    };
+    let mut asked = None;
+    'hunt: for (slide_at, shapes) in addressable.iter().enumerate() {
+        for (shape_at, paragraphs) in shapes.iter().enumerate() {
+            for (para_at, runs) in paragraphs.iter().enumerate() {
+                for (run_at, text) in runs.iter().enumerate() {
+                    if !text.is_empty() {
+                        asked = Some((slide_at, shape_at, para_at, run_at, text.clone()));
+                        break 'hunt;
+                    }
+                }
+            }
+        }
+    }
+    let Some((slide_at, shape_at, para_at, run_at, text)) = asked else {
+        return Verdict::Untested("no run carries text");
+    };
+    editor.set_run_text(slide_at, shape_at, para_at, run_at, text);
+    let written = match editor.save() {
+        Ok(held) => held,
+        Err(trouble) => return Verdict::Broken(format!("will not save: {trouble}")),
+    };
+    kept(keep, path, &written);
+    let after = match parse_pptx(&written) {
+        Ok(held) => held,
+        Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
+    };
+    if before.slides.len() != after.slides.len() {
+        return Verdict::Changed(format!(
+            "held {} slide(s) and now holds {}",
+            before.slides.len(),
+            after.slides.len()
+        ));
+    }
+    for (at, (one, two)) in before.slides.iter().zip(&after.slides).enumerate() {
+        if let Verdict::Changed(what) = compare_at(one, two, &format!(".slides[{at}]")) {
+            return Verdict::Changed(what);
+        }
+    }
+    Verdict::Whole
 }
 
 fn compare<T: serde::Serialize>(before: &T, after: &T) -> Verdict {

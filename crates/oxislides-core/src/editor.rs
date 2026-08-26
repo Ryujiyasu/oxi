@@ -73,6 +73,28 @@ impl PptxEditor {
             .insert((shape_index, paragraph_index, run_index), new_text);
     }
 
+    /// The runs this editor can address, as IT counts them.
+    ///
+    /// `set_run_text` takes a slide, a shape, a paragraph and a run, and the
+    /// shape number counts the `<p:sp>` and `<p:pic>` children of the slide's
+    /// shape tree — not the shapes the IR lists, which is a different set. A
+    /// caller working from a `Presentation` therefore cannot tell which
+    /// numbers to pass, and guessing puts the edit on the wrong shape without
+    /// any error to show for it.
+    ///
+    /// One entry per slide, holding its shapes, holding their paragraphs,
+    /// holding each run's current text.
+    pub fn addressable_runs(&self) -> Result<Vec<Vec<Vec<Vec<String>>>>, PptxError> {
+        let paths = self.resolve_slide_paths()?;
+        let mut archive = OoxmlArchive::new(&self.original_data)?;
+        let mut out = Vec::new();
+        for path in &paths {
+            let xml = archive.read_part(path)?;
+            out.push(runs_of_slide(&xml));
+        }
+        Ok(out)
+    }
+
     pub fn apply_edits(&mut self, edits: &[SlideTextEdit]) {
         for e in edits {
             self.set_run_text(
@@ -210,6 +232,69 @@ impl PptxEditor {
 }
 
 /// Patch slide XML, replacing `<a:t>` text nodes at (shape, para, run) coordinates.
+/// One slide's runs, counted exactly as `patch_slide_xml` counts them:
+/// shapes are the `<p:sp>` and `<p:pic>` children of `<p:spTree>`, paragraphs
+/// are the `<a:p>` inside a shape, runs the `<a:r>` inside a paragraph.
+///
+/// Kept beside the patcher so the two cannot drift apart: a reader that counts
+/// differently from the writer is worse than no reader, because every edit it
+/// aims lands one shape over.
+fn runs_of_slide(xml: &str) -> Vec<Vec<Vec<String>>> {
+    let mut reader = Reader::from_str(xml);
+    let mut shapes: Vec<Vec<Vec<String>>> = Vec::new();
+    let mut paragraphs: Vec<Vec<String>> = Vec::new();
+    let mut runs: Vec<String> = Vec::new();
+    let mut held = String::new();
+    let (mut in_tree, mut in_shape, mut in_para, mut in_run, mut in_text) =
+        (false, false, false, false, false);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref()).as_str() {
+                "spTree" => in_tree = true,
+                "sp" | "pic" if in_tree && !in_shape => {
+                    in_shape = true;
+                    paragraphs = Vec::new();
+                }
+                "p" if in_shape => {
+                    in_para = true;
+                    runs = Vec::new();
+                }
+                "r" if in_para => {
+                    in_run = true;
+                    held.clear();
+                }
+                "t" if in_run => in_text = true,
+                _ => {}
+            },
+            Ok(Event::Text(e)) if in_text => {
+                if let Ok(text) = e.unescape() {
+                    held.push_str(&text);
+                }
+            }
+            Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
+                "spTree" => in_tree = false,
+                "sp" | "pic" if in_shape => {
+                    in_shape = false;
+                    shapes.push(std::mem::take(&mut paragraphs));
+                }
+                "p" if in_para => {
+                    in_para = false;
+                    paragraphs.push(std::mem::take(&mut runs));
+                }
+                "r" if in_run => {
+                    in_run = false;
+                    runs.push(std::mem::take(&mut held));
+                }
+                "t" => in_text = false,
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    shapes
+}
+
 fn patch_slide_xml(
     xml: &str,
     edits: &HashMap<(usize, usize, usize), String>,

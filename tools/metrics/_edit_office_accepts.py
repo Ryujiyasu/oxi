@@ -72,16 +72,44 @@ def documents(word, files: list[Path]) -> list[tuple[Path, str]]:
     return trouble
 
 
+def decks(power, files: list[Path]) -> list[tuple[Path, str]]:
+    trouble = []
+    for path in files:
+        deck = None
+        try:
+            deck = power.Presentations.Open(
+                str(path), ReadOnly=True, Untitled=False, WithWindow=False
+            )
+            _ = deck.Slides.Count
+        except Exception as refused:
+            trouble.append((path, str(refused).split("',")[0][:90]))
+        finally:
+            if deck is not None:
+                try:
+                    deck.Close()
+                except Exception:
+                    pass
+    return trouble
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("where", help="directory of files the editor wrote")
     parser.add_argument("--limit", type=int, default=0)
+    # A file Office refuses is only OUR doing if Office took the original.
+    # Two of the deck fixtures are hand-made and PowerPoint has never opened
+    # them; counting those as damage would put a permanent red mark on a
+    # metric that is meant to mean something.
+    parser.add_argument("--originals", default="", help="where the inputs came from")
     args = parser.parse_args()
     where = Path(args.where)
     sheets = sorted(p for p in where.glob("*.xls*") if not p.name.startswith("~$"))
     docs = sorted(p for p in where.glob("*.docx") if not p.name.startswith("~$"))
+    slides = sorted(p for p in where.glob("*.pptx") if not p.name.startswith("~$"))
     if args.limit:
-        sheets, docs = sheets[: args.limit], docs[: args.limit]
+        sheets = sheets[: args.limit]
+        docs = docs[: args.limit]
+        slides = slides[: args.limit]
 
     refused: list[tuple[Path, str]] = []
     if sheets:
@@ -102,11 +130,52 @@ def main() -> int:
         finally:
             word.Quit()
 
-    total = len(sheets) + len(docs)
-    print(f"  {total} file(s) the editor wrote: {total - len(refused)} opened as they are")
-    for path, why in refused:
+    if slides:
+        # PowerPoint has no CorruptLoad of its own: a deck it quietly mends
+        # still counts as opened here, which is worth knowing when reading
+        # this number.
+        power = win32com.client.DispatchEx("PowerPoint.Application")
+        try:
+            refused += decks(power, slides)
+        finally:
+            power.Quit()
+
+    total = len(sheets) + len(docs) + len(slides)
+    ours, theirs = refused, []
+    if refused and args.originals:
+        source = Path(args.originals)
+        ours, theirs = [], []
+        again = [(source / path.name) for path, _ in refused if (source / path.name).exists()]
+        was = {p.name for p, _ in check(again)}
+        for path, why in refused:
+            (theirs if path.name in was else ours).append((path, why))
+    print(f"  {total} file(s) the editor wrote: {total - len(ours)} opened as they are")
+    for path, why in ours:
         print(f"    XX  {path.name}  {why}")
+    for path, _ in theirs:
+        print(f"    --  {path.name}  (Office will not open the ORIGINAL either)")
     return 0
+
+
+def check(files: list[Path]) -> list[tuple[Path, str]]:
+    """Which of these Office refuses, whatever they are."""
+    out: list[tuple[Path, str]] = []
+    for kind, opener, app in (
+        ("*.xls*", workbooks, "Excel.Application"),
+        ("*.docx", documents, "Word.Application"),
+        ("*.pptx", decks, "PowerPoint.Application"),
+    ):
+        held = [p for p in files if p.match(kind)]
+        if not held:
+            continue
+        office = win32com.client.DispatchEx(app)
+        try:
+            if app != "PowerPoint.Application":
+                office.Visible = False
+            out += opener(office, held)
+        finally:
+            office.Quit()
+    return out
 
 
 if __name__ == "__main__":
