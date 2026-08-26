@@ -233,8 +233,12 @@ fn differences(
                     Some(other) => differences(held, other, &format!("{at}.{key}"), found),
                 }
             }
-            for key in two.keys().filter(|key| !one.contains_key(*key)) {
-                found.push((format!("{at}.{key}"), "appeared".into()));
+            for (key, held) in two.iter().filter(|(key, _)| !one.contains_key(*key)) {
+                // What appeared, not the fact that something did: a value
+                // written over one of another type arrives as a NEW key —
+                // `{"Number":1}` becomes `{"String":"OXIMARK"}` — so saying
+                // only "appeared" loses the very thing being looked for.
+                found.push((format!("{at}.{key}"), brief(held)));
             }
         }
         (Value::Array(one), Value::Array(two)) => {
