@@ -9,7 +9,7 @@ pub mod layout;
 pub mod parser;
 pub mod revisions;
 
-pub use editor::DocxEditor;
+pub use editor::{AddressableCell, DocxEditor};
 pub use ir::Document;
 pub use parser::parse_docx;
 

@@ -50,15 +50,22 @@ fn main() {
     let mut where_from: Option<PathBuf> = None;
     let mut quiet = false;
     let mut limit = usize::MAX;
+    // Where to keep what was written, so that Office can be asked whether it
+    // accepts it. An IR that matches proves the writer kept everything WE
+    // model; it cannot prove the file still opens.
+    let mut keep: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--quiet" => quiet = true,
             "--limit" => limit = args.next().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX),
+            "--keep" => keep = args.next().map(PathBuf::from),
             _ => where_from = Some(PathBuf::from(arg)),
         }
     }
     let Some(where_from) = where_from else {
-        eprintln!("usage: oxi-roundtrip <file-or-directory> [--quiet] [--limit N]");
+        eprintln!(
+                "usage: oxi-roundtrip <file-or-directory> [--quiet] [--limit N] [--keep DIR]"
+            );
         std::process::exit(2);
     };
 
@@ -79,8 +86,8 @@ fn main() {
     let mut wrong: Vec<(PathBuf, String)> = Vec::new();
     for path in &files {
         let verdict = match kind(path) {
-            Some(Kind::Xlsx) => xlsx(path),
-            Some(Kind::Docx) => docx(path),
+            Some(Kind::Xlsx) => xlsx(path, keep.as_deref()),
+            Some(Kind::Docx) => docx(path, keep.as_deref()),
             None => continue,
         };
         match &verdict {
@@ -201,7 +208,7 @@ fn brief(held: &serde_json::Value) -> String {
     }
 }
 
-fn xlsx(path: &Path) -> Verdict {
+fn xlsx(path: &Path, keep: Option<&Path>) -> Verdict {
     let Ok(bytes) = std::fs::read(path) else {
         return Verdict::Broken("cannot be read".into());
     };
@@ -209,17 +216,35 @@ fn xlsx(path: &Path) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Broken(format!("will not open: {trouble}")),
     };
-    // The first cell that holds anything, and the value it already holds.
+    // The first cell whose own content the editor can be ASKED for.
+    //
+    // Not every cell can: a cell dressed in several fonts holds its stretches
+    // in `runs`, and there is no edit that says "this text, dressed as it
+    // was" — `CellEditValue::String` flattens it. Writing one back is a real
+    // change, so counting it as a lost round trip would be blaming the writer
+    // for doing as it was told. A cell carrying a formula CAN be asked for:
+    // it is written back as the formula, not as the value Excel cached for it,
+    // which is the stronger test of the two.
     let mut asked = None;
+    let mut dressed = 0usize;
     'hunt: for (sheet_at, sheet) in before.sheets.iter().enumerate() {
         for row in &sheet.rows {
             for cell in &row.cells {
-                let value = match &cell.value {
-                    oxicells_core::ir::CellValue::String(held) => {
+                if !cell.runs.is_empty() {
+                    dressed += 1;
+                    continue;
+                }
+                let value = match (&cell.formula, &cell.value) {
+                    (Some(held), _) => CellEditValue::Formula(held.clone()),
+                    (None, oxicells_core::ir::CellValue::String(held)) => {
                         CellEditValue::String(held.clone())
                     }
-                    oxicells_core::ir::CellValue::Number(held) => CellEditValue::Number(*held),
-                    oxicells_core::ir::CellValue::Boolean(held) => CellEditValue::Boolean(*held),
+                    (None, oxicells_core::ir::CellValue::Number(held)) => {
+                        CellEditValue::Number(*held)
+                    }
+                    (None, oxicells_core::ir::CellValue::Boolean(held)) => {
+                        CellEditValue::Boolean(*held)
+                    }
                     _ => continue,
                 };
                 asked = Some((sheet_at, row.index, cell.col, value));
@@ -228,7 +253,11 @@ fn xlsx(path: &Path) -> Verdict {
         }
     }
     let Some((sheet_at, row, col, value)) = asked else {
-        return Verdict::Untested("no cell holds a value");
+        return Verdict::Untested(if dressed > 0 {
+            "every cell it holds is dressed"
+        } else {
+            "no cell holds a value"
+        });
     };
     let mut editor = match XlsxEditor::new(&bytes) {
         Ok(held) => held,
@@ -239,14 +268,30 @@ fn xlsx(path: &Path) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Broken(format!("will not save: {trouble}")),
     };
+    kept(keep, path, &written);
     let after = match parse_xlsx(&written) {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
     };
-    compare(&before, &after)
+    // Sheet by sheet, not workbook by workbook. Serialising both trees whole
+    // took five gigabytes on the corpus's largest books — a metric nobody can
+    // afford to run is one nobody runs.
+    if before.sheets.len() != after.sheets.len() {
+        return Verdict::Changed(format!(
+            "held {} sheet(s) and now holds {}",
+            before.sheets.len(),
+            after.sheets.len()
+        ));
+    }
+    for (at, (one, two)) in before.sheets.iter().zip(&after.sheets).enumerate() {
+        if let Verdict::Changed(what) = compare_at(one, two, &format!(".sheets[{at}]")) {
+            return Verdict::Changed(what);
+        }
+    }
+    compare_at(&before.default_style, &after.default_style, ".default_style")
 }
 
-fn docx(path: &Path) -> Verdict {
+fn docx(path: &Path, keep: Option<&Path>) -> Verdict {
     let Ok(bytes) = std::fs::read(path) else {
         return Verdict::Broken("cannot be read".into());
     };
@@ -272,14 +317,45 @@ fn docx(path: &Path) -> Verdict {
             }
         }
     }
-    let Some((para_at, run_at, text)) = asked else {
-        return Verdict::Untested("no run carries text");
-    };
-    editor.set_run_text(para_at, run_at, text);
+    match asked {
+        Some((para_at, run_at, text)) => editor.set_run_text(para_at, run_at, text),
+        None => {
+            // Fifteen percent of the corpus keeps all its text inside tables,
+            // which no body run reaches. Those documents are edited through
+            // the cells, and leaving them untested left the writer's whole
+            // table path unmeasured.
+            let cells = match editor.addressable_cells() {
+                Ok(held) => held,
+                Err(trouble) => {
+                    return Verdict::Broken(format!("will not say what it holds: {trouble}"))
+                }
+            };
+            // A cell of several runs cannot be handed its own text back:
+            // `set_cell_text` takes ONE string, so the cell would come back
+            // flattened. That is the editor doing as it was told, not losing
+            // anything, so the test asks a cell that CAN answer.
+            let mut found = None;
+            'hunt: for (table_at, rows) in cells.iter().enumerate() {
+                for (row_at, row) in rows.iter().enumerate() {
+                    for (col_at, cell) in row.iter().enumerate() {
+                        if !cell.text.is_empty() && cell.runs == 1 {
+                            found = Some((table_at, row_at, col_at, cell.text.clone()));
+                            break 'hunt;
+                        }
+                    }
+                }
+            }
+            let Some((table_at, row_at, col_at, text)) = found else {
+                return Verdict::Untested("no cell holds its text in one run");
+            };
+            editor.set_cell_text(table_at, row_at, col_at, &text);
+        }
+    }
     let written = match editor.save() {
         Ok(held) => held,
         Err(trouble) => return Verdict::Broken(format!("will not save: {trouble}")),
     };
+    kept(keep, path, &written);
     let after = match parse_docx(&written) {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
@@ -287,14 +363,25 @@ fn docx(path: &Path) -> Verdict {
     compare(&before, &after)
 }
 
+/// Put what was written where Office can be pointed at it.
+fn kept(keep: Option<&Path>, path: &Path, written: &[u8]) {
+    let Some(keep) = keep else { return };
+    let _ = std::fs::create_dir_all(keep);
+    let _ = std::fs::write(keep.join(name(path)), written);
+}
+
 fn compare<T: serde::Serialize>(before: &T, after: &T) -> Verdict {
+    compare_at(before, after, "")
+}
+
+fn compare_at<T: serde::Serialize>(before: &T, after: &T, at: &str) -> Verdict {
     let (Ok(one), Ok(two)) = (
         serde_json::to_value(before),
         serde_json::to_value(after),
     ) else {
         return Verdict::Broken("cannot be compared".into());
     };
-    match parted(&one, &two, "") {
+    match parted(&one, &two, at) {
         None => Verdict::Whole,
         Some(what) => Verdict::Changed(what),
     }
