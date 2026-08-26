@@ -3593,7 +3593,30 @@ fn parse_paragraph(
                 && r.style.hr_rule.is_none()
                 && !inline_img_runs.iter().any(|(ri, _)| *ri == i)
         });
-    if ((allow_inline_flow || s984_cell_flow || s1066_cell_text_flow) && inline_img_runs.len() >= 2)
+    // S1232 (2026-08-26, opt-out OXI_S1232_DISABLE): a CELL paragraph hosting
+    // ≥2 data-less flow-reservation placeholders (S741 inline wps textboxes —
+    // kyotei36spec's 労働保険番号 digit boxes, 18 of them on one run of
+    // spaces) flows them horizontally like Word instead of split-blocking
+    // each onto its own line (18 × ~24pt = the 436pt mini-table balloon that
+    // painted stray borders down the page's right side). BODY placeholders
+    // keep the block path (probeqwps regressed 1.0→0.925 when routed inline —
+    // its textbox overlay renders there; the cell overlay (S487) is opt-in/
+    // unrendered, so only the geometry matters in cells). Whitespace-only
+    // hosts included — the boxes ride space runs, which fall between S984's
+    // all-empty and S1066's visible-text gates.
+    let s1232_cell_placeholder_flow = std::env::var("OXI_S1232_DISABLE").is_err()
+        && std::env::var("OXI_S982_DISABLE").is_err()
+        && in_cell
+        && runs.iter().all(|run| run.text.trim().is_empty())
+        && inline_img_runs
+            .iter()
+            .all(|(_, im)| im.data.is_empty() && im.position.is_none())
+        && cell_inline_flow_width.map_or(false, |w| s984_inline_w <= w + 0.01);
+    if ((allow_inline_flow
+        || s984_cell_flow
+        || s1066_cell_text_flow
+        || s1232_cell_placeholder_flow)
+        && inline_img_runs.len() >= 2)
         || s1034_single_inline
         || s1066_cell_single_flow
         || s1186_object_pair
@@ -9830,6 +9853,26 @@ fn parse_table_cell(
         }
     }
 
+    if std::env::var("OXI_DBG_CELLIR").is_ok() {
+        let np = blocks.iter().filter(|b| matches!(b, Block::Paragraph(_))).count();
+        let ni = blocks.iter().filter(|b| matches!(b, Block::Image(_))).count();
+        if blocks.len() > 5 || !cell_text_boxes.is_empty() {
+            eprintln!(
+                "[CELLIR] blocks={} paras={} images={} tbs={} shapes={}",
+                blocks.len(), np, ni, cell_text_boxes.len(), cell_shapes.len()
+            );
+            for (bi, b) in blocks.iter().enumerate().take(30) {
+                if let Block::Paragraph(p) = b {
+                    let txt: String = p.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
+                    let nobj = p.runs.iter().filter(|r| r.style.inline_object_extent.is_some()).count();
+                    let nimg = p.runs.iter().filter(|r| r.style.inline_object_image.is_some()).count();
+                    eprintln!("[CELLIR]   b{bi} para runs={} obj_ext={} obj_img={} {:?}", p.runs.len(), nobj, nimg, txt);
+                } else if let Block::Image(im) = b {
+                    eprintln!("[CELLIR]   b{bi} IMAGE {}x{}", im.width, im.height);
+                }
+            }
+        }
+    }
     Ok(TableCell {
         blocks,
         width: cell_props.width,
