@@ -1641,6 +1641,15 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
     if !slotface_on() {
         return None;
     }
+    // DIAGNOSTIC (2026-08-27, opt-in): ignore embedded italic parts and let the
+    // upright part be skewed instead. This reproduces PowerPoint's COLD first
+    // open, which does not use a deck's embedded italic -- d47's truth PDF
+    // draws its slanted text as `Caladea-Bold` / `Caladea-Regular` with a
+    // synthetic slant even though the deck embeds Caladea-italic and
+    // Caladea-boldItalic. NOT a default: 5 other blind decks' truth PDFs DO
+    // use their embedded italic parts, so the corpus disagrees with itself and
+    // this is a property of when PowerPoint was asked, not of the format.
+    let italic = italic && !std::env::var("OXI_COLDITAL_ENABLE").is_ok();
     let pick = |want: &str, want_bold: bool| -> Option<(String, i32)> {
         let want = norm_family(want);
         PART_IDS.with(|ids| {
@@ -1693,6 +1702,9 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
     if let Some((face, weight)) = resolve_part(family, bold, italic) {
         // The part carries its own style; asking for a slant on top would make
         // GDI skew a face that is already slanted.
+        if std::env::var("OXI_SF_DEBUG").is_ok() {
+            eprintln!("SF part      family={family:?} bold={bold} italic={italic} -> {face:?} w={weight}");
+        }
         return (face, weight, false);
     }
     if embedstyle_on() && italic {
@@ -1702,6 +1714,9 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
             // since a family may embed only one italic part.
             return (name, if bold { 700 } else { 400 }, false);
         }
+    }
+    if std::env::var("OXI_SF_DEBUG").is_ok() {
+        eprintln!("SF fallthrough family={family:?} bold={bold} italic={italic}");
     }
     (
         family.to_string(),
@@ -1834,7 +1849,14 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         if rc == 0 {
             loaded += 1;
             let mut address: Option<String> = None;
+            let face_dbg = face.clone();
             if face != font.typeface {
+                if std::env::var("OXI_SF_DEBUG").is_ok() {
+                    eprintln!(
+                        "INSTALL typeface={:?} bold={} italic={} -> own name {face:?}",
+                        font.typeface, font.bold, font.italic
+                    );
+                }
                 EMBEDDED_FACES.with(|f| f.borrow_mut().insert(face.clone()));
                 address = Some(face);
             } else if let Some(slot) = slot_face_name(&font.typeface, font.bold) {
@@ -1872,7 +1894,14 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                     .is_some_and(|n| *n > 1)
                     && eot_identity(&font.data)
                         .is_some_and(|(_, weight, ital)| !ital && (!font.bold || weight >= 600));
-                if !font.italic && honest && load_font_as(&font.data, &slot) {
+                let ok = !font.italic && honest && load_font_as(&font.data, &slot);
+                if std::env::var("OXI_SF_DEBUG").is_ok() {
+                    eprintln!(
+                        "INSTALL typeface={:?} bold={} italic={} face={:?} slot={slot:?} honest={honest} loaded={ok}",
+                        font.typeface, font.bold, font.italic, face_dbg
+                    );
+                }
+                if ok {
                     EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
                     address = Some(slot);
                 }
@@ -1895,10 +1924,53 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             std::mem::forget(stream); // t2embed keeps no reference, but the
                                       // font must outlive this scope anyway
         } else {
-            eprintln!(
-                "  embedded font '{}' (bold={} italic={}) failed to load: 0x{:x}",
-                font.typeface, font.bold, font.italic, rc
-            );
+            // S-EMBEDCOLLIDE (2026-08-27, opt-in). `TTLoadEmbeddedFont` refuses
+            // a font whose name is already taken -- including by a font
+            // INSTALLED on this machine -- and returns 0x10f. The part is then
+            // simply absent, and every request for that family silently gets
+            // the installed copy instead of the one the deck shipped.
+            //
+            // d47 is the specimen: Caladea is installed here, so the deck's
+            // Caladea-regular and Caladea-bold both fail with 0x10f while its
+            // two ITALIC parts (whose names are free) load fine. Its upright
+            // text is therefore drawn in the SYSTEM Caladea, 6% narrower than
+            // the truth PDF over "EDIT IN GOOGLE SLIDES" (122.88pt vs 131.04),
+            // which is enough to re-break every wrapped paragraph.
+            //
+            // Retrying under the part's own unique slot name sidesteps the
+            // collision, so the deck's font becomes reachable and we can
+            // measure which copy PowerPoint actually drew.
+            let retried = embedcollide_on()
+                && slot_face_name(&font.typeface, font.bold)
+                    .map(|slot| {
+                        let ok = load_font_as(&font.data, &slot);
+                        if ok {
+                            EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
+                            if let Some((fam, weight, ital)) = eot_identity(&font.data) {
+                                PART_IDS.with(|ids| {
+                                    ids.borrow_mut().push(PartId {
+                                        address: slot.clone(),
+                                        family: fam,
+                                        weight,
+                                        italic: ital,
+                                    })
+                                });
+                            }
+                        }
+                        ok
+                    })
+                    .unwrap_or(false);
+            if !retried {
+                eprintln!(
+                    "  embedded font '{}' (bold={} italic={}) failed to load: 0x{:x}",
+                    font.typeface, font.bold, font.italic, rc
+                );
+            } else if std::env::var("OXI_SF_DEBUG").is_ok() {
+                eprintln!(
+                    "INSTALL typeface={:?} bold={} italic={} collided 0x{rc:x}, retried under slot",
+                    font.typeface, font.bold, font.italic
+                );
+            }
         }
     }
     enum_faces_debug();
@@ -12369,6 +12441,12 @@ fn hmtx_width_styled(
     // The trailing spaces this excludes are the ones it already excludes.
     font_adv::line_hmtx_width_pt(text, fs, family)
         .map(|w| w + spc * text.trim_end_matches(' ').chars().count() as f32)
+}
+
+/// An embedded part whose name collides with an INSTALLED font is retried
+/// under its slot name when this is set (opt-in while it is being measured).
+fn embedcollide_on() -> bool {
+    std::env::var("OXI_EMBEDCOLLIDE_ENABLE").is_ok()
 }
 
 /// An exact `a:lnSpc/a:spcPts` line height is honoured unless this is set.
