@@ -376,6 +376,33 @@ impl OoxmlParser {
                 if let Some(crate::ir::Block::Paragraph(bp)) = last.blocks.last_mut() {
                     bp.style.continuous_section_break = true;
                 }
+                // S1233 (2026-08-26, opt-out OXI_S1233_DISABLE): a text-less
+                // STUB first section must not pin the page's character grid.
+                // parttime_000856314: section 1 = ONE empty paragraph carrying
+                // docGrid charSpace=-2156 (and linePitch=403); every body
+                // paragraph lives in section 2 (linePitch=415, NO charSpace).
+                // Word advances the body at fs exactly (PDF census: 8.04/7.92
+                // per char), i.e. by the paragraph's OWN section grid; Oxi kept
+                // the stub's charSpace for the whole merged page and packed
+                // ~2 extra chars into every 60-char line (p3 line map: every
+                // Word paragraph-final short line met a Oxi full line). The
+                // additive charSpace law itself is NOT size- or rule-gated
+                // (_pb_csgrid_gen: cs applies at 12/10.5/8pt and under
+                // exact/atLeast/multiple alike) — only the section attribution
+                // was wrong. Adopt the incoming continuous section's grid when
+                // everything merged so far carries no visible text.
+                if std::env::var("OXI_S1233_DISABLE").is_err()
+                    && last.blocks.iter().all(|b| match b {
+                        crate::ir::Block::Paragraph(p) => {
+                            p.runs.iter().all(|r| r.text.trim().is_empty())
+                        }
+                        _ => false,
+                    })
+                {
+                    last.grid_char_pitch = section.properties.grid_char_pitch;
+                    last.grid_char_space_raw = section.properties.grid_char_space_raw;
+                    last.grid_line_pitch = section.properties.grid_line_pitch;
+                }
                 last.blocks.extend(section.blocks);
                 last.floating_images.extend(section.floating_images);
                 last.text_boxes.extend(section.text_boxes);
