@@ -14481,13 +14481,37 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             (Some(pitch), Some(ratio)) if ratio > 0.0 => (pitch - pitch / ratio).abs() > 0.01,
             _ => false,
         };
+        // S1211C (2026-08-26, opt-in OXI_S1211C=1): the COMPLETE floor law —
+        // measured across 17 arms (margins 623..923 x run 8..14pt x Normal
+        // 16/21/24 x dd present/absent, _pb_rchars/_pb_floorpitch series):
+        //   capacity boundary = floor(raw_content/cell) x cell, cell =
+        //   docDefaults size (else the default-paragraph-style size, = this
+        //   effective_char_pitch), tested against the char's INK — the last
+        //   char may overhang the floored edge by its right bearing
+        //   (advance - ink ~ 0.12em). The horizontal twin of the S576
+        //   page-bottom ink leniency. The "11pt exemption" (F3/F4, b837's
+        //   43-char lines vs a 40-char box floor) is exactly this ink slack
+        //   crossing a small partial cell; parttime's 63-vs-66 char lines are
+        //   the floor itself (+0.108 SSIM when applied).
+        let s1211c = std::env::var("OXI_S1211C").ok().as_deref() == Some("1");
         let grid_content_width = match effective_char_pitch {
             Some(pitch)
-                if ((s1211 && grid_has_char_space) || s1211b)
+                if ((s1211 && grid_has_char_space) || s1211b || s1211c)
                     && pitch > 0.0
                     && content_width > pitch =>
             {
-                (content_width / pitch).floor() * pitch
+                let floored = (content_width / pitch).floor() * pitch;
+                if s1211c {
+                    let fs = para
+                        .runs
+                        .iter()
+                        .find(|r| !r.text.trim().is_empty())
+                        .map(|r| self.resolve_font_size(&r.style, &para.style))
+                        .unwrap_or(self.default_font_size);
+                    floored + 0.12 * fs
+                } else {
+                    floored
+                }
             }
             _ => content_width,
         };
