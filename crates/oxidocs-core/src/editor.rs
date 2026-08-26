@@ -362,11 +362,17 @@ impl DocxEditor {
     /// The table cells this editor can address, as IT counts them.
     ///
     /// The companion to `addressable_runs` for `set_cell_text`: one entry per
-    /// top-level table in the body, holding its rows, holding each cell's
-    /// text. Fifteen percent of the document corpus keeps all of its text
-    /// inside tables, where no body run reaches it, so without this a caller
-    /// working from the IR cannot edit those documents at all.
-    pub fn addressable_cells(&self) -> Result<Vec<Vec<Vec<String>>>, ParseError> {
+    /// top-level table in the body, holding its rows, holding each cell.
+    /// Fifteen percent of the document corpus keeps all of its text inside
+    /// tables, where no body run reaches it, so without this a caller working
+    /// from the IR cannot edit those documents at all.
+    ///
+    /// Each cell says how many runs carry its text as well as what that text
+    /// is, because `set_cell_text` takes ONE string for the whole cell: giving
+    /// a cell of several runs its own text back still collapses it into one.
+    /// A caller that means to leave the dressing alone needs to know that
+    /// before it asks.
+    pub fn addressable_cells(&self) -> Result<Vec<Vec<Vec<AddressableCell>>>, ParseError> {
         let Some(xml) = self.read_original_part("word/document.xml")? else {
             return Ok(Vec::new());
         };
@@ -1697,11 +1703,12 @@ fn runs_of(xml: &str) -> Vec<String> {
 /// A cell's text is everything its `<w:t>` elements hold with the separators
 /// between them, which is what replacing it writes back — so what this reports
 /// and what `set_cell_text` takes are the same string.
-fn cells_of(xml: &str) -> Vec<Vec<String>> {
+fn cells_of(xml: &str) -> Vec<Vec<AddressableCell>> {
     let mut reader = Reader::from_str(xml);
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut row: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<AddressableCell>> = Vec::new();
+    let mut row: Vec<AddressableCell> = Vec::new();
     let mut held = String::new();
+    let mut runs = 0usize;
     let (mut in_row, mut in_cell, mut in_text) = (false, false, false);
     let mut depth = 0i32;
     loop {
@@ -1717,7 +1724,9 @@ fn cells_of(xml: &str) -> Vec<Vec<String>> {
                 "tc" if in_row => {
                     in_cell = true;
                     held.clear();
+                    runs = 0;
                 }
+                "r" if in_cell => runs += 1,
                 "t" if in_cell => in_text = true,
                 _ => {}
             },
@@ -1736,7 +1745,10 @@ fn cells_of(xml: &str) -> Vec<Vec<String>> {
                 "t" => in_text = false,
                 "tc" if in_cell => {
                     in_cell = false;
-                    row.push(std::mem::take(&mut held));
+                    row.push(AddressableCell {
+                        text: std::mem::take(&mut held),
+                        runs,
+                    });
                 }
                 "tr" if in_row => {
                     in_row = false;
@@ -1749,6 +1761,18 @@ fn cells_of(xml: &str) -> Vec<Vec<String>> {
         }
     }
     rows
+}
+
+/// A table cell as the editor can address it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AddressableCell {
+    /// Everything the cell's runs carry, separators included — the string
+    /// `set_cell_text` takes.
+    pub text: String,
+    /// How many runs carry it. One means `set_cell_text` can hand the cell
+    /// its own text back and leave it as it was; more means the cell would be
+    /// flattened into a single run.
+    pub runs: usize,
 }
 
 fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseError> {
@@ -3711,12 +3735,18 @@ mod tests {
             "<w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r>",
             "</w:p></w:tc></w:tr></w:tbl>",
         );
-        assert_eq!(cells_of(xml), vec![vec!["onetwo".to_string()]]);
+        assert_eq!(
+            cells_of(xml),
+            vec![vec![AddressableCell { text: "onetwo".to_string(), runs: 2 }]]
+        );
         let mut edits = HashMap::new();
         let held = "fresh".to_string();
         edits.insert((0usize, 0usize), &held);
         let out = patch_table_xml(xml, &edits, &[], &[]).expect("should patch");
-        assert_eq!(cells_of(&out), vec![vec!["fresh".to_string()]]);
+        assert_eq!(
+            cells_of(&out),
+            vec![vec![AddressableCell { text: "fresh".to_string(), runs: 2 }]]
+        );
     }
 
     #[test]
