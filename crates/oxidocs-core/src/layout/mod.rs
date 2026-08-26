@@ -29552,8 +29552,30 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 } else {
                     table.style.indent.map_or(true, |v| v.abs() < 0.01)
                 };
+                // S1239 (2026-08-27, default ON, opt-out OXI_S1239_DISABLE): a
+                // NEGATIVE tblInd absorbs the cell margin like the zero (S621)
+                // and positive (S496) cases — the legacy law is ONE formula,
+                // grid_x = margin + tblInd − cellMar.left, whole table with
+                // borders. COM probe (_pb_tblneg, no-compat, style cellMar
+                // 108): ind −162 → 21.72, −500 → 4.92, 0 → 29.88, +162 →
+                // 38.04, and −162 with a DIRECT cellMar 72 absorbs its own
+                // 3.6 (23.52) — all = margin + ind − cellMar ± 0.1. The cm15
+                // twin absorbs nothing on any arm. Witness technical__0009d767
+                // (compat undeclared, tblInd −162, TableGrid cellMar 108):
+                // both its tables sat 5.76pt right of Word. The positive case
+                // stays per-cell (S496 lead_absorb) — no overlap, negative
+                // never enters lead_absorb.
+                // UNDECLARED compat parses as (15, explicit=false) but lays out
+                // as legacy (the probe's no-compat doc absorbs on every arm) —
+                // the witness doc has no compatSetting at all. The S621 zero
+                // case keeps its explicit ≤14 gate for now (extending it to
+                // undeclared docs needs its own corpus gate — probe arm ind0
+                // says Word absorbs there too; recorded as follow-up).
+                let s1239_negative = std::env::var("OXI_S1239_DISABLE").is_err()
+                    && table.style.indent.is_some_and(|v| v < -0.1)
+                    && (self.compat_mode <= 14 || !self.compat_mode_explicit);
                 let absorb = if std::env::var("OXI_S621_DISABLE").is_err() {
-                    indent_zero && self.compat_mode <= 14
+                    (indent_zero && self.compat_mode <= 14) || s1239_negative
                 } else {
                     matches!(table.style.indent, Some(v) if v.abs() < 0.01)
                         && !table.style.explicit_borders
