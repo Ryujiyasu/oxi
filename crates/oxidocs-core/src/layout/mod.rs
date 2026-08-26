@@ -4929,7 +4929,10 @@ h_tw={} pitch_tw={} cells={} text={:?}",
         // the GAP above the float, then SKIPS the float's region. Records
         // (top, bottom, page) of the active float; a following block whose
         // cursor lands inside [top, bottom) on that page is bumped to bottom.
-        let mut text_float_region: Option<(f32, f32, usize)> = None;
+        // S1241 (2026-08-27): the region also records the float's X range
+        // (fx0, fx1) so a flow in a DIFFERENT column lane (forms__000cf39c:
+        // float in col1, inline table flowing in col2) is not bumped below it.
+        let mut text_float_region: Option<(f32, f32, usize, f32, f32)> = None;
         // S1195 (2026-08-22, default ON, opt-out `OXI_S1195_DISABLE`): a
         // wrap-below float that still leaves a usable side LANE. Word flows the
         // EMPTY paragraphs that follow such a float in that lane, beside the
@@ -5730,8 +5733,17 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             // S638 (kyotei): if a vertAnchor="text" full-page float is active and
             // this block's cursor has reached the float's region (the gap above it
             // is now consumed), skip the cursor past the float (body wraps below).
-            if let Some((ft_top, ft_bot, ft_page)) = text_float_region {
-                if current_page_idx == ft_page {
+            if let Some((ft_top, ft_bot, ft_page, ft_x0, ft_x1)) = text_float_region {
+                // S1241: the float bump applies only when the CURRENT lane
+                // ([start_x, start_x + content_width]) overlaps the float's X
+                // range — a col2 flow passes a col1 float untouched (Word:
+                // forms__000cf39c's inline table lives beside the float).
+                // Note: the region is NOT cleared for a non-overlapping lane —
+                // a later return to an overlapping lane (next page reset) still
+                // sees it.
+                let s1241_lane_overlaps = std::env::var("OXI_S1241_DISABLE").is_ok()
+                    || (ft_x0 < start_x + content_width - 1.0 && ft_x1 > start_x + 1.0);
+                if current_page_idx == ft_page && s1241_lane_overlaps {
                     // S872 (2026-07-16, default ON, opt-out OXI_S872_DISABLE): an
                     // EMPTY paragraph whose line BOX would cross the float's top
                     // is bumped below the float — the cursor-start-only test let
@@ -5821,9 +5833,11 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     } else if cursor.cursor_y >= ft_bot {
                         text_float_region = None;
                     }
-                } else {
+                } else if current_page_idx != ft_page {
                     text_float_region = None;
                 }
+                // else: same page, non-overlapping lane (S1241) — keep the
+                // region armed and do not bump.
             }
             // S1195: the lane beside a wrap-below float. An EMPTY paragraph is a
             // zero-width line, so Word fits it in the lane and it costs nothing
@@ -9466,8 +9480,27 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // real gap (>6pt) so it only fires for anchor+tblpY floats
                             // (kyotei tblpY=13.4) not zero-offset ones (3a4f/ed025c).
                             cursor.set(saved_cursor_y);
-                            text_float_region =
-                                Some((candidate_y_top, candidate_y_bottom + 1.5, current_page_idx));
+                            let (s1241_fx0, s1241_fx1) = {
+                                let px = table.style.position.as_ref().map_or(0.0, |p| p.x);
+                                let base = match table
+                                    .style
+                                    .position
+                                    .as_ref()
+                                    .and_then(|p| p.h_anchor.as_deref())
+                                {
+                                    Some("page") => 0.0,
+                                    Some("margin") => page.margin.left,
+                                    _ => start_x,
+                                };
+                                (base + px, base + px + table_w_pt)
+                            };
+                            text_float_region = Some((
+                                candidate_y_top,
+                                candidate_y_bottom + 1.5,
+                                current_page_idx,
+                                s1241_fx0,
+                                s1241_fx1,
+                            ));
                         } else if needs_wrap_below {
                             // S469: the cursor advances below the table so body
                             // TEXT wraps under it, but objects anchored to the
@@ -20704,6 +20737,21 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     } else {
                         col_band_top
                     });
+                    // S1240 (2026-08-27, default ON, opt-out OXI_S1240_DISABLE):
+                    // a PARAGRAPH-FINAL column break's paragraph MARK occupies
+                    // one line at the NEW column's top — the mark follows the
+                    // break character, so it lands in the next column and the
+                    // next paragraph starts one line lower. forms__000cf39c:
+                    // Word's col2 = mark 15.75 + 3×15.75 + 3×14.0 = 89.25 above
+                    // the inline table (COM: 58.5 + 89.25 = 147.75 exact); Oxi
+                    // sat one mark-line (15.75) high. A break with same-
+                    // paragraph text after it produces further lines instead —
+                    // no extra cost there.
+                    if line_idx + 1 == lines.len()
+                        && std::env::var("OXI_S1240_DISABLE").is_err()
+                    {
+                        cursor.advance(line_height);
+                    }
                 } else {
                     // Day 33 part 59 (2026-05-12): the line that CARRIES the break_type
                     // has its text already rendered into `elements` and should stay on
