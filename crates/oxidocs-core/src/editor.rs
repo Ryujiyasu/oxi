@@ -187,6 +187,23 @@ pub enum DocxEdit {
         col: usize,
         text: String,
     },
+    /// Set the text of ONE run inside a table cell, leaving the rest of the
+    /// cell as it stands.
+    ///
+    /// `SetCellText` takes the whole cell as a single string, so changing one
+    /// word in a cell of several runs collapses its dressing into the first
+    /// one. Fifteen percent of the document corpus keeps all its text inside
+    /// tables, and in those the wholesale edit is the only one reachable —
+    /// which is to say editing a word costs the reader every bold and every
+    /// size the cell carried.
+    SetTableRunText {
+        table_index: usize,
+        row: usize,
+        col: usize,
+        paragraph_index: usize,
+        run_index: usize,
+        new_text: String,
+    },
 
     // --- Images ---
     /// Insert an inline image as a new paragraph at body-level index.
@@ -533,6 +550,29 @@ impl DocxEditor {
         });
     }
 
+    /// Change one run inside a table cell and leave the rest of it alone.
+    ///
+    /// The paragraph and run are counted within the cell, as
+    /// `addressable_cells` reports them.
+    pub fn set_table_run_text(
+        &mut self,
+        table_index: usize,
+        row: usize,
+        col: usize,
+        paragraph_index: usize,
+        run_index: usize,
+        new_text: &str,
+    ) {
+        self.edits.push(DocxEdit::SetTableRunText {
+            table_index,
+            row,
+            col,
+            paragraph_index,
+            run_index,
+            new_text: new_text.to_string(),
+        });
+    }
+
     /// Insert an inline image as a new paragraph.
     pub fn insert_image(
         &mut self,
@@ -837,6 +877,8 @@ impl DocxEditor {
         let mut table_row_insertions: Vec<(usize, usize, Vec<String>)> = Vec::new();
         let mut table_row_deletions: Vec<(usize, usize)> = Vec::new();
         let mut cell_text_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
+        let mut cell_run_edits: HashMap<(usize, usize, usize, usize, usize), String> =
+            HashMap::new();
         let _image_insertions: Vec<(usize, usize)> = Vec::new(); // (body_index, pending_image_index)
 
         let mut image_counter = 0usize;
@@ -880,6 +922,19 @@ impl DocxEditor {
                 }
                 DocxEdit::SetCellText { table_index, row, col, text } => {
                     cell_text_edits.insert((*table_index, *row, *col), text.clone());
+                }
+                DocxEdit::SetTableRunText {
+                    table_index,
+                    row,
+                    col,
+                    paragraph_index,
+                    run_index,
+                    new_text,
+                } => {
+                    cell_run_edits.insert(
+                        (*table_index, *row, *col, *paragraph_index, *run_index),
+                        new_text.clone(),
+                    );
                 }
                 DocxEdit::InsertImage { index, width_pt, height_pt, content_type: _, .. } => {
                     if image_counter < self.pending_images.len() {
@@ -1066,6 +1121,11 @@ impl DocxEditor {
                 .filter(|((ti, _, _), _)| *ti == tbl_idx)
                 .map(|((_, r, c), t)| ((*r, *c), t))
                 .collect();
+            let tbl_run_edits: HashMap<(usize, usize, usize, usize), &String> = cell_run_edits
+                .iter()
+                .filter(|((ti, _, _, _, _), _)| *ti == tbl_idx)
+                .map(|((_, r, c, p, run), t)| ((*r, *c, *p, *run), t))
+                .collect();
 
             // Row insertions
             let tbl_row_ins: Vec<(usize, &Vec<String>)> = table_row_insertions
@@ -1081,10 +1141,15 @@ impl DocxEditor {
                 .map(|(_, ri)| *ri)
                 .collect();
 
-            if !tbl_cell_edits.is_empty() || !tbl_row_ins.is_empty() || !tbl_row_dels.is_empty() {
+            if !tbl_cell_edits.is_empty()
+                || !tbl_run_edits.is_empty()
+                || !tbl_row_ins.is_empty()
+                || !tbl_row_dels.is_empty()
+            {
                 let patched = patch_table_xml(
                     &seg_xml,
                     &tbl_cell_edits,
+                    &tbl_run_edits,
                     &tbl_row_ins,
                     &tbl_row_dels,
                 )?;
@@ -1709,6 +1774,9 @@ fn cells_of(xml: &str) -> Vec<Vec<AddressableCell>> {
     let mut row: Vec<AddressableCell> = Vec::new();
     let mut held = String::new();
     let mut runs = 0usize;
+    let mut paragraphs: Vec<Vec<String>> = Vec::new();
+    let mut in_paragraph: Vec<String> = Vec::new();
+    let mut in_this_run = String::new();
     let (mut in_row, mut in_cell, mut in_text) = (false, false, false);
     let mut depth = 0i32;
     loop {
@@ -1725,29 +1793,44 @@ fn cells_of(xml: &str) -> Vec<Vec<AddressableCell>> {
                     in_cell = true;
                     held.clear();
                     runs = 0;
+                    paragraphs = Vec::new();
                 }
-                "r" if in_cell => runs += 1,
+                "p" if in_cell => in_paragraph = Vec::new(),
+                "r" if in_cell => {
+                    runs += 1;
+                    in_this_run.clear();
+                }
                 "t" if in_cell => in_text = true,
                 _ => {}
             },
             Ok(Event::Text(e)) if in_text => {
                 if let Ok(text) = e.unescape() {
                     held.push_str(&text);
+                    in_this_run.push_str(&text);
                 }
             }
             Ok(Event::Empty(e)) if in_cell => match local_name(e.name().as_ref()).as_str() {
-                "tab" => held.push('\t'),
-                "br" | "cr" => held.push('\n'),
+                "tab" => {
+                    held.push('\t');
+                    in_this_run.push('\t');
+                }
+                "br" | "cr" => {
+                    held.push('\n');
+                    in_this_run.push('\n');
+                }
                 _ => {}
             },
             Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
                 "tbl" => depth -= 1,
                 "t" => in_text = false,
+                "p" if in_cell => paragraphs.push(std::mem::take(&mut in_paragraph)),
+                "r" if in_cell => in_paragraph.push(std::mem::take(&mut in_this_run)),
                 "tc" if in_cell => {
                     in_cell = false;
                     row.push(AddressableCell {
                         text: std::mem::take(&mut held),
                         runs,
+                        paragraphs: std::mem::take(&mut paragraphs),
                     });
                 }
                 "tr" if in_row => {
@@ -1773,6 +1856,10 @@ pub struct AddressableCell {
     /// its own text back and leave it as it was; more means the cell would be
     /// flattened into a single run.
     pub runs: usize,
+    /// The cell's paragraphs, each holding its runs' texts — the coordinates
+    /// `set_table_run_text` takes. This is how a cell of several runs is
+    /// edited without flattening it.
+    pub paragraphs: Vec<Vec<String>>,
 }
 
 fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseError> {
@@ -2701,6 +2788,7 @@ fn inject_rpr_into_run(run_xml: &str, props: &RunProps) -> String {
 fn patch_table_xml(
     xml: &str,
     cell_text_edits: &HashMap<(usize, usize), &String>,
+    cell_run_edits: &HashMap<(usize, usize, usize, usize), &String>,
     row_insertions: &[(usize, &Vec<String>)],
     row_deletions: &[usize],
 ) -> Result<String, ParseError> {
@@ -2722,6 +2810,12 @@ fn patch_table_xml(
     // holding the text twice.
     let mut cell_text_written = false;
     let mut dropping_cell_text = false;
+    // Where inside the cell we are, so that ONE run can be changed and the
+    // rest of the cell left standing.
+    let mut cell_para_idx: usize = 0;
+    let mut cell_run_idx: usize = 0;
+    let mut run_text_written = false;
+    let mut dropping_run_text = false;
     let mut skip_row = false;
     let mut skip_depth: i32 = 0;
     let mut cell_depth: i32 = 0;
@@ -2765,15 +2859,34 @@ fn patch_table_xml(
                         cell_depth = 1;
                         cell_text_written = false;
                         dropping_cell_text = false;
+                        cell_para_idx = 0;
                         writer.write_event(Event::Start(e.clone()))?;
                     }
                     "p" if in_cell && !in_cell_p => {
                         in_cell_p = true;
+                        cell_run_idx = 0;
                         writer.write_event(Event::Start(e.clone()))?;
                     }
                     "r" if in_cell_p => {
                         in_cell_r = true;
+                        run_text_written = false;
+                        dropping_run_text = false;
                         writer.write_event(Event::Start(e.clone()))?;
+                    }
+                    "t" if in_cell_r
+                        && cell_run_edits
+                            .contains_key(&(row_idx, col_idx, cell_para_idx, cell_run_idx)) =>
+                    {
+                        if !run_text_written {
+                            let held =
+                                cell_run_edits[&(row_idx, col_idx, cell_para_idx, cell_run_idx)];
+                            writer.write_event(Event::Text(BytesText::from_escaped(
+                                &run_text_xml(held),
+                            )))?;
+                            run_text_written = true;
+                        }
+                        dropping_run_text = true;
+                        continue;
                     }
                     "t" if in_cell_r => {
                         if let Some(new_text) = cell_text_edits.get(&(row_idx, col_idx)) {
@@ -2838,11 +2951,29 @@ fn patch_table_xml(
                     }
                     "p" if in_cell_p => {
                         in_cell_p = false;
+                        cell_para_idx += 1;
                         writer.write_event(Event::End(e.clone()))?;
                     }
                     "r" if in_cell_r => {
                         in_cell_r = false;
+                        // A run told to hold new text but carrying no text
+                        // element of its own still takes it.
+                        if !run_text_written {
+                            if let Some(held) =
+                                cell_run_edits.get(&(row_idx, col_idx, cell_para_idx, cell_run_idx))
+                            {
+                                writer.write_event(Event::Text(BytesText::from_escaped(
+                                    &run_text_xml(held),
+                                )))?;
+                            }
+                        }
+                        cell_run_idx += 1;
+                        dropping_run_text = false;
                         writer.write_event(Event::End(e.clone()))?;
+                    }
+                    "t" if dropping_run_text => {
+                        dropping_run_text = false;
+                        continue;
                     }
                     "t" if dropping_cell_text => {
                         dropping_cell_text = false;
@@ -2865,7 +2996,7 @@ fn patch_table_xml(
                     continue;
                 }
 
-                if dropping_cell_text {
+                if dropping_run_text || dropping_cell_text {
                     continue;
                 }
                 if in_cell_t {
@@ -2885,6 +3016,25 @@ fn patch_table_xml(
                 }
                 // The old text's separators go with it, as in a run: the
                 // replacement spells its own out.
+                if in_cell_r
+                    && cell_run_edits.contains_key(&(row_idx, col_idx, cell_para_idx, cell_run_idx))
+                {
+                    let local = local_name_from_bytes(e.name().as_ref());
+                    if local == "t" {
+                        if !run_text_written {
+                            let held =
+                                cell_run_edits[&(row_idx, col_idx, cell_para_idx, cell_run_idx)];
+                            writer.write_event(Event::Text(BytesText::from_escaped(
+                                &run_text_xml(held),
+                            )))?;
+                            run_text_written = true;
+                        }
+                        continue;
+                    }
+                    if matches!(local.as_str(), "tab" | "br" | "cr") {
+                        continue;
+                    }
+                }
                 if in_cell && cell_text_edits.contains_key(&(row_idx, col_idx)) {
                     let local = local_name_from_bytes(e.name().as_ref());
                     if local == "t" {
@@ -3737,16 +3887,48 @@ mod tests {
         );
         assert_eq!(
             cells_of(xml),
-            vec![vec![AddressableCell { text: "onetwo".to_string(), runs: 2 }]]
+            vec![vec![AddressableCell {
+                text: "onetwo".to_string(),
+                runs: 2,
+                paragraphs: vec![vec!["one".to_string(), "two".to_string()]],
+            }]]
         );
         let mut edits = HashMap::new();
         let held = "fresh".to_string();
         edits.insert((0usize, 0usize), &held);
-        let out = patch_table_xml(xml, &edits, &[], &[]).expect("should patch");
+        let out = patch_table_xml(xml, &edits, &HashMap::new(), &[], &[]).expect("should patch");
         assert_eq!(
             cells_of(&out),
-            vec![vec![AddressableCell { text: "fresh".to_string(), runs: 2 }]]
+            vec![vec![AddressableCell {
+                text: "fresh".to_string(),
+                runs: 2,
+                paragraphs: vec![vec!["fresh".to_string(), String::new()]],
+            }]]
         );
+    }
+
+    #[test]
+    fn one_run_in_a_cell_changes_and_the_rest_stands() {
+        // `set_cell_text` takes the whole cell, so changing one word in a cell
+        // of several runs costs every bold and every size the others carried.
+        // Fifteen percent of the document corpus keeps ALL its text in tables,
+        // where that was the only edit reachable.
+        let xml = concat!(
+            "<w:tbl><w:tr><w:tc>",
+            "<w:p><w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>three</w:t></w:r></w:p>",
+            "</w:tc></w:tr></w:tbl>",
+        );
+        let held = "TWO".to_string();
+        let runs = HashMap::from([((0usize, 0usize, 0usize, 1usize), &held)]);
+        let out = patch_table_xml(xml, &HashMap::new(), &runs, &[], &[]).expect("should patch");
+        let cell = &cells_of(&out)[0][0];
+        assert_eq!(cell.paragraphs, vec![
+            vec!["one".to_string(), "TWO".to_string()],
+            vec!["three".to_string()],
+        ]);
+        // The others keep their own elements rather than being folded in.
+        assert_eq!(out.matches("<w:r>").count(), 3, "{out}");
     }
 
     #[test]
