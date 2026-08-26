@@ -14502,13 +14502,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             {
                 let floored = (content_width / pitch).floor() * pitch;
                 if s1211c {
+                    // v2 (R8): the boundary test is compat-mode-dependent —
+                    // settings-less/legacy docs use the strict box floor, but
+                    // compatibilityMode 15 (the b837 slice bisection: settings
+                    // with ONLY cm15 flips n 40→41) lets the last char START
+                    // at ≤ F, i.e. available = floored + one char advance of
+                    // the paragraph's base size. When that reaches past the
+                    // raw width the floor is a no-op (b837: 444+11 > 453.5).
                     let fs = para
                         .runs
                         .iter()
                         .find(|r| !r.text.trim().is_empty())
                         .map(|r| self.resolve_font_size(&r.style, &para.style))
                         .unwrap_or(self.default_font_size);
-                    floored + 0.12 * fs
+                    if self.compat_mode >= 15 && self.compat_mode_explicit {
+                        (floored + fs - 0.01).min(content_width)
+                    } else {
+                        floored
+                    }
                 } else {
                     floored
                 }
