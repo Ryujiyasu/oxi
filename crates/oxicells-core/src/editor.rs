@@ -1563,6 +1563,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
     let mut cell_col: u32;
     let mut cell_row: u32;
     let mut in_value = false;
+    let mut value_written = false;
     let mut current_edit: Option<CellEditValue> = None;
     let mut skip_value_text = false;
     let mut skip_replaced_content_depth = 0_u32;
@@ -1630,6 +1631,15 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     }
                     "c" if in_row => {
                         in_cell = true;
+                        // Whether this cell has been GIVEN its new value yet,
+                        // which is not the same question as whether we are
+                        // inside its `<v>` right now. Asking `in_value` at
+                        // `</c>` — by which point `</v>` has already cleared
+                        // it — put a SECOND `<v>` after the one just written,
+                        // and a cell holding two of them is a workbook Excel
+                        // refuses to open. It is the same conflation that
+                        // wrote a docx run's text once per `<w:t>`.
+                        value_written = false;
                         let cell_ref = get_attr(e, "r").unwrap_or_default();
                         let (col, row) = crate::parser::parse_cell_ref(&cell_ref);
                         cell_col = col;
@@ -1689,6 +1699,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     }
                     "v" if in_cell && current_edit.is_some() => {
                         in_value = true;
+                        value_written = true;
                         skip_value_text = true;
                         // Write <v> start
                         writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -1752,8 +1763,9 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     }
                     "c" => {
                         if in_cell && current_edit.is_some() {
-                            // If the original cell had no <v>, we need to add one
-                            if !in_value {
+                            // A cell that carried no `<v>` of its own still
+                            // needs one to hold the new value.
+                            if !value_written {
                                 if let Some(text) = current_edit
                                     .as_ref()
                                     .map(CellEditValue::value_text)
@@ -2168,6 +2180,26 @@ mod tests {
         assert!(patched.contains("<f>SUM(B1:B2)</f>"));
         assert!(!patched.contains("OLD()"));
         assert_eq!(patched.matches("<f>").count(), 1);
+    }
+
+    #[test]
+    fn a_replaced_cell_keeps_one_value_element() {
+        // The check for "this cell had no `<v>` of its own" was reading the
+        // flag that says "we are inside a `<v>` right now", which `</v>` had
+        // already cleared — so the new value went in twice, and Excel refuses
+        // to open a workbook whose cell holds two of them. `001250007` was
+        // that workbook: 83 sheets, and the whole file would not load.
+        let xml = concat!(
+            r#"<worksheet><sheetData><row r="2">"#,
+            r#"<c r="B2" s="1" t="s"><v>877</v></c>"#,
+            r#"</row></sheetData></worksheet>"#,
+        );
+        let value = CellEditValue::String("fresh".to_string());
+        let edits = HashMap::from([((2, 1), &value)]);
+        let patched = patch_worksheet_xml(xml, &cells_only(&edits)).expect("should patch");
+        assert_eq!(patched.matches("<v>").count(), 1, "{patched}");
+        assert!(patched.contains("<v>fresh</v>"), "{patched}");
+        assert!(!patched.contains("877"), "{patched}");
     }
 
     #[test]
