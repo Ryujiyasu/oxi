@@ -22869,6 +22869,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 && s476_body
                 && self.compress_punctuation
                 && self.compat_mode < 15;
+            // S1234 (2026-08-26, default ON, opt-out OXI_S1234_DISABLE): the S568
+            // legacy-oikomi cap is SIZE-REGIME-dependent. A para whose runs sit ON
+            // the doc-default size keeps the S568 half-em cap (harassmanual's 、→6.0
+            // pack). A para OFF the default regime (parttime 就業規則本文: 8pt vs
+            // docDefaults 12pt) gets only the standard light capacity (3.0): Word
+            // bills its marks NATURAL at break (第25条 stays 3 lines) yet still
+            // rescues small overflows (第24条: ・6.84/）5.66 on L1, line-end 。4.26
+            // on L2 → 2 lines). |Δ| ≥ 1.5pt = the S1231 regime threshold.
+            let s1234_offdefault_light = std::env::var("OXI_S1234_DISABLE").is_err()
+                && s568_legacy_oikomi
+                && fragments
+                    .iter()
+                    .find(|(t, _, _, _, _)| {
+                        t.chars().any(|c| !c.is_whitespace() && c != '\u{3000}')
+                    })
+                    .map(|(_, rs, _, _, _)| self.resolve_font_size(rs, para_style))
+                    .map_or(false, |fs| (fs - self.default_font_size).abs() >= 1.5);
             // S592 (2026-06-17): a PROPORTIONAL CJK font (pgothic family) in a
             // linesAndChars grid is OFF-GRID, so the s476 capacity break must NOT
             // fire — its 約物 are already at the font's narrow proportional advance
@@ -22929,11 +22946,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             let s476_cap: f32 = std::env::var("OXI_S476_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(if s568_legacy_oikomi || s572_legacy_notype_oikomi {
-                    6.0
-                } else {
-                    3.0
-                });
+                .unwrap_or(
+                    if (s568_legacy_oikomi && !s1234_offdefault_light)
+                        || s572_legacy_notype_oikomi
+                    {
+                        6.0
+                    } else {
+                        3.0
+                    },
+                );
             // S558 (2026-06-13): s475_pair default 2.5 → 6.0. A CLOSING bracket
             // before another bracket collapses a full half-em at break (matching
             // the render pair-halving); the old 2.5 under-counted it, so
@@ -24447,6 +24468,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             kinsoku::s475_aki_cap(s1167_cap_raw, pre_yakumono_width, em)
                         } else {
                             s1167_cap_raw
+                        };
+                        // S1234 (2026-08-26): legacy off-default lines carry a
+                        // PER-LINE total squeeze budget (~0.6em), on top of the
+                        // per-mark cap. parttime 第25条 L1 has 9 marks whose
+                        // summed per-mark credits would pull in a 66th char Word
+                        // refuses (~10pt demand vs Word's ~4-5pt/line ceiling),
+                        // while 第24条's 3.5pt rescue fits. Scoped to the
+                        // s1234 branch — the 2026-06-23 LINE_BUDGET falsification
+                        // was on modern period-rich type=lines docs, a different
+                        // regime.
+                        let s1167_cap = if s1234_offdefault_light && s1167_cap > 0.0 {
+                            let budget_tw = pt_to_tw(0.6 * font_size);
+                            let used_tw = current_width_tw - current_capw_tw;
+                            s1167_cap.min(((budget_tw - used_tw).max(0) as f32) / 20.0)
+                        } else {
+                            s1167_cap
                         };
                         pt_to_tw(pre_yakumono_width - s1167_cap)
                     } else {
@@ -28350,7 +28387,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // end ≤ F — the earlier "11pt exemption"/"ink slack"/"start-test"
         // readings were measurement-noise arithmetic on device-quantized
         // advances (archive R4-R11).
-        let s1211c = std::env::var("OXI_S1211C").ok().as_deref() == Some("1")
+        // Default ON 2026-08-26 (was opt-in OXI_S1211C=1; opt-out
+        // OXI_S1211C_DISABLE): shipped together with S1234 — the S568 cap-6.0
+        // over-pack and the un-floored raw width were mutually compensating on
+        // parttime (floor alone or S1234 alone each FAIL Phase-1; together
+        // PASS). Gates: Phase-1 full n=96 92->93 (parttime FAIL->PASS, no
+        // other flip), full-corpus SSIM A/B: only parttime changes bytes,
+        // net +0.6751 / 0 regressed.
+        let s1211c = std::env::var("OXI_S1211C_DISABLE").is_err()
             && para.style.adjust_right_ind
             && !(self.compat_mode >= 15 && self.compat_mode_explicit);
         let grid_has_char_space = match (char_pitch, cw_ratio) {
