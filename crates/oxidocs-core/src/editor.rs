@@ -359,6 +359,28 @@ impl DocxEditor {
         Ok(out)
     }
 
+    /// The table cells this editor can address, as IT counts them.
+    ///
+    /// The companion to `addressable_runs` for `set_cell_text`: one entry per
+    /// top-level table in the body, holding its rows, holding each cell's
+    /// text. Fifteen percent of the document corpus keeps all of its text
+    /// inside tables, where no body run reaches it, so without this a caller
+    /// working from the IR cannot edit those documents at all.
+    pub fn addressable_cells(&self) -> Result<Vec<Vec<Vec<String>>>, ParseError> {
+        let Some(xml) = self.read_original_part("word/document.xml")? else {
+            return Ok(Vec::new());
+        };
+        let (_preamble, segments, _postamble) = split_body(&xml)?;
+        let mut out = Vec::new();
+        for segment in &segments {
+            let BodySegment::Table(held) = segment else {
+                continue;
+            };
+            out.push(cells_of(held));
+        }
+        Ok(out)
+    }
+
     /// Apply multiple legacy text edits at once.
     pub fn apply_edits(&mut self, edits: &[TextEdit]) {
         for edit in edits {
@@ -1669,6 +1691,66 @@ fn runs_of(xml: &str) -> Vec<String> {
     runs
 }
 
+/// One table's cells, in the order `set_cell_text` counts them, each holding
+/// the text its runs carry.
+///
+/// A cell's text is everything its `<w:t>` elements hold with the separators
+/// between them, which is what replacing it writes back — so what this reports
+/// and what `set_cell_text` takes are the same string.
+fn cells_of(xml: &str) -> Vec<Vec<String>> {
+    let mut reader = Reader::from_str(xml);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut held = String::new();
+    let (mut in_row, mut in_cell, mut in_text) = (false, false, false);
+    let mut depth = 0i32;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref()).as_str() {
+                // Only this table's own rows: a nested table brings its own,
+                // and they belong to it rather than here.
+                "tbl" => depth += 1,
+                "tr" if depth == 1 => {
+                    in_row = true;
+                    row = Vec::new();
+                }
+                "tc" if in_row => {
+                    in_cell = true;
+                    held.clear();
+                }
+                "t" if in_cell => in_text = true,
+                _ => {}
+            },
+            Ok(Event::Text(e)) if in_text => {
+                if let Ok(text) = e.unescape() {
+                    held.push_str(&text);
+                }
+            }
+            Ok(Event::Empty(e)) if in_cell => match local_name(e.name().as_ref()).as_str() {
+                "tab" => held.push('\t'),
+                "br" | "cr" => held.push('\n'),
+                _ => {}
+            },
+            Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
+                "tbl" => depth -= 1,
+                "t" => in_text = false,
+                "tc" if in_cell => {
+                    in_cell = false;
+                    row.push(std::mem::take(&mut held));
+                }
+                "tr" if in_row => {
+                    in_row = false;
+                    rows.push(std::mem::take(&mut row));
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    rows
+}
+
 fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut segments = Vec::new();
@@ -2609,6 +2691,13 @@ fn patch_table_xml(
     let mut in_cell_r = false;
     let mut in_cell_t = false;
     let mut cell_text_replaced = false;
+    // A cell's replacement text goes in once, where its first text element
+    // was, and the rest of the cell's text goes with the old text. The same
+    // per-element reset that tripled a run's tabs writes a cell's new text
+    // into EVERY `<w:t>` the cell holds, so a cell of two runs comes back
+    // holding the text twice.
+    let mut cell_text_written = false;
+    let mut dropping_cell_text = false;
     let mut skip_row = false;
     let mut skip_depth: i32 = 0;
     let mut cell_depth: i32 = 0;
@@ -2650,6 +2739,8 @@ fn patch_table_xml(
                     "tc" if in_row => {
                         in_cell = true;
                         cell_depth = 1;
+                        cell_text_written = false;
+                        dropping_cell_text = false;
                         writer.write_event(Event::Start(e.clone()))?;
                     }
                     "p" if in_cell && !in_cell_p => {
@@ -2661,6 +2752,16 @@ fn patch_table_xml(
                         writer.write_event(Event::Start(e.clone()))?;
                     }
                     "t" if in_cell_r => {
+                        if let Some(new_text) = cell_text_edits.get(&(row_idx, col_idx)) {
+                            if !cell_text_written {
+                                writer.write_event(Event::Text(BytesText::from_escaped(
+                                    &run_text_xml(new_text),
+                                )))?;
+                                cell_text_written = true;
+                            }
+                            dropping_cell_text = true;
+                            continue;
+                        }
                         in_cell_t = true;
                         cell_text_replaced = false;
                         writer.write_event(Event::Start(e.clone()))?;
@@ -2719,12 +2820,11 @@ fn patch_table_xml(
                         in_cell_r = false;
                         writer.write_event(Event::End(e.clone()))?;
                     }
+                    "t" if dropping_cell_text => {
+                        dropping_cell_text = false;
+                        continue;
+                    }
                     "t" if in_cell_t => {
-                        if !cell_text_replaced {
-                            if let Some(new_text) = cell_text_edits.get(&(row_idx, col_idx)) {
-                                writer.write_event(Event::Text(BytesText::new(new_text)))?;
-                            }
-                        }
                         in_cell_t = false;
                         writer.write_event(Event::End(e.clone()))?;
                     }
@@ -2741,6 +2841,9 @@ fn patch_table_xml(
                     continue;
                 }
 
+                if dropping_cell_text {
+                    continue;
+                }
                 if in_cell_t {
                     if let Some(new_text) = cell_text_edits.get(&(row_idx, col_idx)) {
                         writer.write_event(Event::Text(BytesText::new(new_text)))?;
@@ -2751,6 +2854,29 @@ fn patch_table_xml(
                 } else {
                     writer.write_event(Event::Text(e.clone()))?;
                 }
+            }
+            Event::Empty(ref e) => {
+                if skip_row {
+                    continue;
+                }
+                // The old text's separators go with it, as in a run: the
+                // replacement spells its own out.
+                if in_cell && cell_text_edits.contains_key(&(row_idx, col_idx)) {
+                    let local = local_name_from_bytes(e.name().as_ref());
+                    if local == "t" {
+                        if !cell_text_written {
+                            writer.write_event(Event::Text(BytesText::from_escaped(
+                                &run_text_xml(&cell_text_edits[&(row_idx, col_idx)]),
+                            )))?;
+                            cell_text_written = true;
+                        }
+                        continue;
+                    }
+                    if matches!(local.as_str(), "tab" | "br" | "cr") {
+                        continue;
+                    }
+                }
+                writer.write_event(Event::Empty(e.clone()))?;
             }
             event => {
                 if skip_row {
@@ -3573,6 +3699,24 @@ mod tests {
         orig_names.sort();
         saved_names.sort();
         assert_eq!(orig_names, saved_names);
+    }
+
+    #[test]
+    fn a_cell_of_two_runs_takes_its_new_text_once() {
+        // The per-element reset wrote a cell's replacement into every `<w:t>`
+        // the cell held, so a cell of two runs came back holding the text
+        // twice over. It is the same defect that tripled a run's tabs.
+        let xml = concat!(
+            "<w:tbl><w:tr><w:tc><w:p>",
+            "<w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r>",
+            "</w:p></w:tc></w:tr></w:tbl>",
+        );
+        assert_eq!(cells_of(xml), vec![vec!["onetwo".to_string()]]);
+        let mut edits = HashMap::new();
+        let held = "fresh".to_string();
+        edits.insert((0usize, 0usize), &held);
+        let out = patch_table_xml(xml, &edits, &[], &[]).expect("should patch");
+        assert_eq!(cells_of(&out), vec![vec!["fresh".to_string()]]);
     }
 
     #[test]
