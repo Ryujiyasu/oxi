@@ -1702,7 +1702,7 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
     if let Some((face, weight)) = resolve_part(family, bold, italic) {
         // The part carries its own style; asking for a slant on top would make
         // GDI skew a face that is already slanted.
-        if std::env::var("OXI_SF_DEBUG").is_ok() {
+        if sf_debug() {
             eprintln!("SF part      family={family:?} bold={bold} italic={italic} -> {face:?} w={weight}");
         }
         return (face, weight, false);
@@ -1715,7 +1715,7 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
             return (name, if bold { 700 } else { 400 }, false);
         }
     }
-    if std::env::var("OXI_SF_DEBUG").is_ok() {
+    if sf_debug() {
         eprintln!("SF fallthrough family={family:?} bold={bold} italic={italic}");
     }
     (
@@ -1851,7 +1851,7 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             let mut address: Option<String> = None;
             let face_dbg = face.clone();
             if face != font.typeface {
-                if std::env::var("OXI_SF_DEBUG").is_ok() {
+                if sf_debug() {
                     eprintln!(
                         "INSTALL typeface={:?} bold={} italic={} -> own name {face:?}",
                         font.typeface, font.bold, font.italic
@@ -1895,7 +1895,7 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                     && eot_identity(&font.data)
                         .is_some_and(|(_, weight, ital)| !ital && (!font.bold || weight >= 600));
                 let ok = !font.italic && honest && load_font_as(&font.data, &slot);
-                if std::env::var("OXI_SF_DEBUG").is_ok() {
+                if sf_debug() {
                     eprintln!(
                         "INSTALL typeface={:?} bold={} italic={} face={:?} slot={slot:?} honest={honest} loaded={ok}",
                         font.typeface, font.bold, font.italic, face_dbg
@@ -1965,7 +1965,7 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                     "  embedded font '{}' (bold={} italic={}) failed to load: 0x{:x}",
                     font.typeface, font.bold, font.italic, rc
                 );
-            } else if std::env::var("OXI_SF_DEBUG").is_ok() {
+            } else if sf_debug() {
                 eprintln!(
                     "INSTALL typeface={:?} bold={} italic={} collided 0x{rc:x}, retried under slot",
                     font.typeface, font.bold, font.italic
@@ -12443,6 +12443,19 @@ fn hmtx_width_styled(
         .map(|w| w + spc * text.trim_end_matches(' ').chars().count() as f32)
 }
 
+/// `OXI_DRAW_DEBUG`, read once. It sits on the per-draw path, so looking it up
+/// each time cost more than the work it reports (d47 64s -> 143s).
+fn draw_debug() -> Option<&'static String> {
+    static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    V.get_or_init(|| std::env::var("OXI_DRAW_DEBUG").ok()).as_ref()
+}
+
+/// `OXI_SF_DEBUG`, read once -- same reason, on the face-resolution path.
+fn sf_debug() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_SF_DEBUG").is_ok())
+}
+
 /// An embedded part whose name collides with an INSTALLED font is retried
 /// under its slot name when this is set (opt-in while it is being measured).
 fn embedcollide_on() -> bool {
@@ -14650,7 +14663,34 @@ fn draw_text_baseline_wiu(
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
+    if let Some(want) = draw_debug() {
+        if text.contains(want.as_str()) {
+            eprintln!(
+                "DRAW {text:?} family={family:?} size={font_size} weight={weight} italic={italic} spc={spc}"
+            );
+        }
+    }
     let font = create_font_for_wiu(family, font_size, weight, italic, underline, scale);
+    if let Some(want) = draw_debug() {
+        if text.contains(want.as_str()) {
+            unsafe {
+                let old = SelectObject(dc, font);
+                let mut buf = [0u16; 64];
+                let n = GetTextFaceW(dc, Some(&mut buf)) as usize;
+                let got = String::from_utf16_lossy(&buf[..n.saturating_sub(1)]);
+                let mut tm = TEXTMETRICW::default();
+                let _ = GetTextMetricsW(dc, &mut tm);
+                let w: Vec<u16> = text.encode_utf16().collect();
+                let mut sz = windows::Win32::Foundation::SIZE::default();
+                let _ = GetTextExtentPoint32W(dc, &w, &mut sz);
+                eprintln!(
+                    "GDI  gave face={got:?} tmWeight={} tmItalic={} extent={}px = {:.2}pt",
+                    tm.tmWeight, tm.tmItalic, sz.cx, sz.cx as f64 / scale
+                );
+                SelectObject(dc, old);
+            }
+        }
+    }
     if font.is_invalid() {
         return;
     }
