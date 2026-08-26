@@ -2954,7 +2954,34 @@ mod windows_draw {
             };
             let runs = super::dash_runs(pattern, width.max(1), line.cap.as_deref());
             let pen = if runs.len() < 2 {
-                CreatePen(PS_SOLID, width, shade)
+                // `CreatePen` rounds the ends of anything wider than a pixel,
+                // which lengthens a rule by half its width at each end: our
+                // 2.25pt line ran 643px where Excel's ran 641, and started
+                // one pixel early. Excel cuts its rules flat and squares its
+                // corners, so the pen has to say so.
+                //
+                // Only above a pixel. A geometric pen one pixel wide is not
+                // the cosmetic pen we have always drawn hairlines with, and
+                // swapping it moved eight workbooks the wrong way by a
+                // hair each — the measurement was of LINES, and a hairline
+                // has no cap worth the name.
+                if width <= 1 {
+                    return (CreatePen(PS_SOLID, width, shade), width);
+                }
+                let brush = LOGBRUSH { lbStyle: BS_SOLID, lbColor: shade, lbHatch: 0 };
+                let held = ExtCreatePen(
+                    PEN_STYLE(
+                        PS_GEOMETRIC.0 | PS_SOLID.0 | PS_ENDCAP_FLAT.0 | PS_JOIN_MITER.0,
+                    ),
+                    width.max(1) as u32,
+                    &brush,
+                    None,
+                );
+                if held.is_invalid() {
+                    CreatePen(PS_SOLID, width, shade)
+                } else {
+                    held
+                }
             } else {
                 let brush = LOGBRUSH { lbStyle: BS_SOLID, lbColor: shade, lbHatch: 0 };
                 let held = ExtCreatePen(
@@ -3052,8 +3079,41 @@ mod windows_draw {
                     } else {
                         (box_.top, box_.bottom)
                     };
+                    // A rule an odd number of pixels wide reaches one pixel
+                    // further than its path, exactly as each dash of a broken
+                    // one does — a solid rule is a single stretch of ink, and
+                    // the same rule governs it.
+                    let stretch = shape
+                        .line
+                        .as_ref()
+                        .filter(|held| {
+                            // Only a rule that is solid because it was ASKED
+                            // to be. A `sysDot` a pixel wide is solid because
+                            // its gap closed, and the pixel that closed it is
+                            // the same pixel — giving it another would spend
+                            // it twice.
+                            //
+                            // And only a rule that ends bare. The pixel goes
+                            // on past where the path stops, which is where an
+                            // arrow's tip is: `glossary_05` draws its whole
+                            // flowchart out of headed connectors, and the
+                            // extra pixel poked through every one of them.
+                            held.head_end.is_none()
+                                && held.tail_end.is_none()
+                                && matches!(held.dash.as_deref(), None | Some("solid"))
+                                && ((held.width as f32 / super::EMU) * scale).round().max(1.0)
+                                    as i32
+                                    % 2
+                                    == 1
+                                && held.cap.as_deref() != Some("rnd")
+                        })
+                        .map_or(0, |_| 1);
+                    let (reach_x, reach_y) = (
+                        to_x + (to_x - from_x).signum() * stretch,
+                        to_y + (to_y - from_y).signum() * stretch,
+                    );
                     let _ = MoveToEx(dc, from_x, from_y, None);
-                    let _ = LineTo(dc, to_x, to_y);
+                    let _ = LineTo(dc, reach_x, reach_y);
                     // And whatever the rule wears at its ends. Measured off
                     // Excel's own picture by `_xlsx_arrow_head.py`, which
                     // reads the head as the ink the same line has WITH one
