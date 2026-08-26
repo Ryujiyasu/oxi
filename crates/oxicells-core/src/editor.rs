@@ -491,6 +491,20 @@ impl XlsxEditor {
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     continue;
                 }
+                // The calculation chain names the cells that hold formulas and
+                // the order Excel works them out in. Writing a value over a
+                // formula takes the formula away, and a chain still pointing at
+                // that cell makes Excel refuse the WHOLE workbook — `fies_t2`
+                // has one entry, `C1`, and replacing C1's `<f>C9</f>` with a
+                // value lost the file. The chain is only a cache: Excel builds
+                // it again on open, so the safe answer is to leave it out
+                // whenever a cell has been touched.
+                if name == "xl/calcChain.xml" {
+                    writer
+                        .abort_file()
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    continue;
+                }
                 if let (Some(plan), "xl/workbook.xml") = (self.sheet_plan.as_ref(), name.as_str())
                 {
                     let mut xml = String::new();
@@ -535,6 +549,22 @@ impl XlsxEditor {
                     let parts: Vec<String> =
                         planned_parts.iter().map(|(path, _)| path.clone()).collect();
                     let patched = patch_content_types(&xml, &parts)?;
+                    writer
+                        .write_all(patched.as_bytes())
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    continue;
+                }
+                // The package must not name a part that is no longer in it:
+                // the chain's own relationship and content type go with it.
+                // Excel opens the workbook either way, but a relationship
+                // pointing at nothing is not a package, and "invalid but
+                // tolerated" is what this whole exercise is meant to catch.
+                if name == "xl/_rels/workbook.xml.rels" || name == "[Content_Types].xml" {
+                    let mut xml = String::new();
+                    entry
+                        .read_to_string(&mut xml)
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    let patched = without_calc_chain(&xml);
                     writer
                         .write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -1110,6 +1140,29 @@ fn patch_workbook_sheets(xml: &str, names: &[String]) -> Result<String, XlsxErro
     }
     listed.push_str("</sheets>");
     Ok(format!("{}{}{}", &xml[..start], listed, &xml[end..]))
+}
+
+/// The same XML with any element naming the calculation chain taken out.
+///
+/// Used on `[Content_Types].xml` and on the workbook's relationships, where
+/// the chain is declared. Both state it as a single self-closing element, so
+/// cutting from its `<` to the `>` that closes it is enough and leaves the
+/// rest of the part byte for byte as it was.
+fn without_calc_chain(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(at) = rest.find("calcChain.xml") {
+        let Some(open) = rest[..at].rfind('<') else {
+            break;
+        };
+        let Some(close) = rest[at..].find('>') else {
+            break;
+        };
+        out.push_str(&rest[..open]);
+        rest = &rest[at + close + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Rewrites the worksheet relationships of `xl/_rels/workbook.xml.rels`,
@@ -2180,6 +2233,29 @@ mod tests {
         assert!(patched.contains("<f>SUM(B1:B2)</f>"));
         assert!(!patched.contains("OLD()"));
         assert_eq!(patched.matches("<f>").count(), 1);
+    }
+
+    #[test]
+    fn the_calculation_chain_is_not_left_pointing_at_nothing() {
+        // Writing a value over a formula takes the formula away. A chain still
+        // naming that cell makes Excel refuse the WHOLE workbook — `fies_t2`
+        // has exactly one entry, C1, and replacing C1's `<f>C9</f>` lost the
+        // file. The part is dropped, and so is anything that declares it.
+        let types = concat!(
+            r#"<Types><Override PartName="/xl/workbook.xml" ContentType="a"/>"#,
+            r#"<Override PartName="/xl/calcChain.xml" ContentType="b"/>"#,
+            r#"<Override PartName="/xl/styles.xml" ContentType="c"/></Types>"#,
+        );
+        let out = without_calc_chain(types);
+        assert!(!out.contains("calcChain"), "{out}");
+        assert!(out.contains("workbook.xml") && out.contains("styles.xml"), "{out}");
+        let rels = concat!(
+            r#"<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/>"#,
+            r#"<Relationship Id="rId8" Target="calcChain.xml"/></Relationships>"#,
+        );
+        let out = without_calc_chain(rels);
+        assert!(!out.contains("calcChain"), "{out}");
+        assert!(out.contains("rId1"), "{out}");
     }
 
     #[test]
