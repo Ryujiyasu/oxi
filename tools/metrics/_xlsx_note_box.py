@@ -21,6 +21,8 @@ is filled, so its edge is where the fill stops.
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -30,6 +32,8 @@ import win32com.client
 from PIL import Image, ImageGrab
 
 Image.MAX_IMAGE_PIXELS = None
+REPO = Path(__file__).resolve().parents[2]
+RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 SCRATCH = Path(r"C:\tmp\xlsx_note_box")
 HEIGHTS = [30.0, 40.0, 45.75, 50.0, 57.75, 58.0, 58.5, 59.0, 59.25, 60.0, 72.0, 82.5]
 WIDE = 120.0
@@ -58,6 +62,7 @@ def build() -> bool:
             note.Shape.Left = sheet.Cells(at, 2).Left
             note.Visible = True
             at += GAP + int(tall / 15) + 2
+        book.SaveAs(str(SCRATCH / "notes.xlsx"), FileFormat=51)
         rows = at + 4
         for _ in range(10):
             try:
@@ -87,16 +92,19 @@ def boxes(picture: Image.Image) -> list[tuple[int, int]]:
     fill = (np.abs(rgb - np.array([255, 255, 225])).sum(axis=2) < 12)
     rows = np.where(fill.sum(axis=1) > 20)[0]
     out, start, last = [], None, None
+    def shut(top: int, foot: int) -> None:
+        cols = np.where(fill[top:foot + 1].any(axis=0))[0]
+        out.append((int(top), int(foot), int(cols.min()), int(cols.max())))
     for y in rows:
         if start is None:
             start = last = y
             continue
         if y > last + 1:
-            out.append((int(start), int(last)))
+            shut(start, last)
             start = y
         last = y
     if start is not None:
-        out.append((int(start), int(last)))
+        shut(start, last)
     return out
 
 
@@ -108,10 +116,18 @@ def main() -> int:
         print("  Excel would not hand over a picture")
         return 1
     found = boxes(Image.open(SCRATCH / "excel.png"))
-    print(f"  {len(HEIGHTS)} note(s) asked for, {len(found)} box(es) drawn")
-    print(f"  {'asked pt':>9}{'96dpi px':>10}{'drawn px':>10}   what that is")
-    for tall, held in zip(HEIGHTS, found):
+    subprocess.run(
+        [str(RENDERER), str(SCRATCH / "notes.xlsx"), str(SCRATCH / "oxi.png"), "96"],
+        capture_output=True, text=True, encoding="utf-8", env=dict(os.environ),
+    )
+    ours = boxes(Image.open(SCRATCH / "oxi.png")) if (SCRATCH / "oxi.png").exists() else []
+    print(f"  {len(HEIGHTS)} note(s) asked for; Excel drew {len(found)}, we drew {len(ours)}")
+    print(f"  {'asked pt':>9}{'96dpi px':>10}{'tall E':>7}{'O':>6}{'wide E':>9}{'O':>6}{'top E':>7}{'O':>5}{'left E':>7}{'O':>5}   what Excel's is")
+    for at, (tall, held) in enumerate(zip(HEIGHTS, found)):
         drawn = held[1] - held[0] + 1
+        across = held[3] - held[2] + 1
+        mine = ours[at][1] - ours[at][0] + 1 if at < len(ours) else None
+        mine_across = ours[at][3] - ours[at][2] + 1 if at < len(ours) else None
         exact = tall * 96 / 72
         # The fill stops one inside the border on each side, so the box the
         # renderer is asked for is two more than the fill.
@@ -122,7 +138,13 @@ def main() -> int:
                 note.append(name)
             if drawn == value + 2:
                 note.append(f"{name}+2")
-        print(f"  {tall:>9}{exact:>10.2f}{drawn:>10}   {', '.join(note) or '—'}")
+        top_e, top_o = held[0], ours[at][0] if at < len(ours) else None
+        left_e, left_o = held[2], ours[at][2] if at < len(ours) else None
+        print(f"  {tall:>9}{exact:>10.2f}{drawn:>7}{str(mine):>6}"
+              f"{across:>9}{str(mine_across):>6}"
+              f"{top_e:>7}{str(top_o):>5}{left_e:>7}{str(left_o):>5}   "
+              f"{', '.join(note) or '—'}"
+              f"{'' if (mine, mine_across, top_o, left_o) == (drawn, across, top_e, left_e) else '  <<'}")
     return 0
 
 
