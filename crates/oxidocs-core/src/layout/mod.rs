@@ -4934,6 +4934,12 @@ h_tw={} pitch_tw={} cells={} text={:?}",
         let mut prev_space_after: f32 = 0.0;
         // Track Y position and layout page index for each block (for paragraph-relative TextBox positioning)
         let mut block_y_positions: Vec<f32> = Vec::with_capacity(page.blocks.len());
+        // S1222 (2026-08-26): the COLUMN each block flows in, for anchored objects
+        // whose positionH says relativeFrom="column" -- that means the column of
+        // the ANCHOR PARAGRAPH, not the margin. forms__000cf39c346c1e59's bottom
+        // box (7.35in wide, H column -3.93in, anchored in the RIGHT column of a
+        // two-column section) rendered 3.5in off the left page edge without this.
+        let mut block_col_x: Vec<f32> = Vec::with_capacity(page.blocks.len());
         // S1123 (2026-08-14): the page a block STARTED on, never overwritten.
         // `block_page_indices` serves two different consumers with two
         // different meanings: footnote bookkeeping wants the block's FINAL
@@ -5928,6 +5934,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             // S469: record the NATURAL (pre-wrap) Y for anchor resolution by
             // subtracting any accumulated wrap-below advance on this page.
             block_y_positions.push(cursor.cursor_y - anchor_flow_offset);
+            block_col_x.push(start_x); // S1222: the current column's left edge
             block_page_indices.push(current_page_idx);
             block_start_page_indices.push(current_page_idx);
             match block {
@@ -10246,7 +10253,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     };
                     if std::env::var("OXI_DEBUG_TB").is_ok() {
                         let (rx, ry) =
-                            self.resolve_textbox_position(text_box, page, &block_y_positions);
+                            self.resolve_textbox_position(text_box, page, &block_y_positions, &block_col_x);
                         let anchor_in_range = text_box.anchor_block_index < block_y_positions.len();
                         let preview: String = text_box
                             .blocks
@@ -10269,7 +10276,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             text_box.position.as_ref().and_then(|p| p.v_relative.clone()),
                             preview);
                     }
-                    let mut tb_elements = self.layout_text_box(text_box, page, &block_y_positions);
+                    let mut tb_elements = self.layout_text_box(text_box, page, &block_y_positions, &block_col_x);
                     // S1089: keep the band where it was RESERVED — the anchor
                     // paragraph has since moved below it, so the block-relative
                     // resolve would double-shift (the S734 image contract).
@@ -10283,7 +10290,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if text_box.wrap_type == Some(crate::ir::WrapType::TopAndBottom) {
                             if let Some(off) = off {
                                 let (_, ry) =
-                                    self.resolve_textbox_position(text_box, page, &block_y_positions);
+                                    self.resolve_textbox_position(text_box, page, &block_y_positions, &block_col_x);
                                 let dy = (fy + off) - ry;
                                 if dy.abs() > 0.001 {
                                     for e in tb_elements.iter_mut() {
@@ -11357,7 +11364,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         text_box: &TextBox,
         page: &Page,
         block_y_positions: &[f32],
+        block_col_x: &[f32],
     ) -> (f32, f32) {
+        // S1222: the left edge of the column the anchor paragraph flows in.
+        let anchor_col_left = if std::env::var("OXI_S1222_DISABLE").is_err() {
+            block_col_x
+                .get(text_box.anchor_block_index)
+                .copied()
+                .unwrap_or(page.margin.left)
+        } else {
+            page.margin.left
+        };
         let pos = match &text_box.position {
             Some(p) => p,
             None => return (page.margin.left, page.margin.top),
@@ -11388,7 +11405,8 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         } else {
             match pos.h_relative.as_deref() {
                 Some("page") => pos.x,
-                Some("margin") | Some("column") | Some("character") => page.margin.left + pos.x,
+                Some("column") => anchor_col_left + pos.x,
+                Some("margin") | Some("character") => page.margin.left + pos.x,
                 Some("leftMarginArea") => pos.x,
                 Some("rightMarginArea") => (page.size.width - page.margin.right) + pos.x,
                 _ => page.margin.left + pos.x,
@@ -11531,8 +11549,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         text_box: &TextBox,
         page: &Page,
         block_y_positions: &[f32],
+        block_col_x: &[f32],
     ) -> Vec<LayoutElement> {
-        self.layout_text_box_at(text_box, page, block_y_positions, None)
+        self.layout_text_box_at(text_box, page, block_y_positions, block_col_x, None)
     }
 
     /// S487/S488 (CLASS E step 2/3): layout a text box, optionally with an
@@ -11548,6 +11567,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         text_box: &TextBox,
         page: &Page,
         block_y_positions: &[f32],
+        block_col_x: &[f32],
         resolved_origin: Option<(f32, f32)>,
     ) -> Vec<LayoutElement> {
         let mut elements = Vec::new();
@@ -11555,7 +11575,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // 1. Calculate absolute position
         let (abs_x, abs_y) = match resolved_origin {
             Some((ax, ay)) => (ax, ay),
-            None => self.resolve_textbox_position(text_box, page, block_y_positions),
+            None => self.resolve_textbox_position(text_box, page, block_y_positions, block_col_x),
         };
 
         // S839c (2026-07-14): an ANCHORED visual-only vector group (hmrc's
@@ -37114,7 +37134,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 para_top_rel + dy + py
                             }
                         };
-                        let tb_elems = self.layout_text_box_at(tb, page, &[], Some((abs_x, abs_y)));
+                        let tb_elems = self.layout_text_box_at(tb, page, &[], &[], Some((abs_x, abs_y)));
                         // Defer (not `elements.extend`) so the box paints on top of the
                         // whole table grid — see deferred_cell_textboxes declaration.
                         deferred_cell_textboxes.extend(tb_elems);
