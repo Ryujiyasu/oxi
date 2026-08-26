@@ -4304,6 +4304,20 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             };
         let mut s755_geom = s755_geom;
         let mut s863_vertical_run_idx: usize = 0;
+        // S1227 (2026-08-26): the vertical-run geom that was ACTIVE WHEN THE
+        // CURRENT PAGE BEGAN. Word's continuous-section top/bottom margins
+        // govern whole physical pages — a mid-page section switch must not
+        // shrink/grow the CURRENT page's content box (kyotei36spec p4: the
+        // 裏面 page begins in the title section, bottom=284tw → content
+        // bottom 581.1; the 2-col body section's bottom=510tw applies only
+        // to pages BEGINNING in it. The per-block refresh below adopted the
+        // switched geom immediately → Oxi's columns stopped one grid row
+        // early, Word packs the row-47 line box to 580.35 ≤ 581.1). The
+        // page-begin index updates whenever pages.len() changes, capturing
+        // the run of the block that pushed the page. Opt-out OXI_S1227_DISABLE.
+        let mut s863_page_begin_idx: usize = 0;
+        let mut s863_last_pages_len: usize = 0;
+        let s1227_on = std::env::var("OXI_S1227_DISABLE").is_err();
         // Round 29 (2026-04-08): per-page dynamic footnote reservation.
         // Footnotes are reserved at the bottom of the page where their reference
         // appears. The amount reserved varies per page based on which footnotes
@@ -5304,6 +5318,13 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                 }
             }
             if !s863_vertical_geoms.is_empty() {
+                // S1227: a page begun by an earlier block is governed by the
+                // run active at that push — capture it BEFORE this block's
+                // run switch.
+                if pages.len() != s863_last_pages_len {
+                    s863_last_pages_len = pages.len();
+                    s863_page_begin_idx = s863_vertical_run_idx;
+                }
                 while s863_vertical_run_idx + 1 < page.vertical_runs.len()
                     && block_idx >= page.vertical_runs[s863_vertical_run_idx + 1].0
                 {
@@ -5382,7 +5403,15 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             }
             // S755: refresh the current page's header/footer geometry (a
             // previous block may have pushed pages internally).
-            if let Some(g) = s755_geom.as_ref() {
+            // S1227: on a vertical-multi-run page, the CURRENT page's box is
+            // the geom of the run in which the page BEGAN, not the run this
+            // block belongs to (Word: continuous-section top/bottom margins
+            // govern whole physical pages).
+            if s1227_on && !s863_vertical_geoms.is_empty() {
+                let g = &s863_vertical_geoms[s863_page_begin_idx.min(s863_vertical_geoms.len() - 1)];
+                start_y = g.top(pages.len() + 1);
+                content_height = g.ch(pages.len() + 1);
+            } else if let Some(g) = s755_geom.as_ref() {
                 start_y = g.top(pages.len() + 1);
                 content_height = g.ch(pages.len() + 1);
             }
@@ -5707,7 +5736,51 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                     + self.estimate_para_height(p, content_width, grid_pitch,
                                         None, false, None, None)
                                     > ft_top + 0.1);
+                    // S1230 (2026-08-26, opt-out OXI_S1230_DISABLE): a TEXT line
+                    // whose line BOX crosses the float band's top goes below the
+                    // float — the JP text-line sibling of S872's Latin empty-box
+                    // rule. Derived on kyotei36spec p3 (float form tblpY=268:
+                    // Word keeps the title in the gap, box 48.8..60.3 <= band top
+                    // ~60.55, and bumps 成立年月日, box 60.3..73.8, to 431.2 =
+                    // band bottom) + _pb_floatband_gen COM arms (y268_noX: the
+                    // following para's box 70.5..84.0 crosses the true band top
+                    // 83.9 by 0.1pt -> Word puts it at 125.25 = below; y500/y1000:
+                    // boxes that clear the band top stay in the gap). First-line
+                    // height = the typed grid pitch when present (kyotei 11.5),
+                    // else the paragraph estimate. EMPTY paragraphs keep the
+                    // cursor-only rule (2ea81a's calibrated gap-empty balance —
+                    // see the S872 scope note).
+                    // HELD OPT-IN (2026-08-26): correct per the derived law but
+                    // EXPOSES table3's +9pt height error on kyotei (the bump lands
+                    // at Oxi's inflated float bottom 440 vs Word 431 and shifts the
+                    // whole tail +12; the un-bumped state scored better via the
+                    // compensating misplacement). Promote after the float-table
+                    // row-height accuracy work (rows 12/13 excess). SSIM A/B
+                    // (DWrite, kyotei): ON -0.1242 vs OFF.
+                    let s1230_text_cross = std::env::var("OXI_S1230").ok().as_deref() == Some("1")
+                        && self.doc_body_has_real_cjk
+                        && cursor.cursor_y < ft_top - 0.1
+                        && matches!(block, Block::Paragraph(p)
+                            if p.runs.iter().any(|r| !r.text.is_empty())
+                                && {
+                                    let est = self.estimate_para_height(p, content_width,
+                                        grid_pitch, None, false, None, None);
+                                    let l1 = match grid_pitch {
+                                        Some(gp) if gp > 0.0 && p.style.snap_to_grid => {
+                                            est.min(gp)
+                                        }
+                                        _ => est,
+                                    };
+                                    cursor.cursor_y
+                                        + prev_space_after
+                                            .max(p.style.space_before.unwrap_or(0.0))
+                                        + l1
+                                        > ft_top + 0.1
+                                });
                     if cursor.cursor_y >= ft_top - 0.1 && cursor.cursor_y < ft_bot {
+                        cursor.set(ft_bot);
+                        text_float_region = None;
+                    } else if s1230_text_cross {
                         cursor.set(ft_bot);
                         text_float_region = None;
                     } else if s872_empty_cross {
@@ -18227,6 +18300,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     cursor.set(page_top);
                     s842_apply(cursor);
+                    if std::env::var("OXI_DBG_EMITY").is_ok() {
+                        eprintln!("[EMITY] midpara push: page_top={:.2} cursor={:.2} line_idx={}", page_top, cursor.cursor_y, line_idx);
+                    }
                     // S637: a real page push lands on column 0 of the new page.
                     cur_col = 0;
                     // S1013 (2026-07-26, opt-out OXI_S1013_DISABLE): a NATURAL
@@ -19311,6 +19387,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // the gen2 lever is the per-line CJK run_base PRECISION (line height ~0.09pt too
                 // tall vs Word), the Phase-1-critical 83/64 wall — NOT the device-snap. Kept
                 // opt-in/default-OFF so it never ships. See [[gen2_vertical_drift]].
+                if std::env::var("OXI_DBG_EMITY").is_ok() {
+                    let head: String = line.fragments.iter().flat_map(|f| f.text.chars()).take(12).collect();
+                    eprintln!("[EMITY] line emit: cursor_y={:.2} visual_y={:.2} line_idx={} {:?}", cursor.cursor_y, cursor.visual_y, line_idx, head);
+                }
                 let emit_y = if s467_vsnap {
                     snap075(cursor.visual_y)
                 } else if page.doc_grid_no_type
@@ -20089,7 +20169,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 //
                 // See [[session69-lm2-unified-refactor-groundwork]].
                 let pitch_tw_i = (grid_pitch.unwrap() * 20.0).round() as i32;
-                let margin_tw = (page.margin.top * 20.0).round() as i32;
+                // S1226 (2026-08-26): the docGrid line lattice anchors at the
+                // CURRENT page's content top (`page_top`, which follows the
+                // ACTIVE section's top margin through S863 geom switches and
+                // page pushes), not the document-first section's
+                // page.margin.top. kyotei36spec p4 pixel truth: the 裏面 page
+                // begins a top=567tw section after a top=964tw section; Word
+                // lays the title at 28.35 and the next line at 39.85 = the
+                // 567-anchored lattice. The old fixed anchor made
+                // offset=(cur-964tw).max(0)=0 → cell-aligned target =
+                // 964+1×pitch = 59.7 → every later-section page drifted
+                // +19.85pt, ate 3 lines of the 2-col band, and manufactured a
+                // 5th page. Byte-identical when page_top == margin.top (the
+                // whole single-section corpus). Opt-out OXI_S1226_DISABLE.
+                let margin_tw = if std::env::var("OXI_S1226_DISABLE").is_err()
+                    && (page_top - page.margin.top).abs() > 0.01
+                {
+                    (page_top * 20.0).round() as i32
+                } else {
+                    (page.margin.top * 20.0).round() as i32
+                };
                 let cells = (line_height * 20.0 / pitch_tw_i as f32).round().max(1.0) as i32;
                 let cur_tw = (cursor.cursor_y * 20.0).round() as i32;
                 let offset = (cur_tw - margin_tw).max(0);
@@ -39604,6 +39703,54 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
 
         for run in &para.runs {
             let font_size = self.resolve_font_size(&run.style, &para.style);
+            // S1225 (2026-08-26): estimate mirror of S703c — a `combine` run
+            // (eastAsianLayout w:combine, 割注 / two-lines-in-one) is ONE atomic
+            // compact unit: ceil(n/2) half-size chars + brackets, on a single
+            // line. This counter measured it as full-size per-char text
+            // (kyotei36spec 労働者数 cell 「満18歳以上の者」 sz=28: estimate 4
+            // lines × 17.5 = 70pt → row 80.1 vs Word ~29; the render side packs
+            // it as one line via S703c, but row height = max(estimate, actual)
+            // so the estimate surplus was permanent — +50pt on p1, spilling 5
+            // trailing empty paragraphs onto p2 and shifting it 77.5pt). Same
+            // gate + width arithmetic as S703c; shared opt-out OXI_S703_DISABLE.
+            if run.style.combine
+                && !run.text.trim().is_empty()
+                && std::env::var("OXI_S703_DISABLE").is_err()
+                && std::env::var("OXI_S1225_DISABLE").is_err()
+            {
+                let n = run.text.chars().count();
+                let rows_chars = (n + 1) / 2;
+                let has_br = run
+                    .style
+                    .combine_brackets
+                    .as_deref()
+                    .map_or(false, |b| b != "none");
+                let cw = rows_chars as f32 * (font_size * 0.5)
+                    + if has_br { font_size * 0.8 } else { 0.0 };
+                let ew = if is_first_line {
+                    first_line_wrap_w
+                } else {
+                    wrap_w
+                };
+                // Commit any pending word buffer first (the unit wraps whole).
+                if buf_nonempty {
+                    line_x += buf_w;
+                    line_nonempty = true;
+                    buf_w = 0.0;
+                    buf_nonempty = false;
+                }
+                if line_x + cw > ew && line_nonempty {
+                    lines += 1;
+                    line_x = 0.0;
+                    is_first_line = false;
+                    current_line_chars.clear();
+                }
+                line_x += cw;
+                line_nonempty = true;
+                prev_char_emitted = None;
+                s1082_gpos += n;
+                continue;
+            }
             let cs = if run.style.fit_text.is_some() {
                 run.style.character_spacing.unwrap_or(0.0)
             } else {
