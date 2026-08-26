@@ -126,6 +126,45 @@ struct SharedString {
     runs: Vec<crate::ir::TextRun>,
 }
 
+/// Text as the reader sees it, with the `_xHHHH_` escapes spelled out.
+///
+/// A character a writer cannot put in XML — a carriage return, a control code —
+/// is written as its code point between `_x` and `_`, and a literal `_x` that
+/// would otherwise begin one of those is itself written `_x005F_`
+/// (ECMA-376 §22.9.2.19). Left to stand, the escape is drawn:
+/// `procurement_contractor_list_02` shows 株式会社ＮＳＤ_x000D_ where Excel shows the
+/// name alone, and the seven strings it carries make the widest black band in
+/// that book's picture.
+///
+/// One pass, left to right, is what keeps `_x005F_` honest: it becomes an
+/// underscore, and the `x000D_` behind it is then ordinary text rather than an
+/// escape read a second time.
+fn unescape_wide(text: &str) -> String {
+    if !text.contains("_x") {
+        return text.to_string();
+    }
+    let letters: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < letters.len() {
+        let escape = letters[at] == '_'
+            && letters.get(at + 1) == Some(&'x')
+            && letters.get(at + 6) == Some(&'_')
+            && letters[at + 2..at + 6].iter().all(char::is_ascii_hexdigit);
+        if escape {
+            let code: String = letters[at + 2..at + 6].iter().collect();
+            if let Some(held) = u32::from_str_radix(&code, 16).ok().and_then(char::from_u32) {
+                out.push(held);
+                at += 7;
+                continue;
+            }
+        }
+        out.push(letters[at]);
+        at += 1;
+    }
+    out
+}
+
 fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut strings: Vec<SharedString> = Vec::new();
@@ -232,7 +271,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
                     // out 85 characters in its five pieces against 62 in the
                     // cell, and every one of the 23 was the other half of a
                     // break.
-                    let text = e.unescape()?.replace("\r\n", "\n");
+                    let text = unescape_wide(&e.unescape()?).replace("\r\n", "\n");
                     current.text.push_str(&text);
                     if in_run {
                         current_run.text.push_str(&text);
@@ -2539,10 +2578,10 @@ fn parse_worksheet(
             }
             Event::Text(e) => {
                 if in_formula {
-                    let text = e.unescape()?.to_string();
+                    let text = unescape_wide(&e.unescape()?);
                     formula_text.push_str(&text);
                 } else if in_value || in_inline_text {
-                    let text = e.unescape()?.to_string();
+                    let text = unescape_wide(&e.unescape()?);
                     value_text.push_str(&text);
                 }
             }
@@ -3068,6 +3107,18 @@ mod tests {
     /// "区分"; appending the reading would give "区分クブン" and silently corrupt
     /// most Japanese workbooks, which carry phonetic guides on names and
     /// addresses as a matter of course.
+    #[test]
+    fn a_wide_escape_is_spelled_out_once() {
+        assert_eq!(unescape_wide("plain"), "plain");
+        assert_eq!(unescape_wide("NSD_x000D_"), "NSD\r");
+        // The escape for an underscore leaves what follows it alone: this is
+        // how a writer spells a literal `_x000D_`.
+        assert_eq!(unescape_wide("_x005F_x000D_"), "_x000D_");
+        // Not four hex digits, so not an escape.
+        assert_eq!(unescape_wide("_xZZZZ_"), "_xZZZZ_");
+        assert_eq!(unescape_wide("a_x0041_b"), "aAb");
+    }
+
     #[test]
     fn shared_strings_exclude_phonetic_guides() {
         let xml = r#"<?xml version="1.0"?>
