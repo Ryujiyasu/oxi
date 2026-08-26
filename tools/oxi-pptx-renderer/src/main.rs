@@ -12007,9 +12007,24 @@ fn line_width_pt_runs(
     Some(total)
 }
 
-/// A `a:srcRect` reaching outside the image is clipped to it only when set.
+/// A `a:srcRect` reaching outside the image is clipped to it unless this is set.
+///
+/// Gate (2026-08-26), every deck carrying an out-of-range `srcRect`:
+///
+///     blind 49  0.920497 -> 0.954592  (+0.034095; s15 0.3425 -> 0.9544)
+///     blind 20  0.945067 -> 0.956298  (+0.011232)
+///     blind 03  0.953188 -> 0.956914  (+0.003726)
+///     blind 10  0.951672 -> 0.953153  (+0.001481)
+///     dev  d26  0.969321 -> 0.969746  (+0.000425)
+///     dev  d38  0.982736 -> 0.982789  (+0.000053)
+///     dev  d37  0.952821 -> 0.952821  (unchanged: the degenerate crop
+///                                      S-SRCDEGEN was derived on lands the
+///                                      same way through the clip)
+///
+/// No regressions, and decks with no out-of-range crop render byte-for-byte
+/// as before (checked on d15, d24, d02).
 fn srcclip_on() -> bool {
-    std::env::var("OXI_SRCCLIP_ENABLE").is_ok()
+    std::env::var("OXI_SRCCLIP_DISABLE").is_err()
 }
 
 /// A picture whose `a:srcRect` crops away everything is skipped unless this is
