@@ -28345,7 +28345,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && content_width > pitch =>
             {
                 let floored = (content_width / pitch).floor() * pitch;
-                if s1211c {
+                let out = if s1211c {
                     let fs = para
                         .runs
                         .iter()
@@ -28359,7 +28359,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                 } else {
                     floored
+                };
+                if std::env::var("OXI_DBG_FLOORW").is_ok() && (out - content_width).abs() > 0.01 {
+                    let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
+                    eprintln!("[FLOORW] cw={:.2} pitch={:.2} floored={:.2} out={:.2} {:?}",
+                        content_width, pitch, floored, out, head);
                 }
+                out
             }
             _ => content_width,
         }
