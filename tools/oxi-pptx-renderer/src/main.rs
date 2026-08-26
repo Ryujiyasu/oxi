@@ -1821,7 +1821,27 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         }
     }
     let mut loaded = 0;
+    // Which families the MACHINE already has, asked before anything private is
+    // added (see `family_installed`).
+    let installed: std::collections::HashSet<&str> = if skipembed_on() {
+        pres.embedded_fonts
+            .iter()
+            .map(|f| f.typeface.as_str())
+            .filter(|f| family_installed(f))
+            .collect()
+    } else {
+        Default::default()
+    };
     for font in &pres.embedded_fonts {
+        if installed.contains(font.typeface.as_str()) {
+            if sf_debug() {
+                eprintln!(
+                    "INSTALL typeface={:?} bold={} italic={} SKIPPED -- family is installed",
+                    font.typeface, font.bold, font.italic
+                );
+            }
+            continue;
+        }
         let mut stream = Box::new(FontStream {
             data: font.data.clone(),
             pos: 0,
@@ -11709,6 +11729,54 @@ fn enum_faces_debug() {
     }
 }
 
+/// Is `family` already an INSTALLED font on this machine?
+///
+/// Asked BEFORE any private part is loaded, so the answer describes the machine
+/// rather than what this deck has just added. PowerPoint uses an embedded font
+/// only when the family is not available locally, and d47 shows what it costs
+/// to ignore that: its Caladea is installed, its embedded upright parts collide
+/// with it (0x10f) and vanish, and its private ITALIC parts then answer upright
+/// requests -- so upright text is drawn AND spaced in italic metrics
+/// (dx 123.52pt against PowerPoint's 131.04).
+#[cfg(windows)]
+fn family_installed(family: &str) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    unsafe extern "system" fn cb(
+        _lf: *const LOGFONTW,
+        _tm: *const TEXTMETRICW,
+        _kind: u32,
+        found: windows::Win32::Foundation::LPARAM,
+    ) -> i32 {
+        *(found.0 as *mut bool) = true;
+        0 // one hit is enough
+    }
+    let dc = probe_dc();
+    let mut lf = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    let wide: Vec<u16> = family.encode_utf16().take(31).collect();
+    lf.lfFaceName[..wide.len()].copy_from_slice(&wide);
+    let mut found = false;
+    unsafe {
+        EnumFontFamiliesExW(
+            dc,
+            &mut lf,
+            Some(cb),
+            windows::Win32::Foundation::LPARAM(&mut found as *mut bool as isize),
+            0,
+        );
+    }
+    found
+}
+
+/// A deck's embedded parts are skipped for a family the machine already has,
+/// when this is set (opt-in while it is being measured).
+fn skipembed_on() -> bool {
+    std::env::var("OXI_SKIPEMBED_ENABLE").is_ok()
+}
+
 /// The design advances of one face, keyed by code point, in font units.
 #[cfg(windows)]
 struct FaceAdvances {
@@ -14767,6 +14835,19 @@ fn draw_text_baseline_wiu(
         let it = italic && italadv_on();
         runtime_dx_px(dc, text, font_size, family, weight >= 700, it, scale, spc)
     });
+    // The dx array is what POSITIONS the glyphs; GDI's own extent is what the
+    // face it selected would advance. When these disagree the run is drawn in
+    // one face and spaced by another.
+    if let Some(want) = draw_debug() {
+        if text.contains(want.as_str()) {
+            let sum: i32 = dx.as_ref().map(|d| d.iter().sum()).unwrap_or(-1);
+            eprintln!(
+                "DXSUM {sum}px = {:.2}pt  (from {})",
+                sum as f64 / scale,
+                if dx.is_some() { "dx array" } else { "no dx -- GDI spacing" }
+            );
+        }
+    }
     // A faked bold is drawn twice, a fraction of an em apart, because GDI's own
     // emboldening is lighter than PowerPoint's (see `FAUX_BOLD_EM`). The second
     // pass thickens the strokes without moving a single pen position, which is
