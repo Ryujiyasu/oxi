@@ -1107,6 +1107,32 @@ pub(crate) fn anchored_box(
     layout: &Geometry,
     scale: f32,
 ) -> Option<windows::Win32::Foundation::RECT> {
+    // The two axes are asked separately, because a corner can be readable in
+    // one and not the other: `002`'s note reaches column 92 of a sheet drawn
+    // to 93 — off the picture — while its row is right there. Giving up on
+    // both because one is missing loses the row that IS the answer.
+    let across = |anchor: &oxicells_core::ir::Anchor| -> Option<i32> {
+        let left = match anchor.col.checked_sub(layout.first_column) {
+            Some(column) => match layout.columns.get(column as usize) {
+                Some(edge) => *edge,
+                None => *layout
+                    .after_columns
+                    .get(column as usize - layout.columns.len())?,
+            },
+            None => *layout.before_columns.get(anchor.col as usize)?,
+        };
+        Some((left + anchor.col_off as f32 / EMU * scale).round() as i32)
+    };
+    let down = |anchor: &oxicells_core::ir::Anchor| -> Option<i32> {
+        let top = match (anchor.row + 1).checked_sub(layout.first_row) {
+            Some(row) => match layout.rows.get(row as usize) {
+                Some(edge) => *edge,
+                None => *layout.after_rows.get(row as usize - layout.rows.len())?,
+            },
+            None => *layout.before_rows.get(anchor.row as usize)?,
+        };
+        Some((top + anchor.row_off as f32 / EMU * scale).round() as i32)
+    };
     let at = |anchor: &oxicells_core::ir::Anchor| -> Option<(i32, i32)> {
         // The drawing part counts both from zero; the layout counts columns
         // from zero and rows from one, the way the sheet states them. A cell
@@ -1138,7 +1164,17 @@ pub(crate) fn anchored_box(
     let (right, bottom) = match (to, extent) {
         // A corner past the drawn range falls off the picture, which is where
         // the sheet's own edge is: keep the box and let the drawing be cut.
-        (Some(to), _) => at(to).unwrap_or((
+        //
+        // Unless the thing also states how big it is. A note's far corner can
+        // name a column the picture never reaches — `002`'s reaches column 92
+        // of a sheet drawn to 93 — and stretching it to the sheet's edge then
+        // loses the note's own bottom rule entirely. Its stated size is the
+        // better answer there.
+        (Some(to), Some((cx, cy))) => (
+            across(to).unwrap_or(left + (cx as f32 / EMU * scale).round() as i32),
+            down(to).unwrap_or(top + (cy as f32 / EMU * scale).round() as i32),
+        ),
+        (Some(to), None) => at(to).unwrap_or((
             *layout.columns.last().unwrap_or(&0.0) as i32,
             *layout.rows.last().unwrap_or(&0.0) as i32,
         )),
@@ -6583,10 +6619,23 @@ mod windows_draw {
                     (note.size.0 * super::EMU * 96.0 / 72.0) as i64,
                     (note.size.1 * super::EMU * 96.0 / 72.0) as i64,
                 );
-                let Some(box_) = super::anchored_box(&note.from, None, Some(extent), layout, scale)
-                else {
+                let Some(box_) = super::anchored_box(
+                    &note.from,
+                    note.to.as_ref(),
+                    Some(extent),
+                    layout,
+                    scale,
+                ) else {
                     continue;
                 };
+                // Excel's border sits OUTSIDE the fill, ours is drawn over the
+                // fill's edge, so the box has to be a pixel bigger each way to
+                // leave the same fill behind: `_xlsx_note_box.py` reads the
+                // fill off Excel's picture at twelve heights and it is always
+                // one more than ours was.
+                let mut box_ = box_;
+                box_.right += 1;
+                box_.bottom += 1;
                 if box_.right <= box_.left || box_.bottom <= box_.top {
                     continue;
                 }

@@ -36,7 +36,14 @@ REPO = Path(__file__).resolve().parents[2]
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
 SCRATCH = Path(r"C:\tmp\xlsx_note_box")
 HEIGHTS = [30.0, 40.0, 45.75, 50.0, 57.75, 58.0, 58.5, 59.0, 59.25, 60.0, 72.0, 82.5]
+# A pixel is 0.75pt, so these nudge the note's top by a quarter of a pixel at a
+# time. Without them every arm sits on a whole pixel, and a rule that depends
+# on where the top falls WITHIN a pixel cannot show itself: twelve arms agreed
+# on `round(height) + 1` and the corpus still disagreed, because the corpus's
+# notes have fractional tops and the probe's did not.
+NUDGES = [0.0, 0.1875, 0.375, 0.5625]
 WIDE = 120.0
+ARMS = [(tall, nudge) for tall in (58.0, 59.0) for nudge in [0.0, 0.1875, 0.375, 0.5625]]
 GAP = 3          # rows between one note and the next
 
 
@@ -52,13 +59,13 @@ def build() -> bool:
         sheet.Columns(1).ColumnWidth = 3
         sheet.Columns(2).ColumnWidth = 30
         at = 2
-        for tall in HEIGHTS:
+        for tall, nudge in ARMS:
             cell = sheet.Cells(at, 2)
             cell.ClearComments()
             note = cell.AddComment("x")
             note.Shape.Width = WIDE
             note.Shape.Height = tall
-            note.Shape.Top = sheet.Cells(at, 2).Top
+            note.Shape.Top = sheet.Cells(at, 2).Top + nudge
             note.Shape.Left = sheet.Cells(at, 2).Left
             note.Visible = True
             at += GAP + int(tall / 15) + 2
@@ -121,9 +128,9 @@ def main() -> int:
         capture_output=True, text=True, encoding="utf-8", env=dict(os.environ),
     )
     ours = boxes(Image.open(SCRATCH / "oxi.png")) if (SCRATCH / "oxi.png").exists() else []
-    print(f"  {len(HEIGHTS)} note(s) asked for; Excel drew {len(found)}, we drew {len(ours)}")
+    print(f"  {len(ARMS)} note(s) asked for; Excel drew {len(found)}, we drew {len(ours)}")
     print(f"  {'asked pt':>9}{'96dpi px':>10}{'tall E':>7}{'O':>6}{'wide E':>9}{'O':>6}{'top E':>7}{'O':>5}{'left E':>7}{'O':>5}   what Excel's is")
-    for at, (tall, held) in enumerate(zip(HEIGHTS, found)):
+    for at, ((tall, nudge), held) in enumerate(zip(ARMS, found)):
         drawn = held[1] - held[0] + 1
         across = held[3] - held[2] + 1
         mine = ours[at][1] - ours[at][0] + 1 if at < len(ours) else None
@@ -140,7 +147,7 @@ def main() -> int:
                 note.append(f"{name}+2")
         top_e, top_o = held[0], ours[at][0] if at < len(ours) else None
         left_e, left_o = held[2], ours[at][2] if at < len(ours) else None
-        print(f"  {tall:>9}{exact:>10.2f}{drawn:>7}{str(mine):>6}"
+        print(f"  {tall:>6}+{nudge / 0.75:>4.2f}px{exact:>9.2f}{drawn:>7}{str(mine):>6}"
               f"{across:>9}{str(mine_across):>6}"
               f"{top_e:>7}{str(top_o):>5}{left_e:>7}{str(left_o):>5}   "
               f"{', '.join(note) or '—'}"

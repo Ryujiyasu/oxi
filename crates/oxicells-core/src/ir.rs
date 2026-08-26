@@ -324,10 +324,16 @@ pub enum DrawingKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Comment {
     pub from: Anchor,
-    /// How big the box is, in points. The anchor states a second corner as
-    /// well, but Excel sizes a note to its text and keeps the result in the
-    /// style's `width`/`height` — which is what it shows.
+    /// How big the box is, in points, as the style states it. It is what is
+    /// used when the anchor's far corner names a cell the picture does not
+    /// reach.
     pub size: (f32, f32),
+    /// The anchor's far corner. Excel draws a note between its two corners:
+    /// `002`'s note says `height:58pt` and Excel draws 78 pixels, which is
+    /// what the anchor's rows come to. A note Excel wrote itself agrees —
+    /// its far corner's offset is the width in pixels exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Anchor>,
     /// The note's text, dressed the way a shape's is.
     pub text: ShapeText,
     /// Six hex digits; Excel's own note is FFFFE1.

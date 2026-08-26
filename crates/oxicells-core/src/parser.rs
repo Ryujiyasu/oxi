@@ -2083,7 +2083,9 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
             row: row.max(0) as u32,
             row_off: y * 9525,
         };
-        let _ = (right, dx2, bottom, dy2);
+        // The far corner is the box. A note's `<x:Anchor>` names both, and
+        // the offsets are pixels within the cell each names.
+        let far = corner(right, dx2, bottom, dy2);
         // How big the box is comes from the style, in whatever unit it names:
         // Excel sizes a note to its text and writes the answer there.
         let measure = |name: &str| -> Option<f32> {
@@ -2123,6 +2125,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         held.push(Comment {
             from: corner(left, dx, top, dy),
             size: (wide, tall),
+            to: Some(far),
             text: ShapeText {
                 paragraphs: paragraphs.clone(),
                 anchor: Some("t".to_string()),
