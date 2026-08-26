@@ -12,18 +12,63 @@ that leaked into a neighbouring cell shows up as a second paragraph moving.
 
 Word is the judge rather than our own reader, because the question is whether
 the change reached the file as Word understands it.
+
+That opinion is expensive. Word hangs — no dialog, no error, no end — on a
+document that links to something it cannot reach, and one of the corpus's own
+ORIGINALS does; its RPC endpoint also dies partway through a long run of opens,
+after which every remaining file reads as unopenable. Both are handled here (a
+watchdog that ends Word under the blocked call, and a restart-and-retry), but
+thirty documents still take the better part of an hour.
+
+So this is the second opinion, not the daily one. `oxi-roundtrip --sentinel`
+asks the same question of every document in seconds, against our own reader:
+exactly one place changed, and it holds the mark. Use this when Word's own
+view of a particular document is what is in doubt.
 """
 
 from __future__ import annotations
 
 import argparse
+import queue
+import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import win32com.client
 
 REPO = Path(__file__).resolve().parents[2]
 ORIGINALS = REPO / "tools" / "golden-test" / "documents" / "docx"
+
+
+def within(seconds: float, work, *args):
+    """Run `work`, or give up on it.
+
+    A COM call cannot be interrupted from outside, and Word will sit on a
+    document that links to something it cannot reach for as long as you let
+    it — no dialog, no error, no end. The only lever is to end Word itself,
+    which turns the blocked call into an RPC failure the worker can return
+    from. So the work runs on its own thread and, if the clock runs out, Word
+    is ended under it.
+    """
+    answer: queue.Queue = queue.Queue(maxsize=1)
+
+    def run():
+        try:
+            answer.put(work(*args))
+        except Exception:
+            answer.put(None)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        return answer.get(timeout=seconds), True
+    except queue.Empty:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "WINWORD.EXE"],
+            capture_output=True, check=False,
+        )
+        return None, False
 
 
 def fresh_word():
@@ -75,6 +120,8 @@ def main() -> int:
     parser.add_argument("where", help="directory of documents the editor wrote")
     parser.add_argument("--mark", default="OXIMARK")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--patience", type=float, default=45.0,
+                        help="seconds to give Word per document before ending it")
     args = parser.parse_args()
 
     edited = sorted(
@@ -90,8 +137,16 @@ def main() -> int:
             before = ORIGINALS / path.name
             if not before.exists():
                 continue
-            was = paragraphs(word, before)
-            now = paragraphs(word, path)
+            (was, in_time) = within(args.patience, paragraphs, word, before)
+            if not in_time:
+                unread.append(f"{path.name} (the ORIGINAL hangs Word)")
+                word = fresh_word()
+                continue
+            (now, in_time) = within(args.patience, paragraphs, word, path)
+            if not in_time:
+                wrong.append((path.name, "hangs Word, though the original does not"))
+                word = fresh_word()
+                continue
             if was is None or now is None:
                 # Word's RPC endpoint dies partway through a long run of opens
                 # — a hundred documents in, it simply stops answering, and
