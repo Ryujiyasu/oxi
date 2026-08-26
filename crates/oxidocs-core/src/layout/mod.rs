@@ -1971,6 +1971,12 @@ impl LayoutCursor {
 
 pub struct LayoutEngine {
     default_font_size: f32,
+    /// S1236: the size-REGIME reference = docDefaults sz else the Normal
+    /// (default paragraph style) sz else `default_font_size`. Unlike
+    /// `default_font_size` it never takes the S636 11.0/10.0 compromise when
+    /// Normal declares a size — the oikomi regime comparison needs the size
+    /// Word's char grid actually uses (harassmanual: Normal 10.5, not 11.0).
+    doc_regime_fs: f32,
     /// S1211B: docDefaults rPrDefault DECLARED a w:sz (the floor pitch is then
     /// the real document default; absent = the S636 compromise 11.0/10.0 whose
     /// value Word does not share -- floor excluded there).
@@ -2365,6 +2371,7 @@ impl LayoutEngine {
     pub fn new() -> Self {
         Self {
             default_font_size: 11.0,
+            doc_regime_fs: 11.0,
             doc_default_sz_declared: false,
             default_font_family: None,
             default_font_family_east_asia: None,
@@ -2450,6 +2457,20 @@ impl LayoutEngine {
                     10.0
                 }
             });
+        let doc_regime_fs = doc
+            .styles
+            .doc_default_run_style
+            .as_ref()
+            .and_then(|s| s.font_size)
+            .or_else(|| {
+                doc.styles
+                    .default_paragraph_style_id
+                    .as_ref()
+                    .and_then(|id| doc.styles.styles.get(id))
+                    .and_then(|sd| sd.paragraph.default_run_style.as_ref())
+                    .and_then(|rs| rs.font_size)
+            })
+            .unwrap_or(default_font_size);
         let default_font_family = doc
             .styles
             .doc_default_run_style
@@ -2493,6 +2514,7 @@ impl LayoutEngine {
             });
         Self {
             default_font_size,
+            doc_regime_fs,
             doc_default_sz_declared: doc
                 .styles
                 .doc_default_run_style
@@ -22885,7 +22907,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         t.chars().any(|c| !c.is_whitespace() && c != '\u{3000}')
                     })
                     .map(|(_, rs, _, _, _)| self.resolve_font_size(rs, para_style))
-                    .map_or(false, |fs| (fs - self.default_font_size).abs() >= 1.5);
+                    // S1236 (2026-08-27): DIRECTIONAL + regime-referenced. The
+                    // harassmanual slice ablation (v4/v5) pinned the oikomi
+                    // regime to run size vs the grid default (docDefaults else
+                    // Normal — font-irrelevant: MS Mincho halves too at sz24):
+                    // ABOVE the default (12 > 10.5) Word demand-compresses
+                    // mid 、to fs/2 (= the s568 cap-6 branch, kept); AT the
+                    // default it refuses (probe C 3.55/M5, slice v5 5.2/M2);
+                    // BELOW it (parttime 8 < 12) the S1235 small caps apply.
+                    .map_or(false, |fs| fs - self.doc_regime_fs <= -1.5);
             // S592 (2026-06-17): a PROPORTIONAL CJK font (pgothic family) in a
             // linesAndChars grid is OFF-GRID, so the s476 capacity break must NOT
             // fire — its 約物 are already at the font's narrow proportional advance
