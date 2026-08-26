@@ -28333,7 +28333,26 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         let s1211 = std::env::var("OXI_S1211").ok().as_deref() == Some("1");
         let s1211b = std::env::var("OXI_S1211B").ok().as_deref() == Some("1")
             && self.doc_default_sz_declared;
-        let s1211c = std::env::var("OXI_S1211C").ok().as_deref() == Some("1");
+        // S1211D (2026-08-26, opt-in OXI_S1211C=1 pending gates): the CLOSED
+        // law. The character-grid line floor (available = floor(content/cell)
+        // × cell, cell = docDefaults-else-Normal size, before indents) applies
+        // iff BOTH:
+        //   (1) the paragraph's adjustRightInd is ON (the pPr/style-chain
+        //       property whose UI name is literally "automatically adjust
+        //       right indent when a document grid is defined" — harassmanual's
+        //       Normal sets w:val="0" and its lines break at the raw edge;
+        //       flipping it either way flips the slice capacities 43↔42 and
+        //       64↔65), AND
+        //   (2) compatibilityMode ≤ 14 or undeclared (cm15 breaks at the raw
+        //       edge on every measured point: b837 slice cm-bisection 40↔41,
+        //       kyotei/b837 corpus byte-identical without the floor).
+        // With true advances (a = fs) all 24 measured points fit strict
+        // end ≤ F — the earlier "11pt exemption"/"ink slack"/"start-test"
+        // readings were measurement-noise arithmetic on device-quantized
+        // advances (archive R4-R11).
+        let s1211c = std::env::var("OXI_S1211C").ok().as_deref() == Some("1")
+            && para.style.adjust_right_ind
+            && !(self.compat_mode >= 15 && self.compat_mode_explicit);
         let grid_has_char_space = match (char_pitch, cw_ratio) {
             (Some(pitch), Some(ratio)) if ratio > 0.0 => (pitch - pitch / ratio).abs() > 0.01,
             _ => false,
@@ -28344,26 +28363,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     && pitch > 0.0
                     && content_width > pitch =>
             {
-                let floored = (content_width / pitch).floor() * pitch;
-                let out = if s1211c {
-                    let fs = para
-                        .runs
-                        .iter()
-                        .find(|r| !r.text.trim().is_empty())
-                        .map(|r| self.resolve_font_size(&r.style, &para.style))
-                        .unwrap_or(self.default_font_size);
-                    if self.compat_mode >= 15 && self.compat_mode_explicit {
-                        (floored + fs - 0.01).min(content_width)
-                    } else {
-                        floored
-                    }
-                } else {
-                    floored
-                };
+                let out = (content_width / pitch).floor() * pitch;
                 if std::env::var("OXI_DBG_FLOORW").is_ok() && (out - content_width).abs() > 0.01 {
                     let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(10).collect();
-                    eprintln!("[FLOORW] cw={:.2} pitch={:.2} floored={:.2} out={:.2} {:?}",
-                        content_width, pitch, floored, out, head);
+                    eprintln!("[FLOORW] cw={:.2} pitch={:.2} out={:.2} {:?}",
+                        content_width, pitch, out, head);
                 }
                 out
             }

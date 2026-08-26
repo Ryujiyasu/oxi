@@ -209,6 +209,10 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if child.heading_level.is_none() {
         child.heading_level = parent.heading_level;
     }
+    // S1211D: false overrides the struct default true (snap_to_grid pattern).
+    if !parent.adjust_right_ind {
+        child.adjust_right_ind = false;
+    }
     if child.outline_level.is_none() {
         child.outline_level = parent.outline_level;
     }
@@ -1023,6 +1027,18 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
             }
             style.snap_to_grid = enabled;
         }
+        "adjustRightInd" => {
+            // S1211D: the character-grid line floor's own switch — harassmanual
+            // carries <w:adjustRightInd w:val="0"/> on Normal.
+            let mut enabled = true;
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                }
+            }
+            style.adjust_right_ind = enabled;
+        }
         "autoSpaceDE" => {
             // Session 85 fix: parse autoSpaceDE in STYLE definitions (was missing).
             // tokumei_08_01 series uses style "ac" with <w:autoSpaceDE w:val="0"/>;
@@ -1614,6 +1630,18 @@ fn parse_style_definition(
                                 }
                             }
                             style.snap_to_grid = enabled;
+                        }
+                        "adjustRightInd" => {
+                            // S1211D: the char-grid line floor switch (harassmanual
+                            // Normal: w:val="0").
+                            let mut enabled = true;
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    enabled = val.as_ref() != "0" && val.as_ref() != "false";
+                                }
+                            }
+                            style.adjust_right_ind = enabled;
                         }
                         // Session 85 fix: parse autoSpaceDE/autoSpaceDN/wordWrap in
                         // STYLE definitions. Previously parse_style_definition only

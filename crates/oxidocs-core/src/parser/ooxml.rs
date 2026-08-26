@@ -3087,6 +3087,14 @@ fn parse_paragraph(
             if !ds.snap_to_grid && !(s606b && style.has_explicit_snap_to_grid) {
                 style.snap_to_grid = false;
             }
+            // S1211D: inherit adjust_right_ind=0 from the style chain (same
+            // false-overrides-default pattern as snap_to_grid). harassmanual's
+            // Normal carries <w:adjustRightInd w:val="0"/> — the input that
+            // disables the character-grid line floor (measured both ways:
+            // harass slice −ARI0 → strict 42; parttime slice +ARI0 → raw 65).
+            if !ds.adjust_right_ind {
+                style.adjust_right_ind = false;
+            }
             // Session 85 fix: inherit auto_space_de from style (false overrides
             // default true). Mirrors snap_to_grid pattern. Confirmed via CR9
             // minimal repro: when paragraph has BOTH direct pPr autoSpaceDE=0
