@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/oxidocs", "crates/oxidocs-common", "crates/oxicells-core", "crates/oxicells-calc", "crates/oxivba-core", "crates/oxidocs-core", "crates/oxihanko", "crates/oxipdf-core", "crates/oxidocs-wasm", "crates/oxislides-core", "crates/oxidocs-cli"]
-exclude = ["tools/font-metrics-gen", "tools/golden-test", "crates/oxi-desktop", "tools/oxi-gdi-renderer", "tools/oxi-dwrite-renderer", "tools/emf-to-png", "tools/oxi-pptx-renderer", "tools/oxi-xlsx-renderer"]
+exclude = ["tools/font-metrics-gen", "tools/golden-test", "crates/oxi-desktop", "tools/oxi-gdi-renderer", "tools/oxi-dwrite-renderer", "tools/emf-to-png", "tools/oxi-pptx-renderer", "tools/oxi-xlsx-renderer", "tools/oxi-roundtrip"]
 resolver = "2"
 
 [profile.release]
