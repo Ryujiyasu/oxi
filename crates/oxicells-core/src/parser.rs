@@ -2039,7 +2039,11 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
 
     // The box of each note, and whether it is shown at all.
     let mut held = Vec::new();
-    for shape in vml.split("<v:shape").skip(1) {
+    // The space matters: `<v:shapetype>` starts with `<v:shape` too, so
+    // splitting without it makes the first piece straddle the shapetype AND
+    // the first real note — and every size after that can pair with the wrong
+    // anchor.
+    for shape in vml.split("<v:shape ").skip(1) {
         let shape = shape.split("</v:shape>").next().unwrap_or(shape);
         if !shape.contains("<x:Visible/>") {
             continue;
