@@ -9670,6 +9670,60 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         ((eh as f64 * (1.0 - dt - db)).round() as i32).max(1),
                                     )
                                 };
+                                // S-SRCCLIP (2026-08-26): `a:srcRect` may reach
+                                // OUTSIDE the image, and what lies out there is
+                                // nothing -- not the edge pixel stretched.
+                                //
+                                // Blind-set doc 49 slide 15 asks for
+                                // `r=-486.51%`: the source rect is 5.87x the
+                                // image wide, so PowerPoint paints the photo
+                                // across the leftmost sixth of the frame and
+                                // leaves the rest clear for the panel beneath.
+                                // Oxi stretched the whole photo over the frame
+                                // and buried the slide's text -- mean|err| 99
+                                // of 255, the worst slide in either corpus.
+                                // Slide 3 of the same deck fails the other way:
+                                // `l=-1.227%` makes the source x negative and
+                                // the picture vanished outright.
+                                //
+                                // Clipping the source rect to the image and
+                                // giving the destination the SAME fraction
+                                // handles both, and subsumes the degenerate
+                                // case (an empty rect clips to nothing). 38 of
+                                // the two corpora's 1885 srcRects reach out of
+                                // range, over 7 decks.
+                                let (sx0, sy0, sw, shh, dx, dy, dw, dh) = if srcclip_on() {
+                                    let fx0 = iw as f64 * sl;
+                                    let fx1 = iw as f64 * (1.0 - sr);
+                                    let fy0 = ih as f64 * st;
+                                    let fy1 = ih as f64 * (1.0 - sb);
+                                    if fx1 - fx0 <= 0.0 || fy1 - fy0 <= 0.0 {
+                                        continue;
+                                    }
+                                    let cx0 = fx0.max(0.0);
+                                    let cx1 = fx1.min(iw as f64);
+                                    let cy0 = fy0.max(0.0);
+                                    let cy1 = fy1.min(ih as f64);
+                                    if cx1 - cx0 < 1.0 || cy1 - cy0 < 1.0 {
+                                        continue;
+                                    }
+                                    let u0 = (cx0 - fx0) / (fx1 - fx0);
+                                    let u1 = (cx1 - fx0) / (fx1 - fx0);
+                                    let v0 = (cy0 - fy0) / (fy1 - fy0);
+                                    let v1 = (cy1 - fy0) / (fy1 - fy0);
+                                    (
+                                        cx0.round() as i32,
+                                        cy0.round() as i32,
+                                        ((cx1 - cx0).round() as i32).max(1),
+                                        ((cy1 - cy0).round() as i32).max(1),
+                                        dx + (f64::from(dw) * u0).round() as i32,
+                                        dy + (f64::from(dh) * v0).round() as i32,
+                                        ((f64::from(dw) * (u1 - u0)).round() as i32).max(1),
+                                        ((f64::from(dh) * (v1 - v0)).round() as i32).max(1),
+                                    )
+                                } else {
+                                    (sx0, sy0, sw, shh, dx, dy, dw, dh)
+                                };
                                 // A blipFill belongs to the SHAPE, so it is
                                 // clipped to the shape's outline -- both the
                                 // part of the box the outline does not cover
@@ -11951,6 +12005,11 @@ fn line_width_pt_runs(
         total += measure(&seg, c)?;
     }
     Some(total)
+}
+
+/// A `a:srcRect` reaching outside the image is clipped to it only when set.
+fn srcclip_on() -> bool {
+    std::env::var("OXI_SRCCLIP_ENABLE").is_ok()
 }
 
 /// A picture whose `a:srcRect` crops away everything is skipped unless this is
