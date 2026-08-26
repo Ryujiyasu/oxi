@@ -5744,7 +5744,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                             if p.runs.iter().all(|r| r.text.is_empty())
                                 && cursor.cursor_y
                                     + prev_space_after.max(p.style.space_before.unwrap_or(0.0))
-                                    + self.estimate_para_height(p, content_width, grid_pitch,
+                                    + self.estimate_para_height(p, self.s1211c_floor_body_width(p, content_width, page.grid_char_pitch, page.grid_char_cw_ratio), grid_pitch,
                                         None, false, None, None)
                                     > ft_top + 0.1);
                     // S1230 (2026-08-26, opt-out OXI_S1230_DISABLE): a TEXT line
@@ -5773,7 +5773,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         && matches!(block, Block::Paragraph(p)
                             if p.runs.iter().any(|r| !r.text.is_empty())
                                 && {
-                                    let est = self.estimate_para_height(p, content_width,
+                                    let est = self.estimate_para_height(p, self.s1211c_floor_body_width(p, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                         grid_pitch, None, false, None, None);
                                     let l1 = match grid_pitch {
                                         Some(gp) if gp > 0.0 && p.style.snap_to_grid => {
@@ -6598,7 +6598,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         if has_lrpb_at_start && !elements.is_empty() && !lrpb_knob_off {
                             let est_h = self.estimate_para_height(
                                 para,
-                                content_width,
+                                self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                 grid_pitch,
                                 None,
                                 false,
@@ -6678,7 +6678,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     if para.style.keep_lines && !elements.is_empty() {
                         let est_h = self.estimate_para_height(
                             para,
-                            content_width,
+                            self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                             grid_pitch,
                             None,
                             false,
@@ -6744,7 +6744,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         if let Some(Block::Paragraph(next_para)) = page.blocks.get(block_idx + 1) {
                             let this_h0 = self.estimate_para_height(
                                 para,
-                                content_width,
+                                self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                 grid_pitch,
                                 None,
                                 false,
@@ -6753,7 +6753,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                             );
                             let next_h = self.estimate_para_height(
                                 next_para,
-                                content_width,
+                                self.s1211c_floor_body_width(next_para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                 grid_pitch,
                                 None,
                                 false,
@@ -7115,7 +7115,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                 if let Some(Block::Paragraph(nn)) = page.blocks.get(block_idx + 2) {
                                     let nn_h = self.estimate_para_height(
                                         nn,
-                                        content_width,
+                                        self.s1211c_floor_body_width(nn, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                         grid_pitch,
                                         None,
                                         false,
@@ -7452,7 +7452,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                             if std::env::var("OXI_S959_DISABLE").is_err() {
                                 let this_h = self.estimate_para_height(
                                     para,
-                                    content_width,
+                                    self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                     grid_pitch,
                                     None,
                                     false,
@@ -7658,7 +7658,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                             if s1024 {
                                 let this_h = self.estimate_para_height(
                                     para,
-                                    content_width,
+                                    self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                                     grid_pitch,
                                     None,
                                     false,
@@ -7991,7 +7991,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     if num_columns > 1 && std::env::var("OXI_S723_DISABLE").is_ok() {
                         let est_h = self.estimate_para_height(
                             para,
-                            content_width,
+                            self.s1211c_floor_body_width(para, content_width, page.grid_char_pitch, page.grid_char_cw_ratio),
                             grid_pitch,
                             None,
                             false,
@@ -14493,39 +14493,22 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         //   43-char lines vs a 40-char box floor) is exactly this ink slack
         //   crossing a small partial cell; parttime's 63-vs-66 char lines are
         //   the floor itself (+0.108 SSIM when applied).
-        let s1211c = std::env::var("OXI_S1211C").ok().as_deref() == Some("1");
-        let grid_content_width = match effective_char_pitch {
-            Some(pitch)
-                if ((s1211 && grid_has_char_space) || s1211b || s1211c)
-                    && pitch > 0.0
-                    && content_width > pitch =>
-            {
-                let floored = (content_width / pitch).floor() * pitch;
-                if s1211c {
-                    // v2 (R8): the boundary test is compat-mode-dependent —
-                    // settings-less/legacy docs use the strict box floor, but
-                    // compatibilityMode 15 (the b837 slice bisection: settings
-                    // with ONLY cm15 flips n 40→41) lets the last char START
-                    // at ≤ F, i.e. available = floored + one char advance of
-                    // the paragraph's base size. When that reaches past the
-                    // raw width the floor is a no-op (b837: 444+11 > 453.5).
-                    let fs = para
-                        .runs
-                        .iter()
-                        .find(|r| !r.text.trim().is_empty())
-                        .map(|r| self.resolve_font_size(&r.style, &para.style))
-                        .unwrap_or(self.default_font_size);
-                    if self.compat_mode >= 15 && self.compat_mode_explicit {
-                        (floored + fs - 0.01).min(content_width)
-                    } else {
-                        floored
-                    }
-                } else {
-                    floored
-                }
-            }
-            _ => content_width,
-        };
+        // v2 (R8): the boundary test is compat-mode-dependent — settings-less/
+        // legacy docs use the strict box floor, but compatibilityMode 15 (the
+        // b837 slice bisection: settings with ONLY cm15 flips n 40→41) lets
+        // the last char START at ≤ F, i.e. available = floored + one char
+        // advance of the paragraph's base size; past the raw width the floor
+        // is a no-op (b837: 444+11 > 453.5). R9: the SAME width must reach the
+        // body page-fit/keepNext estimates (s1211c_floor_body_width mirror) or
+        // Phase-1 breaks (harassmanual/parttime PASS→FAIL on the layout-only
+        // floor). Shared logic lives in s1211c_floor_body_width.
+        let _ = (s1211, s1211b, grid_has_char_space);
+        let grid_content_width = self.s1211c_floor_body_width(
+            para,
+            content_width,
+            effective_char_pitch,
+            page.grid_char_cw_ratio,
+        );
         let available_width = grid_content_width - indent_left - indent_right;
 
         // Render list marker if present
@@ -28337,6 +28320,51 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
     ///
     /// Returns the offset from line-box top to where text should start.
     #[allow(unused_assignments)]
+    /// S1211C: the grid-cell floored body wrap width (estimate==render
+    /// mirror — Phase-1 broke when only the layout side floored). Returns
+    /// `content_width` unchanged unless the opt-in flags fire.
+    fn s1211c_floor_body_width(
+        &self,
+        para: &Paragraph,
+        content_width: f32,
+        char_pitch: Option<f32>,
+        cw_ratio: Option<f32>,
+    ) -> f32 {
+        let s1211 = std::env::var("OXI_S1211").ok().as_deref() == Some("1");
+        let s1211b = std::env::var("OXI_S1211B").ok().as_deref() == Some("1")
+            && self.doc_default_sz_declared;
+        let s1211c = std::env::var("OXI_S1211C").ok().as_deref() == Some("1");
+        let grid_has_char_space = match (char_pitch, cw_ratio) {
+            (Some(pitch), Some(ratio)) if ratio > 0.0 => (pitch - pitch / ratio).abs() > 0.01,
+            _ => false,
+        };
+        match char_pitch {
+            Some(pitch)
+                if ((s1211 && grid_has_char_space) || s1211b || s1211c)
+                    && pitch > 0.0
+                    && content_width > pitch =>
+            {
+                let floored = (content_width / pitch).floor() * pitch;
+                if s1211c {
+                    let fs = para
+                        .runs
+                        .iter()
+                        .find(|r| !r.text.trim().is_empty())
+                        .map(|r| self.resolve_font_size(&r.style, &para.style))
+                        .unwrap_or(self.default_font_size);
+                    if self.compat_mode >= 15 && self.compat_mode_explicit {
+                        (floored + fs - 0.01).min(content_width)
+                    } else {
+                        floored
+                    }
+                } else {
+                    floored
+                }
+            }
+            _ => content_width,
+        }
+    }
+
     fn text_y_offset_for_line(
         &self,
         line: &Line,
