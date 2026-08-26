@@ -10588,6 +10588,22 @@ fn nice_axis_max_div(max_val: f64) -> (f64, usize) {
 
 /// Paint a shape's `a:gradFill`, clipped to its outline.
 ///
+/// A turned ramp spans the shape's turned extent unless this is set.
+///
+/// Gate (2026-08-26), every deck carrying a gradient under a rotation:
+///
+///     blind 28  0.913932 -> 0.957642  (+0.043710)
+///     blind 09  0.968558 -> 0.973750  (+0.005192)
+///     dev  d15  0.955750 -> 0.955750  (unchanged: rotations near -110 deg)
+///     dev  d24  0.956726 -> 0.956726  (unchanged: -60 and -26.8 deg)
+///
+/// On blind 28 slide 20 the ramp goes from spanning 44 of its 63 green levels
+/// to spanning 64, matching PowerPoint band for band, and the slide's
+/// mean|err| falls 4.33 -> 1.30.
+fn gradspan_on() -> bool {
+    std::env::var("OXI_GRADSPAN_DISABLE").is_err()
+}
+
 /// The ramp model is the one already derived for slide backgrounds (linear
 /// angle / scaled, or a circular focus running to the farthest corner); only
 /// the area differs. The corpus has 302 slide-level gradient shapes on 35
@@ -10605,18 +10621,58 @@ unsafe fn paint_shape_gradient(
     if !shapegrad_on() {
         return false;
     }
-    let w = (sh.width as f64 * scale).round() as i32;
-    let h = (sh.height as f64 * scale).round() as i32;
+    let turned = gradient_turned_with_shape(sh, g);
+    // S-GRADSPAN (2026-08-26). `gradient_turned_with_shape` folds the shape's
+    // rotation into the ANGLE, so the box the ramp is measured across has to be
+    // the rotated one too. Measuring a turned ramp across the UNROTATED box
+    // stretches it by exactly the box's aspect whenever the rotation is not a
+    // multiple of 180 degrees.
+    //
+    // Blind doc 28 is that case on every slide: a -90 degree group holds a
+    // shape Oxi sees as 810 x 1440 with `ang=0`. Folding the rotation makes the
+    // angle -90, and across the unrotated box the axis comes to
+    // |810*cos| + |1440*sin| = 1440 -- spread over a shape that is only 810 tall
+    // once turned. The ramp then reaches neither stop: PowerPoint runs green
+    // 185 -> 122 down the slide (its two stops, 186 and 121) and Oxi ran
+    // 178 -> 134, about 70% of the range.
+    //
+    // The turned extent is the rotated box's AABB, |w cos| + |h sin| across and
+    // |w sin| + |h cos| down, about the same centre.
+    // ★Only QUARTER turns. For a multiple of 90 degrees the rotated AABB is the
+    // same box with its sides swapped, so measuring the turned ramp across it
+    // is identical to painting in the shape's own frame and then rotating --
+    // the physically right model. For any other angle the two differ, and the
+    // AABB is the wrong one: it regressed d15 (-0.0035, rotations near -110
+    // degrees) and d24 (-0.0051, -60 and -26.8) while fixing the quarter-turn
+    // decks. Doing arbitrary angles properly means giving the painter the axis
+    // LENGTH from the local box separately from the DIRECTION, which this does
+    // not attempt.
+    let quarter = (sh.rotation.rem_euclid(90.0)).min(90.0 - sh.rotation.rem_euclid(90.0)) < 0.01;
+    let (bw, bh) = if gradspan_on() && turned.is_some() && sh.rotation != 0.0 && quarter {
+        let th = (sh.rotation as f64).to_radians();
+        let (c, s2) = (th.cos().abs(), th.sin().abs());
+        (
+            sh.width as f64 * c + sh.height as f64 * s2,
+            sh.width as f64 * s2 + sh.height as f64 * c,
+        )
+    } else {
+        (sh.width as f64, sh.height as f64)
+    };
+    let w = (bw * scale).round() as i32;
+    let h = (bh * scale).round() as i32;
     if w <= 0 || h <= 0 {
         return false;
     }
+    // The box keeps the shape's centre, so a turned one starts elsewhere.
+    let ox = (sh.x + sh.width / 2.0) as f64 - bw / 2.0;
+    let oy = (sh.y + sh.height / 2.0) as f64 - bh / 2.0;
     // Clip first (the region is captured in device space), then shift the
     // origin so the background painter's 0..w,0..h maps onto the shape box.
     let clipped = clip_to_geometry_gdi(dc, sh, scale);
     let mut clip_rgn = None;
     if !clipped {
-        let x = (sh.x as f64 * scale).round() as i32;
-        let y = (sh.y as f64 * scale).round() as i32;
+        let x = (ox * scale).round() as i32;
+        let y = (oy * scale).round() as i32;
         let rgn = CreateRectRgn(x, y, x + w, y + h);
         let _ = SelectClipRgn(dc, rgn);
         clip_rgn = Some(rgn);
@@ -10624,11 +10680,10 @@ unsafe fn paint_shape_gradient(
     let mut old_org = windows::Win32::Foundation::POINT::default();
     let _ = SetViewportOrgEx(
         dc,
-        (sh.x as f64 * scale).round() as i32,
-        (sh.y as f64 * scale).round() as i32,
+        (ox * scale).round() as i32,
+        (oy * scale).round() as i32,
         Some(&mut old_org),
     );
-    let turned = gradient_turned_with_shape(sh, g);
     paint_bg_gradient(dc, w, h, turned.as_ref().unwrap_or(g));
     let _ = SetViewportOrgEx(dc, old_org.x, old_org.y, None);
     let _ = SelectClipRgn(dc, None);
