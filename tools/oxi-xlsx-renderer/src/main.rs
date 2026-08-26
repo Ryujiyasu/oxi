@@ -895,15 +895,31 @@ pub(crate) fn shrunk_to_fit(
     let fits = |points: f32| {
         run_width(face, points, bold, italic, text).is_some_and(|width| width <= room)
     };
+    let told = std::env::var("OXI_XLSX_DUMP_SHRINK").is_ok();
     if room <= 0.0 || fits(points) {
+        if told {
+            eprintln!(
+                "shrink {face} {points} bold={bold} room={room:.2} width={:?} stays",
+                run_width(face, points, bold, italic, text)
+            );
+        }
         return points;
     }
     let natural = (points * 96.0 / 72.0).round() as i32;
-    (1..natural)
+    let chosen = (1..natural)
         .rev()
         .map(|em| em as f32 * 72.0 / 96.0)
         .find(|smaller| fits(*smaller))
-        .unwrap_or(points)
+        .unwrap_or(points);
+    if told {
+        eprintln!(
+            "shrink {face} {points} bold={bold} room={room:.2} asked_width={:?} -> {chosen} width={:?} text={:?}",
+            run_width(face, points, bold, italic, text),
+            run_width(face, chosen, bold, italic, text),
+            text.chars().take(20).collect::<String>()
+        );
+    }
+    chosen
 }
 
 /// The columns a cell's text is laid out across: its own — and the ones a
@@ -5493,7 +5509,12 @@ mod windows_draw {
                     // text carries a space where the format says `_x`, so what
                     // is missing is the difference between that space and x.
                     let reserved = match (&cell.value, cell.style.number_format.as_deref()) {
-                        (CellValue::Number(value), Some(format)) if format.contains('_') => {
+                        // Not when the cell wraps: the room is trimmed away
+                        // with the line's trailing space, so there is nothing
+                        // left to make the difference up on.
+                        (CellValue::Number(value), Some(format))
+                            if format.contains('_') && !cell.style.wrap_text =>
+                        {
                             let (before, after) = super::reserved_room(format, *value < 0.0);
                             let blank = width_of(" ");
                             let room = |held: Vec<char>| {
@@ -6112,7 +6133,19 @@ mod windows_draw {
                             // well as from the pieces, or the spread comes out
                             // short by their advance
                             // (`_xlsx_distributed_spaces.py`).
-                            let spread_line = if placed == Align::Spread {
+                            //
+                            // A WRAPPED line drops them too, whatever its
+                            // alignment. That is what a number format's
+                            // reserved room turns into — `0_)` writes the
+                            // blank as a space — so a wrapped `0_)` sits
+                            // exactly where a wrapped `0` sits, while an
+                            // unwrapped one keeps the room. 42 pairs of arms
+                            // in `_xlsx_reserved_align.py` say so across two
+                            // faces, seven formats and the three alignments,
+                            // and it is the five pixels every company number
+                            // in `procurement_contractor_list_02` stands left
+                            // of Excel's.
+                            let spread_line = if placed == Align::Spread || cell.style.wrap_text {
                                 line.trim_end_matches(' ')
                             } else {
                                 line.as_str()
