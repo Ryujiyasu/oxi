@@ -254,7 +254,23 @@ fn differences(
     }
 }
 
-/// The verdict for a marked edit: exactly one place changed, holding the mark.
+/// The element a path belongs to: everything up to and including its last
+/// index.
+///
+/// Counting differing LEAVES asks the wrong question. Writing a string over a
+/// number turns `{"Number":1}` into `{"String":"OXIMARK"}`, which is one key
+/// gone and one appeared — two leaves, one cell. Writing a value over a
+/// formula changes the value and takes the formula away — two leaves, one
+/// cell. Neither is a leak. What a leak looks like is two DIFFERENT cells
+/// moving, and that is what this makes visible.
+fn element_of(path: &str) -> &str {
+    match path.rfind(']') {
+        Some(at) => &path[..=at],
+        None => path,
+    }
+}
+
+/// The verdict for a marked edit: one element changed, and it holds the mark.
 fn only_the_mark<T: serde::Serialize>(before: &T, after: &T, mark: &str) -> Verdict {
     let (Ok(one), Ok(two)) = (
         serde_json::to_value(before),
@@ -264,12 +280,26 @@ fn only_the_mark<T: serde::Serialize>(before: &T, after: &T, mark: &str) -> Verd
     };
     let mut found = Vec::new();
     differences(&one, &two, "", &mut found);
-    match found.as_slice() {
-        [(_, held)] if held.contains(mark) => Verdict::Whole,
-        [] => Verdict::Changed("the mark never arrived".into()),
-        [(where_at, held)] => Verdict::Changed(format!("one change, but {where_at} holds {held}")),
-        many => Verdict::Changed(format!("{} places changed, not one", many.len())),
+    if found.is_empty() {
+        return Verdict::Changed("the mark never arrived".into());
     }
+    let mut elements: Vec<&str> = found.iter().map(|(at, _)| element_of(at)).collect();
+    elements.sort_unstable();
+    elements.dedup();
+    if elements.len() > 1 {
+        return Verdict::Changed(format!(
+            "{} elements changed, not one: {}",
+            elements.len(),
+            elements.join(", ")
+        ));
+    }
+    if !found.iter().any(|(_, held)| held.contains(mark)) {
+        return Verdict::Changed(format!(
+            "one element changed, but nothing in it holds the mark: {}",
+            found[0].0
+        ));
+    }
+    Verdict::Whole
 }
 
 fn brief(held: &serde_json::Value) -> String {
