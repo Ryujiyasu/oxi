@@ -139,14 +139,21 @@ pub fn line_hmtx_width_pt(line: &str, fs: f32, family: &str) -> Option<f32> {
 /// advance like PowerPoint. Pixels are rounded from the em value at `scale`
 /// (px per pt). Returns None if the family is unsupported or any character
 /// is outside the table (caller then falls back to plain `TextOutW`).
-pub fn line_hmtx_dx_px(text: &str, fs: f32, family: &str, scale: f64) -> Option<Vec<i32>> {
+/// `spc` is the run's `a:rPr/@spc` tracking in POINTS, added to EVERY glyph's
+/// advance -- the last one included. Derived from d36 slide 1 (2026-08-27): its
+/// centred title asks for `spc="975"` at `sz="9750"`, and the truth PDF places
+/// `PRESENTATION`'s ink at x=286.01 against a box centred on 720.0. Carrying the
+/// tracking on all twelve glyphs predicts an origin of 286.49 (0.5pt of left
+/// side bearing away); dropping it from the last glyph predicts 291.37, which
+/// would put the ink LEFT of its own origin.
+pub fn line_hmtx_dx_px(text: &str, fs: f32, family: &str, scale: f64, spc: f32) -> Option<Vec<i32>> {
     if !family_supported(family) {
         return None;
     }
     let mut dx = Vec::with_capacity(text.len());
     for c in text.chars() {
         match hmtx_advance_em(family, c) {
-            Some(em) => dx.push((em * fs * scale as f32).round() as i32),
+            Some(em) => dx.push(((em * fs + spc) * scale as f32).round() as i32),
             None => return None,
         }
     }
@@ -155,8 +162,8 @@ pub fn line_hmtx_dx_px(text: &str, fs: f32, family: &str, scale: f64) -> Option<
 
 /// Pixel width of `text` as the sum of its rounded per-char design advances
 /// (every char incl. trailing spaces). None if unsupported / non-ASCII.
-pub fn text_hmtx_px(text: &str, fs: f32, family: &str, scale: f64) -> Option<i32> {
-    let dx = line_hmtx_dx_px(text, fs, family, scale)?;
+pub fn text_hmtx_px(text: &str, fs: f32, family: &str, scale: f64, spc: f32) -> Option<i32> {
+    let dx = line_hmtx_dx_px(text, fs, family, scale, spc)?;
     Some(dx.iter().sum())
 }
 

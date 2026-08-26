@@ -1020,6 +1020,8 @@ fn parse_slide(
     // renderer leaves the "off" arm drawing the text in the highlight's colour
     // rather than reproducing the pre-change build. 8 decks / 16 pages proved it.
     let s_highlight = std::env::var("OXI_HIGHLIGHT_DISABLE").is_err();
+    // `a:rPr/@spc` -- letter spacing. 60 runs over 3 blind decks ask for it.
+    let s_letterspc = std::env::var("OXI_LETTERSPC_DISABLE").is_err();
     let s_custgeom = std::env::var("OXI_CUSTGEOM_DISABLE").is_err();
     let mut in_cust_geom = false;
     let mut cg_paths: Vec<GeomPath> = Vec::new();
@@ -1160,6 +1162,7 @@ fn parse_slide(
     let mut run_italic = false;
     let mut run_underline = false;
     let mut run_font_size: Option<f32> = None;
+    let mut run_spacing: Option<f32> = None;
     let mut run_color: Option<String> = None;
     let mut run_color_alpha: Option<f32> = None;
     // `a:rPr/a:highlight` -- the run's text highlight. It holds a colour
@@ -1853,6 +1856,7 @@ fn parse_slide(
                         run_italic = false;
                         run_underline = false;
                         run_font_size = None;
+                        run_spacing = None;
                         run_color = None;
                         run_color_alpha = None;
                         run_highlight = None;
@@ -1877,6 +1881,14 @@ fn parse_slide(
                             // Font size in hundredths of a point
                             if let Ok(v) = sz.parse::<f32>() {
                                 run_font_size = Some(v / 100.0);
+                            }
+                        }
+                        if s_letterspc {
+                            if let Some(spc) = get_attr(&e, "spc") {
+                                // Hundredths of a point, and may be negative.
+                                if let Ok(v) = spc.parse::<f32>() {
+                                    run_spacing = Some(v / 100.0);
+                                }
                             }
                         }
                     }
@@ -1941,6 +1953,7 @@ fn parse_slide(
                             color_alpha: None,
                             highlight: None,
                             font_family: run_font_family.clone(),
+                            spacing: run_spacing,
                         });
                     }
                     "t" if in_run => {
@@ -2019,6 +2032,7 @@ fn parse_slide(
                                 color_alpha: None,
                                 highlight: None,
                                 font_family: run_font_family.clone(),
+                                spacing: run_spacing,
                             });
                         }
                     }
@@ -2350,6 +2364,14 @@ fn parse_slide(
                         if let Some(sz) = get_attr(&e, "sz") {
                             if let Ok(v) = sz.parse::<f32>() {
                                 run_font_size = Some(v / 100.0);
+                            }
+                        }
+                        if s_letterspc {
+                            if let Some(spc) = get_attr(&e, "spc") {
+                                // Hundredths of a point, and may be negative.
+                                if let Ok(v) = spc.parse::<f32>() {
+                                    run_spacing = Some(v / 100.0);
+                                }
                             }
                         }
                     }
@@ -3014,6 +3036,7 @@ fn parse_slide(
                             color_alpha: run_color_alpha.take(),
                                 highlight: run_highlight.take(),
                                 font_family: run_font_family.take(),
+                                spacing: run_spacing,
                             });
                         }
                     }

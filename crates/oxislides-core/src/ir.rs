@@ -917,4 +917,13 @@ pub struct SlideRun {
     #[serde(default)]
     pub highlight: Option<String>,
     pub font_family: Option<String>,
+    /// `a:rPr/@spc` -- letter spacing in POINTS, added to every glyph's advance
+    /// (the attribute is in hundredths of a point and may be negative).
+    ///
+    /// Blind doc 36's title asks for `spc="975"` at `sz="9750"`: 9.75pt of
+    /// tracking on 97.5pt type. Ignoring it set the words far tighter than
+    /// PowerPoint and LibreOffice, which both space them out, and left doc 36
+    /// the last deck in the blind set that LibreOffice rendered better.
+    #[serde(default)]
+    pub spacing: Option<f32>,
 }

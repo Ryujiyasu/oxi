@@ -4067,6 +4067,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let lvl_italic = lvlitalic_on() && phl.is_some_and(|l| l.italic);
                             let para_italic = lvl_italic || p.runs.iter().any(|r| r.italic);
                             let para_ul = p.runs.iter().any(|r| r.underline);
+                            // Every run of an unstyled paragraph shares this;
+                            // one that disagrees makes the paragraph styled.
+                            let ptrack = para_spc(&p.runs);
                             // A highlight needs the per-run path even when the
                             // paragraph is one run, since only that path knows
                             // where a run starts and ends on the line.
@@ -4085,6 +4088,10 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             || (underline_on()
                                                 && p.runs.iter().any(|r| {
                                                     r.underline != p.runs[0].underline
+                                                }))
+                                            || (letterspc_on()
+                                                && p.runs.iter().any(|r| {
+                                                    r.spacing != p.runs[0].spacing
                                                 })))));
                             let mut line_off = 0usize;
                             for (i, (line_text, baseline, x_off)) in
@@ -4149,6 +4156,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         para_weight,
                                         para_italic,
                                         para_ul,
+                                        ptrack,
                                     );
                                 }
                             }
@@ -4480,8 +4488,20 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             } else {
                                                 line.as_str()
                                             };
+                                            // S-LETTERSPC: the cell draws with
+                                            // the run's tracking, so the width
+                                            // it centres on must carry it too --
+                                            // otherwise a widened line keeps its
+                                            // untracked left edge and walks
+                                            // right (d36 s9's SWOT labels).
                                             let lw = measure_text_width(
-                                                mem_dc, measured, fs, &family, bold, scale,
+                                                mem_dc,
+                                                measured,
+                                                fs,
+                                                &family,
+                                                bold,
+                                                scale,
+                                                para_spc(&p.runs),
                                             );
                                             let lx = match p.alignment {
                                                 Some(SlideAlignment::Center) => {
@@ -4523,6 +4543,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     if bold { 700 } else { 400 },
                                                     false,
                                                     false,
+                                                    para_spc(&p.runs),
                                                 );
                                             } else {
                                                 draw_text_line(
@@ -4541,7 +4562,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         continue;
                                     }
                                     let w = measure_text_width(
-                                        mem_dc, &text, fs, &family, bold, scale,
+                                        mem_dc,
+                                        &text,
+                                        fs,
+                                        &family,
+                                        bold,
+                                        scale,
+                                        para_spc(&p.runs),
                                     );
                                     let tx = match p.alignment {
                                         Some(SlideAlignment::Center) => {
@@ -11269,10 +11296,11 @@ unsafe fn draw_line_runs(
         let color = run.color.as_deref().or(default_color);
         let bold = run.bold || default_bold;
         let weight = if bold { 700 } else { 400 };
-        let w = runtime_width_px(dc, &seg, fs, family, bold, run.italic, scale)
-            .or_else(|| font_adv::text_hmtx_px(&seg, fs, family, scale))
+        let spc = run_spc(run);
+        let w = runtime_width_px(dc, &seg, fs, family, bold, run.italic, scale, spc)
+            .or_else(|| font_adv::text_hmtx_px(&seg, fs, family, scale, spc))
             .unwrap_or_else(|| {
-                measure_text_width(dc, &seg, fs, family, bold, scale).round() as i32
+                measure_text_width(dc, &seg, fs, family, bold, scale, spc).round() as i32
             });
         // Behind the glyphs, and exactly as wide as this run's advance -- the
         // probe's `HIGH ` arm put the box's right edge on the trailing space's
@@ -11316,6 +11344,7 @@ unsafe fn draw_line_runs(
             weight,
             run.italic || default_italic,
             run.underline,
+            spc,
         );
         cursor_x += w;
     }
@@ -12031,7 +12060,14 @@ fn masterunit_on() -> bool {
 /// font-link fallback with the base font's metrics (the d19 s39 icon-row
 /// non-determinism lesson -- see runtime_dx_px).
 #[cfg(windows)]
-fn master_units(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> Option<i64> {
+fn master_units(
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    spc: f32,
+) -> Option<i64> {
     if text.chars().any(|c| c as u32 > 0xFFFF) {
         return None;
     }
@@ -12043,7 +12079,7 @@ fn master_units(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> 
         let em = font_adv::hmtx_advance_em(family, ch)
             .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, bold, italic, ch))?;
-        sum += f64::from(em * fs * 8.0).round() as i64;
+        sum += f64::from((em * fs + spc) * 8.0).round() as i64;
     }
     Some(sum)
 }
@@ -12099,12 +12135,14 @@ fn master_units_runs(
         let mut run_fs = fs;
         let mut run_bold = bold;
         let mut run_italic = italic;
+        let mut run_track = 0.0f32;
         for run in styles.runs {
             let n = run.text.chars().count();
             if at < seen + n {
                 run_fs = run.font_size.unwrap_or(fs);
                 run_bold = run.bold;
                 run_italic = run.italic;
+                run_track = run_spc(run);
                 break;
             }
             seen += n;
@@ -12112,7 +12150,7 @@ fn master_units_runs(
         let em = font_adv::hmtx_advance_em(family, ch)
             .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, run_bold, run_italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, run_bold, run_italic, ch))?;
-        sum += f64::from(em * run_fs * 8.0).round() as i64;
+        sum += f64::from((em * run_fs + run_track) * 8.0).round() as i64;
     }
     Some(sum)
 }
@@ -12133,10 +12171,13 @@ fn fits_line(
     scale: f64,
     styles: Option<RunStyles<'_>>,
 ) -> bool {
+    // The runs are already here, so the single-style path can be told the
+    // paragraph's tracking rather than silently breaking without it.
+    let spc = styles.as_ref().map(|s| para_spc(s.runs)).unwrap_or(0.0);
     if masterunit_on() {
         let mu = match styles.filter(|_| runmeasure_on()) {
             Some(s) => master_units_runs(text, fs, family, bold, italic, s),
-            None => master_units(text, fs, family, bold, italic),
+            None => master_units(text, fs, family, bold, italic, spc),
         };
         if let Some(mu) = mu {
             let fits = mu as f64 / 8.0 <= f64::from(width_pt) + 1e-6;
@@ -12151,7 +12192,7 @@ fn fits_line(
             return fits;
         }
     }
-    measure_wrap(dc, text, fs, family, bold, italic, scale) <= width_px
+    measure_wrap(dc, text, fs, family, bold, italic, scale, spc) <= width_px
 }
 
 /// Exact width of `text` in POINTS with every character measured at its own
@@ -12190,7 +12231,7 @@ fn line_width_pt_runs(
     scale: f64,
     styles: RunStyles<'_>,
 ) -> Option<f32> {
-    let style_at = |at: usize| -> (u32, bool, bool) {
+    let style_at = |at: usize| -> (u32, bool, bool, i32) {
         let mut seen = 0usize;
         for run in styles.runs {
             let n = run.text.chars().count();
@@ -12198,20 +12239,26 @@ fn line_width_pt_runs(
                 // f32 has no Eq, and the segment walk needs one; the size is a
                 // half-point value, so hundredths of a point are lossless.
                 let size = run.font_size.unwrap_or(fs);
-                return ((size * 100.0).round() as u32, run.bold, run.italic || italic);
+                return (
+                    (size * 100.0).round() as u32,
+                    run.bold,
+                    run.italic || italic,
+                    (run_spc(run) * 100.0).round() as i32,
+                );
             }
             seen += n;
         }
-        ((fs * 100.0).round() as u32, bold, italic)
+        ((fs * 100.0).round() as u32, bold, italic, 0)
     };
-    let measure = |seg: &str, st: (u32, bool, bool)| -> Option<f32> {
+    let measure = |seg: &str, st: (u32, bool, bool, i32)| -> Option<f32> {
         if seg.is_empty() {
             return Some(0.0);
         }
-        let (sz, sb, si) = st;
+        let (sz, sb, si, sspc) = st;
         let sfs = sz as f32 / 100.0;
-        hmtx_width_styled(seg, sfs, family, sb, si).or_else(|| {
-            runtime_width_px(dc, seg, sfs, family, sb, si, scale)
+        let spc = sspc as f32 / 100.0;
+        hmtx_width_styled(seg, sfs, family, sb, si, spc).or_else(|| {
+            runtime_width_px(dc, seg, sfs, family, sb, si, scale, spc)
                 .map(|px| px as f32 / scale as f32)
         })
     };
@@ -12219,7 +12266,7 @@ fn line_width_pt_runs(
     // path, so this cannot disagree with it on a uniform paragraph.
     let mut total = 0.0f32;
     let mut seg = String::new();
-    let mut cur: Option<(u32, bool, bool)> = None;
+    let mut cur: Option<(u32, bool, bool, i32)> = None;
     for (i, ch) in text.chars().enumerate() {
         let st = style_at(styles.line_start + i);
         if let Some(c) = cur {
@@ -12306,11 +12353,44 @@ fn runalign_on() -> bool {
 /// drew the right 492 but still CENTRED it on the regular-Arial width, landing
 /// the line 2px right. The table has to decline styled text, not answer for it.
 #[cfg(windows)]
-fn hmtx_width_styled(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> Option<f32> {
+fn hmtx_width_styled(
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    spc: f32,
+) -> Option<f32> {
     if hmtxstyle_on() && (bold || italic) {
         return None;
     }
+    // Tracking is a flat addition per glyph, so it rides on the plain design
+    // sum rather than forcing every caller of `line_hmtx_width_pt` to carry it.
+    // The trailing spaces this excludes are the ones it already excludes.
     font_adv::line_hmtx_width_pt(text, fs, family)
+        .map(|w| w + spc * text.trim_end_matches(' ').chars().count() as f32)
+}
+
+/// `a:rPr/@spc` letter spacing is applied unless this is set.
+///
+/// S-LETTERSPC (2026-08-27). PowerPoint adds the run's tracking to every
+/// glyph's advance, the last one included, so it widens the line the wrap
+/// breaks against and the width a centred line is placed from. Oxi ignored the
+/// attribute outright: 60 of them over blind d36, d37 and d31 -- and none at
+/// all in the dev corpus, which is why the gap survived this long.
+fn letterspc_on() -> bool {
+    std::env::var("OXI_LETTERSPC_DISABLE").is_err()
+}
+
+/// The run's tracking in points, or zero when the feature is off.
+fn run_spc(run: &oxislides_core::ir::SlideRun) -> f32 {
+    if letterspc_on() { run.spacing.unwrap_or(0.0) } else { 0.0 }
+}
+
+/// The paragraph's tracking, taken from its first run: a paragraph whose runs
+/// disagree takes the per-run path instead (see `styled`).
+fn para_spc(runs: &[oxislides_core::ir::SlideRun]) -> f32 {
+    runs.first().map(run_spc).unwrap_or(0.0)
 }
 
 /// The hmtx table is declined for bold / italic text unless this is set.
@@ -12662,6 +12742,9 @@ fn runtime_dx_px(
     bold: bool,
     italic: bool,
     scale: f64,
+    // The run's `a:rPr/@spc` tracking in POINTS, on every glyph (see
+    // `font_adv::line_hmtx_dx_px` for the derivation).
+    spc: f32,
 ) -> Option<Vec<i32>> {
     if !advance_exact_on() {
         return None;
@@ -12704,11 +12787,11 @@ fn runtime_dx_px(
             Some(CharPlan::Skip) => 0.0,
             None => runtime_advance_em(family, bold, italic, ch)?,
         };
-        acc += em as f64 * fs as f64 * scale;
+        acc += (em as f64 * fs as f64 + f64::from(spc)) * scale;
         let pos = if advwidth_on() {
             acc.round() as i32
         } else {
-            prev + (em * fs * scale as f32).round() as i32
+            prev + ((em * fs + spc) * scale as f32).round() as i32
         };
         dx.push(pos - prev);
         prev = pos;
@@ -12732,8 +12815,9 @@ fn runtime_width_px(
     bold: bool,
     italic: bool,
     scale: f64,
+    spc: f32,
 ) -> Option<i32> {
-    runtime_dx_px(dc, text, fs, family, bold, italic, scale).map(|dx| dx.iter().sum())
+    runtime_dx_px(dc, text, fs, family, bold, italic, scale, spc).map(|dx| dx.iter().sum())
 }
 
 /// Glyph positions are rounded cumulatively unless this is set, which restores
@@ -12761,6 +12845,8 @@ fn measure_text_width(
     family: &str,
     bold: bool,
     scale: f64,
+    // Tracking, as a flat addition per glyph -- GDI knows nothing about it.
+    spc: f32,
 ) -> f64 {
     use windows::Win32::Graphics::Gdi::*;
     use windows::core::PCWSTR;
@@ -12789,7 +12875,7 @@ fn measure_text_width(
         let w = gdi_measure_text_px(dc, text);
         SelectObject(dc, old);
         let _ = DeleteObject(font);
-        w as f64
+        w as f64 + f64::from(spc) * scale * text.chars().count() as f64
     }
 }
 
@@ -12816,10 +12902,11 @@ fn measure_wrap(
     bold: bool,
     italic: bool,
     scale: f64,
+    spc: f32,
 ) -> i32 {
     let width = if advance_exact_on() {
-        runtime_width_px(dc, text, fs, family, bold, italic, scale)
-            .or_else(|| font_adv::text_hmtx_px(text, fs, family, scale))
+        runtime_width_px(dc, text, fs, family, bold, italic, scale, spc)
+            .or_else(|| font_adv::text_hmtx_px(text, fs, family, scale, spc))
             .unwrap_or_else(|| gdi_measure_text_px(dc, text))
     } else {
         gdi_measure_text_px(dc, text)
@@ -13023,7 +13110,7 @@ fn gdi_wrap_lines(
             eprintln!(
                 "LINE fam={family:?} fs={fs} bold={bold} first={first_width_pt} rest={rest_width_pt} \
                  scale={scale:.4} mu={:?} lines={lines:?}",
-                master_units(text, fs, family, bold, italic),
+                master_units(text, fs, family, bold, italic, 0.0),
             );
         }
     }
@@ -14101,10 +14188,11 @@ fn layout_paragraph_baselines(
             None
         };
         align_at += line.chars().count();
+        let pspc = para_spc(&para.runs);
         let line_w = per_run
-            .or_else(|| hmtx_width_styled(ink, fs, &family, bold, italic))
+            .or_else(|| hmtx_width_styled(ink, fs, &family, bold, italic, pspc))
             .or_else(|| {
-                runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale)
+                runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale, pspc)
                     .map(|px| px as f32 / scale as f32)
             })
             .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32);
@@ -14246,7 +14334,7 @@ fn draw_text_baseline_wi(
     italic: bool,
 ) {
     draw_text_baseline_wiu(
-        dc, x, baseline_pt, text, font_size, family, color, scale, weight, italic, false,
+        dc, x, baseline_pt, text, font_size, family, color, scale, weight, italic, false, 0.0,
     )
 }
 
@@ -14270,6 +14358,7 @@ fn draw_color_run(
     weight: i32,
     italic: bool,
     underline: bool,
+    spc: f32,
 ) -> bool {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
@@ -14288,7 +14377,7 @@ fn draw_color_run(
     if plan.iter().all(|p| matches!(p, CharPlan::Base(_))) {
         return false;
     }
-    let dx = match runtime_dx_px(dc, text, font_size, family, bold, italic, scale) {
+    let dx = match runtime_dx_px(dc, text, font_size, family, bold, italic, scale, spc) {
         Some(dx) if dx.len() == plan.len() => dx,
         // Without agreeing advances the characters would not land where the
         // wrap measured them; the plain path at least keeps them adjacent.
@@ -14455,6 +14544,7 @@ fn draw_text_baseline_wiu(
     weight: i32,
     italic: bool,
     underline: bool,
+    spc: f32,
 ) {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
@@ -14486,6 +14576,7 @@ fn draw_text_baseline_wiu(
             weight,
             italic,
             underline,
+            spc,
         )
     {
         unsafe {
@@ -14529,11 +14620,11 @@ fn draw_text_baseline_wiu(
     let dx = if (italic && italadv_on()) || (weight >= 700 && hmtxstyle_on()) {
         None
     } else {
-        font_adv::line_hmtx_dx_px(text, font_size, family, scale)
+        font_adv::line_hmtx_dx_px(text, font_size, family, scale, spc)
     }
     .or_else(|| {
         let it = italic && italadv_on();
-        runtime_dx_px(dc, text, font_size, family, weight >= 700, it, scale)
+        runtime_dx_px(dc, text, font_size, family, weight >= 700, it, scale, spc)
     });
     // A faked bold is drawn twice, a fraction of an em apart, because GDI's own
     // emboldening is lighter than PowerPoint's (see `FAUX_BOLD_EM`). The second
@@ -14644,12 +14735,12 @@ fn draw_text_justify(
     // the justify stretch is computed) and the word/gap placement use the
     // design advance, matching PowerPoint's PDF export. Otherwise fall back
     // to the hinted GDI metrics.
-    let hmtx = font_adv::line_hmtx_dx_px(text, font_size, family, scale).is_some();
+    let hmtx = font_adv::line_hmtx_dx_px(text, font_size, family, scale, 0.0).is_some();
     let (space_w, word_ws): (i32, Vec<i32>) = if hmtx {
         let sw = font_adv::space_hmtx_px(font_size, family, scale).unwrap_or(0);
         let ww = words
             .iter()
-            .map(|w| font_adv::text_hmtx_px(w, font_size, family, scale).unwrap_or(0))
+            .map(|w| font_adv::text_hmtx_px(w, font_size, family, scale, 0.0).unwrap_or(0))
             .collect();
         (sw, ww)
     } else {
@@ -14667,7 +14758,7 @@ fn draw_text_justify(
     for (i, word) in words.iter().enumerate() {
         let wtext: Vec<u16> = word.encode_utf16().collect();
         if hmtx {
-            if let Some(dx) = font_adv::line_hmtx_dx_px(word, font_size, family, scale) {
+            if let Some(dx) = font_adv::line_hmtx_dx_px(word, font_size, family, scale, 0.0) {
                 unsafe {
                     let _ = ExtTextOutW(
                         dc,
