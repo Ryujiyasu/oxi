@@ -24409,6 +24409,21 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         .and_then(|v| v.parse().ok())
                                         .unwrap_or(s475_solo),
                                 )
+                            } else if s1234_offdefault_light {
+                                // S1235 (2026-08-26): per-CLASS caps for the legacy
+                                // off-default regime, from the parttime Word-PDF
+                                // squeezed-line census (~50 lines, 8pt body):
+                                //   、/・ = 2.5@12 (1.67@8): packing lines take
+                                //   ≤ −1.44/、 (第25条 L1 ×4) while ④解雇 L1
+                                //   REFUSES a 1.83pt rescue from its single 、
+                                //   (renders it natural, wraps 小 leaving 6.2pt)
+                                //   → the solo cap sits in (2.16, 2.74)@12;
+                                //   。 line-end = half-em (第24条 L2 4.26);
+                                //   ）closing-solo = ~0.7em taken (5.66) → 3.6@12.
+                                //   A comma cap of 0 was tried first and REFUTED:
+                                //   ~50 lines under-packed (、 squeezes of −0.24
+                                //   to −1.44 are everywhere in the census).
+                                (6.0, 3.6, 2.5)
                             } else {
                                 (s475_solo, s475_solo, s475_solo)
                             };
@@ -24444,7 +24459,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             chars_vec.get(char_index + 1).copied(),
                             s475_pair,
                             comma_pt,
-                            s757_open_eff,
+                            // S1235: no parttime line shows a compressed opening
+                            // (（ renders 8.04 natural throughout) — zero the
+                            // opening credit in the off-default regime.
+                            if s1234_offdefault_light {
+                                0.0
+                            } else {
+                                s757_open_eff
+                            },
                             period_pt,
                             close_solo_pt,
                             font_size,
@@ -24469,17 +24491,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         } else {
                             s1167_cap_raw
                         };
-                        // S1234 (2026-08-26): legacy off-default lines carry a
-                        // PER-LINE total squeeze budget (~0.6em), on top of the
-                        // per-mark cap. parttime 第25条 L1 has 9 marks whose
-                        // summed per-mark credits would pull in a 66th char Word
-                        // refuses (~10pt demand vs Word's ~4-5pt/line ceiling),
-                        // while 第24条's 3.5pt rescue fits. Scoped to the
-                        // s1234 branch — the 2026-06-23 LINE_BUDGET falsification
-                        // was on modern period-rich type=lines docs, a different
-                        // regime.
+                        // S1235 (2026-08-26): the off-default regime carries a
+                        // PER-LINE compression ceiling of 0.75em on top of the
+                        // per-mark caps. FOUR hairline datapoints pin it
+                        // (parttime Word PDF, 8pt → ceiling 6.0): 第24条 L1
+                        // absorbs 5.90 (packs), two lines refuse at 6.01/6.04,
+                        // and the 8.69-9.55 refusals follow. The earlier 0.6em
+                        // (4.8@8) value was wrong — it would refuse 第24条's
+                        // 5.90 — which is why the first budget attempt appeared
+                        // refuted; the failure was the value plus the uniform
+                        // comma cap, not the ceiling concept.
                         let s1167_cap = if s1234_offdefault_light && s1167_cap > 0.0 {
-                            let budget_tw = pt_to_tw(0.6 * font_size);
+                            let budget_tw = pt_to_tw(0.75 * font_size);
                             let used_tw = current_width_tw - current_capw_tw;
                             s1167_cap.min(((budget_tw - used_tw).max(0) as f32) / 20.0)
                         } else {
