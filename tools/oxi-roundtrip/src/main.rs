@@ -55,17 +55,23 @@ fn main() {
     // accepts it. An IR that matches proves the writer kept everything WE
     // model; it cannot prove the file still opens.
     let mut keep: Option<PathBuf> = None;
+    // Write a mark instead of the value that is already there. An edit that
+    // changes nothing proves the writer breaks nothing; it does not prove an
+    // edit ARRIVES. With this the tool says where it aimed, and Office can be
+    // asked whether that is the one cell that moved.
+    let mut sentinel: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--quiet" => quiet = true,
             "--limit" => limit = args.next().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX),
             "--keep" => keep = args.next().map(PathBuf::from),
+            "--sentinel" => sentinel = Some(args.next().unwrap_or_else(|| "OXI".into())),
             _ => where_from = Some(PathBuf::from(arg)),
         }
     }
     let Some(where_from) = where_from else {
         eprintln!(
-                "usage: oxi-roundtrip <file-or-directory> [--quiet] [--limit N] [--keep DIR]"
+                "usage: oxi-roundtrip <file-or-directory> [--quiet] [--limit N] [--keep DIR] [--sentinel TEXT]"
             );
         std::process::exit(2);
     };
@@ -87,7 +93,7 @@ fn main() {
     let mut wrong: Vec<(PathBuf, String)> = Vec::new();
     for path in &files {
         let verdict = match kind(path) {
-            Some(Kind::Xlsx) => xlsx(path, keep.as_deref()),
+            Some(Kind::Xlsx) => xlsx(path, keep.as_deref(), sentinel.as_deref()),
             Some(Kind::Docx) => docx(path, keep.as_deref()),
             Some(Kind::Pptx) => pptx(path, keep.as_deref()),
             None => continue,
@@ -212,7 +218,7 @@ fn brief(held: &serde_json::Value) -> String {
     }
 }
 
-fn xlsx(path: &Path, keep: Option<&Path>) -> Verdict {
+fn xlsx(path: &Path, keep: Option<&Path>, sentinel: Option<&str>) -> Verdict {
     let Ok(bytes) = std::fs::read(path) else {
         return Verdict::Broken("cannot be read".into());
     };
@@ -267,7 +273,13 @@ fn xlsx(path: &Path, keep: Option<&Path>) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Broken(format!("will not open to edit: {trouble}")),
     };
-    editor.set_cell_value(sheet_at, row, col, value);
+    match sentinel {
+        None => editor.set_cell_value(sheet_at, row, col, value),
+        Some(mark) => {
+            editor.set_cell_value(sheet_at, row, col, CellEditValue::String(mark.to_string()));
+            println!("  aimed {} sheet {sheet_at} row {row} col {col}", name(path));
+        }
+    }
     let written = match editor.save() {
         Ok(held) => held,
         Err(trouble) => return Verdict::Broken(format!("will not save: {trouble}")),
@@ -277,6 +289,10 @@ fn xlsx(path: &Path, keep: Option<&Path>) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
     };
+    if sentinel.is_some() {
+        // The comparison below asks for sameness, which a mark is not.
+        return Verdict::Whole;
+    }
     // Sheet by sheet, not workbook by workbook. Serialising both trees whole
     // took five gigabytes on the corpus's largest books — a metric nobody can
     // afford to run is one nobody runs.
