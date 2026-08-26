@@ -1473,7 +1473,26 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
 
 /// Parts are selected by SLOT only when this is set.
 ///
-/// ★PARKED opt-in, not opt-out. Slot selection is CORRECT but incomplete on
+/// Gate (2026-08-26), every deck whose render changes:
+///
+///     dev  d15  0.955750 -> 0.964815  (+0.009065)
+///     dev  d24  0.956726 -> 0.964659  (+0.007933)
+///     blind 36  0.939420 -> 0.943641  (+0.004221)   37 is its duplicate
+///     dev  d05  0.957359 -> 0.959757  (+0.002398)
+///     dev  d31  0.973106 -> 0.974416  (+0.001310)
+///     dev  d26  0.969746 -> 0.970676  (+0.000930)
+///     dev  d21, blind 01                unchanged
+///     dev  d16  0.983155 -> 0.982835  (-0.000320)
+///     dev  d38  0.982789 -> 0.982600  (-0.000189)
+///
+/// The two small losses are explained: every face resolves to metrically
+/// IDENTICAL advances in both arms (checked with `OXI_FD_DEBUG` -- Montserrat
+/// #R reports the same `a` and `w` as plain Montserrat), so what differs is
+/// only how GDI rasterises the same outlines through a second face handle.
+/// Slide-weighted, the dev corpus gains +0.00083.
+///
+/// ★Superseded note -- this was PARKED opt-in until the two rules below were
+/// found. Slot selection is CORRECT but incomplete on
 /// its own: a part whose declared family does not match the typeface it is
 /// filed under is one PowerPoint does not use at all, and 55 of the corpus's
 /// 262 parts (21%) are in that state. d15 shows both halves. Selecting by slot
@@ -1487,7 +1506,7 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
 /// stays off until the rejection rule is derived and both go through the gate
 /// together.
 fn slotface_on() -> bool {
-    std::env::var("OXI_SLOTFACE_ENABLE").is_ok()
+    std::env::var("OXI_SLOTFACE_DISABLE").is_err()
 }
 
 /// The extra, slot-unique GDI family one UPRIGHT part is also registered under.
@@ -1635,6 +1654,19 @@ fn resolve_part(family: &str, bold: bool, italic: bool) -> Option<(String, i32)>
 /// it is requested at weight 400 upright; anything else keeps the request.
 #[cfg(windows)]
 fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
+    // The SLOT the deck filed a part under wins, when that part's style
+    // actually matches the slot. Consulting `resolve_part` first let its
+    // synthesise-from-regular fallback hijack a bold request that had a
+    // perfectly good bold slot waiting -- d26 asked for bold on "Darker
+    // Grotesque Medium", whose bold slot holds a real Darker Grotesque Bold,
+    // and got the Medium thickened instead.
+    if !italic {
+        if let Some(slot) = slot_face_name(family, bold) {
+            if EMBEDDED_FACES.with(|f| f.borrow().contains(&slot)) {
+                return (slot, if bold { 700 } else { 400 }, false);
+            }
+        }
+    }
     if let Some((face, weight)) = resolve_part(family, bold, italic) {
         // The part carries its own style; asking for a slant on top would make
         // GDI skew a face that is already slanted.
@@ -1646,13 +1678,6 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
             // The part carries its own slant; the weight is still asked for,
             // since a family may embed only one italic part.
             return (name, if bold { 700 } else { 400 }, false);
-        }
-    }
-    if !italic {
-        if let Some(slot) = slot_face_name(family, bold) {
-            if EMBEDDED_FACES.with(|f| f.borrow().contains(&slot)) {
-                return (slot, if bold { 700 } else { 400 }, false);
-            }
         }
     }
     (
@@ -1791,9 +1816,24 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                 // bold slot holds Barlow REGULAR, and addressing it directly
                 // made that deck worse. Skipping the dishonest ones leaves both
                 // decks with the behaviour they want.
-                let honest = eot_identity(&font.data).is_some_and(|(fam, _, _)| {
-                    norm_family(&fam) == norm_family(&font.typeface)
-                });
+                // The test is the part's STYLE, not its family name. A deck may
+                // legitimately file a differently-named face in a slot -- d26
+                // puts "Darker Grotesque Bold" in the bold slot of "Darker
+                // Grotesque Medium", and PowerPoint uses it, because it IS a
+                // bold. What must be refused is a part whose style contradicts
+                // its slot: d15's "Barlow Light" bold slot holds Barlow
+                // REGULAR, and addressing that as the bold makes the deck
+                // worse. Judging by family name instead cost d26 -0.0062 by
+                // rejecting an honest-enough bold.
+                // The REGULAR slot takes any upright weight: a family called
+                // "Open Sans Extra Bold" carries an 800 there and that is
+                // correct, so demanding a light weight threw away doc 36's fix.
+                // The BOLD slot is the one that has to prove itself, because a
+                // deck may park a non-bold face in it -- d15's "Barlow Light"
+                // bold slot holds Barlow REGULAR, and addressing that as the
+                // bold makes the deck worse.
+                let honest = eot_identity(&font.data)
+                    .is_some_and(|(_, weight, ital)| !ital && (!font.bold || weight >= 600));
                 if !font.italic && honest && load_font_as(&font.data, &slot) {
                     EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
                     address = Some(slot);
