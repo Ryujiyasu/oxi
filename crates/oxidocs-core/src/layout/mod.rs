@@ -5750,14 +5750,13 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     // else the paragraph estimate. EMPTY paragraphs keep the
                     // cursor-only rule (2ea81a's calibrated gap-empty balance —
                     // see the S872 scope note).
-                    // HELD OPT-IN (2026-08-26): correct per the derived law but
-                    // EXPOSES table3's +9pt height error on kyotei (the bump lands
-                    // at Oxi's inflated float bottom 440 vs Word 431 and shifts the
-                    // whole tail +12; the un-bumped state scored better via the
-                    // compensating misplacement). Promote after the float-table
-                    // row-height accuracy work (rows 12/13 excess). SSIM A/B
-                    // (DWrite, kyotei): ON -0.1242 vs OFF.
-                    let s1230_text_cross = std::env::var("OXI_S1230").ok().as_deref() == Some("1")
+                    // 2026-08-26 (same day): first held opt-in — it exposed
+                    // table3's +9pt height error (the bump landed at Oxi's
+                    // inflated float bottom 440 vs Word 431, tail +12). S1231
+                    // fixed that error (size-less empty cell ¶ = style-chain
+                    // size); with it the bump lands at 433 vs Word 431.2 and
+                    // the pair nets +0.052 on kyotei -> promoted default-ON.
+                    let s1230_text_cross = std::env::var("OXI_S1230_DISABLE").is_err()
                         && self.doc_body_has_real_cjk
                         && cursor.cursor_y < ft_top - 0.1
                         && matches!(block, Block::Paragraph(p)
@@ -35257,8 +35256,45 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             )
                                         } else {
                                             let metrics = self.doc_default_metrics();
+                                            // S1231 (2026-08-26, opt-out OXI_S1231_DISABLE): a
+                                            // size-less empty cell ¶ mark still resolves through
+                                            // the paragraph's STYLE CHAIN, exactly as the
+                                            // estimate does (estimate_para_height's empty_fs =
+                                            // ppr_rpr.font_size.unwrap_or(resolve_font_size)).
+                                            // kyotei36spec table3 row12: docDefaults sz=21 but
+                                            // Normal sets sz=16 → Word prices the wide cell's two
+                                            // empty paras at 8pt (row 21.1); the engine-default
+                                            // fallback priced them at 10.5 → 13.5 each → row
+                                            // 27.4 (+6.3) and the whole float form ran ~9pt
+                                            // tall (the S1230 blocker).
+                                            // ★SCOPE (2026-08-26): |chain − default| ≥ 1.5pt only.
+                                            // The unscoped chain-pricing is the S610 rule the
+                                            // kyodoken family already FALSIFIED (S636 kept the
+                                            // engine default for them), and the candidate A/B
+                                            // reproduced it: sub-1pt deltas are a compensation
+                                            // lottery (kyodoken07 +0.0047 vs kyodoken11 −0.0050,
+                                            // tokumei_08_07 −0.0412, ukhealthform −0.0311) while
+                                            // the ≥1.5pt class (kyotei Normal sz=16 vs default
+                                            // 11.0, Δ3.0) is probe-confirmed (+_pb_marksz_gen
+                                            // 6 arms) and +0.0496. The small-Δ law needs its own
+                                            // derivation (szCs/table-style inputs) before the
+                                            // threshold can drop.
+                                            let s1231_fs = {
+                                                let chain = self.resolve_font_size(
+                                                    &RunStyle::default(),
+                                                    &para.style,
+                                                );
+                                                if std::env::var("OXI_S1231_DISABLE").is_err()
+                                                    && (chain - self.default_font_size).abs()
+                                                        >= 1.5
+                                                {
+                                                    chain
+                                                } else {
+                                                    self.default_font_size
+                                                }
+                                            };
                                             self.line_height_inner(
-                                                self.default_font_size,
+                                                s1231_fs,
                                                 effective_line_spacing,
                                                 effective_line_rule,
                                                 metrics,
