@@ -95,7 +95,7 @@ fn main() {
         let verdict = match kind(path) {
             Some(Kind::Xlsx) => xlsx(path, keep.as_deref(), sentinel.as_deref()),
             Some(Kind::Docx) => docx(path, keep.as_deref(), sentinel.as_deref()),
-            Some(Kind::Pptx) => pptx(path, keep.as_deref()),
+            Some(Kind::Pptx) => pptx(path, keep.as_deref(), sentinel.as_deref()),
             None => continue,
         };
         match &verdict {
@@ -209,6 +209,69 @@ fn parted(before: &serde_json::Value, after: &serde_json::Value, at: &str) -> Op
     }
 }
 
+/// Every place the two differ, up to a handful.
+///
+/// `parted` stops at the first, which is what a same-or-not question wants. A
+/// MARK is a difference on purpose, so the question becomes how many there
+/// are: exactly one, holding the mark, means the edit went where it was aimed
+/// and nowhere else.
+fn differences(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    at: &str,
+    found: &mut Vec<(String, String)>,
+) {
+    use serde_json::Value;
+    if found.len() > 8 {
+        return;
+    }
+    match (before, after) {
+        (Value::Object(one), Value::Object(two)) => {
+            for (key, held) in one {
+                match two.get(key) {
+                    None => found.push((format!("{at}.{key}"), "is gone".into())),
+                    Some(other) => differences(held, other, &format!("{at}.{key}"), found),
+                }
+            }
+            for key in two.keys().filter(|key| !one.contains_key(*key)) {
+                found.push((format!("{at}.{key}"), "appeared".into()));
+            }
+        }
+        (Value::Array(one), Value::Array(two)) => {
+            if one.len() != two.len() {
+                found.push((at.to_string(), format!("{} became {}", one.len(), two.len())));
+                return;
+            }
+            for (step, (held, other)) in one.iter().zip(two).enumerate() {
+                differences(held, other, &format!("{at}[{step}]"), found);
+            }
+        }
+        _ => {
+            if before != after {
+                found.push((at.to_string(), brief(after)));
+            }
+        }
+    }
+}
+
+/// The verdict for a marked edit: exactly one place changed, holding the mark.
+fn only_the_mark<T: serde::Serialize>(before: &T, after: &T, mark: &str) -> Verdict {
+    let (Ok(one), Ok(two)) = (
+        serde_json::to_value(before),
+        serde_json::to_value(after),
+    ) else {
+        return Verdict::Broken("cannot be compared".into());
+    };
+    let mut found = Vec::new();
+    differences(&one, &two, "", &mut found);
+    match found.as_slice() {
+        [(_, held)] if held.contains(mark) => Verdict::Whole,
+        [] => Verdict::Changed("the mark never arrived".into()),
+        [(where_at, held)] => Verdict::Changed(format!("one change, but {where_at} holds {held}")),
+        many => Verdict::Changed(format!("{} places changed, not one", many.len())),
+    }
+}
+
 fn brief(held: &serde_json::Value) -> String {
     let shown = held.to_string();
     if shown.chars().count() > 40 {
@@ -289,9 +352,8 @@ fn xlsx(path: &Path, keep: Option<&Path>, sentinel: Option<&str>) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
     };
-    if sentinel.is_some() {
-        // The comparison below asks for sameness, which a mark is not.
-        return Verdict::Whole;
+    if let Some(mark) = sentinel {
+        return only_the_mark(&before, &after, mark);
     }
     // Sheet by sheet, not workbook by workbook. Serialising both trees whole
     // took five gigabytes on the corpus's largest books — a metric nobody can
@@ -409,9 +471,13 @@ fn docx(path: &Path, keep: Option<&Path>, sentinel: Option<&str>) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
     };
-    if sentinel.is_some() {
-        // The comparison below asks for sameness, which a mark is not.
-        return Verdict::Whole;
+    if let Some(mark) = sentinel {
+        // A mark is a difference on purpose, so the question is how many.
+        // Exactly one, holding the mark, is an edit that went where it was
+        // aimed and took nothing with it. Asking our own reader rather than
+        // Word costs the outside opinion but gains an answer for every
+        // document: Word hangs without warning on the ones that link out.
+        return only_the_mark(&before, &after, mark);
     }
     compare(&before, &after)
 }
@@ -423,7 +489,7 @@ fn kept(keep: Option<&Path>, path: &Path, written: &[u8]) {
     let _ = std::fs::write(keep.join(name(path)), written);
 }
 
-fn pptx(path: &Path, keep: Option<&Path>) -> Verdict {
+fn pptx(path: &Path, keep: Option<&Path>, sentinel: Option<&str>) -> Verdict {
     let Ok(bytes) = std::fs::read(path) else {
         return Verdict::Broken("cannot be read".into());
     };
@@ -455,7 +521,16 @@ fn pptx(path: &Path, keep: Option<&Path>) -> Verdict {
     let Some((slide_at, shape_at, para_at, run_at, text)) = asked else {
         return Verdict::Untested("no run carries text");
     };
-    editor.set_run_text(slide_at, shape_at, para_at, run_at, text);
+    match sentinel {
+        None => editor.set_run_text(slide_at, shape_at, para_at, run_at, text),
+        Some(mark) => {
+            editor.set_run_text(slide_at, shape_at, para_at, run_at, mark.to_string());
+            println!(
+                "  aimed {} slide {slide_at} shape {shape_at} paragraph {para_at} run {run_at}",
+                name(path)
+            );
+        }
+    }
     let written = match editor.save() {
         Ok(held) => held,
         Err(trouble) => return Verdict::Broken(format!("will not save: {trouble}")),
@@ -465,6 +540,9 @@ fn pptx(path: &Path, keep: Option<&Path>) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
     };
+    if let Some(mark) = sentinel {
+        return only_the_mark(&before, &after, mark);
+    }
     if before.slides.len() != after.slides.len() {
         return Verdict::Changed(format!(
             "held {} slide(s) and now holds {}",
