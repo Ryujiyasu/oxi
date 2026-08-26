@@ -94,7 +94,7 @@ fn main() {
     for path in &files {
         let verdict = match kind(path) {
             Some(Kind::Xlsx) => xlsx(path, keep.as_deref(), sentinel.as_deref()),
-            Some(Kind::Docx) => docx(path, keep.as_deref()),
+            Some(Kind::Docx) => docx(path, keep.as_deref(), sentinel.as_deref()),
             Some(Kind::Pptx) => pptx(path, keep.as_deref()),
             None => continue,
         };
@@ -311,7 +311,7 @@ fn xlsx(path: &Path, keep: Option<&Path>, sentinel: Option<&str>) -> Verdict {
     compare_at(&before.default_style, &after.default_style, ".default_style")
 }
 
-fn docx(path: &Path, keep: Option<&Path>) -> Verdict {
+fn docx(path: &Path, keep: Option<&Path>, sentinel: Option<&str>) -> Verdict {
     let Ok(bytes) = std::fs::read(path) else {
         return Verdict::Broken("cannot be read".into());
     };
@@ -338,7 +338,13 @@ fn docx(path: &Path, keep: Option<&Path>) -> Verdict {
         }
     }
     match asked {
-        Some((para_at, run_at, text)) => editor.set_run_text(para_at, run_at, text),
+        Some((para_at, run_at, text)) => match sentinel {
+            None => editor.set_run_text(para_at, run_at, text),
+            Some(mark) => {
+                editor.set_run_text(para_at, run_at, mark.to_string());
+                println!("  aimed {} body paragraph {para_at} run {run_at}", name(path));
+            }
+        },
         None => {
             // Fifteen percent of the corpus keeps all its text inside tables,
             // which no body run reaches. Those documents are edited through
@@ -380,7 +386,18 @@ fn docx(path: &Path, keep: Option<&Path>) -> Verdict {
             let Some((table_at, row_at, col_at, para_at, run_at, text)) = found else {
                 return Verdict::Untested("nothing in it carries text");
             };
-            editor.set_table_run_text(table_at, row_at, col_at, para_at, run_at, &text);
+            match sentinel {
+                None => {
+                    editor.set_table_run_text(table_at, row_at, col_at, para_at, run_at, &text)
+                }
+                Some(mark) => {
+                    editor.set_table_run_text(table_at, row_at, col_at, para_at, run_at, mark);
+                    println!(
+                        "  aimed {} table {table_at} row {row_at} col {col_at} paragraph {para_at} run {run_at}",
+                        name(path)
+                    );
+                }
+            }
         }
     }
     let written = match editor.save() {
@@ -392,6 +409,10 @@ fn docx(path: &Path, keep: Option<&Path>) -> Verdict {
         Ok(held) => held,
         Err(trouble) => return Verdict::Changed(format!("will not reopen: {trouble}")),
     };
+    if sentinel.is_some() {
+        // The comparison below asks for sameness, which a mark is not.
+        return Verdict::Whole;
+    }
     compare(&before, &after)
 }
 
