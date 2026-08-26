@@ -1971,6 +1971,10 @@ impl LayoutCursor {
 
 pub struct LayoutEngine {
     default_font_size: f32,
+    /// S1211B: docDefaults rPrDefault DECLARED a w:sz (the floor pitch is then
+    /// the real document default; absent = the S636 compromise 11.0/10.0 whose
+    /// value Word does not share -- floor excluded there).
+    doc_default_sz_declared: bool,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
     /// docDefaults East-Asian language is CJK (ja/zh/ko) — drives S763c ambiguous
@@ -2361,6 +2365,7 @@ impl LayoutEngine {
     pub fn new() -> Self {
         Self {
             default_font_size: 11.0,
+            doc_default_sz_declared: false,
             default_font_family: None,
             default_font_family_east_asia: None,
             doc_east_asia_lang_cjk: false,
@@ -2488,6 +2493,12 @@ impl LayoutEngine {
             });
         Self {
             default_font_size,
+            doc_default_sz_declared: doc
+                .styles
+                .doc_default_run_style
+                .as_ref()
+                .and_then(|r| r.font_size)
+                .is_some(),
             default_font_family,
             default_font_family_east_asia,
             doc_east_asia_lang_cjk,
@@ -14455,13 +14466,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
         // 0.9577 / 0.9836 / 0.9970) -- all three are outside every arm measured
         // above. Left alone until it is measured on its own.
         let s1211 = std::env::var("OXI_S1211").ok().as_deref() == Some("1");
+        // S1211B (2026-08-26, opt-in OXI_S1211B=1): extend the floor to
+        // charSpace-LESS linesAndChars grids. The "flooring costs parttime/
+        // b837/harassmanual a page" measurement that held this back predates
+        // S1233 — parttime's floor pitch was then poisoned to 11.47 by the
+        // stub section's charSpace. Word truth on the cs-less shape
+        // (_pb_rchars_gen fine sweep, grid 415, run 8pt, jc=both): capacity
+        // n = floor(floor(usable/12.0)*12.0 / 8.0) — 63 chars at rc0
+        // (42 cells x 12), 64 at rc-80 (43 cells) — the floor is REAL with
+        // pitch = the default size.
+        let s1211b = std::env::var("OXI_S1211B").ok().as_deref() == Some("1")
+            && self.doc_default_sz_declared;
         let grid_has_char_space = match (page.grid_char_pitch, page.grid_char_cw_ratio) {
             (Some(pitch), Some(ratio)) if ratio > 0.0 => (pitch - pitch / ratio).abs() > 0.01,
             _ => false,
         };
         let grid_content_width = match effective_char_pitch {
             Some(pitch)
-                if s1211 && grid_has_char_space && pitch > 0.0 && content_width > pitch =>
+                if ((s1211 && grid_has_char_space) || s1211b)
+                    && pitch > 0.0
+                    && content_width > pitch =>
             {
                 (content_width / pitch).floor() * pitch
             }
