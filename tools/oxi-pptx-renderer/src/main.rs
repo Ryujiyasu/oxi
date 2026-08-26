@@ -1781,7 +1781,20 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                 // Upright parts get a second, slot-unique name so a request can
                 // name the SLOT instead of asking GDI to weight-match between
                 // parts that may not hold what their slot says.
-                if !font.italic && load_font_as(&font.data, &slot) {
+                //
+                // ★Only a part that IS what its family says may answer for the
+                // slot. A deck can file anything under any slot -- blind doc 36
+                // puts CALIBRI in the bold, italic and boldItalic slots of
+                // "Open Sans Extra Bold" -- and naming such a part would just
+                // trade GDI's wrong guess for a confident wrong answer. This is
+                // also what kept the first version out: d15's "Barlow Light"
+                // bold slot holds Barlow REGULAR, and addressing it directly
+                // made that deck worse. Skipping the dishonest ones leaves both
+                // decks with the behaviour they want.
+                let honest = eot_identity(&font.data).is_some_and(|(fam, _, _)| {
+                    norm_family(&fam) == norm_family(&font.typeface)
+                });
+                if !font.italic && honest && load_font_as(&font.data, &slot) {
                     EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
                     address = Some(slot);
                 }
