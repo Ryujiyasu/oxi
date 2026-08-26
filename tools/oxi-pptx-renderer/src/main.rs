@@ -1471,6 +1471,29 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
     format!("{typeface}{suffix}")
 }
 
+/// The BREAK test reads advances from the face's own `hmtx` unless this is set.
+///
+/// This was gated on `slotface_on()` by accident, so turning slot selection on
+/// silently changed how lines are MEASURED as well as which face is drawn --
+/// two unrelated things behind one switch. blind doc 35 is the case that
+/// exposed it: its two families have one upright part each, so slot selection
+/// cannot change anything there, yet the deck moved -0.0033 because its body
+/// text started wrapping a line early.
+/// ★Parked OFF on the evidence. Measured once it was separated from slot
+/// selection (2026-08-26):
+///
+///     blind 35  -0.003290   its body text wraps a line early
+///     dev  d15  +0.000462
+///     dev  d24, d05, blind 36   no change at all
+///
+/// So it buys 0.0005 on one deck and costs 0.0033 on another. The design
+/// advance is the right quantity in principle -- it is what PowerPoint's PDF
+/// places glyphs at -- but the break test evidently is not measured with it,
+/// and until that is understood the GDI probe is the better default.
+fn fdbreak_on() -> bool {
+    std::env::var("OXI_FDBREAK_ENABLE").is_ok()
+}
+
 /// Parts are selected by SLOT only when this is set.
 ///
 /// Gate (2026-08-26), every deck whose render changes:
@@ -1770,6 +1793,18 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     }
     const TTLOAD_PRIVATE: u32 = 0x0000_0001;
     const LICENSE_INSTALLABLE: u32 = 0x0000_0000;
+    // How many UPRIGHT parts each typeface has. A family with only one cannot
+    // be mis-picked by GDI -- there is nothing to choose between -- so giving
+    // it a slot alias buys nothing and costs the small metric differences a
+    // second face handle brings. doc 35's Bebas Neue and Gruppo are one part
+    // each, and aliasing them made its body text wrap a line early (-0.0033).
+    let mut upright_parts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for font in &pres.embedded_fonts {
+        if !font.italic {
+            *upright_parts.entry(font.typeface.as_str()).or_default() += 1;
+        }
+    }
     let mut loaded = 0;
     for font in &pres.embedded_fonts {
         let mut stream = Box::new(FontStream {
@@ -1832,8 +1867,11 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                 // deck may park a non-bold face in it -- d15's "Barlow Light"
                 // bold slot holds Barlow REGULAR, and addressing that as the
                 // bold makes the deck worse.
-                let honest = eot_identity(&font.data)
-                    .is_some_and(|(_, weight, ital)| !ital && (!font.bold || weight >= 600));
+                let honest = upright_parts
+                    .get(font.typeface.as_str())
+                    .is_some_and(|n| *n > 1)
+                    && eot_identity(&font.data)
+                        .is_some_and(|(_, weight, ital)| !ital && (!font.bold || weight >= 600));
                 if !font.italic && honest && load_font_as(&font.data, &slot) {
                     EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
                     address = Some(slot);
@@ -12003,7 +12041,7 @@ fn master_units(text: &str, fs: f32, family: &str, bold: bool, italic: bool) -> 
     let mut sum: i64 = 0;
     for ch in text.chars() {
         let em = font_adv::hmtx_advance_em(family, ch)
-            .or_else(|| slotface_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
+            .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, bold, italic, ch))?;
         sum += f64::from(em * fs * 8.0).round() as i64;
     }
@@ -12072,7 +12110,7 @@ fn master_units_runs(
             seen += n;
         }
         let em = font_adv::hmtx_advance_em(family, ch)
-            .or_else(|| slotface_on().then(|| fontdata_advance_em(family, run_bold, run_italic, ch)).flatten())
+            .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, run_bold, run_italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, run_bold, run_italic, ch))?;
         sum += f64::from(em * run_fs * 8.0).round() as i64;
     }
