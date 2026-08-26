@@ -39,6 +39,7 @@ import hashlib
 import json
 import os
 import shutil
+import zipfile
 import subprocess
 import sys
 import threading
@@ -79,6 +80,17 @@ def deck_id(pptx: Path) -> str:
     return pptx.stem
 
 
+def deck_slide_count(pptx: Path) -> int:
+    """How many slides the deck declares, so a partial cache can be spotted."""
+    try:
+        with zipfile.ZipFile(pptx) as z:
+            names = [n for n in z.namelist()
+                     if n.startswith("ppt/slides/slide") and n.endswith(".xml")]
+        return len(names)
+    except Exception:
+        return 0
+
+
 def render(pptx: Path, tag: str, env_pairs: dict[str, str], rerender: bool) -> dict:
     """Render one deck to PNG_ROOT/<tag>/<deck>/slide_sN.png (cached)."""
     out_dir = PNG_ROOT / tag / deck_id(pptx)
@@ -86,7 +98,16 @@ def render(pptx: Path, tag: str, env_pairs: dict[str, str], rerender: bool) -> d
         shutil.rmtree(out_dir)
     existing = list(out_dir.glob("slide_s*.png"))
     if existing:
-        return {"deck": deck_id(pptx), "ok": True, "cached": True}
+        # ★A partial cache is worse than no cache: it reads as a complete deck
+        # and silently scores the slides that happened to finish. An
+        # interrupted render is the usual way to get one.
+        want = deck_slide_count(pptx)
+        if want and len(existing) < want:
+            print(f"  {deck_id(pptx)}: cache has {len(existing)}/{want} slides "
+                  f"-- discarding and re-rendering")
+            shutil.rmtree(out_dir)
+        else:
+            return {"deck": deck_id(pptx), "ok": True, "cached": True}
     out_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.update(env_pairs)
