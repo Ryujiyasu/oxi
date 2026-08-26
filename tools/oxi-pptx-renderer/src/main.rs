@@ -12371,6 +12371,11 @@ fn hmtx_width_styled(
         .map(|w| w + spc * text.trim_end_matches(' ').chars().count() as f32)
 }
 
+/// An exact `a:lnSpc/a:spcPts` line height is honoured unless this is set.
+fn lnspcpts_on() -> bool {
+    std::env::var("OXI_LNSPCPTS_DISABLE").is_err()
+}
+
 /// `a:rPr/@spc` letter spacing is applied unless this is set.
 ///
 /// S-LETTERSPC (2026-08-27). PowerPoint adds the run's tracking to every
@@ -13894,7 +13899,25 @@ fn layout_paragraph_baselines(
     // The paragraph's own lnSpc wins; otherwise the placeholder chain's
     // (d24's master title placeholder says 90%, which is what makes its
     // 60pt title step 64.8pt instead of 72pt).
-    let n = para.line_spacing.or(m.line_spacing).unwrap_or(1.0);
+    // S-LNSPCPTS (2026-08-27). `a:lnSpc/a:spcPts` is an EXACT line height in
+    // points and outranks any multiple. It is carried here as the equivalent
+    // multiple of the 1.2 default, so `adv = fs * 1.2 * n` reproduces the exact
+    // value and everything downstream -- `first_off`'s 0.75-of-advance rule for
+    // a non-default lnSpc, the master spcBef fraction, the mixed-pitch step --
+    // keeps working unchanged.
+    //
+    // d36 s1's title: 107.25pt asked, 97.58pt type, so n = 107.25/117.096 =
+    // 0.9159 and the step becomes 107.25pt against PowerPoint's measured 107.06
+    // / 106.95. Oxi stepped the flat 117.10 and its three baselines fell 9.91 /
+    // 19.97 / 29.66pt below PowerPoint's.
+    let n = para
+        .line_spacing_pts
+        .filter(|_| lnspcpts_on())
+        .filter(|pts| *pts > 0.0 && fs > 0.0)
+        .map(|pts| pts / (fs * 1.2))
+        .or(para.line_spacing)
+        .or(m.line_spacing)
+        .unwrap_or(1.0);
     let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
     // The same chain the draw path uses, so the wrap measures the face that
     // will actually be drawn: run, then the placeholder's own lstStyle (layout

@@ -825,6 +825,12 @@ pub struct SlideParagraph {
     /// advance = fs*1.2*n (linear over n in [0.5, 3.0], verified spec4d).
     #[serde(default)]
     pub line_spacing: Option<f32>,
+    /// EXACT line height in points from `a:lnSpc/a:spcPts` (val/100), which
+    /// overrides the multiple. d36's title asks for 107.25pt on 97.58pt type,
+    /// where the 1.2 default would step 117.10pt -- so its three title lines
+    /// drifted 9.9 / 20.0 / 29.7pt below PowerPoint's.
+    #[serde(default)]
+    pub line_spacing_pts: Option<f32>,
     /// Space before this paragraph, in points (`a:spcBef/a:spcPts` val/100).
     /// Added on top of the line advance (wave-1 measurement).
     #[serde(default)]

@@ -1134,6 +1134,9 @@ fn parse_slide(
     let mut para_alignment: Option<SlideAlignment> = None;
     // Spec #4: paragraph spacing (a:pPr/a:lnSpc, a:spcBef, a:spcAft)
     let mut para_line_spacing: Option<f32> = None;
+    // `a:lnSpc/a:spcPts` -- an exact line height, overriding the multiple.
+    let s_lnspcpts = std::env::var("OXI_LNSPCPTS_DISABLE").is_err();
+    let mut para_line_spacing_pts: Option<f32> = None;
     let mut para_space_before: Option<f32> = None;
     let mut para_space_after: Option<f32> = None;
     let mut in_ln_spc = false;
@@ -1729,6 +1732,7 @@ fn parse_slide(
                         para_runs.clear();
                         para_alignment = None;
                         para_line_spacing = None;
+                        para_line_spacing_pts = None;
                         para_space_before = None;
                         para_space_after = None;
                         in_ln_spc = false;
@@ -2472,6 +2476,18 @@ fn parse_slide(
                             }
                         }
                     }
+                    "spcPts" if in_ln_spc => {
+                        // a:lnSpc/a:spcPts/@val is an EXACT line height in
+                        // 100ths of a point, not a multiple. 1030 of them over
+                        // 3 blind decks; none in the dev corpus.
+                        if s_lnspcpts {
+                            if let Some(v) = get_attr(&e, "val") {
+                                if let Ok(x) = v.parse::<f32>() {
+                                    para_line_spacing_pts = Some(x / 100.0);
+                                }
+                            }
+                        }
+                    }
                     "spcPts" if in_spc_bef || in_spc_aft => {
                         // a:spcBef/spcAft/a:spcPts/@val is in 100ths of a point.
                         if let Some(v) = get_attr(&e, "val") {
@@ -2855,6 +2871,7 @@ fn parse_slide(
                             runs: std::mem::take(&mut para_runs),
                             alignment: para_alignment,
                             line_spacing: para_line_spacing,
+                            line_spacing_pts: para_line_spacing_pts,
                             space_before: para_space_before,
                             space_after: para_space_after,
                             lvl: para_lvl,
