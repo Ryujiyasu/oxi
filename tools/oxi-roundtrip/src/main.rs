@@ -350,25 +350,37 @@ fn docx(path: &Path, keep: Option<&Path>) -> Verdict {
                     return Verdict::Broken(format!("will not say what it holds: {trouble}"))
                 }
             };
-            // A cell of several runs cannot be handed its own text back:
-            // `set_cell_text` takes ONE string, so the cell would come back
-            // flattened. That is the editor doing as it was told, not losing
-            // anything, so the test asks a cell that CAN answer.
+            // One RUN inside a cell, not the whole cell. `set_cell_text`
+            // takes a single string for the cell, so handing a cell of several
+            // runs its own text back still flattens it — which left every
+            // document whose cells are dressed untestable, and they are the
+            // ones most worth testing.
             let mut found = None;
             'hunt: for (table_at, rows) in cells.iter().enumerate() {
                 for (row_at, row) in rows.iter().enumerate() {
                     for (col_at, cell) in row.iter().enumerate() {
-                        if !cell.text.is_empty() && cell.runs == 1 {
-                            found = Some((table_at, row_at, col_at, cell.text.clone()));
-                            break 'hunt;
+                        for (para_at, runs) in cell.paragraphs.iter().enumerate() {
+                            for (run_at, text) in runs.iter().enumerate() {
+                                if !text.is_empty() {
+                                    found = Some((
+                                        table_at,
+                                        row_at,
+                                        col_at,
+                                        para_at,
+                                        run_at,
+                                        text.clone(),
+                                    ));
+                                    break 'hunt;
+                                }
+                            }
                         }
                     }
                 }
             }
-            let Some((table_at, row_at, col_at, text)) = found else {
-                return Verdict::Untested("no cell holds its text in one run");
+            let Some((table_at, row_at, col_at, para_at, run_at, text)) = found else {
+                return Verdict::Untested("nothing in it carries text");
             };
-            editor.set_cell_text(table_at, row_at, col_at, &text);
+            editor.set_table_run_text(table_at, row_at, col_at, para_at, run_at, &text);
         }
     }
     let written = match editor.save() {

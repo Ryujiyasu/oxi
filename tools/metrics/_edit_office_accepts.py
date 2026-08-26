@@ -120,7 +120,10 @@ def main() -> int:
         try:
             refused += workbooks(excel, sheets)
         finally:
-            excel.Quit()
+            try:
+                excel.Quit()
+            except Exception:
+                pass
     if docs:
         word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
@@ -128,7 +131,12 @@ def main() -> int:
         try:
             refused += documents(word, docs)
         finally:
-            word.Quit()
+            # Word's RPC endpoint sometimes goes before we ask it to. Losing
+            # the whole run's findings to that would be a poor trade.
+            try:
+                word.Quit()
+            except Exception:
+                pass
 
     if slides:
         # PowerPoint has no CorruptLoad of its own: a deck it quietly mends
@@ -138,7 +146,10 @@ def main() -> int:
         try:
             refused += decks(power, slides)
         finally:
-            power.Quit()
+            try:
+                power.Quit()
+            except Exception:
+                pass
 
     total = len(sheets) + len(docs) + len(slides)
     ours, theirs = refused, []
