@@ -6084,6 +6084,17 @@ fn parse_drawing(
                                             parse_paragraph(reader, ctx, styles, false, false, None)
                                         {
                                             shape_text_blocks.push(Block::Paragraph(pr.paragraph));
+                                            // S1223 (2026-08-26, opt-out `OXI_S1223_DISABLE`):
+                                            // an image-only paragraph inside a TEXT BOX parses
+                                            // into sibling Block::Image entries -- and this loop
+                                            // dropped them, so a picture living in a floating
+                                            // textbox never rendered at all. forms__000cf39c's
+                                            // university seal (an inline JPEG alone in the box's
+                                            // one paragraph) is the specimen; layout_text_box_at
+                                            // has drawn Block::Image since S488.
+                                            if std::env::var("OXI_S1223_DISABLE").is_err() {
+                                                shape_text_blocks.extend(pr.inline_images);
+                                            }
                                         }
                                     }
                                 }
