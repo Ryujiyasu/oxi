@@ -5386,6 +5386,18 @@ mod windows_draw {
                     // and several lines with no room to spare lose it again.
                     let merged_block = spans_columns > 0 || spans_rows > 0;
                     let one_line = shown == 1;
+                    // WHERE that pixel is taken from depends on how the text
+                    // is placed across the cell. A spread line — distributed
+                    // or justified — takes it from the FOOT, so a merged one
+                    // sat on the bottom rises by it and a merged one centred
+                    // does not move; every other alignment takes it from the
+                    // block, which is the opposite. 90 arms in
+                    // `_xlsx_align_baseline.py` (three row heights, three
+                    // vertical alignments, five horizontal ones, merged and
+                    // not) part exactly along that line, and it is the pixel
+                    // every merged label in `fies_t2`'s worst column stands
+                    // below Excel's.
+                    let spread_foot = merged_block && placed == Align::Spread;
                     // How far the cell's own bottom rule reaches inside it.
                     let sunk_foot = i32::from(
                         cell.style
@@ -5410,6 +5422,16 @@ mod windows_draw {
                                 // Several lines with no room to spare lose
                                 // the pixel again, and are centred as a plain
                                 // cell's would be.
+                                // The spread cell's pixel is NOT taken out of
+                                // the centred block. It reads that way on a
+                                // single unwrapped line — `_xlsx_align_baseline.py`
+                                // has Excel a pixel below us there — but every
+                                // workbook in the corpus that holds centred
+                                // distributed cells moves the wrong way for it
+                                // (`28C037_2` alone by 0.0041), and
+                                // `_xlsx_spread_wrapped.py` agrees on only 8 of
+                                // 48 arms once the text wraps. The centred case
+                                // is its own question; only the foot is settled.
                                 let leading =
                                     i32::from(merged_block && (one_line || slack > 0));
                                 // A PLAIN cell halves its leftover toward
@@ -5455,7 +5477,11 @@ mod windows_draw {
                             // FOOT and not from the box. It is what puts the
                             // `1c*zbd` nine — figures against the foot of
                             // rows ruled with a double — a pixel low.
-                            _ => slack - i32::from(merged_block && !one_line) - sunk_foot,
+                            _ => {
+                                slack
+                                    - i32::from((merged_block && !one_line) || spread_foot)
+                                    - sunk_foot
+                            }
                         };
 
                     // Nothing is drawn outside the cell, or outside the room
@@ -5839,7 +5865,14 @@ mod windows_draw {
                                             super::rule_for(&line.style).before > 0
                                         }),
                                     );
-                                    slack - i32::from(merged_block && !alone) - sunk
+                                    // The spread line takes its merged pixel
+                                    // from the foot, as on the plain path.
+                                    slack
+                                        - i32::from(
+                                            (merged_block && !alone)
+                                                || (merged_block && placed == Align::Spread),
+                                        )
+                                        - sunk
                                 }
                             };
                         for ((from, stop), (tall, base)) in stretches.iter().zip(&boxes) {

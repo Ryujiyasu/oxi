@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
-r"""Does a cell's horizontal alignment move its baseline?
+r"""Where does a WRAPPED, merged, distributed block sit when it is centred?
 
-`fies_t2`'s label column is the worst band in its picture: every distributed
-label sits a pixel below Excel's, while the right-aligned numbers beside it —
-same face, same size, same row, same box — land exactly. Our two paths draw at
-the same baseline, so the pixel is Excel's.
+The merged pixel of leading is taken from the foot for a distributed line and
+from the block for every other alignment — measured over 90 arms, but all of
+them one line and none of them wrapped. Applying it to centred cells moved five
+workbooks the wrong way, and every one of those five holds merged distributed
+cells that are centred, while the two it moved the right way hold bottom ones.
 
-The rows there are tight: 14.25pt is 19px and ＭＳ 明朝 12pt asks for about
-that, so the question is really two. This sweeps the row height across the
-size's own line height AND the six alignments, and reads the ink's top and
-foot. A step that follows the alignment is one answer; a step that follows the
-height is another.
+So this asks the case the sweep never covered: two and three lines, wrapped,
+merged, distributed, centred, over a range of row heights.
 
-    python tools\metrics\_xlsx_align_baseline.py
-    python tools\metrics\_xlsx_align_baseline.py --reuse
+    python tools\metrics\_xlsx_spread_wrapped.py
+    python tools\metrics\_xlsx_spread_wrapped.py --reuse
 """
 
 from __future__ import annotations
@@ -32,44 +30,40 @@ from PIL import Image, ImageGrab
 Image.MAX_IMAGE_PIXELS = None
 REPO = Path(__file__).resolve().parents[2]
 RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xlsx-renderer.exe"
-SCRATCH = Path(r"C:\tmp\xlsx_align_baseline")
-WORDS = "女性用洋服"
-COLUMN = 26.0
-ALIGNS = [("left", -4131), ("centre", -4108), ("right", -4152),
-          ("distributed", -4117), ("justify", -4130)]
-# The vertical alignment is the input the first reading of this missed: a cell
-# COM has just made is CENTRED, while `fies_t2`'s labels — and most of a real
-# sheet — sit on the BOTTOM, and the pixel goes the other way there.
-UPRIGHT = [("bottom", -4107), ("centre", -4108), ("top", -4160)]
-HEIGHTS = [13.5, 14.25, 18.0]
-MERGED = [False, True]
-ARMS = [(points, tall, name, how, merged, sit, sits)
-        for points in (12.0,)
-        for tall in HEIGHTS
+SCRATCH = Path(r"C:\tmp\xlsx_spread_wrapped")
+POINTS = 12.0
+COLUMN = 9.0
+TEXTS = [("one", "女性用洋服"),
+         ("two", "女性用洋服とシャツセーター類"),
+         ("three", "女性用洋服とシャツセーター類および子供用の洋服")]
+UPRIGHT = [("centre", -4108), ("bottom", -4107)]
+HEIGHTS = [30.0, 36.0, 42.0, 48.0]
+ARMS = [(words, name, tall, sit, sits, merged)
+        for name, words in TEXTS
         for sit, sits in UPRIGHT
-        for name, how in ALIGNS
-        for merged in MERGED]
+        for tall in HEIGHTS
+        for merged in (True, False)]
 
 
 def build(made: Path) -> bool:
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    excel = win32com.client.Dispatch("Excel.Application")
+    excel = win32com.client.DispatchEx("Excel.Application")
     excel.Visible = True
     excel.DisplayAlerts = False
     book = excel.Workbooks.Add()
     try:
         sheet = book.Worksheets(1)
-        sheet.Range(f"A1:C{len(ARMS) + 4}").Interior.Color = 0xFFFFFF
-        sheet.Columns(2).ColumnWidth = COLUMN
-        for _held in (3, 4):
-            sheet.Columns(_held).ColumnWidth = COLUMN / 3
-        for at, (points, tall, _name, how, merged, _sit, sits) in enumerate(ARMS, start=2):
+        sheet.Range(f"A1:F{len(ARMS) + 4}").Interior.Color = 0xFFFFFF
+        for column in (2, 3, 4):
+            sheet.Columns(column).ColumnWidth = COLUMN
+        for at, (words, _name, tall, _sit, sits, merged) in enumerate(ARMS, start=2):
             cell = sheet.Cells(at, 2)
-            cell.Value = WORDS
+            cell.Value = words
             cell.Font.Name = "ＭＳ 明朝"
-            cell.Font.Size = points
-            cell.HorizontalAlignment = how
+            cell.Font.Size = POINTS
+            cell.HorizontalAlignment = -4117            # distributed
             cell.VerticalAlignment = sits
+            cell.WrapText = True
             if merged:
                 sheet.Range(sheet.Cells(at, 2), sheet.Cells(at, 4)).Merge()
             sheet.Rows(at).RowHeight = tall
@@ -110,8 +104,7 @@ def ours(made: Path):
     return np.asarray(Image.open(SCRATCH / "oxi.png").convert("L")) < 140, columns, rows
 
 
-def ink(band: np.ndarray) -> tuple[int, int] | None:
-    """The band's first and last row that carry more than a rule's worth."""
+def ink(band: np.ndarray):
     rows = [r for r in range(band.shape[0]) if band[r].sum() >= 4]
     return (rows[0], rows[-1]) if rows else None
 
@@ -120,30 +113,29 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
     args = parser.parse_args()
-    made = SCRATCH / "align.xlsx"
+    made = SCRATCH / "wrapped.xlsx"
     if not args.reuse and not build(made):
         print("  Excel would not hand over a picture")
         return 1
     mine, columns, rows = ours(made)
     truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L")) < 140
-    wide = columns[3][1] - columns[1][0]
-    left, right = columns[1][0], columns[3][1]
+    wide = columns[4][1] - columns[2][0]
+    left, right = columns[2][0], columns[4][1]
     first = rows[2][0]
-    print(f"  {WORDS!r} in ＭＳ 明朝, a {wide}px column")
-    print(f"  {'pt':>5}{'row':>7}{'px':>4}  {'align':<12}"
-          f"{'Excel ink':>12}{'Oxi ink':>12}   dy")
+    print(f"  distributed, wrapped, ＭＳ 明朝 {POINTS}pt over {wide}px")
+    print(f"  {'lines':<7}{'sits':<8}{'row':>5}{'px':>4}{'merged':>8}"
+          f"{'Excel ink':>13}{'Oxi ink':>13}   dy")
     agree = 0
-    for at, (points, tall, name, _how, merged, sit, _sits) in enumerate(ARMS):
+    for at, (_words, name, tall, sit, _sits, merged) in enumerate(ARMS):
         top, foot = rows[at + 2]
         theirs = ink(truth[top - first:foot - first, 1:wide - 1])
         ours_at = ink(mine[top:foot, left + 1:right - 1])
         if theirs is None or ours_at is None:
-            print(f"  {points:>5}{tall:>7}{foot - top:>4}  {name:<12}{merged!s:<8}{sit:<8}  nothing to read")
+            print(f"  {name:<7}{sit:<8}{tall:>5}{foot - top:>4}{merged!s:>8}  nothing to read")
             continue
-        dy = ours_at[0] - theirs[0]
         agree += theirs == ours_at
-        print(f"  {points:>5}{tall:>7}{foot - top:>4}  {name:<12}{merged!s:<8}{sit:<8}"
-              f"{str(theirs):>12}{str(ours_at):>12}  {dy:>+3}"
+        print(f"  {name:<7}{sit:<8}{tall:>5}{foot - top:>4}{merged!s:>8}"
+              f"{str(theirs):>13}{str(ours_at):>13}  {ours_at[0] - theirs[0]:>+3}"
               f"{'' if theirs == ours_at else '  <<'}")
     print(f"  {agree} of {len(ARMS)} arms agree")
     return 0
