@@ -332,6 +332,33 @@ impl DocxEditor {
         });
     }
 
+    /// The runs this editor can address, as IT counts them.
+    ///
+    /// `set_run_text` takes the index of a paragraph among the body's own
+    /// top-level `<w:p>` children and the index of a run within it. That is
+    /// not how the IR lays a document out — the IR is paginated and folds
+    /// tables in — so a caller holding a `Document` cannot work out which
+    /// numbers to pass. This states them: one entry per addressable
+    /// paragraph, holding that paragraph's runs in order, each as the text it
+    /// currently carries.
+    ///
+    /// A caller that wants to change the word under the cursor needs this;
+    /// so does anything that wants to check an edit went where it was aimed.
+    pub fn addressable_runs(&self) -> Result<Vec<Vec<String>>, ParseError> {
+        let Some(xml) = self.read_original_part("word/document.xml")? else {
+            return Ok(Vec::new());
+        };
+        let (_preamble, segments, _postamble) = split_body(&xml)?;
+        let mut out = Vec::new();
+        for segment in &segments {
+            let BodySegment::Paragraph(held) = segment else {
+                continue;
+            };
+            out.push(runs_of(held));
+        }
+        Ok(out)
+    }
+
     /// Apply multiple legacy text edits at once.
     pub fn apply_edits(&mut self, edits: &[TextEdit]) {
         for edit in edits {
@@ -1585,6 +1612,63 @@ fn generate_image_paragraph_xml(
 
 /// Split document XML into preamble (before body content), body segments, and postamble.
 #[allow(unused_assignments)]
+/// One paragraph's runs, in the order `set_run_text` counts them, each as the
+/// text its `<w:t>` elements carry. A run holding no text still takes its
+/// place: dropping it would shift every run behind it.
+fn runs_of(xml: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut runs: Vec<String> = Vec::new();
+    let (mut in_run, mut in_text) = (false, false);
+    let mut held = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref()).as_str() {
+                "r" => {
+                    in_run = true;
+                    held.clear();
+                }
+                "t" if in_run => in_text = true,
+                _ => {}
+            },
+            Ok(Event::Text(e)) if in_text => {
+                if let Ok(text) = e.unescape() {
+                    held.push_str(&text);
+                }
+            }
+            // The separators read as part of the run's text, the same way the
+            // parser reports them, so that what this says and what
+            // `set_run_text` takes are the same string.
+            Ok(Event::Empty(e)) if in_run => match local_name(e.name().as_ref()).as_str() {
+                "tab" => held.push('\t'),
+                "cr" => held.push('\n'),
+                "br" => {
+                    let kind = e.attributes().flatten().find_map(|held| {
+                        (local_name(held.key.as_ref()) == "type")
+                            .then(|| String::from_utf8_lossy(&held.value).to_string())
+                    });
+                    held.push(match kind.as_deref() {
+                        Some("page") => '\u{0C}',
+                        Some("column") => '\u{0B}',
+                        _ => '\n',
+                    });
+                }
+                _ => {}
+            },
+            Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
+                "t" => in_text = false,
+                "r" if in_run => {
+                    in_run = false;
+                    runs.push(std::mem::take(&mut held));
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    runs
+}
+
 fn split_body(xml: &str) -> Result<(String, Vec<BodySegment>, String), ParseError> {
     let mut reader = Reader::from_str(xml);
     let mut segments = Vec::new();
@@ -2108,6 +2192,14 @@ fn patch_paragraph_xml(
     let mut in_run = false;
     let mut in_text = false;
     let mut text_replaced = false;
+    // A run's replacement text is written ONCE, in place of the run's first
+    // text element, and the rest of the run's text, tabs and breaks are
+    // dropped. Writing it at every `<w:t>` — which is what resetting
+    // `text_replaced` per element did — turned `test_tabs.docx`'s
+    // "Col1	Col2	Col3" into "Col1Col2Col3	Col1Col2Col3	Col1Col2Col3"
+    // on a save that asked for no change at all.
+    let mut run_text_written = false;
+    let mut dropping_text = false;
     let mut skip_run = false;
     let mut skip_depth: i32 = 0;
     // pPr/rPr collection for merging
@@ -2196,6 +2288,8 @@ fn patch_paragraph_xml(
 
                         in_run = true;
                         rpr_seen_in_run = false;
+                        run_text_written = false;
+                        dropping_text = false;
                         writer.write_event(Event::Start(e.clone()))?;
                     }
                     "rPr" if in_run => {
@@ -2212,6 +2306,19 @@ fn patch_paragraph_xml(
                         }
                     }
                     "t" if in_run => {
+                        if let Some(new_text) = text_edits.get(&run_idx) {
+                            if !run_text_written {
+                                writer.write_event(Event::Text(BytesText::from_escaped(
+                                    &run_text_xml(new_text),
+                                )))?;
+                                run_text_written = true;
+                            }
+                            // The run's own text elements go with it: the
+                            // replacement carries the whole of the run's text,
+                            // separators and all.
+                            dropping_text = true;
+                            continue;
+                        }
                         in_text = true;
                         text_replaced = false;
                         writer.write_event(Event::Start(e.clone()))?;
@@ -2308,16 +2415,23 @@ fn patch_paragraph_xml(
                             }
                             rpr_seen_in_run = true;
                         }
+                        if let Some(new_text) = text_edits.get(&run_idx) {
+                            if !run_text_written {
+                                writer.write_event(Event::Text(BytesText::from_escaped(
+                                    &run_text_xml(new_text),
+                                )))?;
+                            }
+                        }
                         in_run = false;
+                        dropping_text = false;
                         writer.write_event(Event::End(e.clone()))?;
                         run_idx += 1;
                     }
+                    "t" if dropping_text => {
+                        dropping_text = false;
+                        continue;
+                    }
                     "t" if in_text => {
-                        if !text_replaced {
-                            if let Some(new_text) = text_edits.get(&run_idx) {
-                                writer.write_event(Event::Text(BytesText::new(new_text)))?;
-                            }
-                        }
                         in_text = false;
                         writer.write_event(Event::End(e.clone()))?;
                     }
@@ -2341,6 +2455,9 @@ fn patch_paragraph_xml(
                     continue;
                 }
 
+                if dropping_text {
+                    continue;
+                }
                 if in_text {
                     if let Some(new_text) = text_edits.get(&run_idx) {
                         writer.write_event(Event::Text(BytesText::new(new_text)))?;
@@ -2358,6 +2475,24 @@ fn patch_paragraph_xml(
                 }
 
                 let local = local_name_from_bytes(e.name().as_ref());
+
+                // The separators inside a run being replaced belong to the old
+                // text: the new one spells its own out. Leaving them would put
+                // `test_tabs.docx`'s three tabs back after the replacement.
+                if in_run && text_edits.contains_key(&run_idx) {
+                    if local == "t" {
+                        if !run_text_written {
+                            writer.write_event(Event::Text(BytesText::from_escaped(
+                                &run_text_xml(text_edits[&run_idx]),
+                            )))?;
+                            run_text_written = true;
+                        }
+                        continue;
+                    }
+                    if matches!(local.as_str(), "tab" | "br" | "cr") {
+                        continue;
+                    }
+                }
 
                 if collecting_ppr {
                     if let Some(ref mut w) = ppr_collector {
@@ -2649,6 +2784,54 @@ pub fn escape_xml_public(s: &str) -> String {
 }
 
 /// Escape XML special characters.
+/// A run's text spelled back out as the elements that carry it.
+///
+/// The IR reports a run's text with its separators inside it — a `<w:tab/>` is
+/// a tab, a `<w:br/>` a newline, a page break a form feed — because that is
+/// what the text reads as. So a caller handing that string back must get the
+/// same run again, which means splitting it at those characters rather than
+/// writing them into a `<w:t>`, where Word would show them as spaces.
+fn run_text_xml(text: &str) -> String {
+    let mut out = String::new();
+    let mut held = String::new();
+    fn flush(held: &mut String, out: &mut String) {
+        if !held.is_empty() {
+            out.push_str(&format!(
+                "<w:t xml:space=\"preserve\">{}</w:t>",
+                escape_xml(held)
+            ));
+            held.clear();
+        }
+    }
+    for letter in text.chars() {
+        match letter {
+            '\t' => {
+                flush(&mut held, &mut out);
+                out.push_str("<w:tab/>");
+            }
+            '\n' => {
+                flush(&mut held, &mut out);
+                out.push_str("<w:br/>");
+            }
+            '\u{0B}' => {
+                flush(&mut held, &mut out);
+                out.push_str("<w:br w:type=\"column\"/>");
+            }
+            '\u{0C}' => {
+                flush(&mut held, &mut out);
+                out.push_str("<w:br w:type=\"page\"/>");
+            }
+            _ => held.push(letter),
+        }
+    }
+    flush(&mut held, &mut out);
+    // A run whose text is emptied still needs an element to hold it.
+    if out.is_empty() {
+        out.push_str("<w:t xml:space=\"preserve\"></w:t>");
+    }
+    out
+}
+
 fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -3603,6 +3786,28 @@ mod tests {
         } else {
             panic!("expected paragraph");
         }
+    }
+
+    #[test]
+    fn a_paragraph_states_its_runs_in_the_order_they_are_addressed() {
+        // A run holding no text still counts: `set_run_text` steps over every
+        // `<w:r>`, so dropping the empty one would aim every later edit one
+        // run short.
+        let xml = concat!(
+            "<w:p><w:r><w:t>one</w:t></w:r>",
+            "<w:r><w:br/></w:r>",
+            "<w:r><w:t>Col1</w:t><w:tab/><w:t>Col2</w:t></w:r></w:p>",
+        );
+        assert_eq!(
+            runs_of(xml),
+            vec!["one".to_string(), "
+".to_string(), "Col1	Col2".to_string()]
+        );
+        // And back again: what the editor is told is what the run becomes.
+        assert_eq!(
+            run_text_xml("Col1	Col2"),
+            "<w:t xml:space=\"preserve\">Col1</w:t><w:tab/><w:t xml:space=\"preserve\">Col2</w:t>"
+        );
     }
 
     #[test]
