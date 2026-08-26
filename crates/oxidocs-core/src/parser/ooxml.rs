@@ -3665,7 +3665,10 @@ fn parse_paragraph(
         }
         for (ridx, image) in inline_img_runs {
             if let Some(run) = runs.get_mut(ridx) {
-                run.style.inline_object_extent = Some((image.width, image.height));
+                // S1238: the in-run ADVANCE is extent + effectExtent l+r
+                // (Word's inline pitch); the render keeps image.width.
+                run.style.inline_object_extent =
+                    Some((image.width + image.advance_extra_w, image.height));
                 run.style.inline_object_image = Some(Box::new(image));
             }
         }
@@ -5581,6 +5584,10 @@ fn parse_drawing(
 ) -> Result<DrawingResult, ParseError> {
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
+    // S1238: wp:effectExtent l + r in points (Word's inline advance is
+    // extent + effectExtent l + r).
+    let mut effect_extent_lr: f32 = 0.0;
+    let mut effect_extent_b: f32 = 0.0;
     let mut alt_text = None;
     let mut rel_id = None;
     let mut depth = 0;
@@ -6449,6 +6456,33 @@ fn parse_drawing(
                             }
                         }
                     }
+                    "effectExtent" => {
+                        // S1238: Word advances an inline drawing by
+                        // extent + effectExtent l + r (kyotei digit boxes:
+                        // 10.405 + 1.6 = the measured 12.0pt pitch).
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = String::from_utf8_lossy(&attr.value);
+                            match key {
+                                "l" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        effect_extent_lr += v / 12700.0;
+                                    }
+                                }
+                                "r" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        effect_extent_lr += v / 12700.0;
+                                    }
+                                }
+                                "b" => {
+                                    if let Ok(v) = val.parse::<f32>() {
+                                        effect_extent_b = v / 12700.0;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     "blip" => {
                         // a:blip r:embed="rId1"
                         for attr in e.attributes().flatten() {
@@ -6927,6 +6961,9 @@ fn parse_drawing(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
             data,
             width,
             height,
@@ -7139,6 +7176,9 @@ fn parse_drawing(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
             data: Vec::new(),
             width,
             height,
@@ -7163,6 +7203,22 @@ fn parse_drawing(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            // S1238: carry the wps shape's visible frame so the flowed
+            // placeholder can render it (kyotei digit boxes: a:ln 0.5pt black
+            // + lt1 fill). border=false shapes stay invisible (None).
+            placeholder_outline: text_box.as_ref().and_then(|tb| {
+                if tb.border {
+                    Some((
+                        tb.stroke_color.clone().unwrap_or_else(|| "000000".into()),
+                        tb.stroke_width.unwrap_or(0.5),
+                        tb.fill.clone(),
+                    ))
+                } else {
+                    None
+                }
+            }),
+            advance_extra_w: effect_extent_lr,
+            effect_extent_b,
             data: Vec::new(),
             width,
             height,
@@ -7674,6 +7730,9 @@ fn parse_vml_pict(
                 paragraph_space_after: 0.0,
                 host_paragraph: None,
                 page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
                 data: Vec::new(),
                 width: group_width,
                 height: group_height,
@@ -7756,6 +7815,9 @@ fn parse_vml_pict(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
             data,
             width,
             height,
@@ -7841,6 +7903,9 @@ fn parse_vml_pict(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
             data: Vec::new(),
             width,
             height,
@@ -8020,6 +8085,9 @@ fn parse_ole_object(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
             data,
             width,
             height,
@@ -9744,6 +9812,9 @@ fn parse_table_cell(
                                 paragraph_space_after: 0.0,
                                 host_paragraph: None,
                                 page_break_before: false,
+            placeholder_outline: None,
+            advance_extra_w: 0.0,
+            effect_extent_b: 0.0,
                                 data: Vec::new(),
                                 width: s838_cx,
                                 height: s838_cy,

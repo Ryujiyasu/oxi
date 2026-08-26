@@ -19657,6 +19657,33 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else {
                             baseline - oh
                         };
+                        // S1238 (2026-08-27): a data-less flow-reservation
+                        // placeholder whose wps shape draws a visible frame
+                        // (kyotei 労働保険番号 digit boxes: 0.5pt black ln +
+                        // lt1 fill) renders that frame at the flowed position.
+                        // Real pictures and frameless placeholders unchanged.
+                        if img.data.is_empty() && std::env::var("OXI_S1238_DISABLE").is_err() {
+                            if let Some((stroke, sw, fill)) = img.placeholder_outline.as_ref() {
+                                let mut e = LayoutElement::new(
+                                    el_x,
+                                    oy,
+                                    img.width,
+                                    oh,
+                                    LayoutContent::BoxRect {
+                                        fill: fill.clone(),
+                                        stroke_color: Some(stroke.clone()),
+                                        stroke_width: *sw,
+                                        corner_radius: 0.0,
+                                    },
+                                );
+                                if let Some(pi) = body_para_index {
+                                    e.paragraph_index = Some(pi);
+                                }
+                                elements.push(e);
+                                x += adjusted_width + frag_spacing_after[frag_idx];
+                                continue;
+                            }
+                        }
                         let mut e = LayoutElement::new(
                             el_x,
                             oy,
@@ -36460,6 +36487,55 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             + align_offset
                                                             + rx;
                                                         let obj_bottom = content_h + lh;
+                                                        // S1238 (2026-08-27): a data-less
+                                                        // flow-reservation placeholder with a
+                                                        // visible wps frame renders it as a
+                                                        // BoxRect at the flowed position
+                                                        // (kyotei 労働保険番号 digit boxes).
+                                                        // Box BOTTOM sits at line_bottom −
+                                                        // effectExtent.b (kyotei row1: Word
+                                                        // bottom 29.5 = 30.8 − 1.5 ± 0.2;
+                                                        // plain line-bottom is 1.3 low,
+                                                        // line-top 4.2 high, a 5pt-run
+                                                        // baseline 2.6 high).
+                                                        let s1238_top =
+                                                            content_h + lh - oh - img.effect_extent_b;
+                                                        let s1238_content = if img.data.is_empty()
+                                                            && std::env::var("OXI_S1238_DISABLE")
+                                                                .is_err()
+                                                        {
+                                                            img.placeholder_outline.as_ref().map(
+                                                                |(stroke, sw, fill)| {
+                                                                    LayoutContent::BoxRect {
+                                                                        fill: fill.clone(),
+                                                                        stroke_color: Some(
+                                                                            stroke.clone(),
+                                                                        ),
+                                                                        stroke_width: *sw,
+                                                                        corner_radius: 0.0,
+                                                                    }
+                                                                },
+                                                            )
+                                                        } else {
+                                                            None
+                                                        };
+                                                        if let Some(content) = s1238_content {
+                                                            let mut e = LayoutElement::new(
+                                                                base_x,
+                                                                s1238_top,
+                                                                img.width,
+                                                                oh,
+                                                                content,
+                                                            );
+                                                            e.paragraph_index = block_idx;
+                                                            e.cell_paragraph_index =
+                                                                Some(cell_para_counter);
+                                                            e.cell_row_index = Some(row_idx);
+                                                            e.cell_col_index = Some(cell_idx);
+                                                            cell_elements.push(e);
+                                                            rx += adj_w;
+                                                            continue;
+                                                        }
                                                         let mut e = LayoutElement::new(
                                                             base_x,
                                                             obj_bottom - oh,

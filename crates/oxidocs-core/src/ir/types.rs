@@ -788,6 +788,22 @@ pub struct Image {
     /// `pageBreakBefore` handler does.
     #[serde(default)]
     pub page_break_before: bool,
+    /// S1238: a data-less flow-reservation placeholder (S741) whose source wps
+    /// shape draws a visible frame — (stroke hex, stroke width pt, fill hex).
+    /// The inline emit renders this as a rectangle at the flowed position
+    /// (kyotei's 労働保険番号 digit boxes). None for real pictures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder_outline: Option<(String, f32, Option<String>)>,
+    /// S1238: extra ADVANCE beyond `width` when the image flows in-run —
+    /// wp:effectExtent l + r. Word's inline pitch = extent + effectExtent
+    /// (kyotei digit boxes: 10.405 + 1.6 = the measured 12.0pt). The RENDER
+    /// stays `width` wide. Zero for everything else.
+    #[serde(default)]
+    pub advance_extra_w: f32,
+    /// S1238: wp:effectExtent b — the flowed box's bottom sits at
+    /// line_bottom − this (kyotei row1: 30.8 − 1.5 = Word's 29.5 ± 0.2).
+    #[serde(default)]
+    pub effect_extent_b: f32,
 }
 
 /// Image crop rectangle (percentages from each edge)
