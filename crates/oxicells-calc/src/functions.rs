@@ -382,6 +382,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         "IFERROR" | "IFNA" | "IF"
             | "ISERROR" | "ISNA" | "ISERR" | "ISNUMBER" | "ISTEXT"
             | "ISBLANK" | "ISLOGICAL" | "ISREF"
+        // The conditional sums look at one row at a time, so an error in a
+        // range is a fact about that row and not about the answer. Each of
+        // them settles for itself what to do with one.
+            | "SUMIF" | "COUNTIF" | "AVERAGEIF"
+            | "SUMIFS" | "COUNTIFS" | "AVERAGEIFS"
     );
     if !error_transparent {
         if let Some(e) = first_error(args) {
@@ -665,6 +670,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             // COUNTIFS it is the first range to test, and is only used for its
             // length.
             let over = args[0].flatten();
+            for pair in pairs.chunks(2) {
+                if let Some(why) = pair[1].scalar().err() {
+                    return Err(why);
+                }
+            }
             let mut total = 0.0;
             let mut seen = 0.0;
             for at in 0..over.len() {
@@ -688,8 +698,11 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 }
                 seen += 1.0;
                 if !counting {
-                    if let Some(Value::Number(n)) = over.get(at) {
-                        total += n;
+                    match over.get(at) {
+                        // An error on a row that matched is being added up.
+                        Some(Value::Error(why)) => return Err(*why),
+                        Some(Value::Number(n)) => total += n,
+                        _ => {}
                     }
                 }
             }
@@ -890,25 +903,44 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
         }
 
-        "SUMIF" => {
+        "SUMIF" | "AVERAGEIF" => {
             if args.len() < 2 {
                 return Err(ExcelError::Value);
             }
-            let criteria = Criteria::parse(&args[1].scalar());
+            let asked = args[1].scalar();
+            // The criterion itself being an error is a different matter from a
+            // range holding one: there is nothing to test against.
+            if let Some(why) = asked.err() {
+                return Err(why);
+            }
+            let criteria = Criteria::parse(&asked);
             let tested = args[0].flatten();
             let summed = match args.get(2) {
                 Some(a) => a.flatten(),
                 None => tested.clone(),
             };
             let mut total = 0.0;
+            let mut seen = 0.0;
             for (i, v) in tested.iter().enumerate() {
-                if criteria.matches(v) {
-                    if let Some(Value::Number(n)) = summed.get(i) {
-                        total += n;
-                    }
+                if !criteria.matches(v) {
+                    continue;
+                }
+                seen += 1.0;
+                match summed.get(i) {
+                    // An error on a row that MATCHED is being added up, and an
+                    // error cannot be added up.
+                    Some(Value::Error(why)) => return Err(*why),
+                    Some(Value::Number(n)) => total += n,
+                    _ => {}
                 }
             }
-            Ok(Value::Number(total))
+            if name == "SUMIF" {
+                return Ok(Value::Number(total));
+            }
+            if seen == 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            Ok(Value::Number(total / seen))
         }
 
         // ---- lookup --------------------------------------------------------
@@ -1632,6 +1664,23 @@ enum BinaryPredicate {
     Ge,
 }
 
+/// The error a criterion spells out, if it spells one.
+fn an_error_named(text: &str) -> Option<ExcelError> {
+    const NAMED: &[(&str, ExcelError)] = &[
+        ("#DIV/0!", ExcelError::DivZero),
+        ("#VALUE!", ExcelError::Value),
+        ("#NAME?", ExcelError::Name),
+        ("#NULL!", ExcelError::Null),
+        ("#REF!", ExcelError::Ref),
+        ("#NUM!", ExcelError::Num),
+        ("#N/A", ExcelError::NA),
+    ];
+    NAMED
+        .iter()
+        .find(|(spelled, _)| text.eq_ignore_ascii_case(spelled))
+        .map(|(_, why)| *why)
+}
+
 impl Criteria {
     fn parse(v: &Value) -> Criteria {
         let text = match v {
@@ -1661,12 +1710,36 @@ impl Criteria {
 
         let operand = match rest.parse::<f64>() {
             Ok(n) => Value::Number(n),
-            Err(_) => Value::Text(rest.to_string()),
+            // `"<>#N/A"` names the error, not the four characters of it.
+            Err(_) => match an_error_named(rest) {
+                Some(why) => Value::Error(why),
+                None => Value::Text(rest.to_string()),
+            },
         };
         Criteria { op, operand }
     }
 
     fn matches(&self, v: &Value) -> bool {
+        // An error is a value of its own kind: equal to itself, equal to
+        // nothing else, and beyond comparing for greater or less. So a
+        // NOT-equal criterion IS satisfied by one — `COUNTIF(range,"<>0")`
+        // counts an `#N/A` — unless the criterion names that same error.
+        let held = match v {
+            Value::Error(why) => Some(*why),
+            _ => None,
+        };
+        let wanted = match &self.operand {
+            Value::Error(why) => Some(*why),
+            _ => None,
+        };
+        if held.is_some() || wanted.is_some() {
+            let alike = held.is_some() && held == wanted;
+            return match self.op {
+                BinaryPredicate::Eq => alike,
+                BinaryPredicate::Ne => !alike,
+                _ => false,
+            };
+        }
         // `""` asks for the empty ones. `COUNTIFS(B:B, x, D:D, "")` — count
         // where D has nothing in it — is how anyone counts what is still
         // outstanding, and a rule that says a blank never matches anything
@@ -1896,6 +1969,123 @@ mod tests {
         assert_eq!(call("T", &[t("one")]), Value::text("one"));
         assert_eq!(call("T", &[v(7.0)]), Value::text(""));
         assert_eq!(call("T", &[Arg::Value(Value::Logical(true))]), Value::text(""));
+    }
+
+    /// A column of 10, <an error>, 30 — the shape every one of these is asked
+    /// about. Each expectation is what Excel 16 answered.
+    fn with_an_error(why: ExcelError) -> Arg {
+        range(&[n(10.0), Value::Error(why), n(30.0)], 1)
+    }
+
+    #[test]
+    fn an_error_in_a_range_being_tested_is_not_a_match() {
+        // The guard that hands back the first error found anywhere in any
+        // argument is right for SUM — a sum of an error IS an error — and
+        // wrong for this whole family, where an error is a fact about one row.
+        // `COUNTIF(range,"yes")` used to answer #N/A because one cell held one.
+        let column = range(
+            &[Value::text("yes"), Value::Error(ExcelError::NA), Value::text("yes")],
+            1,
+        );
+        let amounts = range(&[n(10.0), n(20.0), n(30.0)], 1);
+        assert_eq!(call("COUNTIF", &[column.clone(), t("yes")]), n(2.0));
+        assert_eq!(
+            call("SUMIF", &[column.clone(), t("yes"), amounts.clone()]),
+            n(40.0),
+        );
+        assert_eq!(
+            call("SUMIFS", &[amounts.clone(), column.clone(), t("yes")]),
+            n(40.0),
+        );
+        assert_eq!(call("AVERAGEIF", &[column, t("yes"), amounts]), n(20.0));
+    }
+
+    #[test]
+    fn an_error_on_a_row_that_matched_is_being_added_up() {
+        // The other way round: the error is in the range being SUMMED, on a
+        // row the criterion picked. There is no adding that up.
+        let names = range(
+            &[Value::text("yes"), Value::text("yes"), Value::text("no")],
+            1,
+        );
+        let amounts = range(&[n(10.0), Value::Error(ExcelError::NA), n(30.0)], 1);
+        assert_eq!(
+            call("SUMIF", &[names.clone(), t("yes"), amounts.clone()]),
+            Value::Error(ExcelError::NA),
+        );
+        // And on a row it did NOT pick, the error is simply not reached.
+        assert_eq!(call("SUMIF", &[names, t("no"), amounts]), n(30.0));
+    }
+
+    #[test]
+    fn a_criterion_that_spells_an_error_means_that_error() {
+        // `"#N/A"` is the error, not the four characters. An error equals
+        // itself, equals no other error, and equals no number — so a NOT-equal
+        // criterion IS satisfied by one unless it names that same error.
+        let na = with_an_error(ExcelError::NA);
+        let bad_ref = with_an_error(ExcelError::Ref);
+        let by_zero = with_an_error(ExcelError::DivZero);
+
+        assert_eq!(call("COUNTIF", &[na.clone(), t("#N/A")]), n(1.0));
+        assert_eq!(call("COUNTIF", &[na.clone(), t("<>#N/A")]), n(2.0));
+        assert_eq!(call("SUMIF", &[na.clone(), t("<>#N/A")]), n(40.0));
+        assert_eq!(
+            call("SUMIF", &[na.clone(), t("#N/A")]),
+            Value::Error(ExcelError::NA),
+            "the row it picked holds an error",
+        );
+
+        // A DIFFERENT error is "not #N/A", so it matches — and then it is
+        // being added up. This is what one corpus workbook does down a whole
+        // column of #REF!, and fifty cells turned on getting it right.
+        assert_eq!(call("COUNTIF", &[bad_ref.clone(), t("#N/A")]), n(0.0));
+        assert_eq!(call("COUNTIF", &[bad_ref.clone(), t("<>#N/A")]), n(3.0));
+        assert_eq!(
+            call("SUMIF", &[bad_ref.clone(), t("<>#N/A")]),
+            Value::Error(ExcelError::Ref),
+        );
+        assert_eq!(
+            call("SUMIF", &[by_zero.clone(), t("<>#N/A")]),
+            Value::Error(ExcelError::DivZero),
+        );
+        // Naming its own error excludes it again.
+        assert_eq!(call("COUNTIF", &[bad_ref.clone(), t("<>#REF!")]), n(2.0));
+        assert_eq!(call("SUMIF", &[bad_ref.clone(), t("<>#REF!")]), n(40.0));
+    }
+
+    #[test]
+    fn an_error_is_past_comparing_for_greater_or_less() {
+        // Beyond equality there is nothing to say about an error, so it falls
+        // out of every comparison — but `"<>0"` is an equality, and an error
+        // is indeed not zero.
+        let na = with_an_error(ExcelError::NA);
+        let bad_ref = with_an_error(ExcelError::Ref);
+        assert_eq!(call("COUNTIF", &[na.clone(), t(">5")]), n(2.0));
+        assert_eq!(call("SUMIF", &[na.clone(), t(">5")]), n(40.0));
+        assert_eq!(call("COUNTIF", &[bad_ref.clone(), t(">5")]), n(2.0));
+        assert_eq!(call("SUMIF", &[bad_ref, t(">5")]), n(40.0));
+        assert_eq!(call("COUNTIF", &[na.clone(), t("<>0")]), n(3.0));
+        assert_eq!(
+            call("SUMIF", &[na, t("<>0")]),
+            Value::Error(ExcelError::NA),
+            "all three matched, and one of them is an error",
+        );
+    }
+
+    #[test]
+    fn the_criterion_itself_being_an_error_is_a_different_matter() {
+        // A range holding an error is a fact about a row. A CRITERION that is
+        // an error leaves nothing to test against at all.
+        let amounts = range(&[n(10.0), n(20.0), n(30.0)], 1);
+        let broken = Arg::Value(Value::Error(ExcelError::Value));
+        assert_eq!(
+            call("SUMIF", &[amounts.clone(), broken.clone()]),
+            Value::Error(ExcelError::Value),
+        );
+        assert_eq!(
+            call("SUMIFS", &[amounts.clone(), amounts, broken]),
+            Value::Error(ExcelError::Value),
+        );
     }
 
     #[test]
