@@ -35669,6 +35669,94 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         content_h += empty_lh;
                                     }
 
+                                    // S1242 (2026-08-27, default ON, opt-out OXI_S1242_DISABLE):
+                                    // a JUSTIFIED cell's Latin text arrives as ONE fragment per
+                                    // line, so the word-space slack distribution below has no
+                                    // space fragments to widen — jc=both table cells rendered
+                                    // ragged-left (administrative__00018048's bullet cells; the
+                                    // body path splits words and justifies fine). Split each
+                                    // multi-word fragment at spaces into word/space pieces whose
+                                    // widths are NORMALIZED to the fragment's measured width
+                                    // (interior positions approximate, line edges exact).
+                                    // Sentinel fragments (F8FE/F8FF) and space-free text pass
+                                    // through untouched; non-justified paragraphs are skipped.
+                                    if (para.alignment == Alignment::Justify
+                                        || para.alignment == Alignment::Distribute)
+                                        && std::env::var("OXI_S1242_DISABLE").is_err()
+                                    {
+                                        let fm = self.registry.default_metrics();
+                                        for line in lines.iter_mut() {
+                                            if line.iter().any(|t| {
+                                                !t.0.is_empty() && t.0.trim().is_empty()
+                                            }) {
+                                                continue; // already has space fragments
+                                            }
+                                            if !line.iter().any(|t| {
+                                                !t.0.starts_with('\u{F8FE}')
+                                                    && !t.0.starts_with('\u{F8FF}')
+                                                    && t.0.trim().contains(' ')
+                                            }) {
+                                                continue;
+                                            }
+                                            let mut out = Vec::with_capacity(line.len() * 2);
+                                            for frag in line.drain(..) {
+                                                let (text, fs, tw) =
+                                                    (frag.0.clone(), frag.1, frag.2);
+                                                if text.starts_with('\u{F8FE}')
+                                                    || text.starts_with('\u{F8FF}')
+                                                    || !text.trim().contains(' ')
+                                                {
+                                                    out.push(frag);
+                                                    continue;
+                                                }
+                                                // Alternating word/space pieces.
+                                                let mut pieces: Vec<String> = Vec::new();
+                                                let mut cur = String::new();
+                                                let mut cur_is_space: Option<bool> = None;
+                                                for ch in text.chars() {
+                                                    let sp = ch == ' ';
+                                                    if cur_is_space != Some(sp)
+                                                        && !cur.is_empty()
+                                                    {
+                                                        pieces.push(std::mem::take(&mut cur));
+                                                    }
+                                                    cur_is_space = Some(sp);
+                                                    cur.push(ch);
+                                                }
+                                                if !cur.is_empty() {
+                                                    pieces.push(cur);
+                                                }
+                                                let raw: Vec<f32> = pieces
+                                                    .iter()
+                                                    .map(|p| {
+                                                        p.chars()
+                                                            .map(|c| {
+                                                                self.registry
+                                                                    .char_width_pt_with_fallback(
+                                                                        c, fs, fm,
+                                                                    )
+                                                            })
+                                                            .sum::<f32>()
+                                                    })
+                                                    .collect();
+                                                let raw_sum: f32 = raw.iter().sum();
+                                                let scale = if raw_sum > 0.01 {
+                                                    tw / raw_sum
+                                                } else {
+                                                    1.0
+                                                };
+                                                for (p, rw) in
+                                                    pieces.into_iter().zip(raw.into_iter())
+                                                {
+                                                    let mut nf = frag.clone();
+                                                    nf.0 = p;
+                                                    nf.2 = rw * scale;
+                                                    out.push(nf);
+                                                }
+                                            }
+                                            *line = out;
+                                        }
+                                    }
                                     let total_lines = lines.len();
                                     for (line_idx, line) in lines.iter().enumerate() {
                                         // CELLLINE instrument: reliable per-LINE cell text + char count.
@@ -36088,6 +36176,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         {
                                                             frag_spacing[fi] += per_space;
                                                         }
+                                                    }
+                                                } else if std::env::var("OXI_S1242_DISABLE")
+                                                    .is_err()
+                                                    && line.len() > 1
+                                                    && (0..line.len() - 1).any(|i| {
+                                                        line[i].0.ends_with(' ')
+                                                            || line[i + 1].0.starts_with(' ')
+                                                    })
+                                                {
+                                                    // S1242b: the doc's runs arrive pre-split
+                                                    // at word boundaries with the spaces glued
+                                                    // to the words ("member " "of ") — no pure-
+                                                    // space fragment exists, so the branch above
+                                                    // finds nothing. Distribute the slack at
+                                                    // fragment boundaries that carry a space on
+                                                    // either side (administrative__00018048's
+                                                    // justified bullet cells).
+                                                    let bounds: Vec<usize> = (0..line.len() - 1)
+                                                        .filter(|&i| {
+                                                            line[i].0.ends_with(' ')
+                                                                || line[i + 1].0.starts_with(' ')
+                                                        })
+                                                        .collect();
+                                                    let per_space = slack / bounds.len() as f32;
+                                                    for i in bounds {
+                                                        frag_spacing[i] += per_space;
                                                     }
                                                 } else {
                                                     // No word spaces: distribute between ALL CJK character gaps
