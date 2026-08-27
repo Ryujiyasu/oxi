@@ -2610,14 +2610,19 @@ impl<'a> WorkbookHost<'a> {
         // Every sheet's formulas are rewritten, not just this one: a formula on
         // another sheet naming this one follows the cells that moved.
         let moved_sheet = self.workbook.sheets[range.sheet].name.clone();
-        let shift = ReferenceShift {
-            axis,
-            at,
-            count,
-            across,
-            sheet: Some(&moved_sheet),
-        };
         for worksheet in &mut self.workbook.sheets {
+            // Which sheet these formulas are written on decides what an
+            // unqualified `A1` means: it is about THIS sheet, so it moves only
+            // when this is the sheet the cells moved on. One shift for all of
+            // them dragged every other sheet's references along.
+            let shift = ReferenceShift {
+                axis,
+                at,
+                count,
+                across,
+                sheet: Some(&moved_sheet),
+                on_sheet: Some(worksheet.name.as_str()),
+            };
             for row in &mut worksheet.rows {
                 for cell in &mut row.cells {
                     let Some(formula) = cell.formula.as_ref() else {
@@ -5865,6 +5870,11 @@ mod tests {
                 default_row_custom: false,
                 col_fonts: vec![],
                 normal_font: None,
+                first_font: None,
+                frozen_rows: 0,
+                frozen_cols: 0,
+                drawings: Vec::new(),
+                comments: Vec::new(),
                 merge_cells: Vec::new(),
                 hidden_cols: Vec::new(),
                 auto_filter: None,
@@ -6082,6 +6092,11 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            drawings: Vec::new(),
+            comments: Vec::new(),
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -6136,6 +6151,11 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            drawings: Vec::new(),
+            comments: Vec::new(),
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -8988,6 +9008,11 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            drawings: Vec::new(),
+            comments: Vec::new(),
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -9233,6 +9258,11 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            drawings: Vec::new(),
+            comments: Vec::new(),
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -9279,6 +9309,11 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            drawings: Vec::new(),
+            comments: Vec::new(),
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
@@ -9397,6 +9432,11 @@ mod tests {
             default_row_custom: false,
             col_fonts: vec![],
             normal_font: None,
+            first_font: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            drawings: Vec::new(),
+            comments: Vec::new(),
             merge_cells: Vec::new(),
             hidden_cols: Vec::new(),
             auto_filter: None,
