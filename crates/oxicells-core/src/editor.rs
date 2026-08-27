@@ -56,6 +56,10 @@ pub struct XlsxEditor {
     row_hidden: HashMap<(usize, u32), bool>,
     /// (sheet_idx, 0-based column) -> hidden
     col_hidden: HashMap<(usize, u32), bool>,
+    /// (sheet_idx, 0-based column) -> width, in characters of the workbook's
+    /// default font, gutter included. This is the number the file states, not
+    /// the one a person types into Excel: typing 10 stores 10.625.
+    col_width: HashMap<(usize, u32), f32>,
     /// Sheets whose merged cells are being replaced wholesale. A merge is not
     /// edited in place, so the whole list travels together.
     merges: HashMap<usize, Vec<MergeCell>>,
@@ -98,6 +102,7 @@ impl XlsxEditor {
             edits: HashMap::new(),
             row_hidden: HashMap::new(),
             col_hidden: HashMap::new(),
+            col_width: HashMap::new(),
             merges: HashMap::new(),
             styles: HashMap::new(),
             filters: HashMap::new(),
@@ -263,6 +268,16 @@ impl XlsxEditor {
                 self.col_hidden.insert((index, col), hidden);
             }
 
+            // A width of zero is how the parser records "this column had no
+            // `<col>` entry of its own", so it means nothing to write and is
+            // not a change worth chasing.
+            for (col, width) in after.col_widths.iter().enumerate() {
+                let was = before.col_widths.get(col).copied().unwrap_or(0.0);
+                if *width != was && *width != 0.0 {
+                    self.col_width.insert((index, col as u32), *width);
+                }
+            }
+
             if !same_merges(&before.merge_cells, &after.merge_cells) {
                 self.merges.insert(index, after.merge_cells.clone());
             }
@@ -292,6 +307,15 @@ impl XlsxEditor {
         self.col_hidden.insert((sheet_index, col), hidden);
     }
 
+    /// Sets how wide a column is.
+    ///
+    /// The width is in characters of the workbook's default font with the
+    /// gutter either side counted in, which is what the file states and not
+    /// what Excel's own box shows: typing 10 there stores 10.625.
+    pub fn set_col_width(&mut self, sheet_index: usize, col: u32, width: f32) {
+        self.col_width.insert((sheet_index, col), width);
+    }
+
     /// Replaces every merged cell on a sheet.
     pub fn set_merges(&mut self, sheet_index: usize, merges: Vec<MergeCell>) {
         self.merges.insert(sheet_index, merges);
@@ -317,6 +341,7 @@ impl XlsxEditor {
         !self.edits.is_empty()
             || !self.row_hidden.is_empty()
             || !self.col_hidden.is_empty()
+            || !self.col_width.is_empty()
             || !self.merges.is_empty()
             || !self.styles.is_empty()
             || !self.filters.is_empty()
@@ -434,15 +459,29 @@ impl XlsxEditor {
         for ((sheet, row), hidden) in &self.row_hidden {
             rows_by_sheet.entry(*sheet).or_default().insert(*row, *hidden);
         }
-        let mut cols_by_sheet: HashMap<usize, BTreeMap<u32, bool>> = HashMap::new();
+        let mut cols_by_sheet: HashMap<usize, BTreeMap<u32, ColumnWant>> = HashMap::new();
         for ((sheet, col), hidden) in &self.col_hidden {
-            cols_by_sheet.entry(*sheet).or_default().insert(*col, *hidden);
+            cols_by_sheet
+                .entry(*sheet)
+                .or_default()
+                .entry(*col)
+                .or_default()
+                .hidden = Some(*hidden);
+        }
+        for ((sheet, col), width) in &self.col_width {
+            cols_by_sheet
+                .entry(*sheet)
+                .or_default()
+                .entry(*col)
+                .or_default()
+                .width = Some(*width);
         }
 
 
         // Map sheet path -> everything to change in that sheet
         let empty_cells: HashMap<(u32, u32), &CellEditValue> = HashMap::new();
         let empty_lines: BTreeMap<u32, bool> = BTreeMap::new();
+        let empty_cols: BTreeMap<u32, ColumnWant> = BTreeMap::new();
         let empty_styles: BTreeMap<(u32, u32), u32> = BTreeMap::new();
         let mut path_edits: HashMap<String, SheetEdits<'_>> = HashMap::new();
         for sheet in edits_by_sheet
@@ -461,7 +500,7 @@ impl XlsxEditor {
                     SheetEdits {
                         cells: edits_by_sheet.get(&sheet).unwrap_or(&empty_cells),
                         rows: rows_by_sheet.get(&sheet).unwrap_or(&empty_lines),
-                        cols: cols_by_sheet.get(&sheet).unwrap_or(&empty_lines),
+                        cols: cols_by_sheet.get(&sheet).unwrap_or(&empty_cols),
                         merges: self.merges.get(&sheet).map(Vec::as_slice),
                         styles: cell_styles.get(&sheet).unwrap_or(&empty_styles),
                         filter: self.filters.get(&sheet),
@@ -1438,6 +1477,16 @@ fn write_merges(
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
+/// What a column should end up as. A field left `None` keeps whatever the
+/// sheet already says about it, so hiding a column does not disturb its width
+/// and widening one does not un-hide it.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ColumnWant {
+    hidden: Option<bool>,
+    /// In characters of the workbook's default font, gutter included.
+    width: Option<f32>,
+}
+
 /// Writes one `<col>` span, splitting it where a change covers only part of it.
 ///
 /// A span reads `<col min="1" max="3" .../>` and covers three columns at once,
@@ -1445,7 +1494,7 @@ fn write_merges(
 fn write_col_span(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     start: &BytesStart<'_>,
-    pending: &mut BTreeMap<u32, bool>,
+    pending: &mut BTreeMap<u32, ColumnWant>,
 ) -> Result<(), XlsxError> {
     let min = get_attr(start, "min")
         .and_then(|value| value.parse::<u32>().ok())
@@ -1454,57 +1503,118 @@ fn write_col_span(
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(min);
     let was_hidden = matches!(get_attr(start, "hidden").as_deref(), Some("1") | Some("true"));
+    let was_width = get_attr(start, "width");
+    let was_custom = matches!(
+        get_attr(start, "customWidth").as_deref(),
+        Some("1") | Some("true")
+    );
 
     // Group the columns of this span into runs that share an answer.
-    let mut runs: Vec<(u32, u32, bool)> = Vec::new();
+    let mut runs: Vec<(u32, u32, ColumnFace)> = Vec::new();
     for column in min..=max {
-        let hidden = pending
-            .remove(&(column - 1))
-            .unwrap_or(was_hidden);
+        let want = pending.remove(&(column - 1)).unwrap_or_default();
+        let face = ColumnFace {
+            hidden: want.hidden.unwrap_or(was_hidden),
+            width: want
+                .width
+                .map(width_text)
+                .or_else(|| was_width.clone()),
+            resized: want.width.is_some(),
+            custom: want.width.is_some() || was_custom,
+        };
         match runs.last_mut() {
-            Some((_, last, held)) if *held == hidden && *last + 1 == column => *last = column,
-            _ => runs.push((column, column, hidden)),
+            Some((_, last, held)) if *held == face && *last + 1 == column => *last = column,
+            _ => runs.push((column, column, face)),
         }
     }
 
-    for (first, last, hidden) in runs {
-        let mut span = with_hidden(start, hidden);
-        let mut rebuilt = BytesStart::new("col");
-        for attribute in span.attributes().flatten() {
+    for (first, last, face) in runs {
+        write_col(writer, Some(start), first, last, &face)?;
+    }
+    Ok(())
+}
+
+/// What one column should look like once everything has been applied.
+#[derive(Clone, PartialEq)]
+struct ColumnFace {
+    hidden: bool,
+    width: Option<String>,
+    /// True when this run's width was set here rather than read off the file.
+    resized: bool,
+    custom: bool,
+}
+
+/// A width as the file states it.
+///
+/// The shortest form that still reads back as the same number, which is what
+/// Excel writes: 10.625 for a column someone typed 10 into, and a bare `9` for
+/// one left at the default. Rounding to a fixed number of places would write
+/// 10.63, a different width.
+fn width_text(width: f32) -> String {
+    format!("{width}")
+}
+
+/// Writes one `<col>` span, keeping whatever attributes `from` carried that
+/// this span does not decide for itself — a style, an outline level, a best
+/// fit that still stands.
+fn write_col(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    from: Option<&BytesStart<'_>>,
+    first: u32,
+    last: u32,
+    face: &ColumnFace,
+) -> Result<(), XlsxError> {
+    let mut span = BytesStart::new("col");
+    span.push_attribute(("min", first.to_string().as_str()));
+    span.push_attribute(("max", last.to_string().as_str()));
+    if let Some(width) = &face.width {
+        span.push_attribute(("width", width.as_str()));
+    }
+    if let Some(start) = from {
+        for attribute in start.attributes().flatten() {
             let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
-            if key == "min" || key == "max" {
+            // Everything this span states for itself, and — when a width has
+            // been set by hand — the claim that the old width was a fit to
+            // something. Excel drops bestFit on a resize, measured.
+            if matches!(
+                key.as_str(),
+                "min" | "max" | "width" | "hidden" | "customWidth"
+            ) || (face.resized && key == "bestFit")
+            {
                 continue;
             }
             let value = String::from_utf8_lossy(&attribute.value).into_owned();
-            rebuilt.push_attribute((key.as_str(), value.as_str()));
+            span.push_attribute((key.as_str(), value.as_str()));
         }
-        rebuilt.push_attribute(("min", first.to_string().as_str()));
-        rebuilt.push_attribute(("max", last.to_string().as_str()));
-        span = rebuilt;
-        writer
-            .write_event(Event::Empty(span))
-            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     }
-    Ok(())
+    if face.hidden {
+        span.push_attribute(("hidden", "1"));
+    }
+    if face.custom {
+        span.push_attribute(("customWidth", "1"));
+    }
+    writer
+        .write_event(Event::Empty(span))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
 /// Writes `<col>` spans for columns the sheet never described.
 fn write_new_cols(
     writer: &mut Writer<Cursor<Vec<u8>>>,
-    pending: &mut BTreeMap<u32, bool>,
+    pending: &mut BTreeMap<u32, ColumnWant>,
 ) -> Result<(), XlsxError> {
-    for (column, hidden) in std::mem::take(pending) {
-        if !hidden {
+    for (column, want) in std::mem::take(pending) {
+        let hidden = want.hidden.unwrap_or(false);
+        if !hidden && want.width.is_none() {
             continue;
         }
-        let reference = (column + 1).to_string();
-        let mut span = BytesStart::new("col");
-        span.push_attribute(("min", reference.as_str()));
-        span.push_attribute(("max", reference.as_str()));
-        span.push_attribute(("hidden", "1"));
-        writer
-            .write_event(Event::Empty(span))
-            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let face = ColumnFace {
+            hidden,
+            width: want.width.map(width_text),
+            resized: want.width.is_some(),
+            custom: want.width.is_some(),
+        };
+        write_col(writer, None, column + 1, column + 1, &face)?;
     }
     Ok(())
 }
@@ -1586,8 +1696,8 @@ struct SheetEdits<'a> {
     cells: &'a HashMap<(u32, u32), &'a CellEditValue>,
     /// One-based row -> hidden.
     rows: &'a BTreeMap<u32, bool>,
-    /// Zero-based column -> hidden.
-    cols: &'a BTreeMap<u32, bool>,
+    /// Zero-based column -> what it should become.
+    cols: &'a BTreeMap<u32, ColumnWant>,
     /// Every merge the sheet should end up with, when they are being replaced.
     merges: Option<&'a [MergeCell]>,
     /// (one-based row, zero-based column) -> the cellXfs index it should carry.
@@ -1611,7 +1721,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
 
     let mut pending_rows: std::collections::BTreeSet<u32> =
         sheet_edits.rows.keys().copied().collect();
-    let mut pending_cols: BTreeMap<u32, bool> = sheet_edits.cols.clone();
+    let mut pending_cols: BTreeMap<u32, ColumnWant> = sheet_edits.cols.clone();
     let mut seen_cols = false;
     let mut skip_merges_depth = 0_u32;
     // Whether the sheet already describes its merges decides where the new
@@ -2229,10 +2339,12 @@ mod tests {
         let nothing = NOTHING.get_or_init(BTreeMap::new);
         static NO_STYLES: std::sync::OnceLock<BTreeMap<(u32, u32), u32>> =
             std::sync::OnceLock::new();
+        static NO_COLS: std::sync::OnceLock<BTreeMap<u32, ColumnWant>> =
+            std::sync::OnceLock::new();
         SheetEdits {
             cells,
             rows: nothing,
-            cols: nothing,
+            cols: NO_COLS.get_or_init(BTreeMap::new),
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
             filter: None,
@@ -2294,6 +2406,149 @@ mod tests {
         assert!(!patched.contains("877"), "{patched}");
     }
 
+    /// The edits for one sheet's columns and nothing else.
+    fn cols_only(cols: &BTreeMap<u32, ColumnWant>) -> SheetEdits<'_> {
+        static NOTHING: std::sync::OnceLock<BTreeMap<u32, bool>> = std::sync::OnceLock::new();
+        static NO_CELLS: std::sync::OnceLock<HashMap<(u32, u32), &CellEditValue>> =
+            std::sync::OnceLock::new();
+        static NO_STYLES: std::sync::OnceLock<BTreeMap<(u32, u32), u32>> =
+            std::sync::OnceLock::new();
+        SheetEdits {
+            cells: NO_CELLS.get_or_init(HashMap::new),
+            rows: NOTHING.get_or_init(BTreeMap::new),
+            cols,
+            merges: None,
+            styles: NO_STYLES.get_or_init(BTreeMap::new),
+            filter: None,
+        }
+    }
+
+    /// The `<cols>` element of a patched sheet, or what stands in its place.
+    fn cols_of(xml: &str, cols: &BTreeMap<u32, ColumnWant>) -> String {
+        let patched = patch_worksheet_xml(xml, &cols_only(cols)).expect("should patch");
+        match (patched.find("<cols>"), patched.find("</cols>")) {
+            (Some(from), Some(to)) => patched[from..to + "</cols>".len()].to_string(),
+            _ => format!("(no cols in {patched})"),
+        }
+    }
+
+    const BARE: &str =
+        r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+
+    #[test]
+    fn a_width_is_written_where_the_sheet_had_no_columns_at_all() {
+        // A sheet nobody has resized carries no `<cols>` element — measured on
+        // a freshly saved workbook — so one has to be put in, before
+        // `<sheetData>` where the schema wants it.
+        let want = BTreeMap::from([(1, ColumnWant { hidden: None, width: Some(10.625) })]);
+        assert_eq!(
+            cols_of(BARE, &want),
+            r#"<cols><col min="2" max="2" width="10.625" customWidth="1"/></cols>"#,
+        );
+    }
+
+    #[test]
+    fn a_width_always_brings_the_flag_that_says_it_was_chosen() {
+        // Excel writes `customWidth="1"` beside every width it stores. Without
+        // it the number is there and Excel ignores it.
+        let want = BTreeMap::from([(0, ColumnWant { hidden: None, width: Some(30.625) })]);
+        let out = cols_of(BARE, &want);
+        assert!(out.contains(r#"width="30.625""#), "{out}");
+        assert!(out.contains(r#"customWidth="1""#), "{out}");
+    }
+
+    #[test]
+    fn resizing_one_column_of_a_run_splits_the_run() {
+        // `A:E` at one width, then C widened, comes back as three spans —
+        // 1-2, 3-3, 4-5 — which is what Excel itself writes.
+        let xml = concat!(
+            r#"<worksheet><cols><col min="1" max="5" width="12.625" customWidth="1"/></cols>"#,
+            r#"<sheetData/></worksheet>"#,
+        );
+        let want = BTreeMap::from([(2, ColumnWant { hidden: None, width: Some(30.625) })]);
+        assert_eq!(
+            cols_of(xml, &want),
+            concat!(
+                r#"<cols><col min="1" max="2" width="12.625" customWidth="1"/>"#,
+                r#"<col min="3" max="3" width="30.625" customWidth="1"/>"#,
+                r#"<col min="4" max="5" width="12.625" customWidth="1"/></cols>"#,
+            ),
+        );
+    }
+
+    #[test]
+    fn resizing_a_column_drops_the_claim_that_it_was_a_best_fit() {
+        // An autofitted column carries `bestFit="1"`. Excel takes that off
+        // when a width is set by hand, which is the sort of thing that has to
+        // be looked at rather than reasoned about — measured.
+        let xml = concat!(
+            r#"<worksheet><cols>"#,
+            r#"<col min="2" max="2" width="7.5" bestFit="1" customWidth="1"/>"#,
+            r#"</cols><sheetData/></worksheet>"#,
+        );
+        let want = BTreeMap::from([(1, ColumnWant { hidden: None, width: Some(20.625) })]);
+        let out = cols_of(xml, &want);
+        assert!(!out.contains("bestFit"), "{out}");
+        assert!(out.contains(r#"width="20.625""#), "{out}");
+    }
+
+    #[test]
+    fn hiding_a_column_leaves_its_width_alone_and_the_other_way_round() {
+        let xml = concat!(
+            r#"<worksheet><cols>"#,
+            r#"<col min="2" max="2" width="18.625" customWidth="1"/>"#,
+            r#"</cols><sheetData/></worksheet>"#,
+        );
+        let hide = BTreeMap::from([(1, ColumnWant { hidden: Some(true), width: None })]);
+        let out = cols_of(xml, &hide);
+        assert!(out.contains(r#"width="18.625""#), "{out}");
+        assert!(out.contains(r#"hidden="1""#), "{out}");
+
+        let widen = BTreeMap::from([(1, ColumnWant { hidden: None, width: Some(9.0) })]);
+        let out = cols_of(
+            &xml.replace(r#"width="18.625""#, r#"width="18.625" hidden="1""#),
+            &widen,
+        );
+        assert!(out.contains(r#"hidden="1""#), "{out}");
+        assert!(out.contains(r#"width="9""#), "{out}");
+    }
+
+    #[test]
+    fn a_column_keeps_whatever_else_its_span_was_carrying() {
+        // A `<col>` can dress its column in a style and set an outline level.
+        // Neither is this edit's business, and losing them would change how
+        // every cell in the column is drawn.
+        let xml = concat!(
+            r#"<worksheet><cols>"#,
+            r#"<col min="3" max="3" width="8" style="4" outlineLevel="2"/>"#,
+            r#"</cols><sheetData/></worksheet>"#,
+        );
+        let want = BTreeMap::from([(2, ColumnWant { hidden: None, width: Some(15.5) })]);
+        let out = cols_of(xml, &want);
+        assert!(out.contains(r#"style="4""#), "{out}");
+        assert!(out.contains(r#"outlineLevel="2""#), "{out}");
+        assert!(out.contains(r#"width="15.5""#), "{out}");
+    }
+
+    #[test]
+    fn columns_asked_for_the_same_width_are_written_as_one_span() {
+        let want = BTreeMap::from([
+            (0, ColumnWant { hidden: None, width: Some(12.0) }),
+            (1, ColumnWant { hidden: None, width: Some(12.0) }),
+            (2, ColumnWant { hidden: None, width: Some(12.0) }),
+        ]);
+        let out = cols_of(BARE, &want);
+        assert_eq!(out.matches("<col ").count(), 3, "{out}");
+        // Columns the sheet never described are written one at a time; the
+        // joining-up happens where a span already covers them.
+        let xml = r#"<worksheet><cols><col min="1" max="3" width="8"/></cols><sheetData/></worksheet>"#;
+        let out = cols_of(xml, &want);
+        assert_eq!(
+            out,
+            r#"<cols><col min="1" max="3" width="12" customWidth="1"/></cols>"#,
+        );
+    }
+
     #[test]
     fn a_cell_written_for_the_first_time_wears_the_style_it_was_given() {
         // A cell the sheet already had gets its style put on as it is copied
@@ -2310,7 +2565,7 @@ mod tests {
         let patched = patch_worksheet_xml(xml, &SheetEdits {
             cells: &edits,
             rows: &rows,
-            cols: &rows,
+            cols: &BTreeMap::new(),
             merges: None,
             styles: &styles,
             filter: None,
@@ -2329,7 +2584,7 @@ mod tests {
         let patched = patch_worksheet_xml(xml, &SheetEdits {
             cells: &edits,
             rows: &rows,
-            cols: &rows,
+            cols: &BTreeMap::new(),
             merges: None,
             styles: &styles,
             filter: None,
