@@ -1110,6 +1110,49 @@ fn lnspc_multiple(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
     }
 }
 
+/// A bold slot is taken at its own weight, whatever its header claims, unless
+/// this is set.
+///
+/// S-SLOTNAT (2026-08-28). Two changes that only make sense together:
+///
+///   * registration stops demanding `weight >= 600` of a BOLD part, and
+///   * a slot is requested at weight 400, as `styled_face`'s own docstring
+///     always said ("An embedded part carries its own style") while its code
+///     returned 700.
+///
+/// The `>= 600` test rested on two decks and neither holds. d15 -- "addressing
+/// Barlow Light's bold slot makes the deck worse" -- draws its bold runs in
+/// Barlow-**Light** in PowerPoint's own PDF, which is exactly what that slot
+/// holds (two byte-identical Barlow-Light resources, from two differently-sized
+/// parts); the widening came from the 700 request, not from the slot. Blind
+/// doc 36 -- CALIBRI parked in "Open Sans Extra Bold"'s bold slot -- never
+/// exercises it: all 19 runs naming that family are `b="0"`, so PowerPoint is
+/// never asked and the deck constrains nothing.
+///
+/// What the two measured decks agree on:
+///
+///     d04  slot holds InriaSans-Regular  -> at 400 -> InriaSans-Regular  = PPT
+///     d15  slot holds Light outlines     -> at 400 -> Barlow-Light       = PPT
+///     d26  slot holds a real Bold        -> at 400 -> that Bold, undoubled
+///
+/// Blast radius, counted before the change: 23 of the 30 refused bold slots are
+/// refused for having only ONE upright part, which this does not touch (d18's
+/// Montserrat has no regular slot at all, and PowerPoint sets the whole deck in
+/// Montserrat-Bold). Only 7 family/deck pairs across 5 decks are refused by the
+/// weight test itself.
+/// ★PARKED OPT-IN. The rule is derived and the code is right, but the gate is a
+/// wash -- 8 decks, +0.000061, 5 slides up and 4 down, and d04 (the deck it was
+/// derived from) goes -0.000232 overall while the measured slide s2 goes +0.0036.
+/// The reason is measurable: addressing "Inria Sans Light #B" instead of "#R"
+/// changes the face GDI reports but barely changes the ink (0.905 -> 0.913 of
+/// PowerPoint's), because the parts collapse onto one physical face
+/// (`pptx_embedded_font_name_collision`). Until that is fixed there is nothing
+/// for this to recover, so it waits with the evidence rather than shipping a
+/// wash with two unexplained regressions.
+fn slotnat_on() -> bool {
+    std::env::var("OXI_SLOTNAT_ENABLE").is_ok()
+}
+
 /// A picture fills its geometry's bounding box unless this is set.
 fn picfillbox_on() -> bool {
     std::env::var("OXI_PICFILLBOX_DISABLE").is_err()
@@ -1926,7 +1969,14 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
     if !italic {
         if let Some(slot) = slot_face_name(family, bold) {
             if EMBEDDED_FACES.with(|f| f.borrow().contains(&slot)) {
-                return (slot, if bold { 700 } else { 400 }, false);
+                // S-SLOTNAT: the part IS the answer, so ask for ITS weight.
+                // Asking 700 makes GDI embolden a face that is already what the
+                // slot promised -- which is where "addressing d15's bold slot
+                // makes the deck worse" came from: that slot holds Barlow-Light
+                // outlines, PowerPoint draws them as-is, and Oxi widened them by
+                // 1.2% on top. This is what the docstring above always said.
+                let w = if bold && !slotnat_on() { 700 } else { 400 };
+                return (slot, w, false);
             }
         }
     }
@@ -2143,8 +2193,9 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                 let honest = upright_parts
                     .get(font.typeface.as_str())
                     .is_some_and(|n| *n > 1)
-                    && eot_identity(&font.data)
-                        .is_some_and(|(_, weight, ital)| !ital && (!font.bold || weight >= 600));
+                    && eot_identity(&font.data).is_some_and(|(_, weight, ital)| {
+                        !ital && (!font.bold || slotnat_on() || weight >= 600)
+                    });
                 let ok = !font.italic && honest && load_font_as(&font.data, &slot);
                 if sf_debug() {
                     eprintln!(
