@@ -308,6 +308,7 @@ table { user-select: none; }
   <button id="left" class="dress" title="Align left">&#8676;</button>
   <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
   <button id="right" class="dress" title="Align right">&#8677;</button>
+  <input id="find" disabled placeholder="Find" title="Find (Ctrl+F). Enter for the next, Shift+Enter for the one before." />
   <select id="rules" disabled title="Rules around the cells">
     <option value="">Rules</option>
     <option value="all">All</option>
@@ -1051,6 +1052,51 @@ function recompute() {
   }
 }
 
+// ── Finding something ───────────────────────────────────────────────────────
+//
+// What is searched is what a cell SHOWS, because that is what the person is
+// looking at: a date is found by the date on the screen rather than by the
+// number underneath it, and a formula by its answer. Excel can be told to look
+// at the formulas instead; this cannot, and says so rather than pretending the
+// difference is not there.
+
+const findBox = document.getElementById('find');
+
+/// Move the cursor to the next cell showing `text`, wrapping at the end.
+///
+/// Starts from the cell AFTER the cursor, so pressing Enter again walks on
+/// rather than finding the same cell for ever. Returns whether it found one.
+function findNext(text, backwards) {
+  const wanted = text.trim().toLowerCase();
+  if (!wanted || !book) return false;
+  const bounds = extent();
+  const wide = bounds.cols + 1;
+  const many = bounds.rows * wide;
+  if (many <= 0) return false;
+  // One number for the whole sheet, so walking on and wrapping round is
+  // arithmetic rather than two nested loops with an exception at each end.
+  const here = (at.row - 1) * wide + at.col;
+  for (let step = 1; step <= many; step++) {
+    const spot = (((here + (backwards ? -step : step)) % many) + many) % many;
+    const row = Math.floor(spot / wide) + 1;
+    const col = spot % wide;
+    const held = heldAt(row, col);
+    if (!held) continue;
+    if (!shownText(held).toLowerCase().includes(wanted)) continue;
+    goTo(row, col);
+    paint();
+    return true;
+  }
+  return false;
+}
+
+/// Say whether the last search found anything, on the line the sheet uses for
+/// everything else it has to tell you.
+function sayFound(found, text) {
+  if (!text.trim()) { sayCalc(''); return; }
+  sayCalc(found ? '' : `nothing shows ${text.trim()}`);
+}
+
 // ── Ruling a block of cells ─────────────────────────────────────────────────
 //
 // A rule belongs to a cell's edge, and two cells that meet share the line
@@ -1409,6 +1455,13 @@ for (const [id, run] of [
   if (button) button.addEventListener('click', () => { run(); focusGrid(); });
 }
 
+if (findBox) {
+  findBox.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    sayFound(findNext(findBox.value, event.shiftKey), findBox.value);
+  });
+}
 if (rulesBox) {
   // A menu of actions rather than of states: what the cells are already
   // wearing is not one of the choices, so it goes back to its own name once
@@ -1658,6 +1711,7 @@ function paint() {
   sayFormat();
   sayFill();
   if (rulesBox) rulesBox.disabled = !book;
+  if (findBox) findBox.disabled = !book;
   const table = tableNow();
   if (!table) return;
   const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
@@ -2745,6 +2799,15 @@ function onKey(event) {
       if (!jump) break;
       event.preventDefault();
       takeAll();
+      break;
+    case 'f':
+    case 'F':
+      if (!jump) break;
+      // The browser's own find would search the rows the grid has drawn,
+      // which on a long sheet is a fraction of it, and would leave the cursor
+      // where it was.
+      event.preventDefault();
+      if (findBox) { findBox.focus(); findBox.select(); }
       break;
     // Excel puts the common number formats on Ctrl+Shift and the digit row.
     // The digits themselves are what arrive on a US layout; `event.code` is

@@ -67,7 +67,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
-  'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules',
+  'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules', 'findNext',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere',
   'monthSeries', 'monthAt'].map(lift).join('\n');
@@ -281,7 +281,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          lineAt, holdPanes, aTable, freezeHere, frozenAt,
          monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
-         change, undo, redo, unsaved, forget, rule, wearRules };
+         change, undo, redo, unsaved, forget, rule, wearRules, findNext };
 `));
 
 let failures = 0;
@@ -291,6 +291,45 @@ function is(what, got, want) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}` +
     (ok ? '' : `: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`));
 }
+
+
+
+// ── Finding something ───────────────────────────────────────────────────────
+//
+// Walking on from where the cursor is, and round the end back to the start, is
+// the part that goes wrong: a search that starts where it stands finds the
+// same cell for ever, and one that stops at the end cannot reach what is above
+// the cursor.
+
+grid.forget();
+grid.seed(2, 0, 'apple');
+grid.seed(4, 0, 'apricot');
+grid.seed(6, 2, 'APPLE pie');
+grid.select(1, 0, 1, 0);
+
+is('it finds the first one below the cursor', [grid.findNext('apple'), grid.seat()],
+  [true, { row: 2, col: 0 }]);
+// Row 6 holds `APPLE pie`, so finding it from `apple` is the whole of the
+// case question — a second assertion about the same move would say nothing.
+is('and walks on to the next rather than standing still, whatever its capitals',
+  [grid.findNext('apple'), grid.seat()], [true, { row: 6, col: 2 }]);
+is('and it comes round the end to the start again',
+  [grid.findNext('apple'), grid.seat()], [true, { row: 2, col: 0 }]);
+
+is('a part of a word is enough', [grid.findNext('pric'), grid.seat()],
+  [true, { row: 4, col: 0 }]);
+
+// Backwards, from the same place.
+grid.select(4, 0, 4, 0);
+is('and it can walk the other way',
+  [grid.findNext('apple', true), grid.seat()], [true, { row: 2, col: 0 }]);
+
+// Nothing found leaves the cursor where it was and says so by answering false.
+grid.select(4, 0, 4, 0);
+is('what is not there is not found',
+  [grid.findNext('banana'), grid.seat()], [false, { row: 4, col: 0 }]);
+is('and neither is nothing at all',
+  [grid.findNext('   '), grid.seat()], [false, { row: 4, col: 0 }]);
 
 
 // ── Ruling a block ──────────────────────────────────────────────────────────
