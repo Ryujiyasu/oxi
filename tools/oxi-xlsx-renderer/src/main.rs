@@ -4512,12 +4512,21 @@ mod windows_draw {
         // can satisfy at once.
         let block: f32 = pitch.iter().sum();
         let slack = (area.bottom - area.top) as f32 - block;
-        let mut at = area.top as f32
+        let mut at = (area.top as f32
             + match said.anchor.as_deref() {
                 Some("ctr") => slack / 2.0,
                 Some("b") => slack,
                 _ => 0.0,
-            };
+            })
+        // The block STARTS on a whole pixel, and its lines walk the exact
+        // pitch from there. This is not the same as rounding the block or its
+        // pitch — both of those were tried and both went backwards. Excel's
+        // own gaps are uneven (ＭＳ 明朝 at 9pt gives 16, 15, 16 and at 14pt
+        // 24, 24, 25), which is what accumulating a fraction and rounding
+        // each line looks like; the only thing it does differently is begin
+        // at a whole number. `zuhyo`'s note starts at 529.4 here, and 19.067
+        // from there rounds to 19 then 20 where Excel has 19 and 19.
+        .round();
         if std::env::var("OXI_XLSX_DUMP_BLOCK").is_ok() {
             eprintln!(
                 "block area {}..{} anchor={:?} block={block:.3} slack={slack:.3} at={at:.3} pitch={:?}",
