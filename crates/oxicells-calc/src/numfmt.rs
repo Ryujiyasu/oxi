@@ -63,7 +63,11 @@ fn looks_like_a_date(format: &str) -> bool {
     let mut marked_month = false;
     let mut characters = format.chars().peekable();
     while let Some(character) = characters.next() {
-        match character {
+        // A format code is a format code in either case. The formatter has
+        // always lowercased before reading one; this test did not, so a format
+        // spelled in capitals was taken for a number format and printed its
+        // own letters back.
+        match character.to_ascii_lowercase() {
             '"' => quoted = !quoted,
             _ if quoted => {}
             // The character after one of these belongs to the directive.
@@ -353,8 +357,24 @@ fn format_datetime(serial: f64, format: &str) -> String {
         "December",
     ];
 
-    // Excel's twelve-hour clock only appears with AM/PM, which this does not
-    // model; every hour here is on the twenty-four hour clock.
+    // An `AM/PM` in the format puts the clock on twelve hours and prints the
+    // marker where it stands. Without one every hour runs to twenty-four.
+    let marker = am_pm_marker(format);
+    let (hour, meridiem) = match &marker {
+        Some(written) => (
+            // Midnight and noon are both twelve o'clock.
+            match hour % 12 {
+                0 => 12,
+                other => other,
+            },
+            if hour < 12 {
+                written.before.as_str()
+            } else {
+                written.after.as_str()
+            },
+        ),
+        None => (hour, ""),
+    };
     // weekday_sunday_one counts Sunday as one; these tables start at zero.
     let weekday = (weekday_sunday_one(whole) - 1).clamp(0, 6) as usize;
     // Elapsed time counts from the epoch rather than from midnight, so a
@@ -430,6 +450,7 @@ fn format_datetime(serial: f64, format: &str) -> String {
             at = close + 1;
             continue;
         }
+        let body_at = at;
         let run = body[at..]
             .iter()
             .take_while(|held| held.eq_ignore_ascii_case(&character))
@@ -474,6 +495,17 @@ fn format_datetime(serial: f64, format: &str) -> String {
                     _ => rendered.push_str(&format!("{value:02}")),
                 }
             }
+            // The marker itself, printed as AM or PM whatever case it was
+            // written in.
+            'a' | 'p'
+                if marker
+                    .as_ref()
+                    .is_some_and(|written| written.at == body_at) =>
+            {
+                rendered.push_str(meridiem);
+                at += marker.as_ref().map_or(0, |written| written.len);
+                continue;
+            }
             'e' => rendered.push_str(&era_year.to_string()),
             'g' => rendered.push_str(match run {
                 1 => era_latin,
@@ -512,6 +544,55 @@ fn era(year: i64, month: i64, day: i64) -> (&'static str, &'static str, &'static
         ("M", "明", "明治", 1868)
     };
     (latin, short, full, year - from + 1)
+}
+
+/// The marker that puts a clock on twelve hours, as written.
+struct Meridiem {
+    /// Where it starts in the format, counted in characters.
+    at: usize,
+    /// How many characters it takes up.
+    len: usize,
+    /// What to print before noon, and after — copied out of the format as they
+    /// stand, since that is what Excel prints.
+    before: String,
+    after: String,
+}
+
+/// The `AM/PM` or `A/P` in a format, if it has one.
+///
+/// Both halves are kept exactly as they were typed: `AM/pm` prints `AM` in the
+/// morning and `pm` in the afternoon, so there is no rule about capitals to
+/// apply — only text to copy. Anything else starting with an a or a p is
+/// ordinary text.
+fn am_pm_marker(format: &str) -> Option<Meridiem> {
+    let body: Vec<char> = format.chars().collect();
+    let mut quoted = false;
+    for at in 0..body.len() {
+        if body[at] == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        if quoted {
+            continue;
+        }
+        for (long, split) in [(5, 2), (3, 1)] {
+            if at + long > body.len() {
+                continue;
+            }
+            let held: String = body[at..at + long].iter().collect();
+            let spelling = if long == 5 { "am/pm" } else { "a/p" };
+            if !held.eq_ignore_ascii_case(spelling) {
+                continue;
+            }
+            return Some(Meridiem {
+                at,
+                len: long,
+                before: held[..split].to_string(),
+                after: held[split + 1..].to_string(),
+            });
+        }
+    }
+    None
 }
 
 fn previous_was_hour(body: &[char], at: usize) -> bool {
@@ -634,6 +715,53 @@ mod tests {
         assert_eq!(format_number(1.5, "yyyy\"年\"m\"月\""), "1900年1月");
         assert_eq!(format_number(0.25, "yyyy\"年\"m\"月\""), "1900年1月");
         assert_eq!(format_number(45297.75, "yyyy\"年\"m\"月\""), "2024年1月");
+    }
+
+    /// A format code is a format code in either case.
+    ///
+    /// The formatter has always lowercased before reading one, but the test
+    /// that decides whether a format IS a date only looked at lower-case
+    /// letters. So `TEXT(F4,"DD")` fell through to the number path, where the
+    /// letters are literal text and the serial is printed after them —
+    /// `DD42298`.
+    #[test]
+    fn a_format_code_does_not_care_about_capitals() {
+        assert_eq!(format_number(42298.0, "DD"), "21");
+        assert_eq!(format_number(42298.0, "dd"), "21");
+        assert_eq!(format_number(42298.0, "MMM YY"), "Oct 15");
+        assert_eq!(format_number(42298.0, "mmm yy"), "Oct 15");
+        assert_eq!(format_number(42298.0, "YYYY-MM-DD"), "2015-10-21");
+        assert_eq!(format_number(42298.0, "HH:MM:SS"), "00:00:00");
+    }
+
+    /// An `AM/PM` puts the clock on twelve hours, and the half of the marker
+    /// that applies is printed EXACTLY as it was typed.
+    ///
+    /// Every line is Excel 16's. The two mixed-case ones are what settle the
+    /// rule: with the halves written differently, each output takes the case of
+    /// its own half — so there is nothing about capitals to decide, only text
+    /// to copy. Guessing "always AM or PM" would have passed the first four
+    /// lines and been wrong.
+    #[test]
+    fn the_half_of_the_marker_that_applies_prints_as_it_was_typed() {
+        assert_eq!(format_number(0.5, "H:MM AM/PM"), "12:00 PM");
+        assert_eq!(format_number(0.5, "h AM/PM"), "12 PM");
+        assert_eq!(format_number(0.75, "h:mm AM/PM"), "6:00 PM");
+        assert_eq!(format_number(0.25, "h:mm AM/PM"), "6:00 AM");
+        // Short form: one letter, not two.
+        assert_eq!(format_number(0.75, "h:mm A/P"), "6:00 P");
+        assert_eq!(format_number(0.25, "h:mm A/P"), "6:00 A");
+        assert_eq!(format_number(0.75, "h:mm a/p"), "6:00 p");
+        // Written small, printed small.
+        assert_eq!(format_number(0.75, "h:mm am/pm"), "6:00 pm");
+        assert_eq!(format_number(0.25, "h:mm am/pm"), "6:00 am");
+        assert_eq!(format_number(0.75, "h:mm Am/Pm"), "6:00 Pm");
+        // Mixed: each half its own.
+        assert_eq!(format_number(0.75, "h:mm AM/pm"), "6:00 pm");
+        assert_eq!(format_number(0.25, "h:mm AM/pm"), "6:00 AM");
+        assert_eq!(format_number(0.25, "h:mm am/PM"), "6:00 am");
+        // Without a marker the clock runs to twenty-four.
+        assert_eq!(format_number(0.75, "h:mm"), "18:00");
     }
 
     #[test]

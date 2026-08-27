@@ -144,6 +144,13 @@ fn same(was: Option<&CellValue>, now: Option<&CellValue>) -> bool {
         (Some(CellValue::String(a)), Some(CellValue::String(b))) => a.trim() == b.trim(),
         (Some(CellValue::Boolean(a)), Some(CellValue::Boolean(b))) => a == b,
         (Some(CellValue::Error(a)), Some(CellValue::Error(b))) => a == b,
+        // Some writers store a formula's error as a STRING — `t="str"` with
+        // `<v>#DIV/0!</v>` where Excel itself would write `t="e"`. The two
+        // sides agree about what the cell holds; they disagree about how to
+        // spell it in the file, which is the mark scheme's business and not
+        // the calculator's.
+        (Some(CellValue::String(a)), Some(CellValue::Error(b)))
+        | (Some(CellValue::Error(b)), Some(CellValue::String(a))) => a.trim() == b,
         (Some(CellValue::Empty) | None, Some(CellValue::Empty) | None) => true,
         _ => false,
     }

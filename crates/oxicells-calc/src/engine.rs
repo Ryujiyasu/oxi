@@ -1478,6 +1478,30 @@ mod tests {
     }
 
     #[test]
+    fn sortby_orders_one_block_by_the_numbers_in_another() {
+        // The block being ordered and the numbers ordering it are separate, so
+        // the numbers never appear in the answer — which is the whole point of
+        // it over SORT.
+        let mut wb = book();
+        for (at, (name, score)) in [("Belgium", 3.0), ("Afghanistan", 9.0),
+                                    ("Chad", 5.0), ("Denmark", 7.0)].iter().enumerate() {
+            wb.set_value("Sheet1", &format!("E{}", at + 4), Value::text(*name)).unwrap();
+            wb.set_value("Sheet1", &format!("F{}", at + 4), Value::Number(*score)).unwrap();
+        }
+        wb.set_formula("Sheet1", "A1", "=INDEX(_xlfn.SORTBY(E4:F7,F4:F7,-1),1,1)").unwrap();
+        wb.set_formula("Sheet1", "A2", "=INDEX(_xlfn.SORTBY(E4:F7,F4:F7,1),1,1)").unwrap();
+        wb.set_formula("Sheet1", "A3", "=INDEX(_xlfn.SORTBY(E4:E7,F4:F7,-1),2,1)").unwrap();
+        // One column in, one column out: the ordering column is not carried
+        // through into the answer.
+        wb.set_formula("Sheet1", "A4", "=COLUMNS(_xlfn.SORTBY(E4:E7,F4:F7,-1))").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "A1"), Value::text("Afghanistan"), "9 is the most");
+        assert_eq!(wb.value("Sheet1", "A2"), Value::text("Belgium"), "3 is the least");
+        assert_eq!(wb.value("Sheet1", "A3"), Value::text("Denmark"), "7 is next");
+        assert_eq!(wb.value("Sheet1", "A4"), Value::Number(1.0));
+    }
+
+    #[test]
     fn the_three_that_hand_back_a_block() {
         // UNIQUE keeps the first of each distinct row, SORT puts the rows in
         // order, FILTER keeps the ones a second block says to keep. Each shows

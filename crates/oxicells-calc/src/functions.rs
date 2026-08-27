@@ -304,7 +304,7 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         }
     }
     // The three that hand back a block rather than a value.
-    if matches!(name, "UNIQUE" | "SORT" | "FILTER") {
+    if matches!(name, "UNIQUE" | "SORT" | "FILTER" | "SORTBY") {
         return match a_block_of_rows(name, args) {
             Ok(block) => block,
             Err(why) => Arg::Value(Value::Error(why)),
@@ -1565,6 +1565,19 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
         "SORT" => reads_true(args.get(3)),
         _ => false,
     };
+    // SORTBY orders one block by the values in ANOTHER, which do not appear in
+    // the answer. Carrying that second block alongside as an extra column, and
+    // taking it off again afterwards, makes it the same sort as any other.
+    let (table, sort_by) = match name {
+        "SORTBY" => {
+            let beside = args.get(1).ok_or(ExcelError::Value)?.flatten();
+            if beside.len() != table.height {
+                return Err(ExcelError::Value);
+            }
+            (with_a_column(&table, &beside), Some(table.width))
+        }
+        _ => (table, None),
+    };
     let table = if sideways { on_its_side(&table) } else { table };
     let mut rows: Vec<Vec<Value>> = (0..table.height)
         .map(|row| (0..table.width).map(|col| table.at(col, row)).collect())
@@ -1586,13 +1599,16 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
             }
             rows = kept;
         }
-        "SORT" => {
+        "SORT" | "SORTBY" => {
             // Which column to order by, counted from one, and which way.
-            let by = match args.get(1) {
-                Some(one) => num(one)? as usize,
-                None => 1,
+            let by = match sort_by {
+                Some(added) => added + 1,
+                None => match args.get(1) {
+                    Some(one) => num(one)? as usize,
+                    None => 1,
+                },
             };
-            let descending = match args.get(2) {
+            let descending = match args.get(if name == "SORTBY" { 2 } else { 2 }) {
                 Some(one) => num(one)? < 0.0,
                 None => false,
             };
@@ -1647,6 +1663,12 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
             _ => Err(ExcelError::NA),
         };
     }
+    // The column SORTBY was ordering by is not part of the answer.
+    if let Some(added) = sort_by {
+        for row in &mut rows {
+            row.truncate(added);
+        }
+    }
     let width = rows[0].len();
     let height = rows.len();
     let block = RangeData {
@@ -1655,6 +1677,22 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
         cells: rows.into_iter().flatten().collect(),
     };
     Ok(Arg::Range(if sideways { on_its_side(&block) } else { block }))
+}
+
+/// The block with one more column on the end, a value to each row.
+fn with_a_column(block: &RangeData, beside: &[Value]) -> RangeData {
+    let mut cells = Vec::with_capacity(block.cells.len() + beside.len());
+    for row in 0..block.height {
+        for col in 0..block.width {
+            cells.push(block.at(col, row));
+        }
+        cells.push(beside[row].clone());
+    }
+    RangeData {
+        width: block.width + 1,
+        height: block.height,
+        cells,
+    }
 }
 
 /// The same block with its rows and columns exchanged.
