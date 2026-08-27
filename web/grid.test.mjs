@@ -13,7 +13,10 @@
 //!
 //! The page has no build step, so the functions are lifted out of the HTML and
 //! given a sheet made of a Map. That way this tests the code the page actually
-//! runs, and cannot go on passing against a version it no longer has.
+//! runs, and cannot go on passing against a version it no longer has. The
+//! price is that the harness below has to name everything those functions
+//! reach for: a ReferenceError here means the page grew a dependency, and the
+//! fix is to lift or stub the name it asks for, not to work around it.
 //! Run with `node web/grid.test.mjs`.
 
 import { readFile } from 'node:fs/promises';
@@ -39,41 +42,55 @@ function lift(name) {
 
 const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside',
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
-  'asGrid'].map(lift).join('\n');
+  'asGrid', 'change', 'restore', 'undo', 'redo', 'remember', 'edited',
+  'markSaved', 'markSteps', 'put', 'heldAt'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
-// sheet is a Map of "row,col" to the text typed there; nothing is drawn.
+// sheet is the same shape the parser hands back — rows holding cells — so the
+// page's own put() runs here unaltered, which is the point: writing a cell is
+// where the undo step and the save count are recorded, and stubbing it out
+// would leave exactly that untested.
 const grid = await import('data:text/javascript,' + encodeURIComponent(`
 let at = { row: 1, col: 0 };
 let anchor = { row: 1, col: 0 };
 let reach = { row: 1, col: 0 };
 let tabHome = null;
 let dragging = false;
-const held = new Map();
+const sheet = { rows: [] };
+const sheetNow = () => sheet;
 const countBox = { textContent: '' };
 const whereBox = { textContent: '' };
 const formulaBox = { value: '' };
 const cellBox = { innerHTML: '' };
 const draw = () => {};
 const paint = () => {};
+let shown = 0;
+const changes = new Map();
+const pristine = new Map();
+const undone = [];
+const redone = [];
+let step = null;
+const DEPTH = 100;
+const describe = () => {};
+const saveButton = { disabled: true, textContent: '' };
+const backButton = { disabled: true };
+const onButton = { disabled: true };
 const cellAt = () => null;
 const tableNow = () => null;
 const describeCell = () => {};
 const columnName = (n) => String.fromCharCode(65 + n);
 const extent = () => ({ rows: 500, cols: 50 });
-function heldAt(row, col) {
-  const text = held.get(row + ',' + col);
-  if (text === undefined) return undefined;
-  if (text !== '' && Number.isFinite(Number(text))) {
-    return { value: { Number: Number(text) }, formula: null };
-  }
-  return { value: { String: text }, formula: null };
-}
-function put(row, col, text) {
-  if (text === '') held.delete(row + ',' + col);
-  else held.set(row + ',' + col, text);
-}
 ${lifted}
+// Put a value in as the parser would, without it counting as an edit: this is
+// what the file already held when it was opened.
+const seed = (row, col, text) => {
+  const was = step;
+  step = null;
+  put(row, col, text);
+  step = was;
+  changes.clear();
+  pristine.clear();
+};
 // Select a block the way a drag does: anchor at the corner it started from,
 // reach at the one under the pointer, and the active cell left on the anchor.
 const select = (r1, c1, r2, c2) => {
@@ -83,9 +100,28 @@ const select = (r1, c1, r2, c2) => {
 };
 const seat = () => ({ row: at.row, col: at.col });
 const box = () => region();
-const cells = () => [...held.entries()].sort();
-export { select, seat, box, cells, held, put, tally, countBox, stepInside,
-         pasteGrid, clearSelection, selectionText, asGrid, fieldOf };
+// Only the cells that hold something: clearing one leaves the cell in place
+// with nothing in it, which is not the same as never having written there.
+const cells = () => {
+  const out = [];
+  for (const line of sheet.rows) {
+    for (const cell of line.cells) {
+      const text = contentOf(cell);
+      if (text !== '') out.push([line.index + ',' + cell.col, text]);
+    }
+  }
+  return out.sort();
+};
+const unsaved = () => changes.size;
+// Start over as if a fresh file had been opened.
+const forget = () => {
+  sheet.rows.length = 0;
+  changes.clear(); pristine.clear();
+  undone.length = 0; redone.length = 0;
+};
+export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
+         pasteGrid, clearSelection, selectionText, asGrid, fieldOf,
+         change, undo, redo, unsaved, forget };
 `));
 
 let failures = 0;
@@ -137,27 +173,27 @@ is('a block dragged out backwards is the same block', grid.box(),
 
 // ── Where a pasted block lands ──────────────────────────────────────────────
 
-grid.held.clear();
+grid.forget();
 grid.select(5, 2, 5, 2);
 grid.pasteGrid([['a', 'b'], ['c', 'd']]);
 is('a block lands from the active cell', grid.cells(),
   [['5,2', 'a'], ['5,3', 'b'], ['6,2', 'c'], ['6,3', 'd']]);
 is('and is left selected', grid.box(), { top: 5, left: 2, bottom: 6, right: 3 });
 
-grid.held.clear();
+grid.forget();
 grid.select(1, 0, 3, 1);
 grid.pasteGrid([['x']]);
 is('one value fills the whole selected block', grid.cells(),
   [['1,0', 'x'], ['1,1', 'x'], ['2,0', 'x'],
    ['2,1', 'x'], ['3,0', 'x'], ['3,1', 'x']]);
 
-grid.held.clear();
+grid.forget();
 grid.select(2, 0, 2, 0);
 grid.pasteGrid([['x']]);
 is('one value into one cell goes in once', grid.cells(), [['2,0', 'x']]);
 
 // A ragged block writes the cells it has and leaves the rest alone.
-grid.held.clear();
+grid.forget();
 grid.select(1, 0, 1, 0);
 grid.pasteGrid([['a', 'b', 'c'], ['d']]);
 is('a ragged block writes only what it holds', grid.cells(),
@@ -165,9 +201,9 @@ is('a ragged block writes only what it holds', grid.cells(),
 
 // ── Clearing ────────────────────────────────────────────────────────────────
 
-grid.held.clear();
-for (let row = 1; row <= 4; row++) grid.put(row, 0, String(row));
-grid.put(9, 0, 'kept');
+grid.forget();
+for (let row = 1; row <= 4; row++) grid.seed(row, 0, String(row));
+grid.seed(9, 0, 'kept');
 grid.select(1, 0, 3, 0);
 grid.clearSelection();
 is('Delete clears the block and nothing outside it', grid.cells(),
@@ -179,17 +215,17 @@ is('Delete clears the block and nothing outside it', grid.cells(),
 // are numbers — what those come to. It is how a column gets checked without
 // writing a formula anywhere.
 
-grid.held.clear();
-[10, 20, 30].forEach((n, i) => grid.put(i + 1, 0, String(n)));
-grid.put(4, 0, 'text');
+grid.forget();
+[10, 20, 30].forEach((n, i) => grid.seed(i + 1, 0, String(n)));
+grid.seed(4, 0, 'text');
 grid.select(1, 0, 5, 0);
 grid.tally();
 is('numbers are summed and averaged, text only counted',
   grid.countBox.textContent, 'Average 20   Sum 60   Count 4');
 
-grid.held.clear();
-grid.put(1, 0, 'a');
-grid.put(2, 0, 'b');
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.seed(2, 0, 'b');
 grid.select(1, 0, 2, 0);
 grid.tally();
 is('with no numbers there is nothing to total',
@@ -201,8 +237,8 @@ is('one cell says nothing at all', grid.countBox.textContent, '');
 
 // A total that is plainly a round number is shown as one, rather than with the
 // tail of float noise that 0.1 + 0.2 + 0.3 leaves behind.
-grid.held.clear();
-['0.1', '0.2', '0.3'].forEach((n, i) => grid.put(i + 1, 0, n));
+grid.forget();
+['0.1', '0.2', '0.3'].forEach((n, i) => grid.seed(i + 1, 0, n));
 grid.select(1, 0, 3, 0);
 grid.tally();
 is('a round total is shown as round',
@@ -215,12 +251,12 @@ is('a round total is shown as round',
 // from arriving as three cells is the quoting, and that fails silently: the
 // block simply comes back the wrong shape.
 
-grid.held.clear();
-grid.put(1, 0, 'a'); grid.put(1, 1, 'b'); grid.put(1, 2, 'outside');
-grid.put(2, 0, 'c'); grid.put(2, 1, 'd');
+grid.forget();
+grid.seed(1, 0, 'a'); grid.seed(1, 1, 'b'); grid.seed(1, 2, 'outside');
+grid.seed(2, 0, 'c'); grid.seed(2, 1, 'd');
 grid.select(1, 0, 2, 1);
 is('a copied block holds only what is inside it', grid.selectionText(), 'a\tb\nc\td');
-grid.put(2, 0, '');
+grid.seed(2, 0, '');
 is('an empty cell inside it is an empty field', grid.selectionText(), 'a\tb\n\td');
 
 const out = (block) =>
@@ -251,6 +287,82 @@ is('and a row without one is still a row', grid.asGrid('a\tb'), [['a', 'b']]);
 is('a blank row in the middle stays blank',
   grid.asGrid('a\n\nb'), [['a'], [''], ['b']]);
 is('nothing at all pastes nothing', grid.asGrid(''), [['']]);
+
+// ── Taking it back ──────────────────────────────────────────
+//
+// Undo has to hand back a whole action, not a cell: pasting a block and then
+// undoing must clear all of it, in one press rather than four.
+
+grid.forget();
+grid.select(1, 0, 1, 0);
+grid.change(() => grid.put(1, 0, 'first'));
+grid.change(() => grid.put(1, 0, 'second'));
+grid.undo();
+is('undo puts back the previous value', grid.cells(), [['1,0', 'first']]);
+grid.undo();
+is('and again leaves the cell empty', grid.cells(), []);
+grid.undo();
+is('undo with nothing left to undo does nothing', grid.cells(), []);
+grid.redo();
+grid.redo();
+is('redo walks back up the same path', grid.cells(), [['1,0', 'second']]);
+
+grid.forget();
+grid.select(2, 1, 2, 1);
+grid.pasteGrid([['a', 'b'], ['c', 'd']]);
+grid.undo();
+is('undoing a paste clears the whole block in one press', grid.cells(), []);
+grid.redo();
+is('and redoing puts the whole block back', grid.cells(),
+  [['2,1', 'a'], ['2,2', 'b'], ['3,1', 'c'], ['3,2', 'd']]);
+is('what an undo touched is left selected, so it is clear what moved',
+  grid.box(), { top: 2, left: 1, bottom: 3, right: 2 });
+
+grid.forget();
+for (let row = 1; row <= 3; row++) grid.seed(row, 0, String(row));
+grid.select(1, 0, 3, 0);
+grid.clearSelection();
+is('a block delete is one step', grid.cells(), []);
+grid.undo();
+is('and comes back whole', grid.cells(),
+  [['1,0', '1'], ['2,0', '2'], ['3,0', '3']]);
+
+// A change made after undoing forks: what was undone is no longer ahead.
+grid.forget();
+grid.select(1, 0, 1, 0);
+grid.change(() => grid.put(1, 0, 'a'));
+grid.undo();
+grid.change(() => grid.put(1, 0, 'b'));
+grid.redo();
+is('a change after undo discards what was ahead', grid.cells(), [['1,0', 'b']]);
+
+// ── What the save button counts ─────────────────────────────
+//
+// Cells that differ from the file, not keystrokes. Typing a value and taking
+// it back leaves the file with nothing to write, and saying otherwise claims
+// an edit that is not there.
+
+grid.forget();
+grid.select(1, 0, 1, 0);
+grid.change(() => grid.put(1, 0, 'typed'));
+is('a typed cell is one thing to save', grid.unsaved(), 1);
+grid.undo();
+is('taking it back leaves nothing to save', grid.unsaved(), 0);
+grid.redo();
+is('and putting it back leaves one again', grid.unsaved(), 1);
+
+grid.forget();
+grid.seed(4, 0, 'from the file');
+grid.select(4, 0, 4, 0);
+grid.change(() => grid.put(4, 0, 'changed'));
+grid.change(() => grid.put(4, 0, 'from the file'));
+is('typing a cell back to what the file held is not a change', grid.unsaved(), 0);
+
+grid.forget();
+grid.select(1, 0, 1, 0);
+grid.change(() => grid.put(1, 0, 'x'));
+grid.change(() => grid.put(1, 0, 'y'));
+is('editing one cell twice is one thing to save', grid.unsaved(), 1);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

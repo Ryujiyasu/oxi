@@ -210,6 +210,11 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 #drop.over { display: flex; }
 #state { padding: 40px; color: var(--dim); font-size: 14px; }
 
+/* The two arrows sit together as one control, the way a toolbar pairs them. */
+header .step { font-size: 15px; line-height: 1; padding: 5px 9px; }
+header #back { margin-left: 6px; }
+header #on { margin-right: 4px; }
+
 /* A selected block is washed, and the block's outer edge is ruled, so the eye
    reads one rectangle rather than a scatter of tinted cells. The active cell
    inside it keeps its own outline and is left unwashed, the way Excel leaves
@@ -250,6 +255,8 @@ table { user-select: none; }
   <span class="name">Oxi</span>
   <span class="what">Spreadsheet rendering, in the browser, with no server</span>
   <span class="spacer"></span>
+  <button id="back" class="step" disabled title="Undo (Ctrl+Z)">&#8630;</button>
+  <button id="on" class="step" disabled title="Redo (Ctrl+Y)">&#8631;</button>
   <button id="save" disabled>Save</button>
   <button id="reset">Sample workbook</button>
   <label class="file">Open a .xlsx<input type="file" id="pick" accept=".xlsx"></label>
@@ -543,6 +550,102 @@ function describeCell(address, cell) {
     .join('');
 }
 
+// ── Taking it back ──────────────────────────────────────────────────────────
+//
+// An editor without undo is one people use carefully rather than freely, and
+// carefully is the wrong way to use a spreadsheet: half of what anyone does to
+// one is worth trying to see how it looks. So every action that writes cells
+// is bracketed into a step, and a step can be put back.
+
+const undone = [];
+const redone = [];
+const backButton = document.getElementById('back');
+const onButton = document.getElementById('on');
+
+// The keyboard is how anyone actually undoes something, but a control that is
+// never shown is a feature people do not know they have.
+function markSteps() {
+  if (backButton) backButton.disabled = undone.length === 0;
+  if (onButton) onButton.disabled = redone.length === 0;
+}
+// The step being built. While this is a list, every write records what the
+// cell held before, so it can be handed back.
+let step = null;
+// A cap, so a long afternoon does not grow without end. Excel keeps a hundred.
+const DEPTH = 100;
+
+/** Run `what` so that everything it writes can be undone in one go. */
+function change(what) {
+  if (step) { what(); return; }   // already inside a step: do not nest
+  step = { sheet: shown, cells: [] };
+  const built = step;
+  try {
+    what();
+  } finally {
+    step = null;
+  }
+  if (built.cells.length === 0) return;
+  undone.push(built);
+  if (undone.length > DEPTH) undone.shift();
+  // A fresh change is a fork: what was undone is no longer ahead of us.
+  redone.length = 0;
+  markSteps();
+}
+
+/** Put the cells of `step` back to `side`, and leave them selected. */
+function restore(built, side) {
+  if (built.sheet !== shown) {
+    shown = built.sheet;
+    describe();
+  }
+  const was = step;
+  step = null;                    // putting a step back is not itself a step
+  for (let i = built.cells.length - 1; i >= 0; i--) {
+    const one = built.cells[i];
+    put(one.row, one.col, one[side]);
+  }
+  step = was;
+  draw();
+  // Show what moved. Excel selects the cells an undo touched, which is the
+  // difference between trusting it and hunting for what it did.
+  const rows = built.cells.map((one) => one.row);
+  const cols = built.cells.map((one) => one.col);
+  at = { row: Math.min(...rows), col: Math.min(...cols) };
+  anchor = { row: at.row, col: at.col };
+  reach = { row: Math.max(...rows), col: Math.max(...cols) };
+  paint();
+  const holds = heldAt(at.row, at.col);
+  formulaBox.value = contentOf(holds);
+  if (holds) describeCell(columnName(at.col) + at.row, holds);
+  else cellBox.innerHTML = '<dd class="none">empty</dd>';
+}
+
+function undo() {
+  const built = undone.pop();
+  if (!built) return;
+  restore(built, 'was');
+  redone.push(built);
+  markSteps();
+}
+
+function redo() {
+  const built = redone.pop();
+  if (!built) return;
+  restore(built, 'now');
+  undone.push(built);
+  markSteps();
+}
+
+if (backButton) backButton.addEventListener('click', () => { undo(); focusGrid(); });
+if (onButton) onButton.addEventListener('click', () => { redo(); focusGrid(); });
+
+// After pressing a control, the keyboard belongs to the sheet again — nobody
+// wants their next arrow key to move between buttons.
+function focusGrid() {
+  const table = tableNow();
+  if (table) table.focus();
+}
+
 // ── Selecting more than one cell ────────────────────────────────────────────
 //
 // A sheet where you can only ever be on one cell is a form. Everything people
@@ -738,16 +841,16 @@ function pasteGrid(grid) {
   // and the reason anyone selects a block before pasting one thing.
   const single = grid.length === 1 && grid[0].length === 1;
   if (single && spread()) {
-    eachInRegion((row, col) => put(row, col, grid[0][0]));
+    change(() => eachInRegion((row, col) => put(row, col, grid[0][0])));
     draw();
     paint();
     return;
   }
   const top = single ? at.row : box.top;
   const left = single ? at.col : box.left;
-  grid.forEach((line, down) => {
+  change(() => grid.forEach((line, down) => {
     line.forEach((text, across) => put(top + down, left + across, text));
-  });
+  }));
   draw();
   const wide = Math.max(...grid.map((line) => line.length));
   at = { row: top, col: left };
@@ -756,7 +859,7 @@ function pasteGrid(grid) {
 }
 
 function clearSelection() {
-  eachInRegion((row, col) => put(row, col, ''));
+  change(() => eachInRegion((row, col) => put(row, col, '')));
   draw();
   paint();
 }
@@ -809,14 +912,16 @@ function edited(text) {
   return { value_type: 'string', new_value: text };
 }
 
-function remember(row, col, text) {
-  const held = edited(text);
-  changes.set(`${shown},${row},${col}`, {
-    sheet_index: shown,
-    row: row,
-    col: col,
-    ...held,
-  });
+// What each cell held before this session first wrote to it. A cell put back
+// to that has nothing to save, whether by hand or by undo, and counting it
+// would claim an edit the file does not need.
+const pristine = new Map();
+
+function remember(row, col, text, before) {
+  const key = `${shown},${row},${col}`;
+  if (!pristine.has(key)) pristine.set(key, before);
+  if (pristine.get(key) === text) changes.delete(key);
+  else changes.set(key, { sheet_index: shown, row, col, ...edited(text) });
   markSaved();
 }
 
@@ -849,6 +954,7 @@ async function save() {
     // batch of edits twice.
     source = written;
     changes.clear();
+    pristine.clear();
     markSaved();
   } catch (error) {
     saveButton.textContent = was;
@@ -859,6 +965,15 @@ async function save() {
 }
 
 if (saveButton) saveButton.addEventListener('click', save);
+
+// Nothing here is written to disk until Save is pressed, so leaving with edits
+// outstanding loses them. The browser will only show its own wording, but it
+// will show it.
+window.addEventListener('beforeunload', (event) => {
+  if (changes.size === 0) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 
 // ── Living in the grid ──────────────────────────────────────────────────────
 //
@@ -989,6 +1104,9 @@ function edit(seed) {
 function put(row, col, text) {
   const sheet = sheetNow();
   if (!sheet) return;
+  const before = contentOf(heldAt(row, col));
+  if (before === text) return;
+  if (step) step.cells.push({ row, col, was: before, now: text });
   let line = sheet.rows.find((one) => one.index === row);
   if (!line) {
     line = { index: row, cells: [], height: null };
@@ -1006,7 +1124,7 @@ function put(row, col, text) {
   else if (text === '') cell.value = 'Empty';
   else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
   else cell.value = { String: text };
-  remember(row, col, text);
+  remember(row, col, text, before);
 }
 
 // With a block selected, Enter and Tab do not leave it: Enter walks down the
@@ -1037,7 +1155,7 @@ function commit(then) {
   if (!editor) return;
   const text = editor.input.value;
   editor = null;
-  put(at.row, at.col, text);
+  change(() => put(at.row, at.col, text));
   draw();
   goTo(at.row, at.col, true);
   if (then) then();
@@ -1124,6 +1242,18 @@ function onKey(event) {
       event.preventDefault();
       goTo(from.row - 20, from.col, false, wide);
       break;
+    case 'z':
+    case 'Z':
+      if (!jump) break;
+      event.preventDefault();
+      if (event.shiftKey) redo(); else undo();
+      break;
+    case 'y':
+    case 'Y':
+      if (!jump) break;
+      event.preventDefault();
+      redo();
+      break;
     case 'a':
     case 'A':
       if (!jump) break;
@@ -1162,7 +1292,7 @@ document.addEventListener('keydown', (event) => {
   if (document.activeElement === formulaBox) {
     if (event.key === 'Enter') {
       event.preventDefault();
-      put(at.row, at.col, formulaBox.value);
+      change(() => put(at.row, at.col, formulaBox.value));
       draw();
       goTo(at.row + 1, at.col);
       const table = tableNow();
@@ -1183,7 +1313,11 @@ async function open(data, name) {
     source = new Uint8Array(data).slice();
     fileName = name || 'workbook.xlsx';
     changes.clear();
+    pristine.clear();
+    undone.length = 0;
+    redone.length = 0;
     markSaved();
+    markSteps();
     book = parse_spreadsheet(new Uint8Array(data));
   } catch (error) {
     stateBox.style.display = 'block';
