@@ -28564,6 +28564,50 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         }
     }
 
+    /// S1244 (2026-08-27): the S652 math-paragraph advance, factored for the
+    /// CELL passes (the body Block::Math arm keeps its inline copy — same
+    /// arithmetic, zero body churn). See the S652 comment at the body arm.
+    fn s1244_math_advance(
+        math_elems: &[LayoutElement],
+        bbox: &crate::layout::math::MathBBox,
+        math_font_size: f32,
+    ) -> f32 {
+        let asc = 0.60_f32;
+        let desc = 0.05_f32;
+        let lead = 1.5_f32;
+        let floor = 1.14_f32;
+        let mut ink_top = f32::INFINITY;
+        let mut ink_bot = f32::NEG_INFINITY;
+        for e in math_elems {
+            let (lo, hi) = match &e.content {
+                LayoutContent::Text { text, .. } => {
+                    let fs = e.height / 1.2;
+                    let baseline = e.y + e.height * (2.0 / 3.0);
+                    let is_integral = text
+                        .chars()
+                        .any(|c| ('\u{222B}'..='\u{2233}').contains(&c));
+                    if is_integral {
+                        (e.y, e.y + e.height)
+                    } else {
+                        (baseline - asc * fs, baseline + desc * fs)
+                    }
+                }
+                _ => (e.y, e.y + e.height),
+            };
+            if lo < ink_top {
+                ink_top = lo;
+            }
+            if hi > ink_bot {
+                ink_bot = hi;
+            }
+        }
+        if ink_bot > ink_top {
+            (ink_bot - ink_top + lead).max(math_font_size * floor)
+        } else {
+            bbox.height().max(math_font_size * 1.2) + math_font_size * 0.3
+        }
+    }
+
     fn text_y_offset_for_line(
         &self,
         line: &Line,
@@ -30386,6 +30430,31 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 cell_content_h_visual += img_h_eff;
                             }
                         }
+                        Block::Math(math_block) => {
+                            // S1244 (2026-08-27, default ON, opt-out
+                            // OXI_S1244_DISABLE): cell equations reserve the
+                            // body S652 advance. S331 has forwarded them into
+                            // cell.blocks since 2026-05-26, but BOTH cell
+                            // passes dropped them — educational__002a301d's
+                            // polar-coordinate answers (27 m:f fractions, 61
+                            // of 63 oMath in cells) vanished: missing ink AND
+                            // −67pt per solutions block → Problem 2 pulled up
+                            // a page (EN-250 census pcd +1).
+                            if std::env::var("OXI_S1244_DISABLE").is_err() {
+                                let mfs: f32 = 10.5;
+                                let (me, mbb) = crate::layout::math::emit_math_block(
+                                    math_block,
+                                    0.0,
+                                    0.0,
+                                    mfs,
+                                );
+                                if !me.is_empty() {
+                                    let adv = Self::s1244_math_advance(&me, &mbb, mfs);
+                                    cell_content_h += adv;
+                                    cell_content_h_visual += adv;
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -31816,6 +31885,29 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             continue; // S751
                         }
                         match block {
+                            Block::Math(math_block)
+                                if std::env::var("OXI_S1244_DISABLE").is_err() =>
+                            {
+                                // S1244: emit cell equations at the cell
+                                // content origin and advance by the S652
+                                // model — the estimate arm above mirrors this.
+                                let mfs: f32 = 10.5;
+                                let (me, mbb) = crate::layout::math::emit_math_block(
+                                    math_block,
+                                    cell_x + pad_l,
+                                    content_h,
+                                    mfs,
+                                );
+                                if !me.is_empty() {
+                                    let adv = Self::s1244_math_advance(&me, &mbb, mfs);
+                                    for mut e in me {
+                                        e.cell_row_index = Some(row_idx);
+                                        e.cell_col_index = Some(cell_idx);
+                                        cell_elements.push(e);
+                                    }
+                                    content_h += adv;
+                                }
+                            }
                             Block::Table(nested) => {
                                 // COM-confirmed: nested table width = outer cell width - 2 × padding
                                 let nested_x = cell_x + pad_l;
