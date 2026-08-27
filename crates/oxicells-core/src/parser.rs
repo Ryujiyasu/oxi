@@ -782,6 +782,8 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     let mut in_fill = false;
     let mut current_fill = FillInfo::default();
     let mut in_border = false;
+    // Which edge of a border is open, so its colour knows where it belongs.
+    let mut border_edge: Option<Edge> = None;
     let mut current_border = BorderInfo::default();
     // How many differential formats have been closed.
     let mut dxf_seen = 0usize;
@@ -872,22 +874,49 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     }
 
                     // Inside a border element, parse child elements with style attr
+                    //
+                    // An edge that states a colour states it as a CHILD, so it
+                    // arrives as a Start and its `<color>` follows. Which edge
+                    // is open has to be remembered for the colour to know
+                    // where it belongs.
                     "left" if in_border => {
                         current_border.left = border_line(&e);
+                        border_edge = Some(Edge::Left);
                     }
                     "right" if in_border => {
                         current_border.right = border_line(&e);
+                        border_edge = Some(Edge::Right);
                     }
                     "top" if in_border => {
                         current_border.top = border_line(&e);
+                        border_edge = Some(Edge::Top);
                     }
                     "bottom" if in_border => {
                         current_border.bottom = border_line(&e);
+                        border_edge = Some(Edge::Bottom);
                     }
                     // A diagonal that states a colour has a child, so it
                     // arrives here and not among the self-closing sides.
                     "diagonal" if in_border => {
                         current_border.diagonal = border_line(&e);
+                        border_edge = Some(Edge::Diagonal);
+                    }
+
+                    // The colour of the edge that is open. `indexed="64"` is
+                    // Excel's "automatic" and is past the end of the palette,
+                    // so it reads back as no colour — which is what it means.
+                    "color" if border_edge.is_some() => {
+                        let held = parse_color_attr(&e, theme);
+                        if let Some(line) = match border_edge {
+                            Some(Edge::Left) => current_border.left.as_mut(),
+                            Some(Edge::Right) => current_border.right.as_mut(),
+                            Some(Edge::Top) => current_border.top.as_mut(),
+                            Some(Edge::Bottom) => current_border.bottom.as_mut(),
+                            Some(Edge::Diagonal) => current_border.diagonal.as_mut(),
+                            None => None,
+                        } {
+                            line.color = held;
+                        }
                     }
 
                     // Font color
@@ -955,6 +984,22 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                     "scheme" if in_font => {
                         current_font_scheme = get_attr(&e, "val");
                     }
+                    // A rule's colour is written self-closing, so it lands
+                    // here rather than among the Start events — which is why
+                    // it read back black for as long as it did.
+                    "color" if border_edge.is_some() => {
+                        let held = parse_color_attr(&e, theme);
+                        if let Some(line) = match border_edge {
+                            Some(Edge::Left) => current_border.left.as_mut(),
+                            Some(Edge::Right) => current_border.right.as_mut(),
+                            Some(Edge::Top) => current_border.top.as_mut(),
+                            Some(Edge::Bottom) => current_border.bottom.as_mut(),
+                            Some(Edge::Diagonal) => current_border.diagonal.as_mut(),
+                            None => None,
+                        } {
+                            line.color = held;
+                        }
+                    }
                     "color" if in_font => {
                         if let Some(c) = parse_color_attr(&e, theme) {
                             current_font.color = Some(c);
@@ -966,20 +1011,27 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         }
                     }
                     // Self-closing border sides: <left style="thin"/>
+                    // An edge written self-closing states no colour, so it
+                    // leaves nothing open behind it.
                     "left" if in_border => {
                         current_border.left = border_line(&e);
+                        border_edge = None;
                     }
                     "right" if in_border => {
                         current_border.right = border_line(&e);
+                        border_edge = None;
                     }
                     "top" if in_border => {
                         current_border.top = border_line(&e);
+                        border_edge = None;
                     }
                     "bottom" if in_border => {
                         current_border.bottom = border_line(&e);
+                        border_edge = None;
                     }
                     "diagonal" if in_border => {
                         current_border.diagonal = border_line(&e);
+                        border_edge = None;
                     }
                     "alignment" if in_xf => {
                         current_xf.horizontal_align = get_attr(&e, "horizontal");
@@ -1071,7 +1123,14 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         ss.fills.push(std::mem::take(&mut current_fill));
                         in_fill = false;
                     }
+                    // Each side closes before the next opens. Forgetting to
+                    // let go of it would hand the next `<color>` in the file —
+                    // a font's, most likely — to a rule that had finished.
+                    "left" | "right" | "top" | "bottom" | "diagonal" if in_border => {
+                        border_edge = None;
+                    }
                     "border" if in_border => {
+                        border_edge = None;
                         let held = std::mem::take(&mut current_border);
                         if section == Section::Dxfs {
                             ss.dxf_borders.push(held);
@@ -1112,6 +1171,17 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     }
 
     Ok(ss)
+}
+
+/// Which side of a border is being read, so that a `<color>` child can be put
+/// on the right one.
+#[derive(Clone, Copy)]
+enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Diagonal,
 }
 
 /// An edge that names no style is not drawn; one that does carries how.
