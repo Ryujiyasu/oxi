@@ -3798,6 +3798,26 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
     let scale = render_dpi as f64 / 72.0;
 
     for (si, slide) in pres.slides.iter().enumerate() {
+        // A fractional page is ROUNDED, not ceiled, and that is the better
+        // of the two (2026-08-27, measured then reverted).
+        //
+        // A4 at 150 DPI is 1239.5 x 1754.25px. The reference pixmap takes the
+        // ceiling (1755) and composites the last quarter-covered row over white,
+        // so Oxi's 1754 rows differ in size and the scoring path resizes -- which
+        // looked like a systematic bias on the NINE A4 decks of the corpus.
+        //
+        // It is not. Rendering 1755 rows instead was measured on d39/d50:
+        //     old 1754, resized to the reference : 0.9378
+        //     new 1755, sizes matching           : 0.9379   <- +0.0001, nothing
+        // because the content SCALE is what matters, and 1754 sits 0.25px from
+        // the true 1754.25 while 1755 sits 0.75px away -- three times worse. The
+        // same comparison cropped shows it plainly: the 1754 render scores 0.9547
+        // against the cropped reference, the 1755 render only 0.9383.
+        //
+        // Matching the reference exactly would mean rendering the CONTENT at the
+        // true 1754.25 scale into a 1755-row bitmap with the last row partially
+        // covered -- decoupling bitmap size from content scale. Not done: the
+        // whole artifact is worth about 0.0001.
         let out_w = (pres.slide_width as f64 * dpi as f64 / 72.0).round() as u32;
         let out_h = (pres.slide_height as f64 * dpi as f64 / 72.0).round() as u32;
         let w = (pres.slide_width as f64 * scale).round() as i32;
