@@ -67,14 +67,64 @@ ARMS = [(f"{f.replace(' ', '')}_{p // 1000}", f, SZ, p) for f in FACES for p in 
 ARMS.append(("ComicSansMS_60_sz216", "Comic Sans MS", 216.15, 60000))
 ARMS.append(("Arial_60_sz216", "Arial", 216.15, 60000))
 
+# The same question inside a TABLE CELL. Oxi answers it differently there --
+# `max(1.2, 1.0625 * pct)`, carried over from the d10 s12 ROW-HEIGHT derivation
+# -- so a cell at lnSpc 140% advances 29.75pt where d03 s15 and d33 s9 both show
+# PowerPoint at exactly 33.60 = 1.2 * 1.40 * 20.
+TABLE_ARMS = [
+    (f"tbl_{f.replace(' ', '')}_{p // 1000}", f, 20.0, p)
+    for f in ("Arial", "Comic Sans MS")
+    for p in (60000, 140000)
+]
+
+
+def cell_arm(slide, name: str, face: str, sz: float, pct: int, idx: int) -> dict:
+    """One 2x1 table whose single cell holds the same three paragraphs."""
+    shp = slide.shapes.add_table(1, 2, Emu(int(36 * EMU_PT)), Emu(int(36 * EMU_PT)),
+                                 Emu(int(500 * EMU_PT)), Emu(int(20 * EMU_PT)))
+    tbl = shp._element.graphic.graphicData.tbl
+    tr = tbl.find(f"{{{A}}}tr")
+    tr.set("h", str(int(4 * EMU_PT)))       # too small, so content wins
+    for tc in tr.findall(f"{{{A}}}tc"):
+        tx = tc.find(f"{{{A}}}txBody")
+        for para in tx.findall(f"{{{A}}}p"):
+            tx.remove(para)
+        for line in LINES:
+            p = etree.SubElement(tx, f"{{{A}}}p")
+            ppr = etree.SubElement(p, f"{{{A}}}pPr")
+            ppr.set("algn", "ctr")
+            ls = etree.SubElement(ppr, f"{{{A}}}lnSpc")
+            etree.SubElement(ls, f"{{{A}}}spcPct").set("val", str(pct))
+            for tag in ("spcBef", "spcAft"):
+                e = etree.SubElement(ppr, f"{{{A}}}{tag}")
+                etree.SubElement(e, f"{{{A}}}spcPts").set("val", "0")
+            etree.SubElement(ppr, f"{{{A}}}buNone")
+            r = etree.SubElement(p, f"{{{A}}}r")
+            rpr = etree.SubElement(r, f"{{{A}}}rPr")
+            rpr.set("lang", "en-US")
+            rpr.set("sz", str(int(round(sz * 100))))
+            etree.SubElement(rpr, f"{{{A}}}latin").set("typeface", face)
+            etree.SubElement(r, f"{{{A}}}t").text = line
+        pr = tc.find(f"{{{A}}}tcPr")
+        if pr is None:
+            pr = etree.SubElement(tc, f"{{{A}}}tcPr")
+        for k, v in (("marT", "57150"), ("marB", "57150"),
+                     ("marL", "0"), ("marR", "0"), ("anchor", "ctr")):
+            pr.set(k, v)
+    return {"slide": idx, "name": name, "typeface": face, "sz_pt": sz,
+            "lnSpc_pct": pct, "n_lines": len(LINES), "in_table": True}
+
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     prs = Presentation()
     blank = prs.slide_layouts[6]
     manifest = []
-    for i, (name, face, sz, pct) in enumerate(ARMS):
+    for i, (name, face, sz, pct) in enumerate(ARMS + TABLE_ARMS):
         slide = prs.slides.add_slide(blank)
+        if name.startswith("tbl_"):
+            manifest.append(cell_arm(slide, name, face, sz, pct, i + 1))
+            continue
         box = slide.shapes.add_textbox(
             Emu(int(36 * EMU_PT)), Emu(int(36 * EMU_PT)),
             Emu(int(600 * EMU_PT)), Emu(int(460 * EMU_PT)),
