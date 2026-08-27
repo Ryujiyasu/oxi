@@ -88,6 +88,87 @@ impl Arg {
     }
 }
 
+/// Does `text` match `pattern`, reading `?` as one character, `*` as any run
+/// of them, and `~` in front of either as the character itself?
+///
+/// Excel matches this way in the exact-match forms of VLOOKUP, HLOOKUP and
+/// MATCH, and in every criteria argument. Comparing the pattern as literal
+/// text instead means `VLOOKUP(D1 & "*", ...)` — the ordinary way to look
+/// something up by its beginning — finds nothing at all.
+pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
+    let text: Vec<char> = text.to_lowercase().chars().collect();
+    let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
+    // Walked rather than recursed, remembering the last `*` so a dead end can
+    // be backed out of: `a*b` against `aXbY` has to try the second `b` too.
+    let (mut at, mut against) = (0usize, 0usize);
+    let (mut star, mut after_star) = (None, 0usize);
+    while at < text.len() {
+        let here = pattern.get(against).copied();
+        match here {
+            Some('~') if against + 1 < pattern.len() => {
+                if pattern[against + 1] == text[at] {
+                    at += 1;
+                    against += 2;
+                    continue;
+                }
+            }
+            Some('?') => {
+                at += 1;
+                against += 1;
+                continue;
+            }
+            Some('*') => {
+                star = Some(against);
+                against += 1;
+                after_star = at;
+                continue;
+            }
+            Some(one) if one == text[at] => {
+                at += 1;
+                against += 1;
+                continue;
+            }
+            _ => {}
+        }
+        match star {
+            Some(back) => {
+                against = back + 1;
+                after_star += 1;
+                at = after_star;
+            }
+            None => return false,
+        }
+    }
+    while pattern.get(against) == Some(&'*') {
+        against += 1;
+    }
+    against == pattern.len()
+}
+
+/// Does this candidate answer to this key, the way an exact lookup asks?
+///
+/// Text against text with a `*` or a `?` in it is a pattern; everything else
+/// is ordinary equality. A blank never answers, not even to a blank key —
+/// Excel reports `#N/A` rather than pairing two empty cells, and without that
+/// a lookup of an unfilled cell quietly returns whatever sits beside the first
+/// gap in the table.
+fn answers_to(candidate: &Value, key: &Value) -> bool {
+    if candidate.is_blank() {
+        return false;
+    }
+    if let (Value::Text(held), Value::Text(pattern)) = (candidate, key) {
+        if has_wildcards(pattern) {
+            return wildcard_match(held, pattern);
+        }
+    }
+    compare(candidate, key) == Ok(Ordering::Equal)
+}
+
+/// Whether `pattern` has anything in it that wildcard matching would read.
+pub(crate) fn has_wildcards(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?')
+}
+
 /// Return the first error among the arguments, so that errors propagate the
 /// way Excel propagates them (before the function body runs).
 fn first_error(args: &[Arg]) -> Option<ExcelError> {
@@ -199,6 +280,7 @@ fn one_at_a_time(name: &str) -> bool {
 /// Call `name`, applying it a cell at a time when it has been handed a block
 /// and only knows what to do with one value.
 pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
+    let name = plain(name);
     if one_at_a_time(name) {
         let width = args.iter().map(|one| block_of(one).width).max().unwrap_or(1);
         let height = args.iter().map(|one| block_of(one).height).max().unwrap_or(1);
@@ -229,7 +311,29 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
     Arg::Value(call(name, args))
 }
 
+/// The name without the prefixes a file writes and Excel does not show.
+///
+/// A function newer than the format's own version is stored as `_xlfn.NAME`,
+/// and one that only works on a worksheet as `_xlfn._xlws.NAME`. They are a
+/// note to older readers, not part of the name.
+pub(crate) fn plain(name: &str) -> &str {
+    // The parser upper-cases every function name, so the prefix arrives as
+    // `_XLFN.` however the file spelled it. Stripping only the lower-case form
+    // matched nothing at all, silently.
+    let name = strip_either(name, "_xlfn.");
+    strip_either(name, "_xlws.")
+}
+
+fn strip_either<'a>(name: &'a str, prefix: &str) -> &'a str {
+    if name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        &name[prefix.len()..]
+    } else {
+        name
+    }
+}
+
 pub fn call(name: &str, args: &[Arg]) -> Value {
+    let name = plain(name);
     match dispatch(name, args) {
         Ok(v) => v,
         Err(e) => Value::Error(e),
@@ -831,10 +935,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 // blanks. Without this, looking up an unfilled cell silently
                 // returns whatever sits beside the first gap in the table.
                 (0..lanes)
-                    .find(|&i| {
-                        let candidate = probe(i);
-                        !candidate.is_blank() && compare(&candidate, &key) == Ok(Ordering::Equal)
-                    })
+                    .find(|&i| answers_to(&probe(i), &key))
                     .map(fetch)
                     .ok_or(ExcelError::NA)
             }
@@ -850,9 +951,7 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 None => 1,
             };
             let found = match mode {
-                0 => haystack
-                    .iter()
-                    .position(|v| !v.is_blank() && compare(v, &key) == Ok(Ordering::Equal)),
+                0 => haystack.iter().position(|v| answers_to(v, &key)),
                 m if m > 0 => {
                     let mut best = None;
                     for (i, v) in haystack.iter().enumerate() {
@@ -1159,6 +1258,22 @@ impl Criteria {
         if v.is_blank() {
             return false;
         }
+        // `"a*"` asked of COUNTIF means "starting with a", not the two
+        // characters. Only equality and inequality read wildcards; `>a*` is
+        // a comparison against the literal text.
+        if let Value::Text(pattern) = &self.operand {
+            if has_wildcards(pattern) {
+                if let Value::Text(held) = v {
+                    let hit = wildcard_match(held, pattern);
+                    return match self.op {
+                        BinaryPredicate::Eq => hit,
+                        BinaryPredicate::Ne => !hit,
+                        _ => false,
+                    };
+                }
+                return matches!(self.op, BinaryPredicate::Ne);
+            }
+        }
         match compare(v, &self.operand) {
             Ok(ord) => match self.op {
                 BinaryPredicate::Eq => ord == Ordering::Equal,
@@ -1193,6 +1308,99 @@ mod tests {
 
     fn n(value: f64) -> Value {
         Value::Number(value)
+    }
+
+    #[test]
+    fn the_prefix_a_file_writes_is_not_part_of_the_name() {
+        // A function newer than the format's own version is stored as
+        // `_xlfn.NAME`, and Excel shows it without. The parser upper-cases
+        // every name it reads, so the prefix arrives as `_XLFN.` however the
+        // file spelled it — and stripping only the lower-case form matched
+        // nothing at all, silently, which is how IFNA came back `#NAME?`
+        // despite being implemented all along.
+        assert_eq!(plain("_xlfn.IFNA"), "IFNA");
+        assert_eq!(plain("_XLFN.IFNA"), "IFNA");
+        assert_eq!(plain("_xlfn._xlws.SORT"), "SORT");
+        assert_eq!(plain("_XLFN._XLWS.FILTER"), "FILTER");
+        assert_eq!(plain("SUM"), "SUM");
+        // A name that merely starts with an underscore is left alone.
+        assert_eq!(plain("_MYNAME"), "_MYNAME");
+        assert_eq!(call("_XLFN.IFNA", &[v(1.0), v(2.0)]), Value::Number(1.0));
+    }
+
+    #[test]
+    fn a_star_stands_for_any_run_of_characters() {
+        assert!(wildcard_match("life insurance", "life*"));
+        assert!(wildcard_match("life insurance", "*insurance"));
+        assert!(wildcard_match("life insurance", "*e i*"));
+        assert!(wildcard_match("anything", "*"));
+        assert!(!wildcard_match("car insurance", "life*"));
+        // Backing out of a dead end: the first `b` does not lead anywhere, so
+        // the second has to be tried.
+        assert!(wildcard_match("aXbY", "a*bY"));
+        assert!(!wildcard_match("aXbY", "a*bZ"));
+    }
+
+    #[test]
+    fn a_question_mark_stands_for_exactly_one() {
+        assert!(wildcard_match("cat", "c?t"));
+        assert!(!wildcard_match("coat", "c?t"));
+        assert!(wildcard_match("coat", "c??t"));
+    }
+
+    #[test]
+    fn a_tilde_means_the_character_itself() {
+        assert!(wildcard_match("10%*", "10%~*"));
+        assert!(!wildcard_match("10%x", "10%~*"));
+        assert!(wildcard_match("what?", "what~?"));
+    }
+
+    #[test]
+    fn matching_pays_no_attention_to_capitals() {
+        // Excel's text comparison does not, and neither does this.
+        assert!(wildcard_match("Life Insurance", "life*"));
+        assert!(wildcard_match("life insurance", "LIFE*"));
+    }
+
+    #[test]
+    fn the_lookups_read_wildcards_when_asked_for_an_exact_match() {
+        // `VLOOKUP(D1 & "*", ...)` is the ordinary way to look something up by
+        // its beginning, and comparing the pattern as literal text finds
+        // nothing at all.
+        let table = range(
+            &[
+                Value::text("life insurance"),
+                Value::text("yes"),
+                Value::text("car"),
+                Value::text("no"),
+            ],
+            2,
+        );
+        assert_eq!(
+            call("VLOOKUP", &[t("life*"), table.clone(), v(2.0), v(0.0)]),
+            Value::text("yes")
+        );
+        let column = range(&[Value::text("life insurance"), Value::text("car")], 1);
+        assert_eq!(
+            call("MATCH", &[t("*insurance"), column.clone(), v(0.0)]),
+            Value::Number(1.0)
+        );
+        assert_eq!(call("COUNTIF", &[column.clone(), t("*i*")]), Value::Number(1.0));
+        // The approximate form sorts rather than matches, so the star there is
+        // just a character. Against this unsorted pair that lands on "car" and
+        // answers "no" — which is the point: whatever it is, it is not the
+        // pattern match, and a star must not turn the sorted form into one.
+        assert_eq!(
+            call("VLOOKUP", &[t("life*"), table, v(2.0), v(1.0)]),
+            Value::text("no")
+        );
+    }
+
+    #[test]
+    fn a_criterion_with_no_wildcard_in_it_is_still_plain_equality() {
+        let column = range(&[Value::text("a"), Value::text("ab")], 1);
+        assert_eq!(call("COUNTIF", &[column.clone(), t("a")]), Value::Number(1.0));
+        assert_eq!(call("COUNTIF", &[column, t("a*")]), Value::Number(2.0));
     }
 
     #[test]
