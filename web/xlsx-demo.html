@@ -82,6 +82,61 @@ th {
 }
 th.row { position: sticky; left: 0; z-index: 1; width: 40px; }
 td.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The box Excel draws round the cell you are on, and the little square at its
+   corner. Both are what tells you at a glance where typing will land. */
+td.here {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  position: relative;
+}
+td.here::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  border: 1px solid #FFF;
+}
+td input.inline {
+  font: inherit;
+  border: none;
+  outline: none;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: #FFF;
+  color: inherit;
+  text-align: inherit;
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.bar #where {
+  min-width: 78px;
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--head);
+}
+.bar .fx { color: var(--dim); font-style: italic; font-size: 13px; }
+.bar input {
+  flex: 1;
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.bar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 td.right { text-align: right; }
 td.centre { text-align: center; }
 td.bold { font-weight: 700; }
@@ -165,6 +220,12 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
   <button id="reset">Sample workbook</button>
   <label class="file">Open a .xlsx<input type="file" id="pick" accept=".xlsx"></label>
 </header>
+
+<div class="bar">
+  <span id="where">A1</span>
+  <span class="fx">fx</span>
+  <input id="formula" spellcheck="false" autocomplete="off">
+</div>
 
 <main>
   <div id="sheet">
@@ -321,6 +382,12 @@ function draw() {
         cell.colSpan = box.end_col - box.start_col + 1;
         cell.rowSpan = box.end_row - box.start_row + 1;
       }
+      // Every cell answers to the keyboard, whether it holds anything or
+      // not: in Excel the empty ones are where you type next, and a grid you
+      // can only click the written cells of is a table, not a sheet.
+      cell.dataset.row = index;
+      cell.dataset.col = col;
+      cell.tabIndex = -1;
       const held = source && source.cells.find((one) => one.col === col);
       if (!held) continue;
       cell.textContent = shownText(held);
@@ -334,13 +401,18 @@ function draw() {
       if (held.style.font_name) cell.style.fontFamily = `"${held.style.font_name}", sans-serif`;
       if (held.style.font_color) cell.style.color = `#${held.style.font_color}`;
       if (held.style.bg_color) cell.style.background = `#${held.style.bg_color}`;
-      cell.onclick = () => {
-        for (const lit of table.querySelectorAll('td.picked')) lit.classList.remove('picked');
-        cell.classList.add('picked');
-        describeCell(columnName(col) + index, held);
-      };
     }
   }
+  table.tabIndex = 0;
+  table.addEventListener('mousedown', (event) => {
+    const cell = event.target.closest('td');
+    if (!cell || !cell.dataset.row) return;
+    goTo(Number(cell.dataset.row), Number(cell.dataset.col));
+  });
+  table.addEventListener('dblclick', (event) => {
+    const cell = event.target.closest('td');
+    if (cell && cell.dataset.row) edit(null);
+  });
 
   stateBox.style.display = 'none';
   const previous = sheetBox.querySelector('table');
@@ -405,6 +477,273 @@ function describeCell(address, cell) {
     .map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`)
     .join('');
 }
+
+// ── Living in the grid ──────────────────────────────────────────────────────
+//
+// What separates a sheet from a table is that you never reach for the mouse.
+// The cell you are on takes what you type, the arrows walk it, and Enter puts
+// the value in and steps down ready for the next one. Excel's habits here are
+// specific enough that getting them nearly right feels wrong, so they are
+// spelled out rather than approximated.
+
+let at = { row: 1, col: 0 };
+// Where a run of Tabs began. Excel remembers it: Tab across three cells, press
+// Enter, and you land under the cell you STARTED tabbing from, not under the
+// last one. It is what makes filling in a row of a form feel like a form.
+let tabHome = null;
+let editor = null;
+
+const whereBox = document.getElementById('where');
+const formulaBox = document.getElementById('formula');
+
+function tableNow() {
+  return sheetBox.querySelector('table');
+}
+
+function cellAt(row, col) {
+  const table = tableNow();
+  return table && table.querySelector('td[data-row="' + row + '"][data-col="' + col + '"]');
+}
+
+function sheetNow() {
+  return book && book.sheets && book.sheets[shown];
+}
+
+function heldAt(row, col) {
+  const sheet = sheetNow();
+  if (!sheet) return undefined;
+  const line = sheet.rows.find((one) => one.index === row);
+  return line && line.cells.find((one) => one.col === col);
+}
+
+// What the formula bar shows: the formula if there is one, else what is
+// STORED — not what is displayed. A date shows as a date in the grid and as
+// its own number here, which is the distinction Excel draws too.
+function contentOf(cell) {
+  if (!cell) return '';
+  if (cell.formula) return '=' + cell.formula;
+  const raw = typeof cell.value === 'object' && cell.value !== null
+    ? Object.values(cell.value)[0]
+    : (cell.value === 'Empty' ? '' : cell.value);
+  return raw === undefined || raw === null ? '' : String(raw);
+}
+
+function extent() {
+  const table = tableNow();
+  if (!table) return { rows: 1, cols: 0 };
+  const last = table.rows[table.rows.length - 1];
+  return { rows: table.rows.length - 1, cols: last ? last.cells.length - 2 : 0 };
+}
+
+function goTo(row, col, keepTabHome) {
+  const bounds = extent();
+  at = {
+    row: Math.min(Math.max(1, row), bounds.rows),
+    col: Math.min(Math.max(0, col), bounds.cols),
+  };
+  if (!keepTabHome) tabHome = null;
+  const table = tableNow();
+  if (!table) return;
+  for (const lit of table.querySelectorAll('td.here')) lit.classList.remove('here');
+  const cell = cellAt(at.row, at.col);
+  if (cell) {
+    cell.classList.add('here');
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  const held = heldAt(at.row, at.col);
+  whereBox.textContent = columnName(at.col) + at.row;
+  formulaBox.value = contentOf(held);
+  if (held) describeCell(columnName(at.col) + at.row, held);
+  else cellBox.innerHTML = '<dd class="none">empty</dd>';
+}
+
+// Ctrl with an arrow runs to the edge of the block you are in: to the last
+// written cell if you are on written ground, else to the next written one.
+// It is how anyone moves about a large sheet, and stepping a row at a time is
+// not the same thing.
+function runTo(dRow, dCol) {
+  const bounds = extent();
+  let row = at.row;
+  let col = at.col;
+  const filled = (r, c) => contentOf(heldAt(r, c)) !== '';
+  const started = filled(row + dRow, col + dCol);
+  let moved = false;
+  for (;;) {
+    const nextRow = row + dRow;
+    const nextCol = col + dCol;
+    if (nextRow < 1 || nextRow > bounds.rows || nextCol < 0 || nextCol > bounds.cols) break;
+    if (started && !filled(nextRow, nextCol)) break;
+    row = nextRow;
+    col = nextCol;
+    moved = true;
+    if (!started && filled(row, col)) break;
+  }
+  if (moved) goTo(row, col);
+}
+
+// Typing over a cell replaces it; F2 opens it with what is already there.
+function edit(seed) {
+  const cell = cellAt(at.row, at.col);
+  if (!cell || editor) return;
+  const held = heldAt(at.row, at.col);
+  const input = document.createElement('input');
+  input.className = 'inline';
+  input.value = seed === null ? contentOf(held) : seed;
+  editor = { cell, input, was: cell.textContent };
+  cell.textContent = '';
+  cell.appendChild(input);
+  input.focus();
+  if (seed === null) input.select();
+  else input.setSelectionRange(input.value.length, input.value.length);
+}
+
+// Put the typed text into the sheet. Excel decides then and there whether it
+// is a number: `12` right-aligns, `12a` does not, and for most people that is
+// the only sign a column will add up.
+function put(row, col, text) {
+  const sheet = sheetNow();
+  if (!sheet) return;
+  let line = sheet.rows.find((one) => one.index === row);
+  if (!line) {
+    line = { index: row, cells: [], height: null };
+    sheet.rows.push(line);
+    sheet.rows.sort((a, b) => a.index - b.index);
+  }
+  let cell = line.cells.find((one) => one.col === col);
+  if (!cell) {
+    cell = { col: col, value: 'Empty', style: {}, formula: null, runs: [] };
+    line.cells.push(cell);
+    line.cells.sort((a, b) => a.col - b.col);
+  }
+  cell.formula = text.startsWith('=') ? text.slice(1) : null;
+  if (cell.formula) cell.value = { String: '' };
+  else if (text === '') cell.value = 'Empty';
+  else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
+  else cell.value = { String: text };
+}
+
+function commit(then) {
+  if (!editor) return;
+  const text = editor.input.value;
+  editor = null;
+  put(at.row, at.col, text);
+  draw();
+  goTo(at.row, at.col, true);
+  if (then) then();
+}
+
+function cancel() {
+  if (!editor) return;
+  const held = editor;
+  editor = null;
+  held.cell.textContent = held.was;
+  goTo(at.row, at.col, true);
+}
+
+function onKey(event) {
+  if (!book) return;
+  const bounds = extent();
+  if (editor) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancel();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const down = event.shiftKey ? -1 : 1;
+      const back = tabHome;
+      commit(() => goTo(at.row + down, back === null ? at.col : back));
+    } else if (event.key === 'Tab') {
+      event.preventDefault();
+      if (tabHome === null) tabHome = at.col;
+      const step = event.shiftKey ? -1 : 1;
+      commit(() => goTo(at.row, at.col + step, true));
+    }
+    return;
+  }
+  const jump = event.ctrlKey || event.metaKey;
+  switch (event.key) {
+    case 'ArrowUp':
+      event.preventDefault();
+      if (jump) runTo(-1, 0); else goTo(at.row - 1, at.col);
+      break;
+    case 'ArrowDown':
+      event.preventDefault();
+      if (jump) runTo(1, 0); else goTo(at.row + 1, at.col);
+      break;
+    case 'ArrowLeft':
+      event.preventDefault();
+      if (jump) runTo(0, -1); else goTo(at.row, at.col - 1);
+      break;
+    case 'ArrowRight':
+      event.preventDefault();
+      if (jump) runTo(0, 1); else goTo(at.row, at.col + 1);
+      break;
+    case 'Tab':
+      event.preventDefault();
+      if (tabHome === null) tabHome = at.col;
+      goTo(at.row, at.col + (event.shiftKey ? -1 : 1), true);
+      break;
+    case 'Enter':
+      event.preventDefault();
+      if (tabHome !== null) goTo(at.row + 1, tabHome);
+      else goTo(at.row + (event.shiftKey ? -1 : 1), at.col);
+      break;
+    case 'Home':
+      event.preventDefault();
+      goTo(jump ? 1 : at.row, 0);
+      break;
+    case 'End':
+      event.preventDefault();
+      goTo(jump ? bounds.rows : at.row, bounds.cols);
+      break;
+    case 'PageDown':
+      event.preventDefault();
+      goTo(at.row + 20, at.col);
+      break;
+    case 'PageUp':
+      event.preventDefault();
+      goTo(at.row - 20, at.col);
+      break;
+    case 'F2':
+      event.preventDefault();
+      edit(null);
+      break;
+    case 'Delete':
+    case 'Backspace':
+      event.preventDefault();
+      put(at.row, at.col, '');
+      draw();
+      goTo(at.row, at.col);
+      break;
+    default:
+      // A printable key starts a new value, the way it does in Excel: you do
+      // not open the cell first, you just type.
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        edit(event.key);
+      }
+  }
+}
+
+document.addEventListener('keydown', (event) => {
+  if (document.activeElement === formulaBox) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      put(at.row, at.col, formulaBox.value);
+      draw();
+      goTo(at.row + 1, at.col);
+      const table = tableNow();
+      if (table) table.focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      formulaBox.value = contentOf(heldAt(at.row, at.col));
+      const table = tableNow();
+      if (table) table.focus();
+    }
+    return;
+  }
+  onKey(event);
+});
 
 async function open(data, name) {
   try {
