@@ -642,6 +642,40 @@ pub fn recalculate_spreadsheet(workbook: JsValue) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Put rows or columns into a sheet, or take them out, and hand the workbook
+/// back.
+///
+/// `at` counts rows from one and columns from zero, as the IR does. A negative
+/// `count` takes them out.
+///
+/// The whole workbook goes across because the change reaches all of it: a
+/// formula on any sheet that names this one has to follow the rows it names.
+/// That is a cost worth paying here in a way it would not be per keystroke —
+/// nobody inserts a row sixty times a second.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn shift_band(
+    workbook: JsValue,
+    sheet: &str,
+    rows: bool,
+    at: u32,
+    count: i32,
+) -> Result<JsValue, JsError> {
+    let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    let band = if rows {
+        oxicells_core::bands::Band::Rows
+    } else {
+        oxicells_core::bands::Band::Columns
+    };
+    if count >= 0 {
+        oxicells_core::bands::insert(&mut workbook, sheet, band, at, count as u32);
+    } else {
+        oxicells_core::bands::remove(&mut workbook, sheet, band, at, (-count) as u32);
+    }
+    serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Move a formula's relative references as Excel does when a cell is copied.
 ///
 /// The browser needs this to fill a formula down a column: `=B2+C2` dragged one
