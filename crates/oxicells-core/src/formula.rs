@@ -40,20 +40,23 @@ pub use oxicells_calc::{
 /// Cross-sheet references cannot resolve here and become `#REF!`; use
 /// [`evaluate_workbook_formulas`] when the workbook has more than one sheet.
 pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
-    recalculate(std::slice::from_mut(sheet), Overwrite::All);
+    // One sheet on its own carries no workbook, so it has no names either.
+    recalculate(std::slice::from_mut(sheet), &[], Overwrite::All);
 }
 
 /// Recalculate every formula in the workbook, overwriting cached values.
 ///
 /// Use after editing. Cross-sheet references resolve correctly.
 pub fn evaluate_workbook_formulas(workbook: &mut Workbook) {
-    recalculate(&mut workbook.sheets, Overwrite::All);
+    let names = workbook.defined_names.clone();
+    recalculate(&mut workbook.sheets, &names, Overwrite::All);
 }
 
 /// Compute only those formula cells the file left without a cached value,
 /// leaving everything Excel already calculated untouched.
 pub fn fill_missing_formula_values(workbook: &mut Workbook) {
-    recalculate(&mut workbook.sheets, Overwrite::OnlyMissing);
+    let names = workbook.defined_names.clone();
+    recalculate(&mut workbook.sheets, &names, Overwrite::OnlyMissing);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -62,8 +65,15 @@ enum Overwrite {
     OnlyMissing,
 }
 
-fn recalculate(sheets: &mut [Sheet], mode: Overwrite) {
+fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite) {
     let mut book = oxicells_calc::Workbook::new();
+
+    // Named before anything is asked of them: a formula saying `SUM(sales)`
+    // means one of these, and a name that will not parse is simply left
+    // undefined, which is what it already was.
+    for (name, refers_to) in names {
+        let _ = book.define_name(name, refers_to);
+    }
 
     for sheet in sheets.iter() {
         book.add_sheet(&sheet.name);

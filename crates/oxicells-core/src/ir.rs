@@ -12,6 +12,17 @@ pub struct Workbook {
     /// of this font, so drawing a sheet needs it.
     #[serde(default)]
     pub default_style: CellStyle,
+    /// The names the workbook gives to things, as `(name, what it refers to)`.
+    /// A formula saying `SUM(sales)` means one of these, and without them it
+    /// means nothing at all.
+    ///
+    /// Only the ones that belong to the whole workbook. A name can also be
+    /// scoped to a single sheet, and two sheets are each entitled to mean
+    /// something different by the same word — holding those here, where there
+    /// is one name for the whole book, would answer some formulas with another
+    /// sheet's range.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub defined_names: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

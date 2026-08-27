@@ -292,6 +292,51 @@ struct SheetInfo {
     r_id: String,
 }
 
+/// The names a workbook gives to things, from `xl/workbook.xml`.
+///
+/// `<definedName name="cats">Sheet3!$A$3:$A$15</definedName>` is what a formula
+/// means when it says `cats`. Skipped: the built-in names Excel keeps for
+/// itself (a print area, a filter range), which start `_xlnm.` and are not
+/// what a formula is naming; and the ones scoped to a single sheet, which
+/// carry a `localSheetId` and cannot be held in a workbook-wide list without
+/// letting one sheet answer for another.
+fn parse_defined_names(xml: &str) -> Vec<(String, String)> {
+    let mut reader = Reader::from_str(xml);
+    let mut names = Vec::new();
+    let mut wanted: Option<String> = None;
+    let mut refers = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) if local_name(e.name().as_ref()) == "definedName" => {
+                let name = get_attr(&e, "name").unwrap_or_default();
+                let own_sheet = get_attr(&e, "localSheetId").is_some();
+                wanted = if name.starts_with("_xlnm") || name.is_empty() || own_sheet {
+                    None
+                } else {
+                    Some(name)
+                };
+                refers.clear();
+            }
+            Ok(Event::Text(e)) if wanted.is_some() => {
+                if let Ok(text) = e.unescape() {
+                    refers.push_str(&text);
+                }
+            }
+            Ok(Event::End(e)) if local_name(e.name().as_ref()) == "definedName" => {
+                if let Some(name) = wanted.take() {
+                    let refers = refers.trim();
+                    if !refers.is_empty() {
+                        names.push((name, refers.to_string()));
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    names
+}
+
 /// Parse workbook.xml to extract sheet names and their relationship IDs.
 fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetInfo>, XlsxError> {
     let mut reader = Reader::from_str(xml);
@@ -3128,6 +3173,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     Ok(Workbook {
         sheets,
         default_style: resolve_cell_style(0, &stylesheet),
+        defined_names: parse_defined_names(&workbook_xml),
     })
 }
 
