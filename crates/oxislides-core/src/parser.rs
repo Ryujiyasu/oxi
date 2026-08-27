@@ -3203,6 +3203,9 @@ fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Optio
     let mut scaled = false;
     let mut focus: Option<(f32, f32)> = None;
     let mut empty_tile_rect = false;
+    // An absent `a:fillToRect` inset is 0; `OXI_GRADFTR_DISABLE` restores the
+    // old 0.5, which only differs when some edges are given and others are not.
+    let ftr_default: f32 = if std::env::var("OXI_GRADFTR_DISABLE").is_err() { 0.0 } else { 0.5 };
     loop {
         let ev = match reader.read_event() {
             Ok(ev) => ev,
@@ -3256,13 +3259,28 @@ fn parse_bg_gradient(xml: &str, theme_colors: &HashMap<String, String>) -> Optio
                         }
                     }
                     "fillToRect" if in_path => {
-                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
-                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
-                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
-                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        // S-GRADFTR (2026-08-27). An ABSENT inset is 0, not
+                        // 0.5. Blind d15 writes `<a:fillToRect b="100%"
+                        // r="100%"/>` with l and t absent; defaulting those to
+                        // 0.5 put the focus at (0.25,0.25) instead of the
+                        // top-left corner. PowerPoint's own PDF settles it --
+                        // the slide's radial shading is
+                        //     /Matrix [826.09 0 0 826.09 0 405]
+                        //     /Coords [0 0 0  0 0 1]
+                        // i.e. centre (0,405) = the TOP-LEFT corner of a 720x405
+                        // page (PDF y is up) and radius 826.09 = sqrt(720^2 +
+                        // 405^2), the distance to the far corner. With the focus
+                        // at (0,0) the ramp Oxi already implements predicts that
+                        // page's background to within ~2/255; with (0.25,0.25)
+                        // it ran up to 30/255 dark.
+                        let d = ftr_default;
+                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(d);
+                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(d);
+                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(d);
+                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(d);
                         // The rect's centre is the focus: (1,1,0,0) collapses to
                         // the bottom-right corner and 50% on all edges to the
-                        // page centre -- the only two shapes in the corpus.
+                        // page centre.
                         focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
                     }
                     "tileRect" if in_grad => {
