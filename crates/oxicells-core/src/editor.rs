@@ -1840,10 +1840,12 @@ fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
 }
 
 /// Copies a start tag, replacing whatever it said about being hidden.
-/// Copies a row's start tag with whatever `want` decides applied to it.
+/// Writes a row the file does not have yet.
 ///
-/// Everything the row was carrying that this is not deciding — its span, its
-
+/// There is nothing here to preserve — the row is new — so it wears whatever
+/// `want` says and nothing else. Copying an EXISTING row's start tag, which
+/// has to keep the height and span and hidden flag it was already carrying, is
+/// `row_as_wanted`'s job.
 fn write_inserted_row(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     row: u32,

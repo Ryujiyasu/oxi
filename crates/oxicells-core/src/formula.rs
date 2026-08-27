@@ -99,7 +99,10 @@ fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite
         book.add_sheet(&sheet.name);
         // A table's own name is how a formula reaches its columns:
         // `tblNomina[[#This Row],[DATE]]`. The IR counts a table's rows from
-        // one and its columns from zero, which is what the engine wants too.
+        // ONE and its columns from zero; the engine counts both from zero, so
+        // the rows have to be shifted down on the way across. Handing them
+        // over as they stand puts every table one row lower than it is, which
+        // reads the headings as data and loses the last row.
         for table in &sheet.tables {
             if table.name.is_empty() {
                 continue;
@@ -107,7 +110,10 @@ fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite
             book.add_table(
                 &sheet.name,
                 &table.name,
-                (table.start_row, table.end_row),
+                (
+                    table.start_row.saturating_sub(1),
+                    table.end_row.saturating_sub(1),
+                ),
                 (table.start_col, table.end_col),
                 table.header_rows,
                 table.columns.clone(),
