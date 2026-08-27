@@ -1052,6 +1052,64 @@ fn table_line_pt(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
     }
 }
 
+/// A cell lays its text out like a text frame unless this is set.
+///
+/// S-CELLBOX (2026-08-27). `table_line_pt`'s `max(1.2, 1.0625 * pct)` was fitted
+/// to ONE row -- d10 s12, which holds a single line, so no baseline-to-baseline
+/// pitch is involved in it at all. The cell TEXT then reused that coefficient
+/// for two further jobs it was never measured against: stepping from line to
+/// line, and sizing the block a centred cell is positioned by. Probe `lineadv`
+/// measures all three separately and they are three different quantities:
+///
+///     pitch   = 1.2 * lnSpc * fs                      (face- and size-independent)
+///     first   = first_baseline_off(family, fs, lnSpc) (the TEXT-FRAME rule, unchanged)
+///     block   = sum(lines * pitch) - D(first para) + D0(last para)
+///
+/// where `D0 = (1.2 - font_baseline_offset_em(family)) * fs` is the face's own
+/// descent share of a 1.2em box -- already computed inside `first_baseline_off`
+/// as `natural_descent` -- and `D` is that descent after the quarter cap.
+///
+/// Read off PowerPoint's own PDF, where row rules are vector strokes and
+/// baselines are exact (the stroke PATH, not its edge, is the content bound --
+/// confirmed because the top gap then matches the independently derived
+/// `first_baseline_off` to 0.01pt):
+///
+///     arm             inner   sum(lines*pitch)   -D    +D0    model
+///     tbl_Arial_60    44.16      43.20         -3.60  +4.554  44.154
+///     tbl_Arial_140   96.96     100.80         -8.40  +4.554  96.954
+///     tbl_Comic_60    44.62      43.20         -3.60  +5.030  44.630
+///     tbl_Comic_140   97.42     100.80         -8.40  +5.030  97.430
+///
+/// D0/fs is the face constant, identical at both spacings, and it is exactly
+/// `1.2 * desc / (asc + desc)`: Arial 0.2278 against 0.2280 measured, Comic Sans
+/// 0.2514 against 0.2510, and Jua 0.2210 against 0.2210 read off d10 s12's eight
+/// content-driven cells.
+///
+/// Back-check on the deck that produced 1.0625 -- d10 s12, 29.99pt Jua, lnSpc
+/// 140.013%, marT=marB=19.711, PowerPoint renders 83.84:
+///
+///     50.389 - 12.597 + 6.628 = 44.420;  2*19.711 + 44.420 = 83.842
+///
+/// ★The earlier attempt (S-CELLADV) changed the pitch alone and lost 0 to 10:
+/// the same closure sizes the block, so every SINGLE-LINE cell moved, including
+/// d23 s11 at -0.0487. Pitch and block have to change together or not at all.
+fn cellbox_on() -> bool {
+    std::env::var("OXI_CELLBOX_DISABLE").is_err()
+}
+
+/// The lnSpc multiple a paragraph asks for, as `first_baseline_off` wants it.
+fn lnspc_multiple(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
+    if let Some(exact) = p.line_spacing_pts.filter(|v| *v > 0.0) {
+        if fs > 0.0 {
+            return exact / (fs * 1.2);
+        }
+    }
+    match p.line_spacing {
+        Some(pct) if pct > 0.0 => pct,
+        _ => 1.0,
+    }
+}
+
 /// A picture fills its geometry's bounding box unless this is set.
 fn picfillbox_on() -> bool {
     std::env::var("OXI_PICFILLBOX_DISABLE").is_err()
@@ -4562,9 +4620,54 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         .max(1);
                                                     }
                                                 }
-                                                text += table_line_pt(fs, p) * n as f32;
+                                                text += if cellbox_on() {
+                                                    1.2 * lnspc_multiple(fs, p) * fs * n as f32
+                                                } else {
+                                                    table_line_pt(fs, p) * n as f32
+                                                };
                                             }
                                             None => sized = false,
+                                        }
+                                    }
+                                    // S-CELLBOX: the same two corrections the
+                                    // centred block gets. A row and the block
+                                    // inside it must be sized by ONE rule --
+                                    // sizing the row by the old coefficient and
+                                    // the block by the new one puts every line of
+                                    // a lnSpc-60% cell 14pt low, which is how the
+                                    // probe caught this half of the change.
+                                    if cellbox_on() && sized {
+                                        if let (Some(first), Some(last)) =
+                                            (cell.paragraphs.first(), cell.paragraphs.last())
+                                        {
+                                            let ffs = first
+                                                .runs
+                                                .iter()
+                                                .find_map(|r| r.font_size)
+                                                .unwrap_or(18.0);
+                                            let lfs = last
+                                                .runs
+                                                .iter()
+                                                .find_map(|r| r.font_size)
+                                                .unwrap_or(18.0);
+                                            let ffam = effective_family(
+                                                mem_dc,
+                                                &paragraph_family(
+                                                    pres, sh, first, &sh.ph_levels[..], &[],
+                                                ),
+                                            );
+                                            let lfam = effective_family(
+                                                mem_dc,
+                                                &paragraph_family(
+                                                    pres, sh, last, &sh.ph_levels[..], &[],
+                                                ),
+                                            );
+                                            let fmult = lnspc_multiple(ffs, first);
+                                            let d_first = 1.2 * fmult * ffs
+                                                - first_baseline_off(&ffam, ffs, fmult);
+                                            let d0_last = lfs * 1.2
+                                                - font_baseline_offset_em(&lfam) * lfs;
+                                            text = (text + d0_last - d_first).max(0.0);
                                         }
                                     }
                                     if sized && !cell.paragraphs.is_empty() {
@@ -4704,7 +4807,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     } else {
                                         let mult = match p.line_spacing {
                                             Some(pct) if pct > 0.0 => {
-                                                (1.0625 * pct as f64).max(1.2)
+                                                if cellbox_on() {
+                                                    1.2 * pct as f64
+                                                } else {
+                                                    (1.0625 * pct as f64).max(1.2)
+                                                }
                                             }
                                             _ => 1.2,
                                         };
@@ -4719,7 +4826,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // block look short and pushes the text down by
                                 // half of every line it forgot.
                                 let cell_inner_pt = (right - left).max(1) as f64 / scale;
-                                let total: f64 = cell
+                                let mut total: f64 = cell
                                     .paragraphs
                                     .iter()
                                     .map(|p| {
@@ -4755,6 +4862,53 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         adv * n as f64
                                     })
                                     .sum();
+                                // A stack of lines is one pitch TALLER than the
+                                // text it holds: the first line gives back the
+                                // descent the pitch reserves under it, and the
+                                // last gives back the difference between that
+                                // reserved descent and the face's own.
+                                if cellbox_on() && tblrowln_on() {
+                                    if let (Some(first), Some(last)) =
+                                        (cell.paragraphs.first(), cell.paragraphs.last())
+                                    {
+                                        let ffs = first
+                                            .runs
+                                            .iter()
+                                            .find_map(|r| r.font_size)
+                                            .unwrap_or(18.0);
+                                        let lfs = last
+                                            .runs
+                                            .iter()
+                                            .find_map(|r| r.font_size)
+                                            .unwrap_or(18.0);
+                                        let ffam = effective_family(
+                                            mem_dc,
+                                            &paragraph_family(
+                                                pres, sh, first, &sh.ph_levels[..], &[],
+                                            ),
+                                        );
+                                        let lfam = effective_family(
+                                            mem_dc,
+                                            &paragraph_family(
+                                                pres, sh, last, &sh.ph_levels[..], &[],
+                                            ),
+                                        );
+                                        let fmult = lnspc_multiple(ffs, first);
+                                        let d_first = 1.2 * fmult * ffs
+                                            - first_baseline_off(&ffam, ffs, fmult);
+                                        // ★Written exactly as `first_baseline_off`
+                                        // writes `natural_descent`. At lnSpc 100%
+                                        // the two corrections must CANCEL, and
+                                        // `(1.2 - face) * fs` is one ULP from
+                                        // `fs * 1.2 - face * fs` -- enough to move
+                                        // a pixel in a cell this rule should not
+                                        // reach.
+                                        let d0_last = lfs * 1.2
+                                            - font_baseline_offset_em(&lfam) * lfs;
+                                        total += (d0_last - d_first) as f64 * scale;
+                                        total = total.max(0.0);
+                                    }
+                                }
                                 let inner_top = cy + (cell.mar_t as f64 * scale).round() as i32;
                                 let inner_bot = cy + ph - (cell.mar_b as f64 * scale).round() as i32;
                                 let mut cursor_y = match cell.anchor.as_deref() {
@@ -4882,7 +5036,23 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 //   sz 23.00  412.08 + 34.22 - 5.34 = 440.96  (441.00)
                                                 //   sz 24.99  338.47 + 37.18 - 5.80 = 369.85  (369.77)
                                                 let asc = font_baseline_offset_em(&family);
-                                                let base_pt = if tblrowln_on() {
+                                                let base_pt = if cellbox_on() && tblrowln_on() {
+                                                    // S-CELLBOX: the descent the
+                                                    // pitch reserves is CAPPED at
+                                                    // a quarter of the box, so a
+                                                    // wide lnSpc puts its extra
+                                                    // leading above the text
+                                                    // rather than under it. Below
+                                                    // the cap this is the same
+                                                    // statement as `one descent
+                                                    // up from the bottom`.
+                                                    cursor_y as f32 / scale as f32
+                                                        + first_baseline_off(
+                                                            &family,
+                                                            fs,
+                                                            lnspc_multiple(fs, p),
+                                                        )
+                                                } else if tblrowln_on() {
                                                     cursor_y as f32 / scale as f32
                                                         + (advance / scale) as f32
                                                         - (1.2 - asc) * fs
