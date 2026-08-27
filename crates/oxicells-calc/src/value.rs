@@ -182,9 +182,28 @@ fn parse_numeric_text(s: &str) -> Option<f64> {
         return None;
     }
     if let Some(stripped) = t.strip_suffix('%') {
-        return stripped.trim().parse::<f64>().ok().map(|n| n / 100.0);
+        return parse_numeric_text(stripped).map(|n| n / 100.0);
     }
-    t.parse::<f64>().ok()
+    // Brackets round a number are how an accountant writes a minus sign.
+    if let Some(inside) = t.strip_prefix('(').and_then(|held| held.strip_suffix(')')) {
+        return parse_numeric_text(inside).map(|n| -n);
+    }
+    if let Ok(n) = t.parse::<f64>() {
+        return Some(n);
+    }
+    // A currency sign in front, and separators between the thousands. Both are
+    // how the number was written down rather than part of it.
+    let plain: String = t
+        .chars()
+        .filter(|held| !matches!(held, '$' | '\u{a5}' | '\u{20ac}' | '\u{a3}' | '\u{ffe5}' | ','))
+        .collect();
+    if plain != t {
+        if let Ok(n) = plain.trim().parse::<f64>() {
+            return Some(n);
+        }
+    }
+    // A date or a time is a number too — `="2004-08-15"+1` is the next day.
+    crate::datetime::text_as_datetime(t)
 }
 
 /// Render a number the way Excel's General format does.
@@ -307,6 +326,65 @@ fn compare_text(a: &str, b: &str) -> Ordering {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every expectation is what Excel 16 gave for `VALUE` of that text, on a
+    /// machine that puts the month first (country 81).
+    ///
+    /// The two day-first dates are the exception and are marked as such: that
+    /// Excel refuses them, and the one that wrote the corpus workbook — where
+    /// the day comes first — answers as here. One rule covers both: the first
+    /// number is the month if it CAN be, and the day if it cannot.
+    #[test]
+    fn text_that_names_a_moment_or_a_sum_of_money_is_a_number() {
+        let read = |text: &str| Value::text(text).to_number();
+        for (text, want) in [
+            ("2004-08-15", 38214.0),
+            ("2004/08/15", 38214.0),
+            ("8/15/2004", 38214.0),
+            ("15-Aug-2004", 38214.0),
+            ("Aug 15, 2004", 38214.0),
+            ("15 August 2004", 38214.0),
+            ("01/02/2004", 37988.0),
+            // Day-first: refused by a month-first Excel, and the only reading
+            // there is. This is the corpus workbook's own date.
+            ("15/08/2004", 38214.0),
+            ("16/01/2009", 39829.0),
+        ] {
+            assert_eq!(read(text), Ok(want), "{text}");
+        }
+        for (text, want) in [
+            ("12:30", 0.520_833_333_333_333_4),
+            ("12:30:45", 0.521_354_166_666_666_7),
+            ("1:00 PM", 0.541_666_666_666_666_6),
+            ("2004-08-15 12:30", 38_214.520_833_333_336),
+        ] {
+            assert_eq!(read(text), Ok(want), "{text}");
+        }
+        for (text, want) in [
+            ("1,234.5", 1234.5),
+            ("  42  ", 42.0),
+            ("42%", 0.42),
+            ("-3.5", -3.5),
+            ("$100", 100.0),
+            ("(5)", -5.0),
+            ("1E3", 1000.0),
+        ] {
+            assert_eq!(read(text), Ok(want), "{text}");
+        }
+        for text in ["", "not a date", "2004-13-01", "31/02/2004", "25:00", "12:60"] {
+            assert!(read(text).is_err(), "{text} is not a number");
+        }
+    }
+
+    #[test]
+    fn a_date_written_out_is_a_number_wherever_it_appears() {
+        // Excel keeps this in the coercion rather than in VALUE, so a date in
+        // quotes can be added to.
+        assert_eq!(
+            (Value::text("2004-08-15").to_number().unwrap() + 1.0),
+            38215.0,
+        );
+    }
     use super::*;
 
     #[test]

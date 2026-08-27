@@ -183,6 +183,137 @@ pub fn end_of_month(serial: i64, months: i64) -> Result<i64, ExcelError> {
     serial_from_date(year, month, days_in_month(year, month))
 }
 
+/// The moment a piece of text names, as a serial, or `None` when it names
+/// none.
+///
+/// A date, a time, or a date and a time with a space between them. The date
+/// may be written with slashes, with hyphens, or with the month's name, and
+/// the month's name may come first or in the middle.
+pub fn text_as_datetime(text: &str) -> Option<f64> {
+    let mut said: Vec<&str> = text.split_whitespace().collect();
+    if said.is_empty() {
+        return None;
+    }
+    // A trailing AM or PM belongs to the clock before it.
+    let afternoon = match said.last() {
+        Some(last) if last.eq_ignore_ascii_case("AM") => {
+            said.pop();
+            Some(false)
+        }
+        Some(last) if last.eq_ignore_ascii_case("PM") => {
+            said.pop();
+            Some(true)
+        }
+        _ => None,
+    };
+    let mut time = 0.0;
+    let mut told_the_time = false;
+    if said.last().is_some_and(|last| last.contains(':')) {
+        time = clock(said.pop()?, afternoon)?;
+        told_the_time = true;
+    } else if afternoon.is_some() {
+        // An AM with nothing before it is not a time.
+        return None;
+    }
+    if said.is_empty() {
+        return told_the_time.then_some(time);
+    }
+    Some(calendar(&said)? as f64 + time)
+}
+
+/// `12:30`, `12:30:45`, `1:00` with an afternoon flag beside it.
+fn clock(text: &str, afternoon: Option<bool>) -> Option<f64> {
+    let mut parts = text.split(':');
+    let hours: f64 = parts.next()?.trim().parse().ok()?;
+    let minutes: f64 = parts.next()?.trim().parse().ok()?;
+    let seconds: f64 = match parts.next() {
+        Some(held) => held.trim().parse().ok()?,
+        None => 0.0,
+    };
+    if parts.next().is_some() || !(0.0..60.0).contains(&minutes) || !(0.0..60.0).contains(&seconds) {
+        return None;
+    }
+    let hours = match afternoon {
+        // Twelve o'clock is the odd one: midnight is 0 and noon is 12.
+        Some(true) if hours == 12.0 => 12.0,
+        Some(true) if (1.0..12.0).contains(&hours) => hours + 12.0,
+        Some(false) if hours == 12.0 => 0.0,
+        Some(false) if (1.0..12.0).contains(&hours) => hours,
+        Some(_) => return None,
+        None if (0.0..=23.0).contains(&hours) => hours,
+        None => return None,
+    };
+    Some(fraction_from_time(hours, minutes, seconds))
+}
+
+/// The day a date names, however it is spelled out.
+fn calendar(said: &[&str]) -> Option<i64> {
+    let joined = said.join(" ");
+    let fields: Vec<&str> = joined
+        .split(|held: char| held == '/' || held == '-' || held == ',' || held.is_whitespace())
+        .filter(|held| !held.is_empty())
+        .collect();
+    if fields.len() != 3 {
+        return None;
+    }
+    let named = fields.iter().position(|held| month_named(held).is_some());
+    let (year, month, day) = match named {
+        Some(at) => {
+            let month = month_named(fields[at])?;
+            let rest: Vec<&&str> = fields
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != at)
+                .map(|(_, held)| held)
+                .collect();
+            // Of the two numbers left, the longer one is the year.
+            let (year, day) = if rest[0].len() > rest[1].len() {
+                (rest[0], rest[1])
+            } else {
+                (rest[1], rest[0])
+            };
+            (whole(year)?, month, whole(day)?)
+        }
+        None => {
+            let (first, middle, last) = (whole(fields[0])?, whole(fields[1])?, whole(fields[2])?);
+            if fields[0].len() == 4 {
+                // Year first, and then there is nothing left to decide.
+                (first, middle, last)
+            } else if (1..=12).contains(&first) {
+                // The first number is a month if it can be...
+                (last, first, middle)
+            } else {
+                // ...and a day if it cannot.
+                (last, middle, first)
+            }
+        }
+    };
+    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+        return None;
+    }
+    serial_from_date(year, month, day).ok()
+}
+
+fn whole(text: &str) -> Option<i64> {
+    text.parse::<i64>().ok()
+}
+
+/// The month a name or an abbreviation of one stands for.
+fn month_named(text: &str) -> Option<i64> {
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    ];
+    let asked = text.trim_matches(|held: char| !held.is_alphabetic()).to_lowercase();
+    if asked.len() < 3 {
+        return None;
+    }
+    MONTHS
+        .iter()
+        .position(|full| full.starts_with(&asked) || asked.starts_with(full))
+        .map(|at| at as i64 + 1)
+}
+
 fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
