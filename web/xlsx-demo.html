@@ -308,6 +308,8 @@ table { user-select: none; }
   <button id="left" class="dress" title="Align left">&#8676;</button>
   <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
   <button id="right" class="dress" title="Align right">&#8677;</button>
+  <input id="fill" type="color" disabled title="Fill colour" />
+  <button id="nofill" disabled title="No fill">&#8709;</button>
   <input id="numfmt" list="numfmts" disabled placeholder="Format"
          title="How the numbers look. Any Excel format code, or pick one." />
   <datalist id="numfmts">
@@ -514,6 +516,44 @@ function columnName(index) {
 }
 
 /// What a cell shows, which is its value put through its number format.
+/// How OOXML's rules are drawn, by the name the file gives each.
+///
+/// The widths are what a spreadsheet shows: one pixel for the light rules, two
+/// for medium, three for thick. `double` is a pair of lines and the browser
+/// needs three pixels to find room for them. A hair rule is a single pixel of
+/// something fainter than black, which is the nearest a screen gets to the
+/// mark a printer would make.
+const RULES = {
+  thin: '1px solid',
+  hair: '1px solid',
+  dotted: '1px dotted',
+  dashed: '1px dashed',
+  dashDot: '1px dashed',
+  dashDotDot: '1px dashed',
+  medium: '2px solid',
+  mediumDashed: '2px dashed',
+  mediumDashDot: '2px dashed',
+  mediumDashDotDot: '2px dashed',
+  slantDashDot: '2px dashed',
+  thick: '3px solid',
+  double: '3px double',
+};
+
+/// Put one of a cell's four rules on it, if it has one there.
+///
+/// A rule the file does not name is not drawn, and the cell keeps the faint
+/// grid line the stylesheet gives every cell — that is the line Excel shows
+/// where a sheet has no rule of its own.
+function rule(cell, side, line) {
+  if (!line || !line.style) return;
+  const drawn = RULES[line.style];
+  if (!drawn) return;
+  // A hair rule names no width of its own, so it is told apart by colour.
+  const ink = line.color ? `#${line.color}`
+    : (line.style === 'hair' ? 'var(--rule)' : '#000');
+  cell.style[`border${side}`] = `${drawn} ${ink}`;
+}
+
 function shownText(cell) {
   const value = cell.value;
   if (value === null || value === undefined) return '';
@@ -733,6 +773,10 @@ function draw() {
       if (held.style.font_name) cell.style.fontFamily = `"${held.style.font_name}", sans-serif`;
       if (held.style.font_color) cell.style.color = `#${held.style.font_color}`;
       if (held.style.bg_color) cell.style.background = `#${held.style.bg_color}`;
+      rule(cell, 'Top', held.style.border_top);
+      rule(cell, 'Bottom', held.style.border_bottom);
+      rule(cell, 'Left', held.style.border_left);
+      rule(cell, 'Right', held.style.border_right);
     }
   }
   // The whole grid is written in the workbook's own font at its own size,
@@ -997,6 +1041,40 @@ function recompute() {
   }
 }
 
+// ── What colour a cell is ───────────────────────────────────────────────────
+//
+// A colour input cannot say "none" — it can only say white, and a white cell
+// and an uncoloured one are not the same thing in a file: one names a fill and
+// the other leaves the sheet's own background showing. So taking the colour
+// off is a separate control rather than a value of the same one.
+
+const fillBox = document.getElementById('fill');
+const noFillButton = document.getElementById('nofill');
+
+/// Colour every cell in the selection, or take the colour off with `null`.
+function wearFill(colour) {
+  restyle((was) => ({ ...was, bg_color: colour }));
+}
+
+/// Show the selection's colour, when they agree on one.
+function sayFill() {
+  const can = Boolean(book);
+  if (fillBox) fillBox.disabled = !can;
+  if (noFillButton) noFillButton.disabled = !can;
+  if (!fillBox || !can) return;
+  let seen = null;
+  let agree = true;
+  eachInRegion((row, col) => {
+    const held = heldAt(row, col);
+    const held_colour = (held && held.style && held.style.bg_color) || '';
+    if (seen === null) seen = held_colour;
+    else if (seen !== held_colour) agree = false;
+  });
+  // With nothing agreed, or nothing set, the input shows white — which is what
+  // it would offer anyway, and is not the same as the cell being white.
+  fillBox.value = agree && seen ? `#${seen}` : '#ffffff';
+}
+
 // ── How the numbers look ────────────────────────────────────────────────────
 //
 // A number format decides what a cell SHOWS without touching what it holds:
@@ -1258,6 +1336,14 @@ for (const [id, run] of [
   if (button) button.addEventListener('click', () => { run(); focusGrid(); });
 }
 
+if (fillBox) {
+  // `input` rather than `change`: a colour picker reports as it is dragged,
+  // and seeing the sheet follow is how anyone knows they have the right one.
+  fillBox.addEventListener('input', () => wearFill(fillBox.value.replace('#', '').toUpperCase()));
+}
+if (noFillButton) {
+  noFillButton.addEventListener('click', () => { wearFill(null); focusGrid(); });
+}
 if (formatBox) {
   // Enter applies it and hands the keyboard back to the grid; leaving the box
   // applies it too, since typing a code and clicking away plainly means it.
@@ -1487,6 +1573,7 @@ function paint() {
   // and Delete mean anything, and that changes with every movement.
   sayBands();
   sayFormat();
+  sayFill();
   const table = tableNow();
   if (!table) return;
   const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';

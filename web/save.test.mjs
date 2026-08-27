@@ -184,6 +184,46 @@ const plain = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), (() => {
 is('and a format taken off is gone',
   cellAt(plain, firstRow, 0).style.number_format ?? null, null);
 
+// ── A colour, and the rules around a cell ───────────────────────────────────
+//
+// Both are drawn by the page and both had to be settable before they were
+// worth writing. A white cell and an uncoloured one are different things in a
+// file — one names a fill, the other lets the sheet show through — so taking
+// a colour off has to reach the file as an absence rather than as white.
+
+const dressed = parse_spreadsheet(sample.slice());
+const dressedRow = dressed.sheets[0].rows.find((one) => one.index === 4);
+dressedRow.cells[0].style = {
+  ...dressedRow.cells[0].style,
+  bg_color: 'FFFF00',
+  border_bottom: { style: 'thick', color: null },
+};
+dressedRow.cells[1].style = {
+  ...dressedRow.cells[1].style,
+  border_top: { style: 'dashed', color: 'FF0000' },
+};
+
+const worn = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), dressed));
+const styleOf = (col) => cellAt(worn, 4, col).style;
+is('a fill colour comes back', styleOf(0).bg_color, 'FFFF00');
+is('a thick rule comes back thick', styleOf(0).border_bottom.style, 'thick');
+is('a rule keeps the colour it was given',
+  [styleOf(1).border_top.style, styleOf(1).border_top.color],
+  ['dashed', 'FF0000']);
+is('and a side with no rule has none', styleOf(1).border_bottom ?? null, null);
+
+// Taking the fill off has to leave no fill, rather than a white one.
+const stripped = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), (() => {
+  const one = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), dressed));
+  const cell = cellAt(one, 4, 0);
+  cell.style = { ...cell.style, bg_color: null };
+  return one;
+})()));
+is('a fill taken off is gone, not turned white',
+  cellAt(stripped, 4, 0).style.bg_color ?? null, null);
+is('and the rule under it stayed',
+  cellAt(stripped, 4, 0).style.border_bottom.style, 'thick');
+
 console.log(failures === 0
   ? '\nwhat was changed is what the file holds'
   : `\n${failures} did not`);

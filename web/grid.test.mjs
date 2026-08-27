@@ -67,7 +67,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
-  'padFor', 'fitWidth', 'fitColumn', 'shownText',
+  'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere',
   'monthSeries', 'monthAt'].map(lift).join('\n');
@@ -93,6 +93,7 @@ function inkOf(text, style) {
 }
 const ink = (per) => { inkPer = per; };
 const format_cell_number = (value) => String(value);
+${liftBinding('RULES')}
 const sheetNow = () => sheet;
 let digitWidth = 8;
 let sizing = null;
@@ -269,6 +270,7 @@ const forget = () => {
   changes.clear(); pristine.clear();
   undone.length = 0; redone.length = 0;
 };
+
 export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped, unitOf,
          wear, styleAt, sameStyle, widthForPixels, setWidth, widthAt,
@@ -278,7 +280,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          lineAt, holdPanes, aTable, freezeHere, frozenAt,
          monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
-         change, undo, redo, unsaved, forget };
+         change, undo, redo, unsaved, forget, rule };
 `));
 
 let failures = 0;
@@ -288,6 +290,36 @@ function is(what, got, want) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}` +
     (ok ? '' : `: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`));
 }
+
+// ── The rules a workbook actually has ───────────────────────────────────────
+//
+// Every cell used to be drawn with the same hairline, so a form ruled into
+// boxes came out an even grid: the heavy rule under a heading looked like the
+// light one between rows, and a cell with no rule at all looked ruled.
+
+const ruled = (line) => {
+  const cell = { style: {} };
+  grid.rule(cell, 'Top', line);
+  return cell.style.borderTop;
+};
+is('a thin rule is one pixel', ruled({ style: 'thin' }), '1px solid #000');
+is('a medium one is two', ruled({ style: 'medium' }), '2px solid #000');
+is('a thick one is three', ruled({ style: 'thick' }), '3px solid #000');
+is('a double is drawn as two lines', ruled({ style: 'double' }), '3px double #000');
+is('a dashed rule is dashed', ruled({ style: 'dashed' }), '1px dashed #000');
+is('and a dotted one dotted', ruled({ style: 'dotted' }), '1px dotted #000');
+// A hair rule names no width of its own, so it is told apart by being fainter.
+is('a hair rule is the faintest mark there is',
+  ruled({ style: 'hair' }), '1px solid var(--rule)');
+is('a rule that names a colour wears it',
+  ruled({ style: 'thin', color: 'FF0000' }), '1px solid #FF0000');
+// No rule means no rule: the cell keeps the faint grid line every cell has,
+// which is the line a spreadsheet shows where a sheet rules nothing.
+is('a cell with no rule is left alone', ruled(null), undefined);
+is('and so is one whose rule has no kind', ruled({ color: 'FF0000' }), undefined);
+is('a kind nobody has heard of is not guessed at',
+  ruled({ style: 'invented' }), undefined);
+
 
 // ── Walking a selected block ────────────────────────────────────────────────
 //
