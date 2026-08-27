@@ -2307,6 +2307,8 @@ fn parse_table_xml(
     let mut style = None;
     let mut banded_rows = false;
     let mut outline_at: Option<usize> = None;
+    let mut name = String::new();
+    let mut columns: Vec<String> = Vec::new();
     let mut buf = Vec::new();
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -2314,12 +2316,23 @@ fn parse_table_xml(
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 match local_name(e.name().as_ref()).as_str() {
                     "table" => {
+                        // `displayName` is what a formula writes; `name` is the
+                        // same thing unless someone has renamed the table, and
+                        // then only `displayName` follows.
+                        name = get_attr(e, "displayName")
+                            .or_else(|| get_attr(e, "name"))
+                            .unwrap_or_default();
                         range = get_attr(e, "ref").as_deref().and_then(parse_range_ref);
                         if let Some(count) = get_attr(e, "headerRowCount") {
                             header_rows = count.parse().unwrap_or(1);
                         }
                         outline_at = get_attr(e, "tableBorderDxfId")
                             .and_then(|held| held.parse::<usize>().ok());
+                    }
+                    "tableColumn" => {
+                        if let Some(heading) = get_attr(e, "name") {
+                            columns.push(heading);
+                        }
                     }
                     "tableStyleInfo" => {
                         style = get_attr(e, "name");
@@ -2373,6 +2386,8 @@ fn parse_table_xml(
         .filter(|_| style.as_deref().is_some_and(|name| name.starts_with("TableStyleMedium")))
         .map(|colour| tinted(colour, 0.4));
     Some(crate::ir::Table {
+        name,
+        columns,
         start_row,
         start_col,
         end_row,

@@ -17,6 +17,64 @@ use std::fmt;
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::functions::{self, block_of, reach, Arg, RangeData};
 
+/// Which part of a table a structured reference names.
+enum TablePart {
+    /// The rows below the heading, which is what a bare column name means.
+    Body,
+    Headers,
+    Totals,
+    All,
+    /// The one row the asking cell is on.
+    ThisRow,
+}
+
+/// Where a table is and what its columns are called.
+#[derive(Debug, Clone)]
+struct TableRef {
+    sheet: String,
+    first_row: u32,
+    last_row: u32,
+    first_col: u32,
+    last_col: u32,
+    header_rows: u32,
+    headings: Vec<String>,
+}
+
+impl TableRef {
+    /// The sheet column a heading names, counted as the sheet counts.
+    fn column(&self, heading: &str) -> Option<u32> {
+        let wanted = heading.trim().to_uppercase();
+        self.headings
+            .iter()
+            .position(|one| *one == wanted)
+            .map(|at| self.first_col + at as u32)
+    }
+}
+
+/// Split on the commas that are not inside brackets, so a heading with a comma
+/// in it stays one piece.
+fn outside_brackets(asked: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut held = String::new();
+    for ch in asked.chars() {
+        match ch {
+            '[' => {
+                depth += 1;
+                held.push(ch);
+            }
+            ']' => {
+                depth = depth.saturating_sub(1);
+                held.push(ch);
+            }
+            ',' if depth == 0 => parts.push(std::mem::take(&mut held)),
+            _ => held.push(ch),
+        }
+    }
+    parts.push(held);
+    parts
+}
+
 /// Which cell is being worked out, when that is known. `ROW()` with no
 /// argument is the only thing that needs it, and a formula evaluated on its
 /// own rather than in a cell has no answer for it.
@@ -96,6 +154,9 @@ pub struct RecalcReport {
 pub struct Workbook {
     sheets: BTreeMap<String, Sheet>,
     names: BTreeMap<String, Expr>,
+    /// The tables, by the name a formula calls them, so that
+    /// `tblNomina[[#This Row],[DATE]]` can be told which cells it means.
+    tables: BTreeMap<String, TableRef>,
 }
 
 impl Workbook {
@@ -109,6 +170,35 @@ impl Workbook {
 
     pub fn sheet_names(&self) -> impl Iterator<Item = &str> {
         self.sheets.keys().map(String::as_str)
+    }
+
+    /// Tell the workbook about a table, so that formulas may name its columns.
+    ///
+    /// `rows` and `cols` are the whole table INCLUDING its heading, counted
+    /// from zero, and `headings` names the columns left to right. A table with
+    /// no headings can still be named as a whole; only its columns become
+    /// unreachable.
+    pub fn add_table(
+        &mut self,
+        sheet: &str,
+        name: &str,
+        rows: (u32, u32),
+        cols: (u32, u32),
+        header_rows: u32,
+        headings: Vec<String>,
+    ) {
+        self.tables.insert(
+            name.to_uppercase(),
+            TableRef {
+                sheet: sheet.to_string(),
+                first_row: rows.0,
+                last_row: rows.1,
+                first_col: cols.0,
+                last_col: cols.1,
+                header_rows,
+                headings: headings.into_iter().map(|one| one.to_uppercase()).collect(),
+            },
+        );
     }
 
     /// Define a workbook-scoped name, e.g. `TAX_RATE` → `0.1`.
@@ -342,6 +432,8 @@ impl Workbook {
                 Arg::Range(self.materialise(target, &reference.range, skip_subtotals))
             }
 
+            Expr::Table { name, asked } => self.a_table_column(name, asked, at),
+
             Expr::Name(name) => match self.names.get(name) {
                 Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
                 None => Arg::Value(Value::Error(ExcelError::Name)),
@@ -389,6 +481,97 @@ impl Workbook {
         }
     }
 
+    /// The cells a structured reference names.
+    ///
+    /// `tblNomina[[#This Row],[DATE]]` is the DATE column of the row asking;
+    /// `Table1[Description]` is the whole of that column below its heading;
+    /// `Suppliers1[]` is every data cell. Which rows are meant depends on the
+    /// part named — the body, the heading, this row — and which columns on the
+    /// heading named, so the two are worked out separately and put together.
+    fn a_table_column(&self, name: &str, asked: &str, at: At) -> Arg {
+        match self.table_range(name, asked, at) {
+            Ok((sheet, range)) => Arg::Range(self.materialise(&sheet, &range, false)),
+            Err(why) => Arg::Value(Value::Error(why)),
+        }
+    }
+
+    /// The same, as a reference rather than as its contents.
+    ///
+    /// `ROW(tbl[[#Headers],[ID]])` asks where the heading IS, not what it
+    /// says, so the two callers need different halves of the same answer.
+    fn table_range(&self, name: &str, asked: &str, at: At)
+        -> Result<(String, RangeRef), ExcelError>
+    {
+        let Some(table) = self.tables.get(&name.to_uppercase()) else {
+            return Err(ExcelError::Name);
+        };
+        // `[[#This Row],[DATE]]` arrives as `[#This Row],[DATE]`; a lone
+        // `[DATE]` arrives as `DATE`. Splitting on the commas OUTSIDE any
+        // brackets keeps a heading with a comma in it whole.
+        let parts = outside_brackets(asked);
+        let mut part = TablePart::Body;
+        let mut wanted: Vec<&str> = Vec::new();
+        for piece in &parts {
+            let bare = piece.trim().trim_start_matches('[').trim_end_matches(']');
+            match bare.trim().to_ascii_uppercase().as_str() {
+                "#THIS ROW" | "@" => part = TablePart::ThisRow,
+                "#HEADERS" => part = TablePart::Headers,
+                "#TOTALS" => part = TablePart::Totals,
+                "#ALL" => part = TablePart::All,
+                "#DATA" => part = TablePart::Body,
+                "" => {}
+                _ => wanted.push(bare),
+            }
+        }
+
+        // Which columns. A span written `[A]:[B]` reaches here as one piece
+        // with a colon in it.
+        let (first_col, last_col) = match wanted.len() {
+            0 => (table.first_col, table.last_col),
+            _ => {
+                let mut edges = Vec::new();
+                for one in &wanted {
+                    for side in one.split(':') {
+                        let heading = side.trim().trim_start_matches('[').trim_end_matches(']');
+                        match table.column(heading) {
+                            Some(col) => edges.push(col),
+                            None => return Err(ExcelError::Name),
+                        }
+                    }
+                }
+                (
+                    *edges.iter().min().unwrap_or(&table.first_col),
+                    *edges.iter().max().unwrap_or(&table.last_col),
+                )
+            }
+        };
+
+        // Which rows.
+        let body_first = table.first_row + table.header_rows;
+        let (first_row, last_row) = match part {
+            TablePart::Headers => (table.first_row, table.first_row + table.header_rows - 1),
+            TablePart::All => (table.first_row, table.last_row),
+            TablePart::Totals => (table.last_row, table.last_row),
+            TablePart::Body => (body_first, table.last_row),
+            TablePart::ThisRow => match at {
+                // Outside the table is `#VALUE!` in Excel, which is what a
+                // stray `[#This Row]` deserves.
+                Some((_, row)) if row >= table.first_row && row <= table.last_row => (row, row),
+                _ => return Err(ExcelError::Value),
+            },
+        };
+        if first_row > last_row || first_col > last_col {
+            return Err(ExcelError::Ref);
+        }
+        Ok((
+            table.sheet.clone(),
+            RangeRef::normalised(
+                CellRef::new(first_col, first_row),
+                CellRef::new(last_col, last_row),
+            ),
+        ))
+    }
+
     /// `ROW` and `COLUMN`, answered from the reference rather than its contents.
     ///
     /// With no argument they mean the cell being worked out. With a reference
@@ -410,10 +593,16 @@ impl Workbook {
                 None => Arg::Value(Value::Error(ExcelError::Value)),
             };
         };
-        let Expr::Ref(reference) = first else {
-            return Arg::Value(Value::Error(ExcelError::Value));
+        // `ROW(tbl[[#Headers],[ID]])` asks where the heading is, which is a
+        // reference like any other once the table has been looked up.
+        let range = &match first {
+            Expr::Ref(reference) => reference.range,
+            Expr::Table { name, asked } => match self.table_range(name, asked, at) {
+                Ok((_, range)) => range,
+                Err(why) => return Arg::Value(Value::Error(why)),
+            },
+            _ => return Arg::Value(Value::Error(ExcelError::Value)),
         };
-        let range = &reference.range;
         let (from, to) = if down {
             (range.start.row, range.end.row)
         } else {
@@ -645,6 +834,108 @@ mod tests {
                 .unwrap();
         }
         wb
+    }
+
+    /// A table on sheet S: a heading row and three rows under it.
+    fn a_table() -> Workbook {
+        let mut wb = book();
+        for (at, heading) in ["ID", "NAME", "PAY"].iter().enumerate() {
+            wb.set_value(
+                "Sheet1",
+                &format!("{}1", (b'A' + at as u8) as char),
+                Value::text(*heading),
+            )
+            .unwrap();
+        }
+        for row in 2..=4 {
+            wb.set_value("Sheet1", &format!("A{row}"), Value::Number(row as f64 - 1.0))
+                .unwrap();
+            wb.set_value("Sheet1", &format!("B{row}"), Value::text(format!("w{row}")))
+                .unwrap();
+            wb.set_value("Sheet1", &format!("C{row}"), Value::Number(row as f64 * 100.0))
+                .unwrap();
+        }
+        wb.add_table(
+            "Sheet1",
+            "tbl",
+            (0, 3),
+            (0, 2),
+            1,
+            vec!["ID".into(), "NAME".into(), "PAY".into()],
+        );
+        wb
+    }
+
+    #[test]
+    fn a_table_column_is_the_cells_under_its_heading() {
+        // `Table1[Description]` means the data, not the heading — which is why
+        // the heading row has to be taken off the top rather than the range
+        // being used whole.
+        let mut wb = a_table();
+        wb.set_formula("Sheet1", "E1", "=SUM(tbl[PAY])").unwrap();
+        wb.set_formula("Sheet1", "E2", "=COUNT(tbl[])").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(900.0));
+        // Six numbers in the body: three IDs and three PAYs. The names are not
+        // numbers and the heading row is not the body.
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(6.0));
+    }
+
+    #[test]
+    fn this_row_means_the_row_that_is_asking() {
+        let mut wb = a_table();
+        wb.set_formula("Sheet1", "E3", "=tbl[[#This Row],[PAY]]").unwrap();
+        wb.set_formula("Sheet1", "E4", "=tbl[[#This Row],[PAY]]").unwrap();
+        // Outside the table there is no such row, and Excel says so.
+        wb.set_formula("Sheet1", "E9", "=tbl[[#This Row],[PAY]]").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E3"), Value::Number(300.0));
+        assert_eq!(wb.value("Sheet1", "E4"), Value::Number(400.0));
+        assert_eq!(wb.value("Sheet1", "E9"), Value::Error(ExcelError::Value));
+    }
+
+    #[test]
+    fn the_headers_can_be_named_too() {
+        let mut wb = a_table();
+        wb.set_formula("Sheet1", "E1", "=tbl[[#Headers],[PAY]]").unwrap();
+        // `ROW(tbl[[#Headers],[ID]])` asks WHERE the heading is, not what it
+        // says, which is a different question of the same reference.
+        wb.set_formula("Sheet1", "E2", "=ROW(tbl[[#Headers],[ID]])").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::text("PAY"));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(1.0));
+    }
+
+    #[test]
+    fn a_span_runs_from_one_column_to_another() {
+        // `tblEmpleados[[NOMBRE]:[FECHA INGRESO]]` is a VLOOKUP table written
+        // by the names of its ends. The colon inside the brackets means
+        // columns, not cells, which is why the whole bracket group is kept out
+        // of the ordinary parser's way.
+        let mut wb = a_table();
+        wb.set_formula("Sheet1", "E1", "=COUNT(tbl[[ID]:[PAY]])").unwrap();
+        wb.set_formula("Sheet1", "E2", "=SUM(tbl[[ID]:[ID]])").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(6.0), "1 + 2 + 3");
+    }
+
+    #[test]
+    fn a_name_nobody_gave_is_not_a_table() {
+        let mut wb = a_table();
+        wb.set_formula("Sheet1", "E1", "=SUM(tbl[NOPE])").unwrap();
+        wb.set_formula("Sheet1", "E2", "=SUM(other[PAY])").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Error(ExcelError::Name));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Error(ExcelError::Name));
+    }
+
+    #[test]
+    fn a_table_is_named_without_regard_to_capitals() {
+        let mut wb = a_table();
+        wb.set_formula("Sheet1", "E1", "=SUM(TBL[pay])").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(900.0));
     }
 
     #[test]

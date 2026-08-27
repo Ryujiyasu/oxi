@@ -49,6 +49,11 @@ pub enum Expr {
     Ref(Reference),
     /// A defined name. Resolution is deferred to evaluation time.
     Name(String),
+    /// A table's column, named rather than pointed at:
+    /// `tblNomina[[#This Row],[DATE]]`. Resolved against the workbook's tables
+    /// when it is evaluated, since which cells it means depends on where the
+    /// table is and — for `#This Row` — on which cell is asking.
+    Table { name: String, asked: String },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -75,6 +80,9 @@ impl Expr {
                 lhs.visit(f);
                 rhs.visit(f);
             }
+            // A table reference names its cells rather than pointing at them,
+            // so it has no children to walk.
+            Expr::Table { .. } => {}
             Expr::Function { args, .. } => {
                 for arg in args {
                     arg.visit(f);

@@ -24,6 +24,17 @@ pub enum Token {
         sheet: Option<String>,
         name: String,
     },
+    /// A structured reference: a table's name and whatever was asked of it,
+    /// as the raw text between the brackets.
+    ///
+    /// Kept whole because what is inside those brackets is not the ordinary
+    /// language: `[#This Row]` has a space in it and `[[A]:[B]]` uses a colon
+    /// that means columns rather than cells. Letting either through to the
+    /// ordinary parser would make quite different sense of them.
+    Table {
+        name: String,
+        asked: String,
+    },
 
     Plus,
     Minus,
@@ -174,6 +185,13 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
         }
 
         if c == '\'' || c.is_alphabetic() || c == '_' || c == '$' {
+            // A name followed by `[` is a table being asked for one of its
+            // columns, and the whole bracket group belongs to it.
+            if let Some((tok, next)) = lex_table(src, i) {
+                tokens.push(tok);
+                i = next;
+                continue;
+            }
             let (tok, next) = lex_name(src, i)?;
             tokens.push(tok);
             i = next;
@@ -478,6 +496,12 @@ fn render_token(output: &mut String, token: Token) {
             output.push('"');
         }
         Token::ErrorLit(value) => output.push_str(value.as_str()),
+        Token::Table { name, asked } => {
+            output.push_str(&name);
+            output.push('[');
+            output.push_str(&asked);
+            output.push(']');
+        }
         Token::Name { sheet, name } => {
             if let Some(sheet) = sheet {
                 if sheet_needs_quotes(&sheet) {
@@ -576,6 +600,54 @@ fn lex_number(src: &str, start: usize) -> Result<(f64, usize), ParseError> {
     text.parse::<f64>()
         .map(|n| (n, i))
         .map_err(|_| ParseError::InvalidNumber(text.to_string()))
+}
+
+/// A table's name and the bracket group after it, or `None` when what is here
+/// is not one.
+///
+/// The brackets nest — `tbl[[#This Row],[DATE]]` has two levels — so they are
+/// counted rather than scanned to the first `]`. An unclosed group is not a
+/// table reference at all, and is left for the ordinary lexer to complain
+/// about wherever it actually goes wrong.
+fn lex_table(src: &str, start: usize) -> Option<(Token, usize)> {
+    let bytes = src.as_bytes();
+    let mut at = start;
+    // A table's name is a plain word: no sheet, no dollars.
+    while at < bytes.len() {
+        let ch = src[at..].chars().next()?;
+        if ch.is_alphanumeric() || ch == '_' || ch == '.' {
+            at += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if at == start || bytes.get(at) != Some(&b'[') {
+        return None;
+    }
+    let name = src[start..at].to_string();
+    let inside = at + 1;
+    let mut depth = 1usize;
+    let mut end = inside;
+    while end < bytes.len() {
+        match bytes[end] {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((
+                        Token::Table {
+                            name,
+                            asked: src[inside..end].to_string(),
+                        },
+                        end + 1,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        end += 1;
+    }
+    None
 }
 
 fn lex_name(src: &str, start: usize) -> Result<(Token, usize), ParseError> {

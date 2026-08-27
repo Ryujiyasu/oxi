@@ -275,6 +275,7 @@ impl Parser {
                 }
                 Ok(inner)
             }
+            Token::Table { name, asked } => Ok(Expr::Table { name, asked }),
             Token::Name { sheet, name } => self.finish_name(sheet, name),
             other => Err(ParseError::UnexpectedToken(format!("{other:?}"))),
         }

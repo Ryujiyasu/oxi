@@ -97,6 +97,22 @@ fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite
 
     for sheet in sheets.iter() {
         book.add_sheet(&sheet.name);
+        // A table's own name is how a formula reaches its columns:
+        // `tblNomina[[#This Row],[DATE]]`. The IR counts a table's rows from
+        // one and its columns from zero, which is what the engine wants too.
+        for table in &sheet.tables {
+            if table.name.is_empty() {
+                continue;
+            }
+            book.add_table(
+                &sheet.name,
+                &table.name,
+                (table.start_row, table.end_row),
+                (table.start_col, table.end_col),
+                table.header_rows,
+                table.columns.clone(),
+            );
+        }
         for row in &sheet.rows {
             for cell in &row.cells {
                 let addr = a1(cell.col, row.index);

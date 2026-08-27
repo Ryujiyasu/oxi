@@ -202,6 +202,13 @@ impl CellValue {
 /// these itself: no cell inside carries the header's fill or the banding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Table {
+    /// What a formula calls it. `tblNomina[[#This Row],[DATE]]` names this.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The heading of each column, left to right, so that a formula naming one
+    /// can be told which column of `start_col..=end_col` it meant.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
     pub start_row: u32, // 1-based
     pub start_col: u32, // 0-based
     pub end_row: u32,   // 1-based
