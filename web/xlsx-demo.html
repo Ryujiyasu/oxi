@@ -1015,7 +1015,7 @@ function paint() {
     const row = Number(head.dataset.headRow);
     if (row >= box.top && row <= box.bottom) head.classList.add('lit');
   }
-  for (const lit of table.querySelectorAll('td.cut')) lit.classList.remove('cut');
+  for (const was of table.querySelectorAll('td.cut')) was.classList.remove('cut');
   if (cutFrom && cutFrom.sheet === shown) {
     for (let row = cutFrom.top; row <= cutFrom.bottom; row++) {
       for (let col = cutFrom.left; col <= cutFrom.right; col++) {
