@@ -1608,7 +1608,9 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
                     None => 1,
                 },
             };
-            let descending = match args.get(if name == "SORTBY" { 2 } else { 2 }) {
+            // Both spell the direction third: SORT(block, by, order) and
+            // SORTBY(block, ordered_by, order).
+            let descending = match args.get(2) {
                 Some(one) => num(one)? < 0.0,
                 None => false,
             };
@@ -1682,11 +1684,11 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
 /// The block with one more column on the end, a value to each row.
 fn with_a_column(block: &RangeData, beside: &[Value]) -> RangeData {
     let mut cells = Vec::with_capacity(block.cells.len() + beside.len());
-    for row in 0..block.height {
+    for (row, alongside) in beside.iter().enumerate().take(block.height) {
         for col in 0..block.width {
             cells.push(block.at(col, row));
         }
-        cells.push(beside[row].clone());
+        cells.push(alongside.clone());
     }
     RangeData {
         width: block.width + 1,
