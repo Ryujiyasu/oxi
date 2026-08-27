@@ -191,6 +191,22 @@ fn first_error(args: &[Arg]) -> Option<ExcelError> {
         .find_map(|v| v.err())
 }
 
+/// The first error handed over as an argument in its own right, rather than
+/// found among the values of a block.
+///
+/// The difference is the difference between a cell of a range holding `#N/A`
+/// and a range that is not there at all.
+fn bare_error(args: &[Arg]) -> Option<ExcelError> {
+    args.iter().find_map(|one| match one {
+        Arg::Value(held) => held.err(),
+        // Anything that came from the sheet is a block, however small, and its
+        // contents are values. `CHOOSE(1,A3,A2)` is 30 with an error in A2,
+        // and `COUNT(A4)` is 0 rather than that error — each of those knows
+        // what to do with one, and neither is missing a block.
+        Arg::Range(_) => None,
+    })
+}
+
 fn num(arg: &Arg) -> Result<f64, ExcelError> {
     arg.scalar().to_number()
 }
@@ -389,9 +405,38 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             | "SUMIFS" | "COUNTIFS" | "AVERAGEIFS"
         // AGGREGATE's whole second argument is about what to do with them.
             | "AGGREGATE"
+        // These three never mind an error, wherever it came from: COUNT is
+        // asking how many NUMBERS there are and an error is not one, COUNTA
+        // how many cells are not empty and an error fills a cell, and CHOOSE
+        // only ever looks at the one it is told to. Excel: `COUNT(#REF!)` is
+        // 0, `COUNTA(#REF!)` is 1, `CHOOSE(1,30,#REF!)` is 30.
+            | "COUNT" | "COUNTA" | "CHOOSE"
+    );
+    // And some mind only the errors handed to them DIRECTLY.
+    //
+    // These pick one thing out of a block, search it, or count it, so an error
+    // among the other values is nothing to do with the answer — and where it
+    // IS the answer, as `INDEX(A1:A4,2)` over an error at 2, it comes back on
+    // its own account.
+    //
+    // An error handed over WHERE THE BLOCK SHOULD BE is a different thing
+    // entirely. `INDEX(#REF!,MATCH(x,#REF!,0))` is what Excel writes into a
+    // formula whose external workbook has gone, and it answers `#REF!`: there
+    // is no block to pick from. Ignoring that gave `#N/A` — MATCH searching a
+    // nothing and finding nothing — for 185 cells of one workbook. `ROWS` and
+    // `COLUMNS` are here for that case alone: `ROWS(#REF!)` is `#REF!`, and
+    // there is nothing else in a range for them to mind.
+    let minds_only_bare_errors = matches!(
+        name,
+        "INDEX" | "MATCH" | "VLOOKUP" | "HLOOKUP" | "XLOOKUP" | "ROWS" | "COLUMNS"
     );
     if !error_transparent {
-        if let Some(e) = first_error(args) {
+        let found = if minds_only_bare_errors {
+            bare_error(args)
+        } else {
+            first_error(args)
+        };
+        if let Some(e) = found {
             return Err(e);
         }
     }
@@ -422,7 +467,33 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 .fold(f64::NEG_INFINITY, f64::max);
             Ok(Value::Number(if m.is_infinite() { 0.0 } else { m }))
         }
-        "COUNT" => Ok(Value::Number(numeric_operands(args)?.len() as f64)),
+        // How many numbers there are. An error is not one, so a range holding
+        // one is counted as though it were not there — `numeric_operands`
+        // handed the error back instead of counting.
+        //
+        // Excel asks a different question of an argument given DIRECTLY than
+        // of a value found inside a range. Measured:
+        //
+        //     COUNT(A1:A5) 2   over 1, TRUE, 2, #N/A, "text"
+        //     COUNT(A2)    0   a logical in a reference is not a number
+        //     COUNT(TRUE)  1   but written out it counts
+        //     COUNT("2")   1   and so does text that reads as one
+        //     COUNT(1,"x") 1   where text that does not, does not
+        //     COUNT(NA())  0   and an error never does
+        "COUNT" => Ok(Value::Number(
+            args.iter()
+                .map(|one| match one {
+                    // Written out: anything that reads as a number.
+                    Arg::Value(held) => usize::from(held.to_number().is_ok()),
+                    // Found in a range: only what IS a number.
+                    Arg::Range(block) => block
+                        .cells
+                        .iter()
+                        .filter(|held| matches!(held, Value::Number(_)))
+                        .count(),
+                })
+                .sum::<usize>() as f64,
+        )),
         "COUNTA" => Ok(Value::Number(
             args.iter()
                 .flat_map(|a| a.flatten())
@@ -953,6 +1024,9 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let key = args[0].scalar();
+            if let Some(why) = key.err() {
+                return Err(why);
+            }
             let looked = args[1].flatten();
             let taken = args[2].flatten();
             let how = match args.get(4) {
@@ -1150,6 +1224,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let key = args[0].scalar();
+            // Looking for an error finds nothing: the error is the answer.
+            if let Some(why) = key.err() {
+                return Err(why);
+            }
             let table = args[1].as_range();
             let index = num(&args[2])? as usize;
             if index < 1 {
@@ -1207,6 +1285,10 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 return Err(ExcelError::Value);
             }
             let key = args[0].scalar();
+            // Looking for an error finds nothing: the error is the answer.
+            if let Some(why) = key.err() {
+                return Err(why);
+            }
             let haystack = args[1].flatten();
             let mode = match args.get(2) {
                 Some(a) => num(a)? as i32,
@@ -1276,6 +1358,8 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             if args.len() < 2 {
                 return Err(ExcelError::Value);
             }
+            // `num` hands an error straight back, so an error for the number
+            // saying which one to take is the answer.
             let index = num(&args[0])? as usize;
             if index < 1 || index >= args.len() {
                 return Err(ExcelError::Value);
@@ -1617,25 +1701,7 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
             if by < 1 || by > table.width {
                 return Err(ExcelError::Value);
             }
-            let mut failed = None;
-            rows.sort_by(|left, right| {
-                match compare(&left[by - 1], &right[by - 1]) {
-                    Ok(side) => {
-                        if descending {
-                            side.reverse()
-                        } else {
-                            side
-                        }
-                    }
-                    Err(why) => {
-                        failed = Some(why);
-                        Ordering::Equal
-                    }
-                }
-            });
-            if let Some(why) = failed {
-                return Err(why);
-            }
+            rows.sort_by(|left, right| in_order(&left[by - 1], &right[by - 1], descending));
         }
         _ => {
             // FILTER: a second block, as tall as this one, saying which rows
@@ -1681,6 +1747,46 @@ fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
     Ok(Arg::Range(if sideways { on_its_side(&block) } else { block }))
 }
 
+/// Which of two values comes first when a block is being put in order.
+///
+/// Excel ranks the KINDS before it compares within one — numbers, then text,
+/// then the logicals, then the errors — so an error in the column being sorted
+/// by is something to place rather than something to refuse.
+///
+/// A blank goes last whichever way round the sort is, which is why it cannot
+/// simply be given the highest rank: it takes no part in the reversal.
+fn in_order(left: &Value, right: &Value, descending: bool) -> Ordering {
+    match (left.is_blank(), right.is_blank()) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Greater,
+        (false, true) => return Ordering::Less,
+        _ => {}
+    }
+    let side = sorting_rank(left)
+        .cmp(&sorting_rank(right))
+        // Within one kind, the ordinary comparison. Two errors are left as
+        // they were: a stable sort keeps them in the order they arrived, and
+        // whether Excel puts one error above another was not measured.
+        .then_with(|| compare(left, right).unwrap_or(Ordering::Equal));
+    if descending {
+        side.reverse()
+    } else {
+        side
+    }
+}
+
+/// Which kind of value this is, for the purpose of ordering a block.
+fn sorting_rank(value: &Value) -> u8 {
+    match value {
+        Value::Number(_) => 0,
+        Value::Text(_) => 1,
+        Value::Logical(_) => 2,
+        Value::Error(_) => 3,
+        // Handled before the rank is asked for.
+        Value::Blank => 4,
+    }
+}
+
 /// The block with one more column on the end, a value to each row.
 fn with_a_column(block: &RangeData, beside: &[Value]) -> RangeData {
     let mut cells = Vec::with_capacity(block.cells.len() + beside.len());
@@ -1723,9 +1829,12 @@ fn reads_true(arg: Option<&Arg>) -> bool {
 /// alike in every column are one row twice.
 fn same_row(a: &[Value], b: &[Value]) -> bool {
     a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(one, other)| matches!(compare(one, other), Ok(Ordering::Equal)))
+        && a.iter().zip(b).all(|(one, other)| match (one, other) {
+            // Comparing two errors is not a comparison, but two of the SAME
+            // error are plainly the same value, and UNIQUE has to see that.
+            (Value::Error(why), Value::Error(also)) => why == also,
+            _ => matches!(compare(one, other), Ok(Ordering::Equal)),
+        })
 }
 
 /// The line an INDEX asks for when it leaves out a row or a column, or `None`
@@ -2403,6 +2512,184 @@ mod tests {
         assert_eq!(
             call("AGGREGATE", &[v(15.0), v(6.0), with_a_gap, v(9.0)]),
             Value::Error(ExcelError::Num),
+        );
+    }
+
+    /// 10, <an error>, 30, 40 — a block with one bad cell in the middle.
+    fn a_block_with_a_gap() -> Arg {
+        range(&[n(10.0), Value::Error(ExcelError::NA), n(30.0), n(40.0)], 1)
+    }
+
+    /// Excel 16's answers over that block, and over w x y z beside it.
+    #[test]
+    fn a_function_that_picks_does_not_mind_what_it_is_not_looking_at() {
+        let gap = a_block_with_a_gap();
+        let letters = range(
+            &[Value::text("w"), Value::text("x"), Value::text("y"), Value::text("z")],
+            1,
+        );
+        assert_eq!(call("INDEX", &[gap.clone(), v(1.0)]), n(10.0));
+        assert_eq!(call("INDEX", &[gap.clone(), v(3.0)]), n(30.0));
+        // At the cell picked, the error IS the answer.
+        assert_eq!(
+            call("INDEX", &[gap.clone(), v(2.0)]),
+            Value::Error(ExcelError::NA),
+        );
+        assert_eq!(call("MATCH", &[v(30.0), gap.clone(), v(0.0)]), n(3.0));
+        assert_eq!(
+            call("MATCH", &[v(99.0), gap.clone(), v(0.0)]),
+            Value::Error(ExcelError::NA),
+            "not there is still not there",
+        );
+        assert_eq!(call("COUNT", &[gap.clone()]), n(3.0));
+        assert_eq!(call("COUNTA", &[gap.clone()]), n(4.0));
+        assert_eq!(
+            call("VLOOKUP", &[t("y"), letters, v(1.0), Arg::Value(Value::Logical(false))]),
+            Value::text("y"),
+        );
+        // The unchosen one is not looked at either.
+        assert_eq!(
+            call("CHOOSE", &[v(1.0), v(30.0), Arg::Value(Value::Error(ExcelError::NA))]),
+            n(30.0),
+        );
+        // And the ones that must total or order the whole lot still mind it.
+        assert_eq!(call("SUM", &[gap.clone()]), Value::Error(ExcelError::NA));
+        assert_eq!(call("MAX", &[gap.clone()]), Value::Error(ExcelError::NA));
+        assert_eq!(
+            call("SMALL", &[gap, v(1.0)]),
+            Value::Error(ExcelError::NA),
+        );
+    }
+
+    #[test]
+    fn an_error_where_the_block_should_be_is_a_block_that_is_not_there() {
+        // `INDEX(#REF!,MATCH(x,#REF!,0))` is what Excel writes into a formula
+        // whose external workbook has gone, and it answers `#REF!`. Treating
+        // that as "an error to step over" left MATCH searching a nothing,
+        // finding nothing, and answering `#N/A` — 185 cells of one workbook.
+        //
+        // The difference from the test above is the whole rule: a `#REF!`
+        // among the values of a block is a value; a `#REF!` WHERE THE BLOCK
+        // SHOULD BE is not.
+        let missing = Arg::Value(Value::Error(ExcelError::Ref));
+        assert_eq!(
+            call("INDEX", &[missing.clone(), v(2.0)]),
+            Value::Error(ExcelError::Ref),
+        );
+        assert_eq!(
+            call("MATCH", &[v(30.0), missing.clone(), v(0.0)]),
+            Value::Error(ExcelError::Ref),
+        );
+        assert_eq!(call("ROWS", &[missing]), Value::Error(ExcelError::Ref));
+        // But COUNT, COUNTA and CHOOSE never mind one, however it arrives:
+        // Excel gives 0, 1 and 30 for these.
+        let gone = Arg::Value(Value::Error(ExcelError::Ref));
+        assert_eq!(call("COUNT", &[gone.clone()]), n(0.0));
+        assert_eq!(call("COUNTA", &[gone.clone()]), n(1.0));
+        assert_eq!(call("CHOOSE", &[v(1.0), v(30.0), gone]), n(30.0));
+        // Which holds for #N/A written out just the same, and the one CHOOSE
+        // does pick still comes back whatever it is.
+        let missing_value = Arg::Value(Value::Error(ExcelError::NA));
+        assert_eq!(call("COUNT", &[missing_value.clone()]), n(0.0));
+        assert_eq!(call("COUNTA", &[missing_value.clone()]), n(1.0));
+        assert_eq!(call("CHOOSE", &[v(1.0), v(30.0), missing_value.clone()]), n(30.0));
+        assert_eq!(
+            call("CHOOSE", &[v(2.0), v(30.0), missing_value.clone()]),
+            Value::Error(ExcelError::NA),
+        );
+        assert_eq!(call("COUNT", &[v(1.0), missing_value]), n(1.0));
+    }
+
+    #[test]
+    fn looking_for_an_error_finds_nothing() {
+        // The thing being searched FOR is not one of the values searched.
+        let gap = a_block_with_a_gap();
+        let broken = Arg::Value(Value::Error(ExcelError::NA));
+        assert_eq!(
+            call("MATCH", &[broken.clone(), gap.clone(), v(0.0)]),
+            Value::Error(ExcelError::NA),
+        );
+        assert_eq!(
+            call("INDEX", &[gap, broken]),
+            Value::Error(ExcelError::NA),
+            "nor is the number saying which one",
+        );
+    }
+
+    /// How many numbers there are — a question Excel asks differently of an
+    /// argument written out than of a value found inside a block.
+    #[test]
+    fn count_asks_two_questions() {
+        let block = range(
+            &[
+                n(1.0),
+                Value::Logical(true),
+                n(2.0),
+                Value::Error(ExcelError::NA),
+                Value::text("text"),
+            ],
+            1,
+        );
+        // In a block: only what IS a number. The logical, the error and the
+        // text are all not.
+        assert_eq!(call("COUNT", &[block.clone()]), n(2.0));
+        assert_eq!(call("COUNTA", &[block.clone()]), n(5.0));
+        // Written out: anything that READS as a number.
+        assert_eq!(call("COUNT", &[Arg::Value(Value::Logical(true))]), n(1.0));
+        assert_eq!(call("COUNT", &[v(1.0), Arg::Value(Value::Logical(true))]), n(2.0));
+        assert_eq!(call("COUNT", &[t("2")]), n(1.0), "text that reads as one");
+        assert_eq!(call("COUNT", &[v(1.0), t("x")]), n(1.0), "and text that does not");
+        assert_eq!(
+            call("COUNT", &[Arg::Value(Value::Error(ExcelError::NA))]),
+            n(0.0),
+            "an error never reads as one",
+        );
+        assert_eq!(call("COUNT", &[block, Arg::Value(Value::Logical(true))]), n(3.0));
+    }
+
+    /// A sort ranks the KINDS of value before comparing within one, so an
+    /// error is something to place rather than something to refuse.
+    ///
+    /// Excel 16, over a column holding 3, #N/A, 5, "zz", TRUE and a blank:
+    /// ascending gives 3, 5, zz, TRUE, #N/A, blank; descending gives #N/A,
+    /// TRUE, zz, 5, 3, blank. The blank is last BOTH ways — it takes no part
+    /// in the reversal, which is what shows this to be a ranking.
+    #[test]
+    fn a_sort_puts_the_kinds_in_order_and_the_blanks_last() {
+        let mixed = range(
+            &[
+                n(3.0),
+                Value::Error(ExcelError::NA),
+                n(5.0),
+                Value::text("zz"),
+                Value::Logical(true),
+                Value::Blank,
+            ],
+            1,
+        );
+        let up = call_arg("SORT", &[mixed.clone(), Arg::Value(Value::Number(1.0)), v(1.0)]);
+        let down = call_arg("SORT", &[mixed, Arg::Value(Value::Number(1.0)), v(-1.0)]);
+        assert_eq!(
+            up.flatten(),
+            vec![
+                n(3.0),
+                n(5.0),
+                Value::text("zz"),
+                Value::Logical(true),
+                Value::Error(ExcelError::NA),
+                Value::Blank,
+            ],
+        );
+        assert_eq!(
+            down.flatten(),
+            vec![
+                Value::Error(ExcelError::NA),
+                Value::Logical(true),
+                Value::text("zz"),
+                n(5.0),
+                n(3.0),
+                Value::Blank,
+            ],
         );
     }
 
