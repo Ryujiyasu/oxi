@@ -56,10 +56,48 @@ def ssim(a: np.ndarray, b: np.ndarray) -> float:
                   / ((m1 ** 2 + m2 ** 2 + c1) * (s11 + s22 + c2))).mean())
 
 
+def _verify(cache: dict, exe_mtime: int, n: int) -> None:
+    """Re-render a sample and record whether this binary reproduces the cache."""
+    import hashlib
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    man = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    have = [m for m in man if (SS / "oxi_png" / f"{m['idx']:02d}").is_dir()]
+    step = max(1, len(have) // max(n, 1))
+    ok = True
+    for item in have[::step][:n]:
+        doc = f"{item['idx']:02d}"
+        out = Path(tempfile.mkdtemp(prefix="rankverify_"))
+        env = dict(os.environ)
+        subprocess.run([str(EXE), str(ROOT / "pptx" / item["local"]),
+                        str(out / "slide"), "150"],
+                       capture_output=True, env=env, timeout=3600)
+        def h(d: Path) -> dict:
+            return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in sorted(d.glob("slide_s*.png"))}
+        a, b = h(SS / "oxi_png" / doc), h(out)
+        shutil.rmtree(out, ignore_errors=True)
+        same = sum(1 for k in a if a.get(k) == b.get(k))
+        print(f"  d{doc}: {same}/{len(a)} identical", flush=True)
+        ok = ok and a and same == len(a)
+    if ok:
+        cache["_verified_exe_mtime"] = exe_mtime
+        CACHE.write_text(json.dumps(cache, indent=0), encoding="utf-8")
+        print("this binary reproduces the stored renders -- staleness cleared")
+    else:
+        print("the renders DIFFER: re-measure before trusting the ranking")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--doc", default="")
+    ap.add_argument("--verify", type=int, default=0, metavar="N",
+                    help="re-render N sampled decks; if they match the stored PNGs, "
+                         "record that this binary draws them and stop warning")
     args = ap.parse_args()
 
     # A PNG older than the binary was drawn by a renderer that no longer
@@ -68,7 +106,17 @@ def main() -> None:
     # derived to fix that very slide. Rank them, but never without saying so.
     exe_mtime = EXE.stat().st_mtime_ns if EXE.exists() else 0
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
-    docs = sorted(p.name for p in (SS / "oxi_png").iterdir() if p.is_dir())
+    if args.verify:
+        _verify(cache, exe_mtime, args.verify)
+        return
+    # A rebuild that changes nothing must not condemn the whole table. The mtime
+    # test alone fires on EVERY rebuild -- including parking a flag opt-in, which
+    # is provably byte-identical -- and a guard that always cries wolf gets
+    # ignored, which is worse than not having one. `--verify` re-renders a sample
+    # and, when it matches, records that THIS binary draws the stored PNGs.
+    verified = cache.get("_verified_exe_mtime") == exe_mtime
+    docs = sorted(p.name for p in (SS / "oxi_png").iterdir() if p.is_dir()
+                  and not p.name.startswith("_"))
     if args.doc:
         docs = [d for d in docs if d == args.doc]
     rows = []
@@ -118,10 +166,12 @@ def main() -> None:
     # Recomputed every run rather than stored: a rebuild must make the whole
     # table go stale immediately, without anyone remembering to invalidate it.
     for r in rows:
-        r["stale"] = r.get("mtime", 0) < exe_mtime
+        r["stale"] = (not verified) and r.get("mtime", 0) < exe_mtime
     stale = [r for r in rows if r["stale"]]
     if stale:
         docs = sorted({r["doc"] for r in stale})
+        print("   (if the rebuild changed nothing, prove it: "
+              "pptx_defect_rank.py --verify 3)")
         print()
         print(f"!! {len(stale)} of {len(rows)} slides were rendered BEFORE the "
               f"current binary and are marked * -- re-render before trusting them.")
