@@ -50,7 +50,13 @@ function element(name, id) {
     rows: [],
     cells: [],
     children: [],
-    classList: { add() {}, remove() {}, contains: () => false, toggle() {} },
+    classList: {
+      names: new Set(),
+      add(...names) { names.forEach((one) => this.names.add(one)); },
+      remove(...names) { names.forEach((one) => this.names.delete(one)); },
+      contains(one) { return this.names.has(one); },
+      toggle() {},
+    },
     addEventListener() {},
     removeEventListener() {},
     appendChild(child) { this.children.push(child); return child; },
@@ -168,6 +174,32 @@ is('and asks to be warned before the tab closes with edits outstanding',
 const table = made.find((one) => one.tagName === 'TABLE');
 is('it drew a grid', Boolean(table), true);
 is('with the sample workbook in it', table && table.rows.length > 1, true);
+
+// ── Opening a second workbook, the way anyone would ─────────────────────
+//
+// Everything above is the page at rest. This drives the file picker's own
+// handler with a workbook that asks for a frozen top row, which exercises the
+// one part of the drawing that can only be worked out after the table is on
+// the page: how far down a held row sits depends on what the browser actually
+// laid out, so it cannot be settled while the table is being built.
+
+const picker = nodes.get('pick');
+if (picker && picker.onchange) {
+  const bytes = await readFile(join(here, '..', 'crates', 'oxicells-core',
+    'tests', 'fixtures', 'frozen.xlsx'));
+  made.length = 0;
+  await picker.onchange({ target: { files: [{
+    name: 'frozen.xlsx',
+    arrayBuffer: async () =>
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  }] } });
+  const second = made.find((one) => one.tagName === 'TABLE');
+  is('a second workbook opens through the picker', Boolean(second), true);
+  is('and its frozen row is held in view',
+    made.some((one) => one.classList.contains('held')), true);
+} else {
+  is('the page has a file picker with a handler on it', false, true);
+}
 
 console.log(failures === 0 ? '\nthe page loads' : `\n${failures} did not`);
 process.exit(failures === 0 ? 0 : 1);
