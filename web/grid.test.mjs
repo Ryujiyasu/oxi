@@ -40,11 +40,32 @@ function lift(name) {
   throw new Error(`${name}() is never closed`);
 }
 
+/** The source of one top-level `const NAME = ...;`, brackets balanced. */
+function liftBinding(name) {
+  const at = page.indexOf(`const ${name} = `);
+  if (at < 0) throw new Error(`the page no longer has ${name}`);
+  let depth = 0;
+  for (let i = at; i < page.length; i++) {
+    const ch = page[i];
+    if ('([{'.includes(ch)) depth += 1;
+    else if (')]}'.includes(ch)) depth -= 1;
+    else if (ch === ';' && depth === 0) return page.slice(at, i + 1);
+  }
+  throw new Error(`${name} is never closed`);
+}
+
+// The fill's tables come across as they are written, not as a copy: the eleven
+// lists were read out of Excel, and a test holding its own copy of them would
+// go on passing after the page's had drifted.
+const tables = ['LISTS', 'TAIL'].map(liftBinding).join('\n');
+
 const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside',
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
   'asGrid', 'change', 'restore', 'undo', 'redo', 'remember', 'edited',
   'markSaved', 'markSteps', 'put', 'heldAt',
-  'takeColumn', 'takeRow', 'takeAll'].map(lift).join('\n');
+  'takeColumn', 'takeRow', 'takeAll',
+  'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
+  'runValue', 'fillLine', 'fillTo', 'wrapped'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -63,6 +84,7 @@ const countBox = { textContent: '' };
 const whereBox = { textContent: '' };
 const formulaBox = { value: '' };
 const cellBox = { innerHTML: '' };
+${tables}
 const draw = () => {};
 const paint = () => {};
 let shown = 0;
@@ -77,6 +99,11 @@ const saveButton = { disabled: true, textContent: '' };
 const backButton = { disabled: true };
 const onButton = { disabled: true };
 let anyFormulas = false;
+let filling = null;
+// Moving a formula's references is the engine's job and has its own test.
+// Here it only has to be visible when a formula is carried across.
+const translate_formula = (text, rows, cols) =>
+  text.slice(1) + '[' + rows + ',' + cols + ']';
 // Working out formulas is the engine's job and has its own test; here it only
 // has to not happen, so that what a cell holds is exactly what was typed.
 const recompute = () => {};
@@ -125,7 +152,7 @@ const forget = () => {
   undone.length = 0; redone.length = 0;
 };
 export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
-         takeColumn, takeRow, takeAll,
+         takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf,
          change, undo, redo, unsaved, forget };
 `));
@@ -408,6 +435,163 @@ grid.takeAll();
 is('the corner takes the sheet', grid.box(),
   { top: 1, left: 0, bottom: 500, right: 50 });
 is('with the cursor at A1', grid.seat(), { row: 1, col: 0 });
+
+// ── Pulling the corner ─────────────────────────────────────
+//
+// Every case below was read off Excel by `tools/metrics/_xlsx_fill_series.py`,
+// which pulls the handle down a real sheet and reports what landed. None of it
+// is reasoned out here: the fitted line, and the way a lone number behaves
+// differently inside a block, both look wrong until they are measured.
+
+// The Japanese seeds, named so the cases below stay readable.
+const _JP_SUN = '日';
+const _JP_MON = '月';
+const _JP_TUE = '火';
+const _JP_WED = '水';
+const _JP_THU = '木';
+const _JP_SAT = '土';
+const _JP_M1 = '睦月';
+const _JP_M2 = '如月';
+const _JP_M3 = '弥生';
+const _JP_Q1 = '第1四半期';
+const _JP_Q2 = '第2四半期';
+const _JP_Q3 = '第3四半期';
+const _JP_Z1 = '子';
+const _JP_Z2 = '丑';
+const _JP_Z3 = '寅';
+const _JP_I = 'い';
+
+const pull = (r1, c1, r2, c2, to) => { grid.select(r1, c1, r2, c2); grid.fillTo(to, c1); };
+const column = (col, from, to) => {
+  const out = [];
+  for (let row = from; row <= to; row++) {
+    const found = grid.cells().find(([key]) => key === row + ',' + col);
+    out.push(found ? found[1] : '');
+  }
+  return out;
+};
+/** Seed a column downwards, pull it `over` further, and read the lot back. */
+const filled = (seed, over) => {
+  grid.forget();
+  seed.forEach((one, i) => grid.seed(i + 1, 0, one));
+  pull(1, 0, seed.length, 0, seed.length + over);
+  return column(0, 1, seed.length + over);
+};
+
+is('a lone number repeats', filled(['5'], 3), ['5', '5', '5', '5']);
+is('two numbers set the step', filled(['1', '2'], 4),
+  ['1', '2', '3', '4', '5', '6']);
+is('the step can be any size', filled(['10', '20', '30'], 2),
+  ['10', '20', '30', '40', '50']);
+is('and can go down', filled(['10', '8'], 3), ['10', '8', '6', '4', '2']);
+
+// Excel fits a line through the values rather than repeating the last gap. It
+// shows 5.333333 in a narrow column; the value behind it is sixteen thirds.
+is('unevenly spaced numbers follow the fitted line', filled(['1', '2', '4'], 2),
+  ['1', '2', '4', '5.33333333333333', '6.83333333333333']);
+is('and so do these', filled(['1', '4', '5'], 2),
+  ['1', '4', '5', '7.33333333333333', '9.33333333333333']);
+
+is('text repeats', filled(['total'], 2), ['total', 'total', 'total']);
+is('text ending in digits counts up', filled(['Item 1'], 3),
+  ['Item 1', 'Item 2', 'Item 3', 'Item 4']);
+is('and keeps the width it was written with', filled(['A001'], 2),
+  ['A001', 'A002', 'A003']);
+is('two numbered texts carry the step in their digits',
+  filled(['Item 1', 'Item 2'], 4),
+  ['Item 1', 'Item 2', 'Item 3', 'Item 4', 'Item 5', 'Item 6']);
+is('a block with no series in it repeats round', filled(['a', 'b'], 4),
+  ['a', 'b', 'a', 'b', 'a', 'b']);
+
+// A list Excel knows continues rather than repeating. All eleven were read out
+// of Excel itself with GetCustomListContents.
+is('an English weekday continues', filled(['Sun'], 3),
+  ['Sun', 'Mon', 'Tue', 'Wed']);
+is('so does the long form', filled(['Sunday'], 3),
+  ['Sunday', 'Monday', 'Tuesday', 'Wednesday']);
+is('and a month', filled(['Jan'], 3), ['Jan', 'Feb', 'Mar', 'Apr']);
+is('a Japanese weekday continues', filled([_JP_MON], 3),
+  [_JP_MON, _JP_TUE, _JP_WED, _JP_THU]);
+is('and wraps round the end of the list', filled([_JP_SAT], 2),
+  [_JP_SAT, _JP_SUN, _JP_MON]);
+is('the old month names continue', filled([_JP_M1], 2),
+  [_JP_M1, _JP_M2, _JP_M3]);
+is('so do the quarters', filled([_JP_Q1], 2), [_JP_Q1, _JP_Q2, _JP_Q3]);
+is('and the zodiac', filled([_JP_Z1], 2), [_JP_Z1, _JP_Z2, _JP_Z3]);
+is('a word Excel has no list for just repeats', filled([_JP_I], 2),
+  [_JP_I, _JP_I, _JP_I]);
+is('and neither has it one for a bare digit as text', filled(['1'], 2),
+  ['1', '1', '1']);
+
+// The rule behind all of it: a mixed block is split into runs of neighbours of
+// the same kind, and each run carries on by itself. A number that repeats when
+// selected alone counts up when it is a run inside a block.
+is('a number and a word each follow their own rule', filled(['1', 'a'], 3),
+  ['1', 'a', '2', 'a', '3']);
+is('whichever order they are in', filled(['a', '1'], 4),
+  ['a', '1', 'a', '2', 'a', '3']);
+is('a lone number in a block counts up by one, not by itself',
+  filled(['2', 'a'], 4), ['2', 'a', '3', 'a', '4', 'a']);
+is('however large it is', filled(['100', 'a'], 4),
+  ['100', 'a', '101', 'a', '102', 'a']);
+is('two numbers beside each other are one run with their own step',
+  filled(['2', '4', 'a'], 4), ['2', '4', 'a', '6', '8', 'a', '10']);
+is('numbers split by text are two runs, each counting by one',
+  filled(['1', 'a', '9'], 4), ['1', 'a', '9', '2', 'a', '10', '3']);
+is('neighbouring words are one run and repeat together',
+  filled(['1', 'a', 'b'], 4), ['1', 'a', 'b', '2', 'a', 'b', '3']);
+is('a list and a number interleave', filled(['Mon', '1'], 4),
+  ['Mon', '1', 'Tue', '2', 'Wed', '3']);
+
+// Two members of one list are a run, and carry the stride between them.
+is('two neighbouring weekdays carry on', filled(['Sun', 'Mon'], 4),
+  ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
+is('two days apart keeps that gap', filled(['Mon', 'Wed'], 4),
+  ['Mon', 'Wed', 'Fri', 'Sun', 'Tue', 'Thu']);
+is('and a gap that runs backwards wraps round the list',
+  filled(['Wed', 'Mon'], 4),
+  ['Wed', 'Mon', 'Sat', 'Thu', 'Tue', 'Sun']);
+is('but two different lists are two runs', filled(['Mon', 'Jan'], 4),
+  ['Mon', 'Jan', 'Tue', 'Feb', 'Wed', 'Mar']);
+is('as are two numbered texts with different prefixes',
+  filled(['Item 1', 'Row 5'], 4),
+  ['Item 1', 'Row 5', 'Item 2', 'Row 6', 'Item 3', 'Row 7']);
+is('and numbered text keeps counting inside a block',
+  filled(['Item 1', 'a'], 4), ['Item 1', 'a', 'Item 2', 'a', 'Item 3', 'a']);
+
+// Pulling upwards runs every rule the other way.
+grid.forget();
+grid.seed(5, 0, '10');
+grid.seed(6, 0, '20');
+grid.select(5, 0, 6, 0);
+grid.fillTo(3, 0);
+is('pulling upwards counts the other way', column(0, 3, 6),
+  ['-10', '0', '10', '20']);
+
+// A formula is carried across with its references moved by how far it went.
+grid.forget();
+grid.seed(1, 0, '=B1+C1');
+pull(1, 0, 1, 0, 3);
+is('a formula moves with the cell it lands in', column(0, 1, 3),
+  ['=B1+C1', '=B1+C1[1,0]', '=B1+C1[2,0]']);
+
+// What a fill wrote comes back in one press, like any other action.
+grid.forget();
+grid.seed(1, 0, '1');
+grid.seed(2, 0, '2');
+pull(1, 0, 2, 0, 8);
+grid.undo();
+is('a fill is one step', column(0, 1, 8),
+  ['1', '2', '', '', '', '', '', '']);
+
+// The pieces the rules are built from.
+is('a line through evenly spaced values has that step',
+  grid.fitLine([2, 4, 6]), { slope: 2, base: 2 });
+is('a line through one value is flat', grid.fitLine([7]), { slope: 0, base: 7 });
+is('a line through equal values is flat', grid.fitLine([3, 3, 3]),
+  { slope: 0, base: 3 });
+is('an index off the end of a list comes round', grid.wrapped(8, 7), 1);
+is('and off the start too', grid.wrapped(-1, 7), 6);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

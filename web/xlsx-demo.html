@@ -240,6 +240,20 @@ td.edge-t.edge-l { box-shadow: inset 0 1px 0 0 var(--accent), inset 1px 0 0 0 va
 td.edge-t.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
 td.edge-b.edge-l { box-shadow: inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
 td.edge-b.edge-r { box-shadow: inset 0 -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
+/* The fill handle: the corner of the selection, and the only part of it the
+   pointer treats differently. */
+td.edge-b.edge-r::after, td.here:not(.pick)::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border: 1px solid #fff;
+  cursor: crosshair;
+}
+td { position: relative; }
 td.edge-t.edge-b.edge-l { box-shadow: inset 0 1px 0 0 var(--accent), inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
 td.edge-t.edge-b.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset 0 -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
 td.edge-t.edge-l.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
@@ -301,7 +315,7 @@ table { user-select: none; }
 
 <script type="module">
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
-               recalculate_spreadsheet } from './oxidocs_wasm.js';
+               recalculate_spreadsheet, translate_formula } from './oxidocs_wasm.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
@@ -490,6 +504,12 @@ function draw() {
     }
     const cell = event.target.closest('td');
     if (!cell || !cell.dataset.row) return;
+    if (onHandle(cell, event)) {
+      filling = { row: at.row, col: at.col };
+      table.focus();
+      event.preventDefault();
+      return;
+    }
     // Shift extends from wherever the selection already starts; a plain click
     // starts a new one and arms the drag.
     goTo(Number(cell.dataset.row), Number(cell.dataset.col), false, event.shiftKey);
@@ -498,6 +518,13 @@ function draw() {
     event.preventDefault();
   });
   table.addEventListener('mouseover', (event) => {
+    if (filling) {
+      const cell = event.target.closest('td');
+      if (cell && cell.dataset.row) {
+        filling.to = { row: Number(cell.dataset.row), col: Number(cell.dataset.col) };
+      }
+      return;
+    }
     if (headDrag) {
       const head = event.target.closest('th');
       if (!head) return;
@@ -811,11 +838,13 @@ function eachInRegion(visit) {
   }
 }
 
-// Enough digits to be honest, without a tail of float noise behind a total that
-// is plainly a round number.
+// Fifteen significant digits, which is the precision Excel works to. Fewer
+// throws away real value — a third of sixteen is 5.33333333333333, and cutting
+// it at ten decimals would be a different number. More keeps the tail that
+// binary floating point leaves behind: a tenth plus two tenths is not three
+// tenths in a double, and nobody wants to be shown that.
 function trim(value) {
-  const near = Math.round(value * 1e10) / 1e10;
-  return String(Number(near.toFixed(10)));
+  return String(Number(value.toPrecision(15)));
 }
 
 // Excel's status bar: how many cells hold something, and — when any of them are
@@ -862,6 +891,16 @@ function takeAll() {
   goTo(bounds.rows, bounds.cols, false, true);
 }
 
+/** Was this press on the fill handle rather than on the cell itself? */
+function onHandle(cell, event) {
+  const box = region();
+  if (Number(cell.dataset.row) !== box.bottom || Number(cell.dataset.col) !== box.right) {
+    return false;
+  }
+  const edge = cell.getBoundingClientRect();
+  return event.clientX >= edge.right - 6 && event.clientY >= edge.bottom - 6;
+}
+
 function paint() {
   const table = tableNow();
   if (!table) return;
@@ -900,6 +939,312 @@ function paint() {
     ? `${box.bottom - box.top + 1}R x ${box.right - box.left + 1}C`
     : columnName(at.col) + at.row;
   tally();
+}
+
+// ── Dragging the corner ─────────────────────────────────────────────────────
+//
+// The small square on the bottom-right of a selection is the fill handle, and
+// pulling it is how most spreadsheet work actually gets done: number a column,
+// carry a formula down a table, repeat a heading.
+//
+// It looks like one gesture and is several rules, and Excel picks between them
+// by what was selected. Measured with `tools/metrics/_xlsx_fill_series.py`,
+// which pulls each shape of selection down a real sheet and reads back what
+// landed:
+//
+//     [5]            -> 5, 5, 5          a lone number repeats
+//     [1, 2]         -> 3, 4, 5          two set the step
+//     [1, 2, 4]      -> 5.33, 6.83       a line fitted through them, not the last gap
+//     ['Item 1']     -> Item 2, Item 3   trailing digits count up
+//     ['a', 'b']     -> a, b, a, b       with no series in it, the block repeats
+//     ['Mon']        -> Tue, Wed         a list Excel knows continues
+//     [1, 'a']       -> 1, a, 2, a, 3    and here is the rule behind all of it
+//
+// That last one is the shape of the whole thing. Excel does not read the
+// selection as one series: it splits it into runs of neighbouring cells of the
+// same kind, and continues each run on its own, at its own stride. So the `1`
+// and the `a` interleave, each following its own rule — and a number that would
+// repeat when selected alone counts up when it sits in a block, because then it
+// is a run being continued rather than a cell being copied.
+
+// Set while the handle is being pulled; holds where the pull started.
+let filling = null;
+
+// The lists Excel continues rather than repeats, read out of Excel itself with
+// `Application.GetCustomListContents` rather than guessed at. This install
+// carries eleven; a Japanese Excel knows the weekdays and months twice over,
+// the old month names, the zodiac and the ten stems.
+const LISTS = [
+  ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+  ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+   'September', 'October', 'November', 'December'],
+  ['日', '月', '火', '水', '木', '金', '土'],
+  ['日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日'],
+  ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+  ['第1四半期', '第2四半期', '第3四半期', '第4四半期'],
+  ['睦月', '如月', '弥生', '卯月', '皐月', '水無月', '文月', '葉月', '長月',
+   '神無月', '霜月', '師走'],
+  ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'],
+  ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'],
+];
+
+// A trailing run of digits counts up and everything before it is kept, so
+// "Item 1" becomes "Item 2". The digits have to be at the END: "2026年度" has
+// none there and is left alone.
+const TAIL = /^(.*?)(\d+)$/;
+
+/** Wrap `index` into `length`, for indices that run off either end. */
+function wrapped(index, length) {
+  return ((index % length) + length) % length;
+}
+
+function numberOf(cell) {
+  if (!cell || cell.formula) return null;
+  const value = typeof cell.value === 'object' && cell.value !== null
+    ? cell.value.Number
+    : undefined;
+  return typeof value === 'number' ? value : null;
+}
+
+// Excel fits a straight line through the selected numbers rather than taking
+// the last gap: 1, 2, 4 continues 5.33, not 6. With evenly spaced values the
+// two agree, which is why the difference goes unnoticed until they are not.
+function fitLine(values) {
+  const n = values.length;
+  if (n === 1) return { slope: 0, base: values[0] };
+  let sumX = 0;
+  let sumY = 0;
+  let sumXY = 0;
+  let sumXX = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i;
+    sumY += values[i];
+    sumXY += i * values[i];
+    sumXX += i * i;
+  }
+  const under = n * sumXX - sumX * sumX;
+  const slope = under === 0 ? 0 : (n * sumXY - sumX * sumY) / under;
+  return { slope, base: (sumY - slope * sumX) / n };
+}
+
+// What kind of thing a cell is, finely enough to say whether it belongs in the
+// same run as its neighbour. Number and text is not fine enough: "Item 1" and
+// "a" are both text, and Excel counts the first up while repeating the second,
+// so they cannot be one run. Two numbered texts DO join, but only when they
+// share a prefix — which is what makes them a series rather than a coincidence.
+function kindOf(cell) {
+  if (cell && cell.formula) return 'formula';
+  if (numberOf(cell) !== null) return 'number';
+  const text = contentOf(cell);
+  const found = inList(text);
+  if (found) return 'list:' + LISTS.indexOf(found.list);
+  const parts = TAIL.exec(text);
+  return parts ? 'counted:' + parts[1] : 'text';
+}
+
+/** Split a line of cells into runs of neighbours of the same kind. */
+function runsOf(line) {
+  const out = [];
+  line.forEach((cell, at) => {
+    const kind = kindOf(cell);
+    const last = out[out.length - 1];
+    if (last && last.kind === kind) last.cells.push(cell);
+    else out.push({ kind, at, cells: [cell] });
+  });
+  return out;
+}
+
+/** The list holding `text`, and where in it, or null. */
+function inList(text) {
+  for (const list of LISTS) {
+    const at = list.indexOf(text);
+    if (at >= 0) return { list, at };
+  }
+  return null;
+}
+
+/**
+ * Work out how a run carries on, once, so that asking for the value at each
+ * index afterwards is only arithmetic.
+ *
+ * `alone` is true when the whole selection is a single cell, which is the one
+ * case where a number is copied rather than counted up.
+ */
+function planRun(run, alone) {
+  const kind = run.kind.split(':')[0];
+  if (kind === 'number') {
+    const values = run.cells.map(numberOf);
+    const line = fitLine(values);
+    // A single number in a block still counts up, by one — measured on
+    // [2, 'a'], which gives 3 and 4, not 3 and 5 or 2 and 2.
+    if (values.length === 1) line.slope = alone ? 0 : 1;
+    return { kind: 'number', line };
+  }
+  if (kind === 'formula') return { kind: 'formula', cells: run.cells };
+  const texts = run.cells.map((cell) => contentOf(cell));
+  if (kind === 'list') {
+    // Members of one list carry on along it, so long as they sit at an even
+    // stride within it; anything else is not a series and simply repeats.
+    const found = texts.map(inList);
+    const first = found[0];
+    const stride = found.length > 1
+      ? wrapped(found[1].at - first.at, first.list.length)
+      : 1;
+    if (found.every((one, i) =>
+      wrapped(one.at - first.at, first.list.length) === i * stride)) {
+      return { kind: 'list', list: first.list, at: first.at, stride };
+    }
+  }
+  {
+    // Text that differs only in the digits it ends with is a series in those
+    // digits: Item 1, Item 2 carries on to Item 3.
+    const parts = texts.map((text) => TAIL.exec(text));
+    if (parts.every((one) => one) && parts.every((one) => one[1] === parts[0][1])) {
+      const line = fitLine(parts.map((one) => Number(one[2])));
+      // Numbered text always counts up, even on its own — "Item 1" pulled down
+      // gives Item 2, where a lone `1` would have given 1. The digits are what
+      // make it a series, so there is nothing for a single one to be ambiguous
+      // about.
+      if (parts.length === 1) line.slope = 1;
+      return {
+        kind: 'counted',
+        before: parts[0][1],
+        width: parts[0][2].length,
+        padded: parts[0][2].startsWith('0'),
+        line,
+      };
+    }
+  }
+  return { kind: 'repeat', texts };
+}
+
+/** What a planned run holds at `index`, counting from its own first cell. */
+function runValue(plan, index, spot, source) {
+  if (plan.kind === 'number') return trim(plan.line.base + plan.line.slope * index);
+  if (plan.kind === 'list') {
+    return plan.list[wrapped(plan.at + index * plan.stride, plan.list.length)];
+  }
+  if (plan.kind === 'counted') {
+    const next = Math.round(plan.line.base + plan.line.slope * index);
+    const digits = String(next);
+    // A number written with leading zeros keeps its width: 001 goes to 002.
+    return plan.before + (plan.padded ? digits.padStart(plan.width, '0') : digits);
+  }
+  if (plan.kind === 'repeat') {
+    return plan.texts[wrapped(index, plan.texts.length)];
+  }
+  const cell = plan.cells[wrapped(index, plan.cells.length)];
+  if (!cell) return '';
+  try {
+    return '=' + translate_formula('=' + cell.formula,
+      spot.row - source.row, spot.col - source.col);
+  } catch (error) {
+    // A formula the engine cannot read is left exactly as it was rather than
+    // moved by guesswork: a reference that should have moved and did not is
+    // easier to notice than one moved wrongly.
+    return '=' + cell.formula;
+  }
+}
+
+/** The values of the selected block, read column by column or row by row. */
+function seriesOf(box, down) {
+  const out = [];
+  if (down) {
+    for (let col = box.left; col <= box.right; col++) {
+      const line = [];
+      for (let row = box.top; row <= box.bottom; row++) line.push(heldAt(row, col));
+      out.push(line);
+    }
+  } else {
+    for (let row = box.top; row <= box.bottom; row++) {
+      const line = [];
+      for (let col = box.left; col <= box.right; col++) line.push(heldAt(row, col));
+      out.push(line);
+    }
+  }
+  return out;
+}
+
+/**
+ * Everything one line of the block puts into the cells beyond it.
+ *
+ * `steps` cells are filled, and `q` counts on from the block: the cell just
+ * past it is `q = length`, and pulling backwards runs `q` negative. Which
+ * position of the block that lands on, and which turn round it is, together
+ * say which run answers and at what index.
+ */
+function fillLine(line, steps, forwards, place) {
+  const runs = runsOf(line);
+  const plans = runs.map((run) => planRun(run, line.length === 1));
+  const written = [];
+  for (let step = 1; step <= steps; step++) {
+    const q = forwards ? line.length - 1 + step : -step;
+    const seat = wrapped(q, line.length);
+    const turn = Math.floor(q / line.length);
+    const which = runs.findIndex((run, i) =>
+      seat >= run.at && seat < run.at + run.cells.length);
+    const run = runs[which];
+    const spot = place(step);
+    const index = turn * run.cells.length + (seat - run.at);
+    const source = place(step, run.at + wrapped(index, run.cells.length) - seat);
+    written.push({ spot, text: runValue(plans[which], index, spot, source) });
+  }
+  return written;
+}
+
+/** Fill from the selection out to `row`/`col`, whichever direction that is. */
+function fillTo(row, col) {
+  const box = region();
+  const below = row > box.bottom || row < box.top;
+  const beside = col > box.right || col < box.left;
+  if (!below && !beside) return;
+  // One direction at a time, the way the handle behaves: whichever the pointer
+  // has travelled further along wins.
+  const down = below
+    && (!beside || Math.abs(row - box.bottom) >= Math.abs(col - box.right));
+  const forwards = down ? row > box.bottom : col > box.right;
+  const steps = down
+    ? (forwards ? row - box.bottom : box.top - row)
+    : (forwards ? col - box.right : box.left - col);
+  if (steps <= 0) return;
+
+  const lines = seriesOf(box, down);
+  change(() => {
+    lines.forEach((line, which) => {
+      // Where the cell filled at `step` sits, and — with `back` — where in the
+      // block the value it copies came from.
+      const place = (step, back) => down
+        ? {
+          row: back === undefined
+            ? (forwards ? box.bottom + step : box.top - step)
+            : box.top + back,
+          col: box.left + which,
+        }
+        : {
+          row: box.top + which,
+          col: back === undefined
+            ? (forwards ? box.right + step : box.left - step)
+            : box.left + back,
+        };
+      for (const { spot, text } of fillLine(line, steps, forwards, place)) {
+        put(spot.row, spot.col, text);
+      }
+    });
+  });
+  draw();
+  // The filled cells join the selection, so the whole run is there to be
+  // pulled again or taken back.
+  if (down) {
+    anchor = { row: forwards ? box.top : row, col: box.left };
+    at = { row: anchor.row, col: anchor.col };
+    goTo(forwards ? row : box.bottom, box.right, false, true);
+  } else {
+    anchor = { row: box.top, col: forwards ? box.left : col };
+    at = { row: anchor.row, col: anchor.col };
+    goTo(box.bottom, forwards ? col : box.right, false, true);
+  }
 }
 
 // ── Carrying cells in and out ───────────────────────────────────────────────
@@ -1429,6 +1774,12 @@ function onKey(event) {
 
 document.addEventListener('mouseup', () => {
   headDrag = null;
+  if (filling) {
+    const to = filling.to;
+    filling = null;
+    if (to) fillTo(to.row, to.col);
+    return;
+  }
   if (!dragging) return;
   dragging = false;
   // The name box goes back to the anchor's address now the size has been read.

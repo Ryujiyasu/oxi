@@ -642,6 +642,20 @@ pub fn recalculate_spreadsheet(workbook: JsValue) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Move a formula's relative references as Excel does when a cell is copied.
+///
+/// The browser needs this to fill a formula down a column: `=B2+C2` dragged one
+/// row must become `=B3+C3`, while `=$B$2` must not move. A formula the engine
+/// cannot parse comes back as an error rather than unchanged, because copying
+/// it verbatim would keep relative references Excel would have moved — which
+/// looks like it worked and is wrong.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn translate_formula(formula: &str, rows: i32, columns: i32) -> Result<String, JsError> {
+    oxicells_core::formula::translate_formula_references(formula, rows as i64, columns as i64)
+        .map_err(|error| JsError::new(&error))
+}
+
 /// Renders a number the way a sheet shows it under `format`.
 ///
 /// The browser used to carry its own reading of number formats; this is the

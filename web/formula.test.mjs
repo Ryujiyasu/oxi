@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const wasm = await import('file://' + join(here, 'oxidocs_wasm.js').replaceAll('\\', '/'));
 await wasm.default({ module_or_path: await readFile(join(here, 'oxidocs_wasm_bg.wasm')) });
-const { parse_spreadsheet, recalculate_spreadsheet, edit_xlsx } = wasm;
+const { parse_spreadsheet, recalculate_spreadsheet, edit_xlsx, translate_formula } = wasm;
 
 const page = await readFile(join(here, 'xlsx-demo.html'), 'utf8');
 
@@ -176,6 +176,31 @@ for (let row = 1; row <= 400; row++) {
 bits.use(heavy);
 const big = bits.affordable();
 is('a workbook that would hang is refused before it is asked', big.cost > 300, true);
+
+// ── Carrying a formula across ───────────────────────────────
+//
+// Filling a formula down a column moves its relative references and leaves its
+// absolute ones alone. The grid trusts the engine for this rather than editing
+// the text itself, so what it has to know is that the engine does it, and that
+// a formula it cannot read comes back as a refusal rather than as the formula
+// unchanged — an unmoved reference that should have moved looks like it worked.
+
+is('a reference follows the cell down', translate_formula('=B2+C2', 1, 0), '=B3+C3');
+is('and across', translate_formula('=B2+C2', 0, 2), '=D2+E2');
+is('an absolute reference does not move', translate_formula('=$B$2', 3, 3), '=$B$2');
+is('a half-absolute one moves only the loose half',
+  translate_formula('=$B2', 1, 1), '=$B3');
+is('and the other half the other way', translate_formula('=B$2', 1, 1), '=C$2');
+is('a range moves whole', translate_formula('=SUM(A1:A3)', 2, 0), '=SUM(A3:A5)');
+is('going back up moves it back', translate_formula('=B5', -2, 0), '=B3');
+
+let refused = false;
+try {
+  translate_formula('=NOTAFUNCTION(', 1, 0);
+} catch (error) {
+  refused = true;
+}
+is('a formula the engine cannot read is refused, not passed through', refused, true);
 
 console.log(failures === 0
   ? '\nformulas are worked out, and only when they can be'
