@@ -627,6 +627,21 @@ pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Recalculate every formula in a workbook and hand the workbook back.
+///
+/// The browser holds a sheet as this IR while it is being edited, so this is
+/// how a typed `=A1+B1` gets an answer: without it the editor would have to
+/// write the file out and read it back to find out what it had just computed.
+/// Cross-sheet references resolve, because the whole workbook goes across.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn recalculate_spreadsheet(workbook: JsValue) -> Result<JsValue, JsError> {
+    let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    oxicells_core::formula::evaluate_workbook_formulas(&mut workbook);
+    serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Renders a number the way a sheet shows it under `format`.
 ///
 /// The browser used to carry its own reading of number formats; this is the

@@ -672,7 +672,15 @@ pub struct ShapeLine {
     pub cap: Option<String>,
 }
 
+/// How a cell is drawn.
+///
+/// `#[serde(default)]` on the whole struct is load-bearing for the browser:
+/// the editor builds a cell the moment someone types into an empty one, and it
+/// has no style to give it. Requiring every field would mean the editor had to
+/// know and restate the default of each — which is to say, hold a second copy
+/// of this struct that would drift.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct CellStyle {
     pub bold: bool,
     pub italic: bool,

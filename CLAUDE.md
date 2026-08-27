@@ -46,7 +46,7 @@ Reference: JIS X 4051
 cargo build                          # Build all
 cargo test                           # Run tests
 cargo clippy                         # Lint
-cd crates/oxidocs-wasm && wasm-pack build --target web  # Wasm build (browser editor)
+cd crates/oxidocs-wasm && wasm-pack build --target web -- --features suite  # Wasm build (browser editor)
 cd tools/oxi-gdi-renderer && cargo build --release  # GDI renderer (verify pipeline)
 ```
 

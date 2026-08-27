@@ -75,6 +75,10 @@ const describe = () => {};
 const saveButton = { disabled: true, textContent: '' };
 const backButton = { disabled: true };
 const onButton = { disabled: true };
+let anyFormulas = false;
+// Working out formulas is the engine's job and has its own test; here it only
+// has to not happen, so that what a cell holds is exactly what was typed.
+const recompute = () => {};
 const cellAt = () => null;
 const tableNow = () => null;
 const describeCell = () => {};

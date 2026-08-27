@@ -210,6 +210,15 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 #drop.over { display: flex; }
 #state { padding: 40px; color: var(--dim); font-size: 14px; }
 
+/* Said once, quietly, beside the formula it applies to. */
+.bar #calcNote {
+  flex: none;
+  padding: 0 12px;
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* The two arrows sit together as one control, the way a toolbar pairs them. */
 header .step { font-size: 15px; line-height: 1; padding: 5px 9px; }
 header #back { margin-left: 6px; }
@@ -266,6 +275,7 @@ table { user-select: none; }
   <span id="where">A1</span>
   <span class="fx">fx</span>
   <input id="formula" spellcheck="false" autocomplete="off">
+  <span id="calcNote" style="display:none"></span>
 </div>
 
 <main>
@@ -288,7 +298,8 @@ table { user-select: none; }
 <div class="tabs" id="tabs"><span id="tally"></span></div>
 
 <script type="module">
-import init, { parse_spreadsheet, format_cell_number, edit_xlsx } from './oxidocs_wasm.js';
+import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
+               recalculate_spreadsheet } from './oxidocs_wasm.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
@@ -550,6 +561,80 @@ function describeCell(address, cell) {
     .join('');
 }
 
+// ── Working out what a formula comes to ─────────────────────────────────────
+//
+// Typing `=B2+C2` and seeing nothing is the moment a grid stops being a
+// spreadsheet, so the engine is asked for the answer after every edit. It is
+// the same evaluator that reads the corpus, not a second one written for the
+// browser — a formula must not mean one thing here and another when the file
+// is opened.
+//
+// It cannot always be asked. Recalculation is all-or-nothing today: the whole
+// dependency graph is rebuilt each time, which costs about a microsecond a
+// cell plus a millisecond and a half a formula. On the median workbook that is
+// a few milliseconds; on the largest in the corpus — 936,000 cells, 22,864
+// formulas — it is thirty-eight seconds. So the page works out whether it can
+// afford the answer before asking for it, and says plainly when it cannot.
+
+// Anything past this and the sheet would visibly stop responding.
+const PATIENCE = 300;
+let liveCalc = true;
+let anyFormulas = false;
+let weight = 0;
+const calcNote = document.getElementById('calcNote');
+
+/** Roughly what a recalculation of this workbook will cost, in milliseconds. */
+function calcCost() {
+  let cells = 0;
+  let formulas = 0;
+  for (const sheet of (book ? book.sheets : [])) {
+    for (const row of sheet.rows) {
+      cells += row.cells.length;
+      for (const cell of row.cells) if (cell.formula) formulas += 1;
+    }
+  }
+  anyFormulas = formulas > 0;
+  // Measured on the corpus: the graph build is per cell, the evaluation per
+  // formula, and crossing the wasm bridge doubles the per-cell part. The point
+  // of the estimate is only to catch the workbooks that would hang, so it is
+  // deliberately pessimistic rather than precise.
+  return cells / 40 + formulas * 2;
+}
+
+function sayCalc(why) {
+  if (!calcNote) return;
+  calcNote.textContent = why || '';
+  calcNote.style.display = why ? '' : 'none';
+}
+
+function weighCalc() {
+  weight = calcCost();
+  liveCalc = weight <= PATIENCE;
+  sayCalc(liveCalc ? '' :
+    'too large to work out formulas as you type — Excel will do it on open');
+}
+
+/** Ask the engine what everything comes to now. */
+function recompute() {
+  if (!book || !anyFormulas || !liveCalc) return;
+  const started = performance.now();
+  try {
+    book = recalculate_spreadsheet(book);
+  } catch (error) {
+    // A formula the evaluator cannot read is not a reason to stop showing the
+    // sheet; leave every cached value as it was.
+    liveCalc = false;
+    sayCalc(`formulas could not be worked out: ${error}`);
+    return;
+  }
+  // The estimate is a guess about a machine this code has never run on. What
+  // it actually took is not, so let that have the last word.
+  if (performance.now() - started > PATIENCE) {
+    liveCalc = false;
+    sayCalc('too slow to work out formulas as you type — Excel will do it on open');
+  }
+}
+
 // ── Taking it back ──────────────────────────────────────────────────────────
 //
 // An editor without undo is one people use carefully rather than freely, and
@@ -585,6 +670,7 @@ function change(what) {
     step = null;
   }
   if (built.cells.length === 0) return;
+  recompute();
   undone.push(built);
   if (undone.length > DEPTH) undone.shift();
   // A fresh change is a fork: what was undone is no longer ahead of us.
@@ -605,6 +691,7 @@ function restore(built, side) {
     put(one.row, one.col, one[side]);
   }
   step = was;
+  recompute();
   draw();
   // Show what moved. Excel selects the cells an undo touched, which is the
   // difference between trusting it and hunting for what it did.
@@ -1120,6 +1207,7 @@ function put(row, col, text) {
     line.cells.sort((a, b) => a.col - b.col);
   }
   cell.formula = text.startsWith('=') ? text.slice(1) : null;
+  if (cell.formula) anyFormulas = true;
   if (cell.formula) cell.value = { String: '' };
   else if (text === '') cell.value = 'Empty';
   else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
@@ -1327,6 +1415,7 @@ async function open(data, name) {
     return;
   }
   shown = 0;
+  weighCalc();
   const style = book.default_style || {};
   digitWidth = measureDigit(style.font_name, style.font_size);
   draw();
