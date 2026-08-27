@@ -157,6 +157,17 @@ pub struct Workbook {
     /// The tables, by the name a formula calls them, so that
     /// `tblNomina[[#This Row],[DATE]]` can be told which cells it means.
     tables: BTreeMap<String, TableRef>,
+    /// What NOW answers: the moment this workbook is being worked out, as a
+    /// serial with the time of day after the point.
+    ///
+    /// Read once at the start of a recalculation so that every TODAY in a
+    /// workbook agrees with every other — a sheet where one column thought it
+    /// was Monday and the next thought it was Tuesday would be worse than one
+    /// that could not tell the time at all. `set_now` pins it, which is what
+    /// makes a test of a function that means "now" possible.
+    now: f64,
+    /// True once someone has pinned the moment, so the clock is left alone.
+    now_pinned: bool,
 }
 
 impl Workbook {
@@ -166,6 +177,28 @@ impl Workbook {
 
     pub fn add_sheet(&mut self, name: &str) {
         self.sheets.entry(name.to_string()).or_default();
+    }
+
+    /// Fix what NOW and TODAY answer, instead of asking the clock.
+    ///
+    /// `serial` is counted the way every other date here is: whole days since
+    /// the last day of 1899, with the time of day after the point.
+    pub fn set_now(&mut self, serial: f64) {
+        self.now = serial;
+        self.now_pinned = true;
+    }
+
+    /// The moment by the system clock, as a serial. Falls back on the epoch
+    /// itself if the machine believes it is before 1970, which is not a
+    /// question worth an error.
+    fn read_the_clock() -> f64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let since = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|held| held.as_secs_f64())
+            .unwrap_or(0.0);
+        // 25,569 is 1970-01-01 counted from the last day of 1899.
+        25_569.0 + since / 86_400.0
     }
 
     pub fn sheet_names(&self) -> impl Iterator<Item = &str> {
@@ -265,6 +298,9 @@ impl Workbook {
 
     /// Recalculate every formula in dependency order.
     pub fn recalculate(&mut self) -> RecalcReport {
+        if !self.now_pinned {
+            self.now = Workbook::read_the_clock();
+        }
         let keys = self.formula_keys();
         let index: BTreeMap<&(String, (u32, u32)), usize> =
             keys.iter().enumerate().map(|(i, k)| (k, i)).collect();
@@ -478,6 +514,19 @@ impl Workbook {
 
             Expr::Function { name, args } if name == "ROW" || name == "COLUMN" => {
                 self.which_line(name, args, at)
+            }
+
+            // The clock belongs to the workbook, not to the function library,
+            // which is handed values and has no way to ask what day it is.
+            Expr::Function { name, args } if matches!(name.as_str(), "TODAY" | "NOW") => {
+                if !args.is_empty() {
+                    return Arg::Value(Value::Error(ExcelError::Value));
+                }
+                Arg::Value(Value::Number(if name == "TODAY" {
+                    self.now.trunc()
+                } else {
+                    self.now
+                }))
             }
 
             // How tall or how wide, answered from the reference. Counting the
@@ -934,6 +983,43 @@ mod tests {
             }
         }
         wb
+    }
+
+    #[test]
+    fn a_workbook_can_be_told_what_time_it_is() {
+        // Pinning the moment is what makes a function meaning "now" testable
+        // at all. 45297.75 is 2024-01-06 at six in the evening.
+        let mut wb = book();
+        wb.set_now(45297.75);
+        wb.set_formula("Sheet1", "A1", "=TODAY()").unwrap();
+        wb.set_formula("Sheet1", "A2", "=NOW()").unwrap();
+        wb.set_formula("Sheet1", "A3", "=DAY(TODAY())").unwrap();
+        wb.set_formula("Sheet1", "A4", "=TEXT(TODAY(),\"yyyy-mm-dd\")").unwrap();
+        // Neither takes an argument.
+        wb.set_formula("Sheet1", "A5", "=TODAY(1)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "A1"), Value::Number(45297.0), "the day only");
+        assert_eq!(wb.value("Sheet1", "A2"), Value::Number(45297.75), "and the hour");
+        assert_eq!(wb.value("Sheet1", "A3"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "A4"), Value::text("2024-01-06"));
+        assert_eq!(wb.value("Sheet1", "A5"), Value::Error(ExcelError::Value));
+    }
+
+    #[test]
+    fn every_today_in_one_working_out_is_the_same_day() {
+        // The clock is read once for a whole recalculation. A sheet where one
+        // column thought it was Monday and the next thought it was Tuesday
+        // would be worse than one that could not tell the time — and midnight
+        // falls in the middle of some recalculation eventually.
+        let mut wb = book();
+        wb.set_formula("Sheet1", "A1", "=TODAY()").unwrap();
+        wb.set_formula("Sheet1", "A2", "=TODAY()").unwrap();
+        wb.set_formula("Sheet1", "A3", "=A1=A2").unwrap();
+        // And it is a real date, not zero: well past the year 2000.
+        wb.set_formula("Sheet1", "A4", "=TODAY()>36526").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "A3"), Value::Logical(true));
+        assert_eq!(wb.value("Sheet1", "A4"), Value::Logical(true));
     }
 
     #[test]
