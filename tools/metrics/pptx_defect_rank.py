@@ -64,7 +64,8 @@ def _verify(cache: dict, exe_mtime: int, n: int) -> None:
     import subprocess
     import tempfile
 
-    man = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    root = SS.parent
+    man = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     have = [m for m in man if (SS / "oxi_png" / f"{m['idx']:02d}").is_dir()]
     step = max(1, len(have) // max(n, 1))
     ok = True
@@ -72,7 +73,7 @@ def _verify(cache: dict, exe_mtime: int, n: int) -> None:
         doc = f"{item['idx']:02d}"
         out = Path(tempfile.mkdtemp(prefix="rankverify_"))
         env = dict(os.environ)
-        subprocess.run([str(EXE), str(ROOT / "pptx" / item["local"]),
+        subprocess.run([str(EXE), str(root / "pptx" / item["local"]),
                         str(out / "slide"), "150"],
                        capture_output=True, env=env, timeout=3600)
         def h(d: Path) -> dict:
