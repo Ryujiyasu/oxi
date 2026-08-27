@@ -121,7 +121,12 @@ def _run() -> None:
     exe_mtime = EXE.stat().st_mtime_ns if EXE.exists() else 0
     state = load()
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-    tmp = SSIMD / "_remeasure_tmp"
+    # ★Per-process staging. The lock already forbids a second run, but a lock
+    # can be bypassed (an older build holds none) and the failure is SILENT:
+    # on 2026-08-28 two runs shared this directory and one moved the other's
+    # render into the wrong deck -- d35 ended up holding eleven of d28's slides
+    # while its own SSIM entry still read 0.9700. Isolation costs nothing.
+    tmp = SSIMD / f"_remeasure_tmp_{os.getpid()}"
     for item in manifest:
         doc = f"{item['idx']:02d}"
         # `--stale` re-does only the decks whose PNGs predate the binary, so a
