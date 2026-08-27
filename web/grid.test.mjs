@@ -66,7 +66,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'takeColumn', 'takeRow', 'takeAll',
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
-  'widthForPixels', 'setWidth'].map(lift).join('\n');
+  'widthForPixels', 'setWidth', 'dropCut'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -83,6 +83,7 @@ const sheet = { rows: [], col_widths: [] };
 const sheetNow = () => sheet;
 let digitWidth = 8;
 let sizing = null;
+let cutFrom = null;
 const showWidth = () => {};
 const countBox = { textContent: '' };
 const whereBox = { textContent: '' };
@@ -150,6 +151,22 @@ const wear = (row, col, text, format) => {
   beyondValues = false;
 };
 const widthAt = (col) => sheet.col_widths[col];
+// Mark a block for a cut, the way the cut handler does: remember where it is
+// and what it wears, and leave it exactly where it stands.
+const mark = (r1, c1, r2, c2) => {
+  select(r1, c1, r2, c2);
+  const box = region();
+  const styles = new Map();
+  for (let row = box.top; row <= box.bottom; row++) {
+    for (let col = box.left; col <= box.right; col++) {
+      const one = heldAt(row, col);
+      if (one) styles.set((row - box.top) + ',' + (col - box.left), { ...one.style });
+    }
+  }
+  cutFrom = { sheet: shown, ...box, styles };
+};
+// What a paste would move, as the paste handler works it out.
+const marked = () => cutFrom;
 const beyond = () => beyondValues;
 const depth = () => undone.length;
 const styleAt = (row, col) => {
@@ -169,6 +186,7 @@ const cells = () => {
 const unsaved = () => changes.size;
 // Start over as if a fresh file had been opened.
 const forget = () => {
+  cutFrom = null;
   sheet.rows.length = 0;
   sheet.col_widths.length = 0;
   beyondValues = false;
@@ -178,8 +196,8 @@ const forget = () => {
 export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped, unitOf,
          wear, styleAt, sameStyle, widthForPixels, setWidth, widthAt,
-         beyond, depth,
-         pasteGrid, clearSelection, selectionText, asGrid, fieldOf,
+         beyond, depth, dropCut, mark, marked,
+         pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
 
@@ -730,6 +748,67 @@ grid.setWidth(1, 96);
 const deep = grid.depth();
 grid.setWidth(1, 96);
 is('dragging to the width it already has changes nothing', grid.depth(), deep);
+
+// ── Cutting ─────────────────────────────────────────────
+//
+// A cut takes nothing away. It says which cells are going to move; they move
+// when they are pasted, and Escape calls the whole thing off. Emptying them at
+// the moment of the cut — which is what this used to do — loses the work of
+// anyone who cuts a column and then changes their mind.
+
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.seed(2, 0, 'b');
+grid.mark(1, 0, 2, 0);
+is('a cut leaves the cells where they are', grid.cells(),
+  [['1,0', 'a'], ['2,0', 'b']]);
+is('and remembers which ones it marked',
+  [grid.marked().top, grid.marked().bottom], [1, 2]);
+
+grid.dropCut();
+is('Escape calls it off', grid.marked(), null);
+is('with everything still there', grid.cells(), [['1,0', 'a'], ['2,0', 'b']]);
+
+// Pasting after a cut moves the block: it arrives, and the cells it came from
+// empty, as one action.
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.seed(2, 0, 'b');
+grid.mark(1, 0, 2, 0);
+const moving = grid.marked();
+grid.select(5, 3, 5, 3);
+grid.change(() => {
+  for (let row = moving.top; row <= moving.bottom; row++) grid.put(row, moving.left, '');
+  grid.pasteGrid([['a'], ['b']], moving);
+});
+is('the block arrives where it was pasted', grid.cells(),
+  [['5,3', 'a'], ['6,3', 'b']]);
+grid.undo();
+is('and one undo puts the whole move back', grid.cells(),
+  [['1,0', 'a'], ['2,0', 'b']]);
+
+// The formatting travels with the cells, or a column of dates arrives as a
+// column of five-figure numbers.
+grid.forget();
+grid.wear(1, 0, '46052', 'mm-dd-yy');
+grid.mark(1, 0, 1, 0);
+const dated = grid.marked();
+grid.select(4, 2, 4, 2);
+grid.change(() => {
+  grid.put(1, 0, '');
+  grid.pasteGrid([['46052']], dated);
+});
+is('a cut date arrives still wearing its format', grid.styleAt(4, 2),
+  { number_format: 'mm-dd-yy' });
+is('and the cell it came from is empty', grid.cells(), [['4,2', '46052']]);
+
+// Writing to the sheet at all makes the mark stale, because the cells the
+// clipboard holds are no longer the cells that are there.
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.mark(1, 0, 1, 0);
+grid.change(() => grid.put(9, 9, 'something else'));
+is('editing anything drops the mark', grid.marked(), null);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

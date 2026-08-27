@@ -230,6 +230,9 @@ header #on { margin-right: 4px; }
    the cell you are about to type into. */
 td.pick { background: rgba(33, 115, 70, .10); }
 th.lit { background: var(--accent); color: #fff; }
+/* Cells a cut has marked. They are still there — this says where they will
+   move from, and Escape takes it back. */
+td.cut { outline: 2px dashed var(--accent); outline-offset: -2px; }
 th[data-head-col], th[data-head-row], th[data-all] { cursor: cell; }
 td.pick.here { background: transparent; }
 td.edge-t { box-shadow: inset 0 1px 0 0 var(--accent); }
@@ -759,6 +762,8 @@ function change(what) {
     step = null;
   }
   if (built.cells.length === 0 && built.columns.length === 0) return;
+  // Whatever was marked for a cut is no longer what the clipboard holds.
+  if (cutFrom) cutFrom = null;
   recompute();
   undone.push(built);
   if (undone.length > DEPTH) undone.shift();
@@ -1009,6 +1014,15 @@ function paint() {
   for (const head of table.querySelectorAll('th[data-head-row]')) {
     const row = Number(head.dataset.headRow);
     if (row >= box.top && row <= box.bottom) head.classList.add('lit');
+  }
+  for (const lit of table.querySelectorAll('td.cut')) lit.classList.remove('cut');
+  if (cutFrom && cutFrom.sheet === shown) {
+    for (let row = cutFrom.top; row <= cutFrom.bottom; row++) {
+      for (let col = cutFrom.left; col <= cutFrom.right; col++) {
+        const marked = cellAt(row, col);
+        if (marked) marked.classList.add('cut');
+      }
+    }
   }
   const cell = cellAt(at.row, at.col);
   if (cell) cell.classList.add('here');
@@ -1435,7 +1449,15 @@ function asGrid(text) {
   return rows;
 }
 
-function pasteGrid(grid) {
+/**
+ * Write `grid` into the sheet from the selection.
+ *
+ * `moving` is the block a cut marked, when this paste is completing one. The
+ * cells it names have already been emptied, but their styles are wanted at the
+ * far end: cutting a column of dates and pasting it somewhere else should not
+ * turn them into serial numbers on the way.
+ */
+function pasteGrid(grid, moving) {
   if (grid.length === 0) return;
   const box = region();
   // One value into a selected block fills the block — the way it does in Excel,
@@ -1450,7 +1472,10 @@ function pasteGrid(grid) {
   const top = single ? at.row : box.top;
   const left = single ? at.col : box.left;
   change(() => grid.forEach((line, down) => {
-    line.forEach((text, across) => put(top + down, left + across, text));
+    line.forEach((text, across) => {
+      put(top + down, left + across, text,
+        moving ? moving.styles.get(`${down},${across}`) : undefined);
+    });
   }));
   draw();
   const wide = Math.max(...grid.map((line) => line.length));
@@ -1476,20 +1501,57 @@ document.addEventListener('copy', (event) => {
   event.preventDefault();
 });
 
+// The block a cut has marked, or null. A cut takes nothing away: it says
+// which cells are going to move, and they move when they are pasted. Escape
+// calls it off, and so does anything else that writes to the sheet — which is
+// what makes cutting something you can change your mind about.
+let cutFrom = null;
+
 document.addEventListener('cut', (event) => {
   if (busyElsewhere()) return;
   event.clipboardData.setData('text/plain', selectionText());
   event.clipboardData.setData('text/html', selectionHtml());
   event.preventDefault();
-  clearSelection();
+  // The formatting travels with the cells. Cutting a column of dates and
+  // pasting it elsewhere should not turn them into serial numbers on the way,
+  // and by the time the paste runs the source has already been emptied.
+  const box = region();
+  const styles = new Map();
+  for (let row = box.top; row <= box.bottom; row++) {
+    for (let col = box.left; col <= box.right; col++) {
+      const held = heldAt(row, col);
+      if (held) styles.set(`${row - box.top},${col - box.left}`, { ...held.style });
+    }
+  }
+  cutFrom = { sheet: shown, ...box, styles };
+  paint();
 });
+
+/** Take the dashed border away; the cells it was round stay where they are. */
+function dropCut() {
+  if (!cutFrom) return;
+  cutFrom = null;
+  paint();
+}
 
 document.addEventListener('paste', (event) => {
   if (busyElsewhere()) return;
   const text = event.clipboardData.getData('text/plain');
   if (!text) return;
   event.preventDefault();
-  pasteGrid(asGrid(text));
+  // A cut and its paste are one action: the cells arrive and the ones they
+  // came from empty, and taking that back has to undo both halves at once.
+  const moving = cutFrom && cutFrom.sheet === shown ? cutFrom : null;
+  cutFrom = null;
+  change(() => {
+    if (moving) {
+      for (let row = moving.top; row <= moving.bottom; row++) {
+        for (let col = moving.left; col <= moving.right; col++) put(row, col, '');
+      }
+    }
+    pasteGrid(asGrid(text), moving);
+  });
+  paint();
 });
 
 // ── Keeping what was typed ──────────────────────────────────────────────────
@@ -1891,6 +1953,10 @@ function onKey(event) {
     case 'F2':
       event.preventDefault();
       edit(null);
+      break;
+    case 'Escape':
+      event.preventDefault();
+      dropCut();
       break;
     case 'Delete':
     case 'Backspace':
