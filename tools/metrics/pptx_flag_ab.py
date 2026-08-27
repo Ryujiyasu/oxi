@@ -45,13 +45,18 @@ EXE = REPO / "tools" / "oxi-pptx-renderer" / "target" / "release" / "oxi-pptx-re
 DPI = 150
 
 
-def render(src: Path, out: Path, env_off: str | None) -> list[Path]:
+def render(src: Path, out: Path, flag: str, on: bool) -> list[Path]:
+    """`on` selects the FEATURE, not the variable: an `_ENABLE` flag is set to
+    turn the feature on, a `_DISABLE` flag is set to turn it off. Passing the
+    variable through unchanged from the environment would let an inherited value
+    decide the arm, so it is always removed first."""
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     env = dict(os.environ)
-    env.pop("OXI_CELLADV_DISABLE", None)
-    if env_off:
-        env[env_off] = "1"
+    env.pop(flag, None)
+    want_set = (not on) if flag.endswith("_DISABLE") else on
+    if want_set:
+        env[flag] = "1"
     r = subprocess.run([str(EXE), str(src), str(out / "slide"), str(DPI)],
                        capture_output=True, env=env, timeout=3600)
     if r.returncode != 0:
@@ -95,8 +100,8 @@ def main() -> None:
             continue
         t0 = time.time()
         pdf = pymupdf.open(pdf_path)
-        pa = render(src, tmp_a, args.flag)      # control: feature OFF
-        pb = render(src, tmp_b, None)           # treatment: feature ON
+        pa = render(src, tmp_a, args.flag, on=False)   # control: feature OFF
+        pb = render(src, tmp_b, args.flag, on=True)    # treatment: feature ON
         if not pa or not pb:
             print(f"{doc}: render failed", flush=True)
             pdf.close()
