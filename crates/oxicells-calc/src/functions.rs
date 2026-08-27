@@ -387,6 +387,8 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         // them settles for itself what to do with one.
             | "SUMIF" | "COUNTIF" | "AVERAGEIF"
             | "SUMIFS" | "COUNTIFS" | "AVERAGEIFS"
+        // AGGREGATE's whole second argument is about what to do with them.
+            | "AGGREGATE"
     );
     if !error_transparent {
         if let Some(e) = first_error(args) {
@@ -1294,15 +1296,188 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 4 => "MAX",
                 5 => "MIN",
                 6 => "PRODUCT",
+                7 => "STDEV.S",
+                8 => "STDEV.P",
                 9 => "SUM",
-                // 7, 8, 10, 11 are STDEV/STDEVP/VAR/VARP, not implemented yet.
+                10 => "VAR.S",
+                11 => "VAR.P",
                 _ => return Err(ExcelError::Value),
             };
             dispatch(inner, &args[1..])
         }
 
+        // ---- statistics -------------------------------------------------
+        // The middle value, or the mean of the two in the middle when there is
+        // no single one.
+        "MEDIAN" => {
+            let mut held = numeric_operands(args)?;
+            if held.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            held.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let middle = held.len() / 2;
+            Ok(Value::Number(if held.len() % 2 == 1 {
+                held[middle]
+            } else {
+                (held[middle - 1] + held[middle]) / 2.0
+            }))
+        }
+
+        // How far the values lie from their mean. The `.S` forms divide by one
+        // less than the count, taking the values for a sample of something
+        // larger; the `.P` forms divide by the count, taking them for the whole
+        // of it.
+        "STDEV" | "STDEV.S" | "STDEVP" | "STDEV.P" | "VAR" | "VAR.S" | "VARP" | "VAR.P" => {
+            let held = numeric_operands(args)?;
+            let whole = matches!(name, "STDEVP" | "STDEV.P" | "VARP" | "VAR.P");
+            let divisor = if whole {
+                held.len() as f64
+            } else {
+                held.len() as f64 - 1.0
+            };
+            if divisor <= 0.0 {
+                return Err(ExcelError::DivZero);
+            }
+            let mean = held.iter().sum::<f64>() / held.len() as f64;
+            let spread = held.iter().map(|one| (one - mean).powi(2)).sum::<f64>() / divisor;
+            Ok(Value::Number(if name.starts_with("STDEV") {
+                spread.sqrt()
+            } else {
+                spread
+            }))
+        }
+
+        // The value that turns up most often. One that turns up no more often
+        // than any other is not a mode at all.
+        "MODE" | "MODE.SNGL" => {
+            let held = numeric_operands(args)?;
+            let mut best: Option<(f64, usize)> = None;
+            for one in &held {
+                let times = held.iter().filter(|other| *other == one).count();
+                if times < 2 {
+                    continue;
+                }
+                // Walking in order and refusing to replace on a tie keeps the
+                // earliest of the values that turn up equally often.
+                match best {
+                    Some((_, seen)) if seen >= times => {}
+                    _ => best = Some((*one, times)),
+                }
+            }
+            match best {
+                Some((one, _)) => Ok(Value::Number(one)),
+                None => Err(ExcelError::NA),
+            }
+        }
+
+        // The value a given way along the sorted list. The two families differ
+        // in where they start counting: INC from the first value, EXC from
+        // before it, which is why the same quarter comes out differently.
+        "PERCENTILE" | "PERCENTILE.INC" | "PERCENTILE.EXC" | "QUARTILE" | "QUARTILE.INC"
+        | "QUARTILE.EXC" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let mut held = numeric_operands(&args[..args.len() - 1])?;
+            if held.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            held.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let asked = num(&args[args.len() - 1])?;
+            // A quartile is a percentile in quarters.
+            let part = if name.starts_with("QUARTILE") {
+                if !(0.0..=4.0).contains(&asked) {
+                    return Err(ExcelError::Num);
+                }
+                asked.trunc() / 4.0
+            } else {
+                asked
+            };
+            let excluding = name.ends_with(".EXC");
+            let count = held.len() as f64;
+            let place = if excluding {
+                part * (count + 1.0) - 1.0
+            } else {
+                part * (count - 1.0)
+            };
+            if !(0.0..=count - 1.0).contains(&place) {
+                return Err(ExcelError::Num);
+            }
+            let below = place.floor() as usize;
+            let above = (below + 1).min(held.len() - 1);
+            let along = place - below as f64;
+            Ok(Value::Number(held[below] + (held[above] - held[below]) * along))
+        }
+
+        // SUBTOTAL's successor: the same aggregations, and a second argument
+        // saying what to leave out of them.
+        "AGGREGATE" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let which = num(&args[0])? as i64;
+            let leaving_out = num(&args[1])? as i64;
+            if !(0..=7).contains(&leaving_out) {
+                return Err(ExcelError::Value);
+            }
+            let inner = match which {
+                1 => "AVERAGE",
+                2 => "COUNT",
+                3 => "COUNTA",
+                4 => "MAX",
+                5 => "MIN",
+                6 => "PRODUCT",
+                7 => "STDEV.S",
+                8 => "STDEV.P",
+                9 => "SUM",
+                10 => "VAR.S",
+                11 => "VAR.P",
+                12 => "MEDIAN",
+                13 => "MODE.SNGL",
+                14 => "LARGE",
+                15 => "SMALL",
+                16 => "PERCENTILE.INC",
+                17 => "QUARTILE.INC",
+                18 => "PERCENTILE.EXC",
+                19 => "QUARTILE.EXC",
+                _ => return Err(ExcelError::Value),
+            };
+            // 14 to 19 want a k, or a fraction, after the values.
+            let wants_k = (14..=19).contains(&which);
+            let rest = &args[2..];
+            if rest.is_empty() || (wants_k && rest.len() < 2) {
+                return Err(ExcelError::Value);
+            }
+            let (values, k) = if wants_k {
+                rest.split_at(rest.len() - 1)
+            } else {
+                (rest, &rest[..0])
+            };
+            // Options 2, 3, 6 and 7 pass over the errors. The rest do not, and
+            // an error in the values is then the answer, as it would be for the
+            // aggregation on its own.
+            let mut passed: Vec<Arg> = if matches!(leaving_out, 2 | 3 | 6 | 7) {
+                let kept: Vec<Value> = values
+                    .iter()
+                    .flat_map(|one| one.flatten())
+                    .filter(|held| !held.is_error())
+                    .collect();
+                vec![Arg::Range(RangeData {
+                    width: 1,
+                    height: kept.len(),
+                    cells: kept,
+                })]
+            } else {
+                if let Some(why) = first_error(values) {
+                    return Err(why);
+                }
+                values.to_vec()
+            };
+            passed.extend(k.iter().cloned());
+            dispatch(inner, &passed)
+        }
+
         // ---- date and time ---------------------------------------------
-        // NOW/TODAY are absent on purpose: see the module docs.
         "DATE" => {
             expect(args, 3)?;
             let s = datetime::serial_from_date(
@@ -2085,6 +2260,109 @@ mod tests {
         assert_eq!(
             call("SUMIFS", &[amounts.clone(), amounts, broken]),
             Value::Error(ExcelError::Value),
+        );
+    }
+
+    /// 2 4 4 4 5 5 7 — a set chosen so the mean, the median and the mode are
+    /// three different questions with three different answers.
+    fn a_spread() -> Arg {
+        range(&[n(2.0), n(4.0), n(4.0), n(4.0), n(5.0), n(5.0), n(7.0)], 1)
+    }
+
+    /// 1 2 3 4 — an even count, so the median and the quartiles have to land
+    /// between two values rather than on one.
+    fn four_in_a_row() -> Arg {
+        range(&[n(1.0), n(2.0), n(3.0), n(4.0)], 1)
+    }
+
+    fn close_to(got: Value, want: f64, what: &str) {
+        match got {
+            Value::Number(held) => assert!(
+                (held - want).abs() < 1e-9,
+                "{what}: {held} is not {want}",
+            ),
+            other => panic!("{what}: {other:?} is not a number"),
+        }
+    }
+
+    /// Every expectation is Excel 16's answer.
+    #[test]
+    fn the_middle_and_the_spread_of_a_set_of_numbers() {
+        close_to(call("MEDIAN", &[a_spread()]), 4.0, "MEDIAN");
+        // No single middle: the mean of the two there are.
+        close_to(call("MEDIAN", &[four_in_a_row()]), 2.5, "MEDIAN of four");
+        // `.S` divides by one less than the count, taking the values for a
+        // sample; `.P` divides by the count, taking them for the whole.
+        close_to(call("STDEV.S", &[a_spread()]), 1.511_857_892_036_909, "STDEV.S");
+        close_to(call("STDEV.P", &[a_spread()]), 1.399_708_424_447_929_5, "STDEV.P");
+        close_to(call("VAR.S", &[a_spread()]), 2.285_714_285_714_285_5, "VAR.S");
+        close_to(call("VAR.P", &[a_spread()]), 1.959_183_673_469_387_7, "VAR.P");
+        // The old names mean the sample forms.
+        close_to(call("STDEV", &[a_spread()]), 1.511_857_892_036_909, "STDEV");
+        close_to(call("VAR", &[a_spread()]), 2.285_714_285_714_285_5, "VAR");
+        // One value is no sample at all.
+        assert_eq!(
+            call("STDEV.S", &[range(&[n(1.0)], 1)]),
+            Value::Error(ExcelError::DivZero),
+        );
+    }
+
+    #[test]
+    fn a_mode_has_to_turn_up_more_than_once() {
+        assert_eq!(call("MODE.SNGL", &[a_spread()]), n(4.0));
+        assert_eq!(call("MODE", &[a_spread()]), n(4.0));
+        assert_eq!(
+            call("MODE.SNGL", &[range(&[n(1.0), n(2.0), n(3.0)], 1)]),
+            Value::Error(ExcelError::NA),
+            "nothing turned up twice",
+        );
+    }
+
+    #[test]
+    fn the_two_percentile_families_start_counting_in_different_places() {
+        // Over 1 2 3 4: INC puts the rank at `p x (n-1)` from the first value,
+        // so a quarter of the way is 0.75 along and reads 1.75. EXC puts it at
+        // `p x (n+1)` counted from before the first, so a quarter is 1.25.
+        close_to(call("PERCENTILE.INC", &[four_in_a_row(), v(0.25)]), 1.75, "INC");
+        close_to(call("PERCENTILE.EXC", &[four_in_a_row(), v(0.25)]), 1.25, "EXC");
+        close_to(call("PERCENTILE.INC", &[four_in_a_row(), v(0.0)]), 1.0, "the least");
+        close_to(call("PERCENTILE.INC", &[four_in_a_row(), v(1.0)]), 4.0, "the most");
+        close_to(call("PERCENTILE", &[four_in_a_row(), v(0.9)]), 3.7, "the old name");
+        // A quartile is a percentile in quarters.
+        close_to(call("QUARTILE.INC", &[four_in_a_row(), v(1.0)]), 1.75, "Q1");
+        close_to(call("QUARTILE.INC", &[four_in_a_row(), v(2.0)]), 2.5, "Q2");
+        close_to(call("QUARTILE.INC", &[four_in_a_row(), v(3.0)]), 3.25, "Q3");
+        close_to(call("QUARTILE", &[four_in_a_row(), v(0.0)]), 1.0, "Q0");
+        close_to(call("QUARTILE.EXC", &[four_in_a_row(), v(1.0)]), 1.25, "Q1 exclusive");
+    }
+
+    #[test]
+    fn aggregate_can_be_told_to_pass_over_the_errors() {
+        // 10, #N/A, 30, 40. The second argument is what to leave out: 2, 3, 6
+        // and 7 leave out errors, and the corpus writes 6.
+        let with_a_gap = range(&[n(10.0), Value::Error(ExcelError::NA), n(30.0), n(40.0)], 1);
+        assert_eq!(call("AGGREGATE", &[v(15.0), v(6.0), with_a_gap.clone(), v(1.0)]), n(10.0));
+        assert_eq!(call("AGGREGATE", &[v(15.0), v(6.0), with_a_gap.clone(), v(3.0)]), n(40.0));
+        assert_eq!(call("AGGREGATE", &[v(14.0), v(6.0), with_a_gap.clone(), v(1.0)]), n(40.0));
+        assert_eq!(call("AGGREGATE", &[v(9.0), v(6.0), with_a_gap.clone()]), n(80.0));
+        assert_eq!(call("AGGREGATE", &[v(4.0), v(6.0), with_a_gap.clone()]), n(40.0));
+        assert_eq!(call("AGGREGATE", &[v(12.0), v(6.0), with_a_gap.clone()]), n(30.0));
+        close_to(
+            call("AGGREGATE", &[v(1.0), v(6.0), with_a_gap.clone()]),
+            26.666_666_666_666_668,
+            "the mean of what is left",
+        );
+        // Option 0 leaves nothing out, so the error is the answer — as it is
+        // for the aggregation on its own.
+        assert_eq!(
+            call("AGGREGATE", &[v(9.0), v(0.0), with_a_gap.clone()]),
+            Value::Error(ExcelError::NA),
+        );
+        assert_eq!(call("SUM", &[with_a_gap.clone()]), Value::Error(ExcelError::NA));
+        // There is no ninth of four.
+        assert_eq!(
+            call("AGGREGATE", &[v(15.0), v(6.0), with_a_gap, v(9.0)]),
+            Value::Error(ExcelError::Num),
         );
     }
 
