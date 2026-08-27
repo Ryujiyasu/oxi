@@ -60,6 +60,7 @@ fn split_sections(format: &str) -> Vec<&str> {
 /// A format is a date format when it names a date or time part outside quotes.
 fn looks_like_a_date(format: &str) -> bool {
     let mut quoted = false;
+    let mut marked_month = false;
     let mut characters = format.chars().peekable();
     while let Some(character) = characters.next() {
         match character {
@@ -73,17 +74,36 @@ fn looks_like_a_date(format: &str) -> bool {
             // is a date part. Reading the d in Red as a day turned every
             // negative number in an accounting format into a date.
             '[' => {
+                // A group of one repeated h, m or s is a lump of elapsed time
+                // — `[h]:mm` is 36:00 for a day and a half — and it is the
+                // only date part a format can consist of entirely. Skipping
+                // the group without looking left `[s]` reading as a number and
+                // showing 2 where Excel shows 129600.
+                let mut inside = String::new();
                 for held in characters.by_ref() {
                     if held == ']' {
                         break;
                     }
+                    inside.push(held.to_ascii_lowercase());
+                }
+                let unit = inside.chars().next().unwrap_or(' ');
+                if matches!(unit, 'h' | 'm' | 's') && inside.chars().all(|held| held == unit) {
+                    return true;
                 }
             }
             'y' | 'd' | 'h' | 's' => return true,
+            // `m` is a month beside the others and minutes beside an `h`, and
+            // on its own — `"mmmm"`, the month's name — it is still a date.
+            // It cannot simply be added to the line above: `m` is also an
+            // ordinary letter, and a number format is free to contain one.
+            // What a number format is never free to contain is a month code
+            // AND no digit at all, so the two are told apart by that.
+            'm' => marked_month = true,
+            '0' | '#' | '?' => return false,
             _ => {}
         }
     }
-    false
+    marked_month
 }
 
 /// What `General` shows: the shortest text that reads back as the same number.
@@ -337,6 +357,12 @@ fn format_datetime(serial: f64, format: &str) -> String {
     // model; every hour here is on the twenty-four hour clock.
     // weekday_sunday_one counts Sunday as one; these tables start at zero.
     let weekday = (weekday_sunday_one(whole) - 1).clamp(0, 6) as usize;
+    // Elapsed time counts from the epoch rather than from midnight, so a
+    // `[h]` is 1087128 where an `h` is 0. Excel rounds the whole serial to
+    // the nearest second once, and every elapsed part reads off that.
+    let total_seconds = (serial * 86_400.0).round() as i64;
+    let (era_latin, era_short, era_full, era_year) = era(year, month, day);
+
     let body: Vec<char> = format.chars().collect();
     let mut rendered = String::new();
     let mut at = 0;
@@ -351,6 +377,57 @@ fn format_datetime(serial: f64, format: &str) -> String {
         if quoted {
             rendered.push(character);
             at += 1;
+            continue;
+        }
+        // A backslash shows the next character as itself: `yyyy\-mm` is a date
+        // with hyphens in it, not a date with backslashes in it.
+        if character == '\\' {
+            if let Some(next) = body.get(at + 1) {
+                rendered.push(*next);
+            }
+            at += 2;
+            continue;
+        }
+        // `_)` reserves the width of a `)` without drawing it, and `*` fills
+        // the rest of the cell with a character. Neither is text.
+        if character == '_' {
+            rendered.push(' ');
+            at += 2;
+            continue;
+        }
+        if character == '*' {
+            at += 2;
+            continue;
+        }
+        // A bracket group is either a lump of elapsed time — `[h]`, `[mm]`,
+        // `[s]` — or something for the renderer rather than the reader, like
+        // the locale tag `[$-411]` or the colour `[Red]`.
+        if character == '[' {
+            let close = body[at..]
+                .iter()
+                .position(|held| *held == ']')
+                .map(|found| at + found);
+            let Some(close) = close else {
+                at += 1;
+                continue;
+            };
+            let inside: String = body[at + 1..close].iter().collect();
+            let lower = inside.to_ascii_lowercase();
+            let unit = lower.chars().next().unwrap_or(' ');
+            if !lower.is_empty() && lower.chars().all(|held| held == unit) {
+                let elapsed = match unit {
+                    'h' => Some(total_seconds / 3600),
+                    'm' => Some(total_seconds / 60),
+                    's' => Some(total_seconds),
+                    _ => None,
+                };
+                if let Some(elapsed) = elapsed {
+                    rendered.push_str(&format!("{:0width$}", elapsed, width = lower.len()));
+                    at = close + 1;
+                    continue;
+                }
+            }
+            at = close + 1;
             continue;
         }
         let run = body[at..]
@@ -397,6 +474,12 @@ fn format_datetime(serial: f64, format: &str) -> String {
                     _ => rendered.push_str(&format!("{value:02}")),
                 }
             }
+            'e' => rendered.push_str(&era_year.to_string()),
+            'g' => rendered.push_str(match run {
+                1 => era_latin,
+                2 => era_short,
+                _ => era_full,
+            }),
             _ => {
                 rendered.push(character);
                 at += 1;
@@ -406,6 +489,29 @@ fn format_datetime(serial: f64, format: &str) -> String {
         at += run;
     }
     rendered
+}
+
+/// The Japanese era a date falls in: its name three ways, and which year of it
+/// this is.
+///
+/// The four boundaries are the days the era changed, and each was measured by
+/// asking Excel for the day before and the day of — a boundary in the wrong
+/// place shows up as the two sides agreeing. Nothing before Meiji is reachable,
+/// since Excel's own day one is 1900.
+fn era(year: i64, month: i64, day: i64) -> (&'static str, &'static str, &'static str, i64) {
+    let ymd = (year, month, day);
+    let (latin, short, full, from) = if ymd >= (2019, 5, 1) {
+        ("R", "令", "令和", 2019)
+    } else if ymd >= (1989, 1, 8) {
+        ("H", "平", "平成", 1989)
+    } else if ymd >= (1926, 12, 25) {
+        ("S", "昭", "昭和", 1926)
+    } else if ymd >= (1912, 7, 30) {
+        ("T", "大", "大正", 1912)
+    } else {
+        ("M", "明", "明治", 1868)
+    };
+    (latin, short, full, year - from + 1)
 }
 
 fn previous_was_hour(body: &[char], at: usize) -> bool {
@@ -433,6 +539,116 @@ mod tests {
     /// renderer, not text to show. `#,##0.0_);(#,##0.0)` is what the machinery
     /// statistics are written with, and printing the `_)` leaves every number
     /// on the sheet with a stray bracket.
+    /// `m` is the one code that means two things, and it means a third thing
+    /// again when nothing else is there to tell them apart.
+    ///
+    /// In `h:mm` it is minutes, in `d-mmm` it is a month, and in `mmmm` on its
+    /// own — the month's name, which is a perfectly ordinary way to label a
+    /// column — there is nothing beside it at all. Reading `m` as "not a date"
+    /// left `TEXT(45297,"mmmm")` printing `mmmm45297`: the format was taken for
+    /// a number format, so its letters were passed through as literal text and
+    /// the serial was appended as though it were the number.
+    ///
+    /// What a number format never contains is a month code and no digit at
+    /// all, so a digit placeholder anywhere is what rules the format out.
+    /// Every one of these is what Excel 16 put in `Range.Text` for that value
+    /// under that format, read off a column wide enough to show it — a narrow
+    /// column answers `#######` however right the format is.
+    ///
+    /// Three things live here that the date formatter had never met, and all
+    /// three arrived together because allowing `m` to mark a date sent six of
+    /// the corpus formats down this path for the first time:
+    ///
+    ///   `[h]` and `[m]` and `[s]` are elapsed time, counted from the epoch
+    ///   rather than from midnight, so a day and a half is 36 hours and not 12.
+    ///
+    ///   `e` is which year of the Japanese era it is and `g` the era's name,
+    ///   as its Latin initial, one kanji, or in full. The four boundaries were
+    ///   each measured on the day before and the day of the change.
+    ///
+    ///   A backslash shows the next character as itself, so `yyyy\-mm\-dd`
+    ///   is a date with hyphens rather than one with backslashes.
+    #[test]
+    fn brackets_eras_and_escapes_are_what_excel_shows() {
+        assert_eq!(format_number(45297.0, "mmmm"), "January");
+        assert_eq!(format_number(1.5, "mmmm"), "January");
+        assert_eq!(format_number(0.25, "mmmm"), "January");
+        assert_eq!(format_number(45297.75, "mmmm"), "January");
+        assert_eq!(format_number(45297.0, "mmm"), "Jan");
+        assert_eq!(format_number(1.5, "mmm"), "Jan");
+        assert_eq!(format_number(0.25, "mmm"), "Jan");
+        assert_eq!(format_number(45297.75, "mmm"), "Jan");
+        assert_eq!(format_number(45297.0, "mm"), "01");
+        assert_eq!(format_number(1.5, "mm"), "01");
+        assert_eq!(format_number(0.25, "mm"), "01");
+        assert_eq!(format_number(45297.75, "mm"), "01");
+        assert_eq!(format_number(45297.0, "[$-411]\"(\"e\"年\"m\"月分)\""), "(6年1月分)");
+        assert_eq!(format_number(1.5, "[$-411]\"(\"e\"年\"m\"月分)\""), "(33年1月分)");
+        assert_eq!(format_number(0.25, "[$-411]\"(\"e\"年\"m\"月分)\""), "(33年1月分)");
+        assert_eq!(format_number(45297.75, "[$-411]\"(\"e\"年\"m\"月分)\""), "(6年1月分)");
+        assert_eq!(format_number(45297.0, "\"（\"[$-411]e\"年\"m\"月）\""), "（6年1月）");
+        assert_eq!(format_number(1.5, "\"（\"[$-411]e\"年\"m\"月）\""), "（33年1月）");
+        assert_eq!(format_number(0.25, "\"（\"[$-411]e\"年\"m\"月）\""), "（33年1月）");
+        assert_eq!(format_number(45297.75, "\"（\"[$-411]e\"年\"m\"月）\""), "（6年1月）");
+        assert_eq!(format_number(45297.0, "[h]:mm"), "1087128:00");
+        assert_eq!(format_number(1.5, "[h]:mm"), "36:00");
+        assert_eq!(format_number(0.25, "[h]:mm"), "6:00");
+        assert_eq!(format_number(45297.75, "[h]:mm"), "1087146:00");
+        assert_eq!(format_number(45297.0, "[h]:mm;@"), "1087128:00");
+        assert_eq!(format_number(1.5, "[h]:mm;@"), "36:00");
+        assert_eq!(format_number(0.25, "[h]:mm;@"), "6:00");
+        assert_eq!(format_number(45297.75, "[h]:mm;@"), "1087146:00");
+        assert_eq!(format_number(45297.0, "[mm]:ss"), "65227680:00");
+        assert_eq!(format_number(1.5, "[mm]:ss"), "2160:00");
+        assert_eq!(format_number(0.25, "[mm]:ss"), "360:00");
+        assert_eq!(format_number(45297.75, "[mm]:ss"), "65228760:00");
+        assert_eq!(format_number(45297.0, "[s]"), "3913660800");
+        assert_eq!(format_number(1.5, "[s]"), "129600");
+        assert_eq!(format_number(0.25, "[s]"), "21600");
+        assert_eq!(format_number(45297.75, "[s]"), "3913725600");
+        assert_eq!(format_number(45297.0, "[m]"), "65227680");
+        assert_eq!(format_number(1.5, "[m]"), "2160");
+        assert_eq!(format_number(0.25, "[m]"), "360");
+        assert_eq!(format_number(45297.75, "[m]"), "65228760");
+        assert_eq!(format_number(45297.0, "\"(\"[$-409]mmm\\,\\ yyyy\")\""), "(Jan, 2024)");
+        assert_eq!(format_number(1.5, "\"(\"[$-409]mmm\\,\\ yyyy\")\""), "(Jan, 1900)");
+        assert_eq!(format_number(0.25, "\"(\"[$-409]mmm\\,\\ yyyy\")\""), "(Jan, 1900)");
+        assert_eq!(format_number(45297.75, "\"(\"[$-409]mmm\\,\\ yyyy\")\""), "(Jan, 2024)");
+        assert_eq!(format_number(45297.0, "yyyy\\-mm\\-dd"), "2024-01-06");
+        assert_eq!(format_number(1.5, "yyyy\\-mm\\-dd"), "1900-01-01");
+        assert_eq!(format_number(0.25, "yyyy\\-mm\\-dd"), "1900-01-00");
+        assert_eq!(format_number(45297.75, "yyyy\\-mm\\-dd"), "2024-01-06");
+        assert_eq!(format_number(45297.0, "[$-409]d\\-mmm"), "6-Jan");
+        assert_eq!(format_number(1.5, "[$-409]d\\-mmm"), "1-Jan");
+        assert_eq!(format_number(0.25, "[$-409]d\\-mmm"), "0-Jan");
+        assert_eq!(format_number(45297.75, "[$-409]d\\-mmm"), "6-Jan");
+        assert_eq!(format_number(45297.0, "ggge\"年\"m\"月\"d\"日\""), "令和6年1月6日");
+        assert_eq!(format_number(1.5, "ggge\"年\"m\"月\"d\"日\""), "明治33年1月1日");
+        assert_eq!(format_number(0.25, "ggge\"年\"m\"月\"d\"日\""), "明治33年1月0日");
+        assert_eq!(format_number(45297.75, "ggge\"年\"m\"月\"d\"日\""), "令和6年1月6日");
+        assert_eq!(format_number(45297.0, "ge.m.d"), "R6.1.6");
+        assert_eq!(format_number(1.5, "ge.m.d"), "M33.1.1");
+        assert_eq!(format_number(0.25, "ge.m.d"), "M33.1.0");
+        assert_eq!(format_number(45297.75, "ge.m.d"), "R6.1.6");
+        assert_eq!(format_number(45297.0, "yyyy\"年\"m\"月\""), "2024年1月");
+        assert_eq!(format_number(1.5, "yyyy\"年\"m\"月\""), "1900年1月");
+        assert_eq!(format_number(0.25, "yyyy\"年\"m\"月\""), "1900年1月");
+        assert_eq!(format_number(45297.75, "yyyy\"年\"m\"月\""), "2024年1月");
+    }
+
+    #[test]
+    fn a_month_on_its_own_is_still_a_date() {
+        assert_eq!(format_number(45297.0, "mmmm"), "January");
+        assert_eq!(format_number(45297.0, "mmm"), "Jan");
+        assert_eq!(format_number(45297.0, "mm"), "01");
+        // Beside the codes that were already recognised, unchanged.
+        assert_eq!(format_number(45297.0, "yyyy-mm-dd"), "2024-01-06");
+        // A number format with an `m` in its currency text is not a date, and
+        // it is the digits that say so.
+        assert_eq!(format_number(1234.5, "0.00"), "1234.50");
+        assert_eq!(format_number(1234.5, "#,##0"), "1,235");
+    }
+
     #[test]
     fn spacing_and_colour_are_not_text() {
         assert_eq!(format_number(105.3, "#,##0.0_);(#,##0.0)"), "105.3 ");
