@@ -69,6 +69,19 @@ def report(state: dict) -> None:
         print(f"{r['doc']:>5}{r['mean']:>10.4f}{r['min']:>10.4f}{r['worst_slide']:>7}{r['pages']:>7}")
 
 
+def _alive(pid: str) -> bool:
+    """Is that pid still running? A stale lock must not outlive its holder."""
+    if not pid.isdigit():
+        return False
+    import ctypes
+
+    h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+    if not h:
+        return False
+    ctypes.windll.kernel32.CloseHandle(h)
+    return True
+
+
 def main() -> None:
     # ★One renderer at a time, enforced rather than remembered. Two instances
     # share `_remeasure_tmp`: on 2026-08-28 a second run's rmtree deleted the
@@ -85,9 +98,19 @@ def main() -> None:
         os.close(fd)
     except FileExistsError:
         held = lock.read_text(encoding="utf-8", errors="replace").strip()
-        print(f"another remeasure holds {lock.name} (pid {held}). "
-              f"Wait for it, or delete the lock if that process is gone.")
-        return
+        # A killed run cannot clean up after itself, so the lock outlives it and
+        # every later run would refuse for a process that no longer exists. Ask
+        # the OS whether the holder is alive and take the lock over if not --
+        # "delete it yourself" is not a mechanism, it is a note.
+        if _alive(held):
+            print(f"another remeasure holds {lock.name} (pid {held}) -- waiting on it.")
+            return
+        print(f"taking over a stale {lock.name} (pid {held} is gone)")
+        lock.unlink(missing_ok=True)
+        shutil.rmtree(SSIMD / "_remeasure_tmp", ignore_errors=True)
+        fd = os.open(str(lock), os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
     try:
         _run()
     finally:
