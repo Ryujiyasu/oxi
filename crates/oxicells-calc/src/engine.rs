@@ -198,17 +198,28 @@ impl Workbook {
         self.now_pinned = true;
     }
 
-    /// The moment by the system clock, as a serial. Falls back on the epoch
-    /// itself if the machine believes it is before 1970, which is not a
-    /// question worth an error.
-    fn read_the_clock() -> f64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let since = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|held| held.as_secs_f64())
-            .unwrap_or(0.0);
-        // 25,569 is 1970-01-01 counted from the last day of 1899.
-        25_569.0 + since / 86_400.0
+    /// The moment by the system clock, as a serial, where there is one.
+    ///
+    /// There is not always one: `wasm32-unknown-unknown` has no clock at all,
+    /// and asking it for the time does not fail politely — it panics, which
+    /// took down the browser editor on the first thing anyone typed. So this
+    /// answers `None` there and the host says instead. Anything that knows it
+    /// is running in a browser knows what day it is.
+    fn read_the_clock() -> Option<f64> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let since = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|held| held.as_secs_f64())
+                .unwrap_or(0.0);
+            // 25,569 is 1970-01-01 counted from the last day of 1899.
+            Some(25_569.0 + since / 86_400.0)
+        }
     }
 
     pub fn sheet_names(&self) -> impl Iterator<Item = &str> {
@@ -338,7 +349,9 @@ impl Workbook {
     /// The whole of it, or some part.
     fn work_out(&mut self, extent: Extent<'_>) -> RecalcReport {
         if !self.now_pinned {
-            self.now = Workbook::read_the_clock();
+            if let Some(moment) = Workbook::read_the_clock() {
+                self.now = moment;
+            }
         }
         let keys = self.formula_keys();
         // Where the formulas are, sheet by sheet, ordered by column and then

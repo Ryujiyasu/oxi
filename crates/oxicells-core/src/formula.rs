@@ -61,7 +61,7 @@ pub fn unparsed_formulas(workbook: &Workbook) -> usize {
 
 pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
     // One sheet on its own carries no workbook, so it has no names either.
-    recalculate(std::slice::from_mut(sheet), &[], Overwrite::All);
+    recalculate(std::slice::from_mut(sheet), &[], Overwrite::All, None);
 }
 
 /// Recalculate every formula in the workbook, overwriting cached values.
@@ -69,14 +69,27 @@ pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
 /// Use after editing. Cross-sheet references resolve correctly.
 pub fn evaluate_workbook_formulas(workbook: &mut Workbook) {
     let names = workbook.defined_names.clone();
-    recalculate(&mut workbook.sheets, &names, Overwrite::All);
+    recalculate(&mut workbook.sheets, &names, Overwrite::All, None);
+}
+
+/// The same, told what the moment is.
+///
+/// `now` is a serial: whole days since the last day of 1899, with the time of
+/// day after the point. It is what `TODAY()` and `NOW()` answer.
+///
+/// Somewhere without a clock has to be told — a browser build has no
+/// `SystemTime` — and somewhere with one may still want to pin the moment, so
+/// that a sheet worked out twice comes out the same both times.
+pub fn evaluate_workbook_formulas_at(workbook: &mut Workbook, now: f64) {
+    let names = workbook.defined_names.clone();
+    recalculate(&mut workbook.sheets, &names, Overwrite::All, Some(now));
 }
 
 /// Compute only those formula cells the file left without a cached value,
 /// leaving everything Excel already calculated untouched.
 pub fn fill_missing_formula_values(workbook: &mut Workbook) {
     let names = workbook.defined_names.clone();
-    recalculate(&mut workbook.sheets, &names, Overwrite::OnlyMissing);
+    recalculate(&mut workbook.sheets, &names, Overwrite::OnlyMissing, None);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -85,7 +98,12 @@ enum Overwrite {
     OnlyMissing,
 }
 
-fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite) {
+fn recalculate(
+    sheets: &mut [Sheet],
+    names: &[(String, String)],
+    mode: Overwrite,
+    now: Option<f64>,
+) {
     // Which formula cells the file left without an answer. A workbook Excel
     // wrote has none, and then there is nothing to do at all — which is worth
     // asking BEFORE building anything, since building it is the cost.
@@ -111,6 +129,9 @@ fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite
     };
 
     let mut book = oxicells_calc::Workbook::new();
+    if let Some(moment) = now {
+        book.set_now(moment);
+    }
 
     // Named before anything is asked of them: a formula saying `SUM(sales)`
     // means one of these, and a name that will not parse is simply left

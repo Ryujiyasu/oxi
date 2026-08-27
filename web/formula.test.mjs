@@ -81,7 +81,9 @@ function typeInto(book, row, col, text) {
   else if (text === '') cell.value = 'Empty';
   else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
   else cell.value = { String: text };
-  return recalculate_spreadsheet(book);
+  // A fixed moment, so a sheet holding TODAY() comes out the same every run.
+  // The browser has no clock the engine can reach, so somebody has to say.
+  return recalculate_spreadsheet(book, 45297.5);
 }
 
 const cellAt = (book, row, col) => {

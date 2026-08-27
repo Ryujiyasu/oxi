@@ -635,10 +635,19 @@ pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>
 /// Cross-sheet references resolve, because the whole workbook goes across.
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
-pub fn recalculate_spreadsheet(workbook: JsValue) -> Result<JsValue, JsError> {
+pub fn recalculate_spreadsheet(workbook: JsValue, now: Option<f64>) -> Result<JsValue, JsError> {
     let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
-    oxicells_core::formula::evaluate_workbook_formulas(&mut workbook);
+    // A browser has no system clock to ask — `SystemTime::now` does not merely
+    // fail there, it panics — so `TODAY()` is answered from the moment the
+    // page hands over. Without one it falls back on the engine's own default
+    // rather than taking the page down.
+    match now {
+        Some(moment) => {
+            oxicells_core::formula::evaluate_workbook_formulas_at(&mut workbook, moment)
+        }
+        None => oxicells_core::formula::evaluate_workbook_formulas(&mut workbook),
+    }
     serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
 }
 
