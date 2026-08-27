@@ -8,6 +8,8 @@ pub mod formula;
 pub mod ir;
 pub mod parser;
 
+pub mod bands;
+
 pub use editor::{CellEditValue, XlsxEditor};
 pub use formula::{
     evaluate_sheet_formulas, evaluate_workbook_formulas, fill_missing_formula_values,

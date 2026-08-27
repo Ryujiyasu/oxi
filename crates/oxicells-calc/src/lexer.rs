@@ -276,6 +276,18 @@ pub struct ReferenceShift<'a> {
     /// left alone, while one naming this sheet moves even from another sheet's
     /// formula, which is how `=Data!A5` follows a row inserted on `Data`.
     pub sheet: Option<&'a str>,
+    /// The sheet the formula being rewritten is written ON, when that is
+    /// known.
+    ///
+    /// An unqualified `A1` means this sheet, so it moves only when this is the
+    /// sheet the cells moved on. Without it, rewriting another sheet's
+    /// formulas moves references that never pointed at the change: a row put
+    /// into `Data` would drag `=A3` on `Summary` along with it.
+    ///
+    /// `None` means it is not known, and then an unqualified reference is
+    /// taken to be on the moved sheet — which is what a caller rewriting only
+    /// that sheet wants.
+    pub on_sheet: Option<&'a str>,
 }
 
 /// Which way a band of inserted or removed cells runs.
@@ -305,6 +317,7 @@ pub fn shift_formula_references(
         count,
         across,
         sheet: moved_sheet,
+        on_sheet,
     } = *shift;
     crate::parser::parse(input).map_err(|error| error.to_string())?;
     let had_equals = input.trim_start().starts_with('=');
@@ -353,7 +366,12 @@ pub fn shift_formula_references(
         // A reference naming another sheet points at cells this change never
         // touched, so it stays as it is.
         let names_moved_sheet = match (sheet.as_deref(), moved_sheet) {
-            (None, _) => true,
+            // Unqualified: it means the sheet the formula is written on, so it
+            // moves only when that is the sheet the cells moved on.
+            (None, Some(moved)) => {
+                on_sheet.is_none_or(|own| own.eq_ignore_ascii_case(moved))
+            }
+            (None, None) => true,
             (Some(named), Some(moved)) => named.eq_ignore_ascii_case(moved),
             (Some(_), None) => false,
         };
@@ -913,6 +931,7 @@ mod shift_tests {
                         count,
                         across: (1, MAX_COL + 1),
                         sheet: None,
+                        on_sheet: None,
                     },
                 )
                 .unwrap(),
@@ -943,6 +962,7 @@ mod shift_tests {
                         count,
                         across: (1, MAX_COL + 1),
                         sheet: None,
+                        on_sheet: None,
                     },
                 )
                 .unwrap(),
@@ -969,6 +989,7 @@ mod shift_tests {
                         count,
                         across: (1, MAX_ROW + 1),
                         sheet: None,
+                        on_sheet: None,
                     },
                 )
                 .unwrap(),
@@ -985,7 +1006,35 @@ mod shift_tests {
             count,
             across: (1, MAX_COL + 1),
             sheet,
+            // These tests rewrite the moved sheet's own formulas, which is
+            // what an unspoken `on_sheet` already means.
+            on_sheet: None,
         }
+    }
+
+    /// An unqualified reference means the sheet the formula is written on.
+    ///
+    /// Without saying which sheet that is, every unqualified reference moved —
+    /// so putting a row into `Data` dragged `=A3` on `Summary` along with it,
+    /// pointing it at a row nothing had touched. Found by a test that inserted
+    /// into a sheet that did not exist and watched another sheet's formulas
+    /// change anyway.
+    #[test]
+    fn an_unqualified_reference_belongs_to_its_own_sheet() {
+        let moving_data = |on: Option<&str>, formula: &str| {
+            let mut shift = whole_rows(2, 1, Some("Data"));
+            shift.on_sheet = on;
+            shift_formula_references(formula, &shift).unwrap()
+        };
+        // Written on Data: the unqualified one is about Data, so it moves.
+        assert_eq!(moving_data(Some("Data"), "=A3+Data!A3+Other!A3"), "=A4+Data!A4+Other!A3");
+        // Written anywhere else: the unqualified one is about that sheet.
+        assert_eq!(moving_data(Some("Other"), "=A3+Data!A3+Other!A3"), "=A3+Data!A4+Other!A3");
+        // Sheet names are matched without regard to capitals, as Excel does.
+        assert_eq!(moving_data(Some("DATA"), "=A3"), "=A4");
+        // Saying nothing keeps the old meaning: the caller is rewriting the
+        // moved sheet's own formulas.
+        assert_eq!(moving_data(None, "=A3"), "=A4");
     }
 
     /// A formula on another sheet follows the rows of the sheet it names.
@@ -1053,6 +1102,7 @@ mod shift_tests {
                         count,
                         across: column_b,
                         sheet: None,
+                        on_sheet: None,
                     },
                 )
                 .unwrap(),
@@ -1081,6 +1131,7 @@ mod shift_tests {
                         count,
                         across: row_2,
                         sheet: None,
+                        on_sheet: None,
                     },
                 )
                 .unwrap(),
