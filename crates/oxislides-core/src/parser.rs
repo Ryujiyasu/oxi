@@ -1045,6 +1045,8 @@ fn parse_slide(
     // Empty branch (they are always self-closing) unless this is set, which
     // restores every shape ramp running at angle 0.
     let s_gradlin = std::env::var("OXI_GRADLIN_DISABLE").is_err();
+    // A shape gradient's ramp centre comes from a:tileRect, not a:fillToRect.
+    let s_gradtile = std::env::var("OXI_GRADTILE_DISABLE").is_err();
     // A gradient stop's colour is read from the Empty branch too unless this
     // is set, which restores dropping every stop written without an alpha.
     let s_gradstop = std::env::var("OXI_GRADSTOP_DISABLE").is_err();
@@ -1562,11 +1564,34 @@ fn parse_slide(
                             sg_focus = Some((0.5, 0.5));
                         }
                     }
-                    "fillToRect" if sg_in_path => {
+                    // S-GRADTILE (2026-08-27). For a SHAPE fill PowerPoint
+                    // IGNORES `a:fillToRect` -- the gradpath probe renders the
+                    // focus declared centre, top-left, bottom-right and ABSENT
+                    // as four identical centred circles -- and takes the ramp's
+                    // centre from `a:tileRect` instead. Reading fillToRect put
+                    // the focus at (0.25,0.25) for d15-style `r=b=100%` (l and t
+                    // default to 0.5 here), which is neither what PowerPoint
+                    // does with the attribute nor what it does without it, and
+                    // cost 0.2118 mean|delta| on the probe's arm 2.
+                    "fillToRect" if sg_in_path && !s_gradtile => {
                         let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
                         let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
                         let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
                         let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        sg_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
+                    }
+                    // The tile's own centre, in shape-relative units: its edges
+                    // are INSETS from the shape box, so a negative one pushes
+                    // outward. `l="-100%" t="-100%"` makes a tile twice the
+                    // shape centred on the shape's TOP-LEFT corner, and that is
+                    // where PowerPoint puts the ramp's centre (probe arm 4,
+                    // focus (0.00,0.00)). Absent or empty -> (0.5,0.5), which is
+                    // the centred case every other arm shows.
+                    "tileRect" if sg_in && sg_focus.is_some() && s_gradtile => {
+                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
                         sg_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
                     }
                     "custGeom" if in_shape && s_custgeom => {
@@ -2084,11 +2109,20 @@ fn parse_slide(
                             sg_focus = Some((0.5, 0.5));
                         }
                     }
-                    "fillToRect" if sg_in_path && s_gradlin => {
+                    "fillToRect" if sg_in_path && s_gradlin && !s_gradtile => {
                         let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
                         let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
                         let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
                         let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.5);
+                        sg_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
+                    }
+                    // The self-closing form -- `<a:tileRect l=".." t=".."/>` and
+                    // the bare `<a:tileRect/>` both arrive here, not above.
+                    "tileRect" if sg_in && sg_focus.is_some() && s_gradtile => {
+                        let l = get_attr(&e, "l").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        let t = get_attr(&e, "t").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        let r = get_attr(&e, "r").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
+                        let b = get_attr(&e, "b").and_then(|v| gradient_frac(&v)).unwrap_or(0.0);
                         sg_focus = Some(((l + (1.0 - r)) / 2.0, (t + (1.0 - b)) / 2.0));
                     }
                     // Self-closing forms of the cell properties. quick-xml
