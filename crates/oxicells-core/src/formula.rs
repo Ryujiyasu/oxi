@@ -86,6 +86,30 @@ enum Overwrite {
 }
 
 fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite) {
+    // Which formula cells the file left without an answer. A workbook Excel
+    // wrote has none, and then there is nothing to do at all — which is worth
+    // asking BEFORE building anything, since building it is the cost.
+    let missing: Vec<(String, (u32, u32))> = if mode == Overwrite::OnlyMissing {
+        let mut found = Vec::new();
+        for sheet in sheets.iter() {
+            for row in &sheet.rows {
+                for cell in &row.cells {
+                    if formula_text(cell.formula.as_deref()).is_some()
+                        && matches!(cell.value, CellValue::Empty)
+                    {
+                        found.push((sheet.name.clone(), (cell.col, row.index.saturating_sub(1))));
+                    }
+                }
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+        found
+    } else {
+        Vec::new()
+    };
+
     let mut book = oxicells_calc::Workbook::new();
 
     // Named before anything is asked of them: a formula saying `SUM(sales)`
@@ -141,7 +165,17 @@ fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite
         }
     }
 
-    book.recalculate();
+    match mode {
+        Overwrite::All => {
+            book.recalculate();
+        }
+        // Only the cells that need an answer. Whatever they read is either
+        // already cached or is another of these, and a missing input comes
+        // earlier in the same order.
+        Overwrite::OnlyMissing => {
+            book.recalculate_these(&missing);
+        }
+    }
 
     for sheet in sheets.iter_mut() {
         let name = sheet.name.clone();

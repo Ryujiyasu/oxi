@@ -75,6 +75,16 @@ fn outside_brackets(asked: &str) -> Vec<String> {
     parts
 }
 
+/// How much of a workbook a recalculation covers.
+enum Extent<'a> {
+    /// Every formula there is.
+    Everything,
+    /// Only what a change to these cells can reach.
+    ReachedBy(&'a [(String, (u32, u32))]),
+    /// Only these, and nothing they lead to.
+    JustThese(&'a [(String, (u32, u32))]),
+}
+
 /// Which cell is being worked out, when that is known. `ROW()` with no
 /// argument is the only thing that needs it, and a formula evaluated on its
 /// own rather than in a cell has no answer for it.
@@ -298,7 +308,7 @@ impl Workbook {
 
     /// Recalculate every formula in dependency order.
     pub fn recalculate(&mut self) -> RecalcReport {
-        self.work_out(None)
+        self.work_out(Extent::Everything)
     }
 
     /// Recalculate only the formulas a change to these cells can reach.
@@ -312,11 +322,21 @@ impl Workbook {
     /// graph is still built, since a cell that has just been given a formula
     /// may read anything. What is skipped is the working out.
     pub fn recalculate_after(&mut self, changed: &[(String, (u32, u32))]) -> RecalcReport {
-        self.work_out(Some(changed))
+        self.work_out(Extent::ReachedBy(changed))
     }
 
-    /// The whole of it, or only what `changed` reaches.
-    fn work_out(&mut self, changed: Option<&[(String, (u32, u32))]>) -> RecalcReport {
+    /// Work out these formulas and no others, in the order a whole pass would
+    /// have used.
+    ///
+    /// This is for filling gaps rather than following a change: whatever these
+    /// read is either already known or is another of them, and a cell that is
+    /// waited for comes earlier in that order.
+    pub fn recalculate_these(&mut self, wanted: &[(String, (u32, u32))]) -> RecalcReport {
+        self.work_out(Extent::JustThese(wanted))
+    }
+
+    /// The whole of it, or some part.
+    fn work_out(&mut self, extent: Extent<'_>) -> RecalcReport {
         if !self.now_pinned {
             self.now = Workbook::read_the_clock();
         }
@@ -356,11 +376,23 @@ impl Workbook {
 
         let emitted: BTreeSet<usize> = order.iter().copied().collect();
 
-        // Which of them a change can reach. Everything, when nothing in
-        // particular changed.
-        if let Some(changed) = changed {
-            let reached = self.reached_by(changed, &keys, &at, &dependents);
-            order.retain(|i| reached.contains(i));
+        match extent {
+            Extent::Everything => {}
+            // Which of them a change can reach.
+            Extent::ReachedBy(changed) => {
+                let reached = self.reached_by(changed, &keys, &at, &dependents);
+                order.retain(|i| reached.contains(i));
+            }
+            // Just these, wherever they fall in the order.
+            Extent::JustThese(wanted) => {
+                let asked: BTreeSet<usize> = wanted
+                    .iter()
+                    .filter_map(|(sheet, coord)| {
+                        at.get(sheet.as_str()).and_then(|held| held.get(coord)).copied()
+                    })
+                    .collect();
+                order.retain(|i| asked.contains(i));
+            }
         }
 
         let mut report = RecalcReport {
@@ -379,7 +411,7 @@ impl Workbook {
 
         // Anything Kahn could not emit sits in a cycle. A partial pass says
         // nothing about the cells it did not look at, so it leaves them be.
-        if changed.is_some() {
+        if !matches!(extent, Extent::Everything) {
             return report;
         }
         for (i, (sheet, coord)) in keys.iter().enumerate() {
