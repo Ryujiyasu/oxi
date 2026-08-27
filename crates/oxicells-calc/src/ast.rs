@@ -92,6 +92,17 @@ impl Expr {
         }
     }
 
+    /// Whether this function is asking about a range rather than reading it.
+    ///
+    /// These four want a shape or a position, so the range they name is not
+    /// something they wait for. Only a plain reference counts: anything that
+    /// has to be worked out first is a dependency like any other, and the
+    /// evaluator draws the line in the same place.
+    pub fn asks_only_the_shape(name: &str, args: &[Expr]) -> bool {
+        matches!(name, "ROW" | "COLUMN" | "ROWS" | "COLUMNS")
+            && matches!(args.first(), Some(Expr::Ref(_)) | Some(Expr::Table { .. }))
+    }
+
     /// Every reference this expression reads. Used to build the dependency graph.
     pub fn references(&self) -> Vec<Reference> {
         let mut found = Vec::new();
@@ -101,5 +112,39 @@ impl Expr {
             }
         });
         found
+    }
+
+    /// Every reference whose CONTENTS this expression depends on.
+    ///
+    /// The same as `references`, less the ranges that are only being measured.
+    /// This is what the dependency graph wants: a formula that asks how tall a
+    /// block is does not have to wait for the block to be worked out, and
+    /// treating it as though it did makes a cycle out of the commonest way to
+    /// number a series.
+    pub fn value_references(&self) -> Vec<Reference> {
+        let mut found = Vec::new();
+        self.walk_values(&mut found);
+        found
+    }
+
+    fn walk_values(&self, found: &mut Vec<Reference>) {
+        match self {
+            Expr::Ref(reference) => found.push(reference.clone()),
+            Expr::Unary { operand, .. } => operand.walk_values(found),
+            Expr::Binary { lhs, rhs, .. } => {
+                lhs.walk_values(found);
+                rhs.walk_values(found);
+            }
+            Expr::Function { name, args } => {
+                let measured = Expr::asks_only_the_shape(name, args);
+                for (at, arg) in args.iter().enumerate() {
+                    if measured && at == 0 {
+                        continue;
+                    }
+                    arg.walk_values(found);
+                }
+            }
+            Expr::Table { .. } | Expr::Literal(_) | Expr::Name(_) => {}
+        }
     }
 }

@@ -346,7 +346,9 @@ impl Workbook {
             return Vec::new();
         };
         let mut deps = Vec::new();
-        for reference in expr.references() {
+        // Not `references`: a range that is only being measured is not
+        // something this cell waits for.
+        for reference in expr.value_references() {
             let target = reference.sheet.as_deref().unwrap_or(sheet);
             let Some(target_sheet) = self.sheets.get(target) else {
                 continue;
@@ -463,6 +465,19 @@ impl Workbook {
 
             Expr::Function { name, args } if name == "ROW" || name == "COLUMN" => {
                 self.which_line(name, args, at)
+            }
+
+            // How tall or how wide, answered from the reference. Counting the
+            // range by evaluating it would pull in every cell it names — and
+            // the commonest use writes the formula INTO that block, so the
+            // count would be a circular reference where Excel sees no
+            // difficulty at all. Only a plain reference is taken this way; an
+            // array arriving from somewhere else still goes the ordinary road.
+            Expr::Function { name, args }
+                if matches!(name.as_str(), "ROWS" | "COLUMNS")
+                    && Expr::asks_only_the_shape(name, args) =>
+            {
+                self.how_many_lines(name, args, at)
             }
 
             Expr::Function { name, args } => {
@@ -617,6 +632,31 @@ impl Workbook {
             height: if down { many } else { 1 },
             cells,
         })
+    }
+
+    /// `ROWS` and `COLUMNS`, answered from the reference rather than its
+    /// contents.
+    ///
+    /// A whole-column `ROWS(A:A)` is therefore 1,048,576, which is what Excel
+    /// says — `materialise` cuts a range back to what the sheet holds, and
+    /// counting the cut-down block would answer with the sheet's height
+    /// instead of the reference's.
+    fn how_many_lines(&self, name: &str, args: &[Expr], at: At) -> Arg {
+        let down = name == "ROWS";
+        let range = match args.first() {
+            Some(Expr::Ref(reference)) => reference.range,
+            Some(Expr::Table { name, asked }) => match self.table_range(name, asked, at) {
+                Ok((_, range)) => range,
+                Err(why) => return Arg::Value(Value::Error(why)),
+            },
+            _ => return Arg::Value(Value::Error(ExcelError::Value)),
+        };
+        let (from, to) = if down {
+            (range.start.row, range.end.row)
+        } else {
+            (range.start.col, range.end.col)
+        };
+        Arg::Value(Value::Number((to.saturating_sub(from) + 1) as f64))
     }
 
     /// Every value in `range`, as a block.
@@ -881,6 +921,49 @@ mod tests {
             }
         }
         wb
+    }
+
+    #[test]
+    fn a_range_that_is_only_measured_is_not_waited_for() {
+        // A date series that numbers itself by how far down the block it has
+        // got: the same formula in every cell of B7:B10, each asking how tall
+        // B7:B10 is. Excel answers without hesitating, because ROWS never
+        // looks inside the range.
+        //
+        // Counting that range as a dependency makes the block a cycle, and
+        // then NOTHING in it is evaluated — including, as the last assertion
+        // shows, a cell standing outside it, since the cells it names are the
+        // ones stuck.
+        let mut wb = book();
+        wb.set_value("Sheet1", "B3", Value::Number(44440.0)).unwrap();
+        wb.set_value("Sheet1", "F3", Value::Number(44530.0)).unwrap();
+        let counting = "=IF($B$3+ROWS($B$7:$B10)-1<=$F$3,$B$3+ROWS($B$7:$B10)-1,\"\")";
+        for row in 7..=10 {
+            wb.set_formula("Sheet1", &format!("B{row}"), counting).unwrap();
+        }
+        wb.set_formula("Sheet1", "Z1", counting).unwrap();
+        wb.recalculate();
+        for at in ["B7", "B8", "B10", "Z1"] {
+            assert_eq!(wb.value("Sheet1", at), Value::Number(44443.0), "at {at}");
+        }
+    }
+
+    #[test]
+    fn how_tall_a_range_is_comes_from_the_reference() {
+        // `materialise` cuts a range back to what the sheet holds, so counting
+        // the block it returns would answer with the sheet's height rather
+        // than the reference's. Excel says a whole column is 1,048,576 rows
+        // however few of them are filled in.
+        let mut wb = book();
+        wb.set_value("Sheet1", "A1", Value::Number(1.0)).unwrap();
+        wb.set_value("Sheet1", "A2", Value::Number(2.0)).unwrap();
+        wb.set_formula("Sheet1", "C1", "=ROWS(A:A)").unwrap();
+        wb.set_formula("Sheet1", "C2", "=COLUMNS(A1:D9)").unwrap();
+        wb.set_formula("Sheet1", "C3", "=ROWS(A1:B9)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "C1"), Value::Number(1_048_576.0));
+        assert_eq!(wb.value("Sheet1", "C2"), Value::Number(4.0));
+        assert_eq!(wb.value("Sheet1", "C3"), Value::Number(9.0));
     }
 
     #[test]

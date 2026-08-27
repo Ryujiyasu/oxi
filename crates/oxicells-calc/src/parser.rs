@@ -390,6 +390,39 @@ mod tests {
         );
     }
 
+    /// Which references a formula has to WAIT for, as against which it merely
+    /// measures.
+    ///
+    /// `ROWS(A1:A9)` asks how tall that block is and never looks inside it, so
+    /// counting the block as a dependency is what turns a self-numbering
+    /// series into a cycle. The line is drawn at "a plain reference", because
+    /// that is the only shape the evaluator answers without evaluating — and
+    /// the graph has to draw it in exactly the same place, or a formula waits
+    /// for something that is never computed, or is computed too early.
+    #[test]
+    fn a_range_that_is_only_measured_is_not_a_dependency() {
+        let waits_for = |s: &str| {
+            let mut names: Vec<String> = p(s)
+                .value_references()
+                .iter()
+                .map(|one| one.range.to_string())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(waits_for("=SUM(A1:A9)"), ["A1:A9"]);
+        assert!(waits_for("=ROWS(A1:A9)").is_empty());
+        assert!(waits_for("=COLUMNS(A1:D1)").is_empty());
+        assert!(waits_for("=ROW(A1:A9)").is_empty());
+        // The other arguments still count, and so does a second use of the
+        // same range that IS reading it.
+        assert_eq!(waits_for("=SUM(A1:A9)+ROWS(A1:A9)"), ["A1:A9"]);
+        assert_eq!(waits_for("=INDEX(B1:B9,ROWS(A1:A9))"), ["B1:B9"]);
+        // An argument that has to be worked out first is a dependency like any
+        // other: what it reads, the count reads.
+        assert_eq!(waits_for("=ROWS(INDEX(A1:C5,,B1))"), ["A1:C5", "B1"]);
+    }
+
     #[test]
     fn power_is_left_associative() {
         // Excel: 2^3^2 = 64, not 512.
