@@ -421,6 +421,246 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
                 .count();
             Ok(Value::Number(count as f64))
         }
+        // ---- several conditions at once --------------------------------
+        //
+        // SUMIFS reads its ranges the other way round from SUMIF: the range to
+        // add comes FIRST, and the pairs to test follow it. Getting that the
+        // wrong way round is the classic way to write one of these.
+        "SUMIFS" | "COUNTIFS" | "AVERAGEIFS" => {
+            let counting = name == "COUNTIFS";
+            let pairs = if counting { &args[0..] } else { &args[1..] };
+            if pairs.len() < 2 || pairs.len() % 2 != 0 {
+                return Err(ExcelError::Value);
+            }
+            // For SUMIFS and AVERAGEIFS this is the range to add up; for
+            // COUNTIFS it is the first range to test, and is only used for its
+            // length.
+            let over = args[0].flatten();
+            let mut total = 0.0;
+            let mut seen = 0.0;
+            for at in 0..over.len() {
+                let mut all = true;
+                for pair in pairs.chunks(2) {
+                    let tested = pair[0].flatten();
+                    let criteria = Criteria::parse(&pair[1].scalar());
+                    // A row is only counted when every range has something to
+                    // say about it; ranges of different lengths are Excel's
+                    // #VALUE!, but a short one simply fails to match here.
+                    match tested.get(at) {
+                        Some(value) if criteria.matches(value) => {}
+                        _ => {
+                            all = false;
+                            break;
+                        }
+                    }
+                }
+                if !all {
+                    continue;
+                }
+                seen += 1.0;
+                if !counting {
+                    if let Some(Value::Number(n)) = over.get(at) {
+                        total += n;
+                    }
+                }
+            }
+            Ok(match name {
+                "COUNTIFS" => Value::Number(seen),
+                "SUMIFS" => Value::Number(total),
+                _ if seen == 0.0 => Value::Error(ExcelError::DivZero),
+                _ => Value::Number(total / seen),
+            })
+        }
+
+        // Multiply the arrays together elementwise and add up the lot. Text and
+        // blanks count as nothing rather than spoiling the sum, which is what
+        // makes `SUMPRODUCT((A=x)*(B=y), C)` work at all — the comparisons come
+        // through as TRUE and FALSE and have to weigh one and nothing.
+        "SUMPRODUCT" => {
+            if args.is_empty() {
+                return Err(ExcelError::Value);
+            }
+            let columns: Vec<Vec<Value>> = args.iter().map(|one| one.flatten()).collect();
+            let reach = columns.iter().map(|one| one.len()).max().unwrap_or(0);
+            let mut total = 0.0;
+            for at in 0..reach {
+                let mut running = 1.0;
+                for column in &columns {
+                    // Arrays of different lengths are #VALUE! in Excel, and a
+                    // missing cell here is treated as one.
+                    if column.len() != reach && column.len() != 1 {
+                        return Err(ExcelError::Value);
+                    }
+                    let value = if column.len() == 1 { &column[0] } else { &column[at] };
+                    running *= match value {
+                        Value::Number(n) => *n,
+                        Value::Logical(true) => 1.0,
+                        Value::Logical(false) | Value::Blank | Value::Text(_) => 0.0,
+                        Value::Error(e) => return Err(*e),
+                    };
+                    if running == 0.0 {
+                        break;
+                    }
+                }
+                total += running;
+            }
+            Ok(Value::Number(total))
+        }
+
+        // ---- how big is this ---------------------------------------------
+        "ROWS" | "COLUMNS" => {
+            let shape = one_arg(args)?.as_range();
+            Ok(Value::Number(if name == "ROWS" {
+                shape.height as f64
+            } else {
+                shape.width as f64
+            }))
+        }
+
+        // ---- the nth smallest, and the nth largest ------------------------
+        "SMALL" | "LARGE" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let mut numbers: Vec<f64> = args[0]
+                .flatten()
+                .iter()
+                .filter_map(|one| match one {
+                    Value::Number(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            if numbers.is_empty() {
+                return Err(ExcelError::Num);
+            }
+            numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let nth = num(&args[1])?;
+            if nth < 1.0 || nth as usize > numbers.len() {
+                return Err(ExcelError::Num);
+            }
+            let at = nth as usize - 1;
+            Ok(Value::Number(if name == "SMALL" {
+                numbers[at]
+            } else {
+                numbers[numbers.len() - 1 - at]
+            }))
+        }
+
+        // Where a number comes in a list, counting from the largest unless
+        // told otherwise. Equal numbers share the higher place, and the places
+        // after them are skipped — two firsts are followed by a third.
+        "RANK" | "RANK.EQ" => {
+            if args.len() < 2 {
+                return Err(ExcelError::Value);
+            }
+            let wanted = num(&args[0])?;
+            let numbers: Vec<f64> = args[1]
+                .flatten()
+                .iter()
+                .filter_map(|one| match one {
+                    Value::Number(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            let up = match args.get(2) {
+                Some(one) => num(one)? != 0.0,
+                None => false,
+            };
+            if !numbers.contains(&wanted) {
+                return Err(ExcelError::NA);
+            }
+            let ahead = numbers
+                .iter()
+                .filter(|one| if up { **one < wanted } else { **one > wanted })
+                .count();
+            Ok(Value::Number(ahead as f64 + 1.0))
+        }
+
+        // ---- rounding away from zero to a multiple ------------------------
+        "CEILING" | "FLOOR" | "CEILING.MATH" | "FLOOR.MATH" => {
+            let value = num(&args[0])?;
+            let step = match args.get(1) {
+                Some(one) => num(one)?,
+                // The .MATH forms take a step of one when none is given; the
+                // older ones insist on being told.
+                None if name.ends_with(".MATH") => 1.0,
+                None => return Err(ExcelError::Value),
+            };
+            if step == 0.0 {
+                return Ok(Value::Number(0.0));
+            }
+            // Excel refuses a positive number rounded to a negative step.
+            if value > 0.0 && step < 0.0 && !name.ends_with(".MATH") {
+                return Err(ExcelError::Num);
+            }
+            let up = name.starts_with("CEILING");
+            let steps = value / step;
+            Ok(Value::Number(
+                step * if up { steps.ceil() } else { steps.floor() },
+            ))
+        }
+
+        // ---- letters and their numbers ------------------------------------
+        "CHAR" => {
+            let code = one(args)?;
+            if !(1.0..=255.0).contains(&code) {
+                return Err(ExcelError::Value);
+            }
+            // Excel's CHAR is the Windows codepage, which agrees with Latin-1
+            // over the whole range it accepts.
+            Ok(Value::Text(
+                char::from_u32(code as u32).map(String::from).unwrap_or_default(),
+            ))
+        }
+        "CODE" | "UNICODE" => {
+            let letters = text(one_arg(args)?)?;
+            match letters.chars().next() {
+                Some(one) => Ok(Value::Number(u32::from(one) as f64)),
+                None => Err(ExcelError::Value),
+            }
+        }
+
+        // Whether two pieces of text are the same, letter case and all —
+        // which is exactly what `=` does not ask.
+        "EXACT" => {
+            expect(args, 2)?;
+            Ok(Value::Logical(text(&args[0])? == text(&args[1])?))
+        }
+
+        // Put something in the middle of some text, over what was there.
+        "REPLACE" => {
+            expect(args, 4)?;
+            let held = utf16(&text(&args[0])?);
+            let from = num(&args[1])?;
+            let many = num(&args[2])?;
+            if from < 1.0 || many < 0.0 {
+                return Err(ExcelError::Value);
+            }
+            let from = (from as usize - 1).min(held.len());
+            let to = (from + many as usize).min(held.len());
+            let mut out = from_utf16(&held[..from]);
+            out.push_str(&text(&args[3])?);
+            out.push_str(&from_utf16(&held[to..]));
+            Ok(Value::Text(out))
+        }
+
+        // A number written the way a cell would show it under `format`.
+        "TEXT" => {
+            expect(args, 2)?;
+            let format = text(&args[1])?;
+            match args[0].scalar() {
+                Value::Number(n) => Ok(Value::Text(crate::numfmt::format_number(n, &format))),
+                // Text handed to TEXT comes back as it was: there is nothing
+                // for a number format to do to it.
+                Value::Text(t) => Ok(Value::Text(t)),
+                Value::Logical(b) => Ok(Value::Text(
+                    if b { "TRUE" } else { "FALSE" }.to_string(),
+                )),
+                Value::Blank => Ok(Value::Text(String::new())),
+                Value::Error(e) => Err(e),
+            }
+        }
+
         "SUMIF" => {
             if args.len() < 2 {
                 return Err(ExcelError::Value);
@@ -853,6 +1093,189 @@ mod tests {
             height: values.len() / width,
             cells: values.to_vec(),
         })
+    }
+
+    fn n(value: f64) -> Value {
+        Value::Number(value)
+    }
+
+    #[test]
+    fn sumproduct_multiplies_across_and_adds_up() {
+        let a = range(&[n(1.0), n(2.0), n(3.0)], 1);
+        let b = range(&[n(4.0), n(5.0), n(6.0)], 1);
+        // 1*4 + 2*5 + 3*6
+        assert_eq!(call("SUMPRODUCT", &[a.clone(), b]), Value::Number(32.0));
+        // One array on its own is just its sum.
+        assert_eq!(call("SUMPRODUCT", &[a]), Value::Number(6.0));
+    }
+
+    #[test]
+    fn sumproduct_weighs_a_condition_as_one_or_nothing() {
+        // This is what the function is nearly always for: a column of TRUE and
+        // FALSE picking out which of another column to add. Text and blanks
+        // have to weigh nothing rather than spoil the sum.
+        let flags = range(
+            &[Value::Logical(true), Value::Logical(false), Value::Logical(true)],
+            1,
+        );
+        let amounts = range(&[n(10.0), n(20.0), n(30.0)], 1);
+        assert_eq!(call("SUMPRODUCT", &[flags, amounts]), Value::Number(40.0));
+        let mixed = range(&[n(2.0), Value::text("x"), Value::Blank], 1);
+        let ones = range(&[n(1.0), n(1.0), n(1.0)], 1);
+        assert_eq!(call("SUMPRODUCT", &[mixed, ones]), Value::Number(2.0));
+    }
+
+    #[test]
+    fn sumproduct_refuses_arrays_of_different_lengths() {
+        let three = range(&[n(1.0), n(2.0), n(3.0)], 1);
+        let two = range(&[n(1.0), n(2.0)], 1);
+        assert_eq!(
+            call("SUMPRODUCT", &[three, two]),
+            Value::Error(ExcelError::Value)
+        );
+    }
+
+    #[test]
+    fn sumifs_reads_its_ranges_the_other_way_round_from_sumif() {
+        // SUMIF puts the range to test first and the range to add last; SUMIFS
+        // puts the range to add FIRST. Writing one as the other is the classic
+        // way to get a plausible wrong answer.
+        let amounts = range(&[n(10.0), n(20.0), n(30.0)], 1);
+        let region = range(
+            &[Value::text("N"), Value::text("S"), Value::text("N")],
+            1,
+        );
+        assert_eq!(
+            call("SUMIFS", &[amounts.clone(), region.clone(), t("N")]),
+            Value::Number(40.0)
+        );
+        assert_eq!(
+            call("COUNTIFS", &[region.clone(), t("N")]),
+            Value::Number(2.0)
+        );
+        assert_eq!(
+            call("AVERAGEIFS", &[amounts.clone(), region.clone(), t("N")]),
+            Value::Number(20.0)
+        );
+        // Two conditions, both of which must hold.
+        let size = range(&[n(1.0), n(1.0), n(2.0)], 1);
+        assert_eq!(
+            call("SUMIFS", &[amounts, region, t("N"), size, t("1")]),
+            Value::Number(10.0)
+        );
+    }
+
+    #[test]
+    fn averageifs_of_nothing_is_a_division_by_zero() {
+        let amounts = range(&[n(10.0)], 1);
+        let region = range(&[Value::text("N")], 1);
+        assert_eq!(
+            call("AVERAGEIFS", &[amounts, region, t("S")]),
+            Value::Error(ExcelError::DivZero)
+        );
+    }
+
+    #[test]
+    fn rows_and_columns_report_the_shape_of_what_they_are_given() {
+        let block = range(&[n(1.0), n(2.0), n(3.0), n(4.0), n(5.0), n(6.0)], 3);
+        assert_eq!(call("ROWS", &[block.clone()]), Value::Number(2.0));
+        assert_eq!(call("COLUMNS", &[block]), Value::Number(3.0));
+        // A single value is a block one by one.
+        assert_eq!(call("ROWS", &[v(5.0)]), Value::Number(1.0));
+    }
+
+    #[test]
+    fn small_and_large_count_from_opposite_ends() {
+        let data = range(&[n(5.0), n(1.0), n(9.0), n(3.0)], 1);
+        assert_eq!(call("SMALL", &[data.clone(), v(1.0)]), Value::Number(1.0));
+        assert_eq!(call("SMALL", &[data.clone(), v(3.0)]), Value::Number(5.0));
+        assert_eq!(call("LARGE", &[data.clone(), v(1.0)]), Value::Number(9.0));
+        assert_eq!(call("LARGE", &[data.clone(), v(2.0)]), Value::Number(5.0));
+        // Past the end of the list is #NUM!, not the last one.
+        assert_eq!(
+            call("SMALL", &[data, v(9.0)]),
+            Value::Error(ExcelError::Num)
+        );
+    }
+
+    #[test]
+    fn small_ignores_what_is_not_a_number() {
+        let data = range(&[n(5.0), Value::text("x"), Value::Blank, n(1.0)], 1);
+        assert_eq!(call("SMALL", &[data.clone(), v(1.0)]), Value::Number(1.0));
+        assert_eq!(call("SMALL", &[data, v(2.0)]), Value::Number(5.0));
+    }
+
+    #[test]
+    fn rank_gives_equal_numbers_the_same_place_and_skips_the_next() {
+        let data = range(&[n(9.0), n(9.0), n(5.0)], 1);
+        assert_eq!(call("RANK", &[v(9.0), data.clone()]), Value::Number(1.0));
+        // Two firsts are followed by a third, not a second.
+        assert_eq!(call("RANK", &[v(5.0), data.clone()]), Value::Number(3.0));
+        // Counting up instead of down.
+        assert_eq!(
+            call("RANK", &[v(5.0), data.clone(), v(1.0)]),
+            Value::Number(1.0)
+        );
+        assert_eq!(
+            call("RANK", &[v(7.0), data]),
+            Value::Error(ExcelError::NA)
+        );
+    }
+
+    #[test]
+    fn ceiling_and_floor_move_to_a_multiple() {
+        assert_eq!(call("CEILING", &[v(4.2), v(1.0)]), Value::Number(5.0));
+        assert_eq!(call("CEILING", &[v(4.2), v(0.5)]), Value::Number(4.5));
+        assert_eq!(call("FLOOR", &[v(4.8), v(0.5)]), Value::Number(4.5));
+        assert_eq!(call("CEILING", &[v(-4.2), v(1.0)]), Value::Number(-4.0));
+        // The older CEILING refuses a positive number and a negative step;
+        // the .MATH form takes one.
+        assert_eq!(
+            call("CEILING", &[v(4.2), v(-1.0)]),
+            Value::Error(ExcelError::Num)
+        );
+        assert_eq!(call("CEILING.MATH", &[v(4.2)]), Value::Number(5.0));
+    }
+
+    #[test]
+    fn exact_is_the_comparison_that_notices_capitals() {
+        assert_eq!(call("EXACT", &[t("Word"), t("Word")]), Value::Logical(true));
+        assert_eq!(call("EXACT", &[t("Word"), t("word")]), Value::Logical(false));
+    }
+
+    #[test]
+    fn char_and_code_are_each_others_undoing() {
+        assert_eq!(call("CHAR", &[v(65.0)]), Value::text("A"));
+        assert_eq!(call("CODE", &[t("A")]), Value::Number(65.0));
+        assert_eq!(call("CODE", &[t("Apple")]), Value::Number(65.0));
+        assert_eq!(call("CHAR", &[v(0.0)]), Value::Error(ExcelError::Value));
+        assert_eq!(call("CHAR", &[v(300.0)]), Value::Error(ExcelError::Value));
+    }
+
+    #[test]
+    fn replace_puts_something_over_what_was_there() {
+        assert_eq!(
+            call("REPLACE", &[t("abcdef"), v(2.0), v(3.0), t("XY")]),
+            Value::text("aXYef")
+        );
+        // Nothing taken out is an insertion.
+        assert_eq!(
+            call("REPLACE", &[t("abc"), v(2.0), v(0.0), t("-")]),
+            Value::text("a-bc")
+        );
+        // Counted in the same units as LEN, so a surrogate pair is two.
+        assert_eq!(
+            call("REPLACE", &[t("𠮷野"), v(1.0), v(2.0), t("Y")]),
+            Value::text("Y野")
+        );
+    }
+
+    #[test]
+    fn text_writes_a_number_the_way_a_cell_would_show_it() {
+        assert_eq!(call("TEXT", &[v(1234.5), t("0.00")]), Value::text("1234.50"));
+        // Text handed to it comes back untouched: a number format has nothing
+        // to say about it.
+        assert_eq!(call("TEXT", &[t("already"), t("0.00")]), Value::text("already"));
     }
 
     #[test]
