@@ -1,31 +1,40 @@
 # -*- coding: utf-8 -*-
-"""Probe: what does `a:srcRect` do to a shape's picture fill in PowerPoint?
+"""Author the a:srcRect / geometry PICTURE-CROP probe.
 
-d30 slide 16 (SSIM 0.5236, one of the corpus's worst) has a full-width photo
-whose fill declares `<a:srcRect b="14368"/>`. Correlating the two renders band
-by band shows the horizontal scale matches to 1.000 while the VERTICAL content
-of Oxi is ~1.15x larger -- i.e. exactly the sort of difference a mis-modelled
-source crop makes. The crop rule Oxi implements was derived on the DOCX side
-(a Word `p:pic`), never measured for a PPTX shape blipFill.
+d44 s23 is the corpus's worst real defect after the MIN re-rank (0.8200, heavy
+10.22%). Its portrait declares
 
-Source is the 2x2 colour grid (TL red, TR green, BL blue, BR yellow) with a
-black frame, so each sample point names the source quadrant that landed there.
+    <a:srcRect b="5384" l="790" r="16864" t="1782"/>  <a:stretch/>
+    prstGeom chord, square shape, 800x800 source
 
-Arms (4in square shape, centred):
-  F1 no srcRect                   control
-  F2 srcRect b="50000"            keep the TOP half of the source
-  F3 srcRect t="50000"            keep the BOTTOM half
-  F4 srcRect l="50000"            keep the RIGHT half
-  F5 srcRect b="14368"            the literal d30 value
-  F6 srcRect t="25000" b="25000"  keep the middle band
+Oxi applies all four edges and stretches the surviving 659x742 region into the
+square. PowerPoint shows a WIDER view. A search over which subset of the edges
+reproduces PowerPoint favoured "top and bottom only" (mean|err| 21.91 against
+52.63 for all four) -- but the best residual was far too high to call a law, so
+this asks PowerPoint directly instead.
+
+The source is a COORDINATE GRID, not a photograph: 10x10 cells, each a distinct
+colour, with the (row, col) recoverable from the colour alone. Reading back which
+colours land where gives the visible source rectangle exactly, with no
+registration or masking guesswork -- which is what made the pixel search
+inconclusive.
+
+Arms isolate one thing at a time: each edge alone, all four together, the same
+crop under rect / ellipse / chord, and a NON-SQUARE shape (where "preserve the
+aspect" and "stretch to fill" must disagree).
+
+Usage:
+    python tools/metrics/gen_pptx_srcrect.py
+    python tools/metrics/export_pptx_srcrect.py   # PowerPoint COM -> PDF
+    python tools/metrics/read_pptx_srcrect.py     # read the PDF back
 """
 from __future__ import annotations
 
-import io
+import json
 import sys
-import zipfile
 from pathlib import Path
 
+from lxml import etree
 from PIL import Image, ImageDraw
 from pptx import Presentation
 from pptx.util import Emu
@@ -33,84 +42,95 @@ from pptx.util import Emu
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-OUT = Path(r"pipeline_data\pptx_probes\srcrect").resolve()
-SHAPE_EMU = 3657600
-SHAPE_XY = (2743200, 1600200)
+REPO = Path(__file__).resolve().parents[2]
+OUT = REPO / "pipeline_data" / "pptx_probes" / "srcrect"
+A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+EMU_IN = 914400
 
+N = 10          # grid cells per side
+CELL = 80       # px per cell -> 800x800 source
+
+# (name, prst, srcRect dict or None, shape w_in, shape h_in)
+CROP = {"l": 10000, "t": 10000, "r": 20000, "b": 5000}   # deliberately asymmetric
 ARMS = [
-    ("F1 no srcRect", ""),
-    ("F2 srcRect b=50%", 'b="50000"'),
-    ("F3 srcRect t=50%", 't="50000"'),
-    ("F4 srcRect l=50%", 'l="50000"'),
-    ("F5 srcRect b=14.368% (d30)", 'b="14368"'),
-    ("F6 srcRect t=25% b=25%", 't="25000" b="25000"'),
+    ("rect_none",      "rect",    None,                     3.0, 3.0),
+    ("rect_l10",       "rect",    {"l": 10000},             3.0, 3.0),
+    ("rect_r10",       "rect",    {"r": 10000},             3.0, 3.0),
+    ("rect_t10",       "rect",    {"t": 10000},             3.0, 3.0),
+    ("rect_b10",       "rect",    {"b": 10000},             3.0, 3.0),
+    ("rect_all",       "rect",    CROP,                     3.0, 3.0),
+    ("ellipse_all",    "ellipse", CROP,                     3.0, 3.0),
+    ("chord_all",      "chord",   CROP,                     3.0, 3.0),
+    ("ellipse_none",   "ellipse", None,                     3.0, 3.0),
+    ("rect_all_wide",  "rect",    CROP,                     5.0, 2.5),
+    ("rect_all_tall",  "rect",    CROP,                     2.5, 5.0),
 ]
 
 
-def grid_png() -> bytes:
-    img = Image.new("RGB", (400, 400), "white")
+def cell_colour(r: int, c: int) -> tuple[int, int, int]:
+    """A colour that encodes (r, c) unambiguously and survives JPEG-ish noise."""
+    return (20 + r * 23, 20 + c * 23, 128)
+
+
+def make_source(path: Path) -> None:
+    img = Image.new("RGB", (N * CELL, N * CELL), (255, 255, 255))
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, 199, 199], fill=(255, 0, 0))
-    d.rectangle([200, 0, 399, 199], fill=(0, 200, 0))
-    d.rectangle([0, 200, 199, 399], fill=(0, 0, 255))
-    d.rectangle([200, 200, 399, 399], fill=(255, 220, 0))
-    # A thin black rule every 10% of the height, so a vertical crop is readable
-    # to better than a quadrant.
-    for i in range(1, 10):
-        y = int(400 * i / 10)
-        d.line([(0, y), (399, y)], fill=(0, 0, 0), width=3)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    for r in range(N):
+        for c in range(N):
+            d.rectangle(
+                [c * CELL, r * CELL, (c + 1) * CELL - 1, (r + 1) * CELL - 1],
+                fill=cell_colour(r, c),
+                outline=(255, 255, 255),
+                width=2,
+            )
+    img.save(path)
 
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    tmp, dst = OUT / "_stage.pptx", OUT / "srcrect.pptx"
-    png = grid_png()
-    (OUT / "source.png").write_bytes(png)
+    grid = OUT / "grid.png"
+    make_source(grid)
 
     prs = Presentation()
     blank = prs.slide_layouts[6]
-    for label, _ in ARMS:
-        s = prs.slides.add_slide(blank)
-        box = s.shapes.add_textbox(Emu(228600), Emu(228600), Emu(6400800), Emu(400050))
-        box.text_frame.text = label
-        s.shapes.add_picture(io.BytesIO(png), Emu(0), Emu(0), Emu(91440), Emu(91440))
-        sp = s.shapes.add_shape(1, Emu(SHAPE_XY[0]), Emu(SHAPE_XY[1]),
-                                Emu(SHAPE_EMU), Emu(SHAPE_EMU))
-        sp.line.fill.background()
-        sp.shadow.inherit = False
-    prs.save(tmp)
-
-    with zipfile.ZipFile(tmp) as zin:
-        names = zin.namelist()
-        data = {n: zin.read(n) for n in names}
-
-    for i, (label, src) in enumerate(ARMS, start=1):
-        part = f"ppt/slides/slide{i}.xml"
-        xml = data[part].decode("utf-8")
-        rels = data[f"ppt/slides/_rels/slide{i}.xml.rels"].decode("utf-8")
-        rid = next(t.split('"')[0] for t in rels.split('Id="')[1:] if "/image" in t)
-        ps = xml.index("<p:pic>")
-        pe = xml.index("</p:pic>") + len("</p:pic>")
-        xml = xml[:ps] + xml[pe:]
-        src_el = f"<a:srcRect {src}/>" if src else ""
-        fill = (
-            f'<a:blipFill rotWithShape="1"><a:blip r:embed="{rid}"><a:alphaModFix/></a:blip>'
-            f"{src_el}<a:stretch><a:fillRect/></a:stretch></a:blipFill>"
+    manifest = []
+    for i, (name, prst, crop, w_in, h_in) in enumerate(ARMS):
+        slide = prs.slides.add_slide(blank)
+        pic = slide.shapes.add_picture(
+            str(grid), Emu(int(0.5 * EMU_IN)), Emu(int(0.5 * EMU_IN)),
+            Emu(int(w_in * EMU_IN)), Emu(int(h_in * EMU_IN)),
         )
-        # `ge` is already the index PAST the closing tag; adding the length a
-        # second time spliced the fill into the middle of <a:ln><a:noFill/>.
-        ge = xml.rindex("</a:prstGeom>") + len("</a:prstGeom>")
-        xml = xml[:ge] + fill + xml[ge:]
-        data[part] = xml.encode("utf-8")
-
-    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-        for n in names:
-            zout.writestr(n, data[n])
-    tmp.unlink()
-    print(f"wrote {dst}  ({len(ARMS)} arms)")
+        el = pic._element
+        blip_fill = el.find(f"{{{A}}}blipFill") or el.find(
+            "{http://schemas.openxmlformats.org/presentationml/2006/main}blipFill"
+        )
+        if crop:
+            sr = etree.SubElement(blip_fill, f"{{{A}}}srcRect")
+            for k, v in crop.items():
+                sr.set(k, str(v))
+            # srcRect must precede a:stretch
+            st = blip_fill.find(f"{{{A}}}stretch")
+            if st is not None:
+                blip_fill.remove(st)
+                blip_fill.append(st)
+        sp_pr = el.find("{http://schemas.openxmlformats.org/presentationml/2006/main}spPr")
+        geom = sp_pr.find(f"{{{A}}}prstGeom")
+        if geom is not None:
+            geom.set("prst", prst)
+        manifest.append(
+            {
+                "slide": i + 1, "name": name, "prst": prst, "srcRect": crop,
+                "x_in": 0.5, "y_in": 0.5, "w_in": w_in, "h_in": h_in,
+                "grid": N, "cell_px": CELL,
+            }
+        )
+    path = OUT / "probe_srcrect.pptx"
+    prs.save(str(path))
+    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    print(f"wrote {path} ({len(ARMS)} arms), source grid {N}x{N} at {grid}")
+    for m in manifest:
+        print(f"  s{m['slide']:>2} {m['name']:<16} prst={m['prst']:<8} "
+              f"srcRect={m['srcRect']} shape={m['w_in']}x{m['h_in']}in")
 
 
 if __name__ == "__main__":
