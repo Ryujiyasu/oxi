@@ -144,6 +144,91 @@ fn from_utf16(units: &[u16]) -> String {
 
 /// Evaluate a worksheet function. Returns `#NAME?` for anything unimplemented,
 /// which is the same thing Excel reports for a function it does not know.
+/// One cell of a block, stretching a single row or column across the rest.
+///
+/// A side one cell wide is read for every column and one cell tall for every
+/// row, which is what lets a column of 72 meet a row of 14 and make a block of
+/// both. `None` is a cell the block does not reach.
+pub(crate) fn reach(block: &RangeData, col: usize, row: usize) -> Option<Value> {
+    let col = if block.width == 1 { 0 } else { col };
+    let row = if block.height == 1 { 0 } else { row };
+    if col >= block.width || row >= block.height {
+        return None;
+    }
+    Some(block.at(col, row))
+}
+
+pub(crate) fn block_of(arg: &Arg) -> RangeData {
+    arg.as_range()
+}
+
+/// Whether every argument this function takes is a single value.
+///
+/// Named one by one, and deliberately so. The first version of this asked the
+/// question the other way round — everything is one-at-a-time unless it is a
+/// known aggregate — and `DGET(A$3:C$200, 4, P11:P12)` was quietly applied to
+/// each of six hundred cells in turn. It takes three ranges and was in no list
+/// of aggregates because nobody had thought of it.
+///
+/// A name left off this list keeps the behaviour it always had. A name wrongly
+/// on it is applied hundreds of times to the wrong things and says nothing
+/// about it, so the cost of the two mistakes is not remotely equal.
+fn one_at_a_time(name: &str) -> bool {
+    matches!(
+        name,
+        // arithmetic on one number
+        "ABS" | "INT" | "MOD" | "POWER" | "SQRT" | "ROUND" | "ROUNDDOWN"
+            | "ROUNDUP" | "CEILING" | "FLOOR" | "CEILING.MATH" | "FLOOR.MATH"
+        // one piece of text
+            | "LEN" | "LEFT" | "RIGHT" | "MID" | "LOWER" | "UPPER" | "TRIM"
+            | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPLACE" | "REPT" | "EXACT"
+            | "CHAR" | "CODE" | "UNICODE" | "TEXT" | "VALUE"
+        // one date
+            | "DATE" | "DATEDIF" | "DAY" | "DAYS" | "EDATE" | "EOMONTH"
+            | "HOUR" | "MINUTE" | "MONTH" | "SECOND" | "TIME" | "WEEKDAY"
+            | "YEAR"
+        // one thing, tested
+            | "ISBLANK" | "ISERR" | "ISERROR" | "ISLOGICAL" | "ISNA"
+            | "ISNUMBER" | "ISTEXT" | "NOT"
+        // and the ones that pick between two answers, which is what makes
+        // `IF(A1:A10>5, 1, 0)` a column of ten rather than one #VALUE!
+            | "IF" | "IFERROR" | "IFNA"
+    )
+}
+
+/// Call `name`, applying it a cell at a time when it has been handed a block
+/// and only knows what to do with one value.
+pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
+    if one_at_a_time(name) {
+        let width = args.iter().map(|one| block_of(one).width).max().unwrap_or(1);
+        let height = args.iter().map(|one| block_of(one).height).max().unwrap_or(1);
+        if width * height > 1 {
+            let blocks: Vec<RangeData> = args.iter().map(block_of).collect();
+            let mut cells = Vec::with_capacity(width * height);
+            for row in 0..height {
+                for col in 0..width {
+                    let picked: Vec<Arg> = blocks
+                        .iter()
+                        .map(|block| {
+                            Arg::Value(
+                                reach(block, col, row)
+                                    .unwrap_or(Value::Error(ExcelError::NA)),
+                            )
+                        })
+                        .collect();
+                    cells.push(call(name, &picked));
+                }
+            }
+            return Arg::Range(RangeData {
+                width,
+                height,
+                cells,
+            });
+        }
+    }
+    Arg::Value(call(name, args))
+}
+
 pub fn call(name: &str, args: &[Arg]) -> Value {
     match dispatch(name, args) {
         Ok(v) => v,
@@ -152,8 +237,19 @@ pub fn call(name: &str, args: &[Arg]) -> Value {
 }
 
 fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
-    // IFERROR/IFNA/ISERROR/ISNA must see errors rather than propagate them.
-    let error_transparent = matches!(name, "IFERROR" | "IFNA" | "ISERROR" | "ISNA" | "ISERR" | "IF");
+    // Some functions have to SEE an error rather than pass it on. For IFERROR
+    // and IFNA that is the whole point of them; for the IS* family it is too —
+    // `ISNUMBER(#VALUE!)` is FALSE in Excel, not `#VALUE!`, and a function that
+    // cannot say "no, that is not a number" about an error is no use for the
+    // one thing it exists to do. `ISNUMBER(SEARCH(x, range))` is the commonest
+    // way anyone asks "does this text appear in that list", and it only works
+    // because the misses come back as errors and ISNUMBER calls them false.
+    let error_transparent = matches!(
+        name,
+        "IFERROR" | "IFNA" | "IF"
+            | "ISERROR" | "ISNA" | "ISERR" | "ISNUMBER" | "ISTEXT"
+            | "ISBLANK" | "ISLOGICAL" | "ISREF"
+    );
     if !error_transparent {
         if let Some(e) = first_error(args) {
             return Err(e);

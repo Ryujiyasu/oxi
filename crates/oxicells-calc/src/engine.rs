@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::ast::{BinaryOp, Expr, UnaryOp};
-use crate::functions::{self, Arg, RangeData};
+use crate::functions::{self, block_of, reach, Arg, RangeData};
 use crate::lexer::ParseError;
 use crate::parser::parse;
 use crate::reference::{parse_a1, CellRef, RangeRef};
@@ -335,14 +335,25 @@ impl Workbook {
             },
 
             Expr::Unary { op, operand } => {
-                let v = self.eval(operand, sheet, depth + 1);
-                Arg::Value(apply_unary(*op, v))
+                let operand = self.eval_arg(operand, sheet, depth + 1);
+                match operand {
+                    Arg::Value(v) => Arg::Value(apply_unary(*op, v)),
+                    Arg::Range(block) => Arg::Range(RangeData {
+                        width: block.width,
+                        height: block.height,
+                        cells: block
+                            .cells
+                            .iter()
+                            .map(|one| apply_unary(*op, one.clone()))
+                            .collect(),
+                    }),
+                }
             }
 
             Expr::Binary { op, lhs, rhs } => {
-                let a = self.eval(lhs, sheet, depth + 1);
-                let b = self.eval(rhs, sheet, depth + 1);
-                Arg::Value(apply_binary(*op, a, b))
+                let a = self.eval_arg(lhs, sheet, depth + 1);
+                let b = self.eval_arg(rhs, sheet, depth + 1);
+                across(*op, &a, &b)
             }
 
             Expr::Function { name, args } => {
@@ -356,7 +367,7 @@ impl Workbook {
                     .iter()
                     .map(|a| self.eval_arg_inner(a, sheet, depth + 1, nested))
                     .collect();
-                Arg::Value(functions::call(name, &evaluated))
+                functions::call_arg(name, &evaluated)
             }
         }
     }
@@ -420,6 +431,43 @@ fn apply_unary(op: UnaryOp, v: Value) -> Value {
         UnaryOp::Plus => Value::Number(n),
         UnaryOp::Percent => Value::Number(n / 100.0),
     }
+}
+
+/// Apply `op` to every pair of cells, stretching each side to fit the other.
+///
+/// Two single values are one value, as they always were. Anything wider or
+/// taller becomes a block of answers as big as the larger of the two in each
+/// direction: a column of 72 against a row of 14 makes a block of 14 by 72,
+/// which is the shape the cross-tab idiom depends on.
+///
+/// A side that is one cell across is read for every column, and one cell down
+/// for every row. Where the two disagree and neither is one, the cells with
+/// nothing on one side are `#N/A` — Excel's answer, and the reason it is worth
+/// stretching rather than refusing.
+fn across(op: BinaryOp, a: &Arg, b: &Arg) -> Arg {
+    let (left, right) = match (a, b) {
+        (Arg::Value(x), Arg::Value(y)) => return Arg::Value(apply_binary(op, x.clone(), y.clone())),
+        _ => (block_of(a), block_of(b)),
+    };
+    if left.cells.len() == 1 && right.cells.len() == 1 {
+        return Arg::Value(apply_binary(op, left.cells[0].clone(), right.cells[0].clone()));
+    }
+    let width = left.width.max(right.width);
+    let height = left.height.max(right.height);
+    let mut cells = Vec::with_capacity(width * height);
+    for row in 0..height {
+        for col in 0..width {
+            match (reach(&left, col, row), reach(&right, col, row)) {
+                (Some(x), Some(y)) => cells.push(apply_binary(op, x, y)),
+                _ => cells.push(Value::Error(ExcelError::NA)),
+            }
+        }
+    }
+    Arg::Range(RangeData {
+        width,
+        height,
+        cells,
+    })
 }
 
 fn apply_binary(op: BinaryOp, a: Value, b: Value) -> Value {
@@ -487,6 +535,150 @@ mod tests {
         let mut wb = Workbook::new();
         wb.add_sheet("Sheet1");
         wb
+    }
+
+    /// A column of values in A, and a second column in B.
+    fn two_columns() -> Workbook {
+        let mut wb = book();
+        for (at, (a, b)) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)].iter().enumerate() {
+            wb.set_value("Sheet1", &format!("A{}", at + 1), Value::Number(*a))
+                .unwrap();
+            wb.set_value("Sheet1", &format!("B{}", at + 1), Value::Number(*b))
+                .unwrap();
+        }
+        wb
+    }
+
+    #[test]
+    fn comparing_a_range_to_a_value_answers_for_every_cell() {
+        // The single largest thing this could not do. Both sides of the `=`
+        // were collapsed to one value first, and a column of three does not
+        // collapse, so the whole formula came back #VALUE!.
+        let mut wb = two_columns();
+        wb.set_formula("Sheet1", "D1", "=SUMPRODUCT((A1:A3=2)*B1:B3)")
+            .unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(20.0));
+    }
+
+    #[test]
+    fn two_conditions_multiply_together() {
+        let mut wb = two_columns();
+        wb.set_formula("Sheet1", "D1", "=SUMPRODUCT((A1:A3>=2)*(B1:B3<30)*B1:B3)")
+            .unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(20.0));
+    }
+
+    #[test]
+    fn a_column_meeting_a_row_makes_a_block_of_both() {
+        // The cross-tab idiom, and the reason shapes have to STRETCH rather
+        // than merely match: one wide by three tall against three wide by one
+        // tall is a three-by-three block, and a rule that only handled equal
+        // shapes would miss exactly the case this is written for.
+        let mut wb = book();
+        for at in 1..=3 {
+            wb.set_value("Sheet1", &format!("A{at}"), Value::Number(at as f64))
+                .unwrap();
+            wb.set_value(
+                "Sheet1",
+                &format!("{}1", (b'C' + at as u8 - 1) as char),
+                Value::Number(at as f64 * 10.0),
+            )
+            .unwrap();
+        }
+        // Each of A1:A3 against each of C1:E1, so nine products, summing to
+        // (1+2+3) * (10+20+30) = 360.
+        wb.set_formula("Sheet1", "A5", "=SUMPRODUCT(A1:A3*C1:E1)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "A5"), Value::Number(360.0));
+    }
+
+    #[test]
+    fn a_function_meant_for_one_value_answers_for_every_cell() {
+        // `ISNUMBER(SEARCH(x, A1:A3))` is a column of three yes-or-nos. SEARCH
+        // wants a piece of text and is handed three, and the answer is three
+        // answers.
+        let mut wb = book();
+        for (at, word) in ["alpha", "beta", "alphabet"].iter().enumerate() {
+            wb.set_value("Sheet1", &format!("A{}", at + 1), Value::text(*word))
+                .unwrap();
+            wb.set_value(
+                "Sheet1",
+                &format!("B{}", at + 1),
+                Value::Number((at + 1) as f64),
+            )
+            .unwrap();
+        }
+        wb.set_formula(
+            "Sheet1",
+            "D1",
+            "=SUMPRODUCT(ISNUMBER(SEARCH(\"alpha\",A1:A3))*B1:B3)",
+        )
+        .unwrap();
+        wb.recalculate();
+        // "alpha" is in the first and the third, so 1 + 3.
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(4.0));
+    }
+
+    #[test]
+    fn a_function_handed_ranges_on_purpose_is_left_alone() {
+        // DGET takes three ranges and means something by all of them. It is
+        // not implemented, so it answers `#NAME?` — and a great many real
+        // sheets are written to swallow exactly that: `IF(ISERR(DGET(...)),,
+        // DGET(...))` gives nothing whether DGET works or not.
+        //
+        // The first version of this asked "is it a known aggregate?" rather
+        // than "is it known to take one value?", so DGET fell through, was
+        // applied to each of six hundred cells in turn, and answered with six
+        // hundred `#NAME?`s. A block of them does not fit in a cell, so the
+        // swallow stopped working and the formula turned `#VALUE!` — seventy
+        // eight cells of a corpus that had been right for months.
+        //
+        // Anything not named as one-at-a-time keeps the behaviour it had.
+        let mut wb = book();
+        wb.set_value("Sheet1", "A1", Value::text("name")).unwrap();
+        wb.set_value("Sheet1", "A2", Value::text("ann")).unwrap();
+        wb.set_value("Sheet1", "C1", Value::text("name")).unwrap();
+        wb.set_value("Sheet1", "C2", Value::text("bob")).unwrap();
+        wb.set_formula("Sheet1", "E1", "=DGET(A1:A2,1,C1:C2)").unwrap();
+        wb.set_formula("Sheet1", "E2", "=IF(ISERR(DGET(A1:A2,1,C1:C2)),,1)")
+            .unwrap();
+        wb.recalculate();
+        // One answer, not a block of them.
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Error(ExcelError::Name));
+        // And so the sheet's own way of swallowing it still works.
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(0.0));
+    }
+
+    #[test]
+    fn an_array_that_reaches_a_cell_still_will_not_fit_in_one() {
+        // Nothing about this changed, and it is worth pinning that it did not:
+        // a block of answers written into a single cell is #VALUE!, as it was
+        // before any of this and as it is in Excel without dynamic arrays.
+        let mut wb = two_columns();
+        wb.set_formula("Sheet1", "D1", "=A1:A3+1").unwrap();
+        wb.recalculate();
+        assert_eq!(
+            wb.value("Sheet1", "D1"),
+            Value::Error(ExcelError::Value)
+        );
+    }
+
+    #[test]
+    fn where_two_blocks_disagree_and_neither_is_one_the_rest_is_not_available() {
+        let mut wb = book();
+        for at in 1..=3 {
+            wb.set_value("Sheet1", &format!("A{at}"), Value::Number(1.0))
+                .unwrap();
+        }
+        wb.set_value("Sheet1", "B1", Value::Number(1.0)).unwrap();
+        wb.set_value("Sheet1", "B2", Value::Number(1.0)).unwrap();
+        // Three against two: the third pair has nothing on one side. SUM skips
+        // nothing, so the #N/A comes through.
+        wb.set_formula("Sheet1", "D1", "=SUM(A1:A3+B1:B2)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Error(ExcelError::NA));
     }
 
     #[test]
