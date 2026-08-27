@@ -57,7 +57,7 @@ function liftBinding(name) {
 // The fill's tables come across as they are written, not as a copy: the eleven
 // lists were read out of Excel, and a test holding its own copy of them would
 // go on passing after the page's had drifted.
-const tables = ['LISTS', 'TAIL', 'INDENT'].map(liftBinding).join('\n');
+const tables = ['LISTS', 'TAIL', 'INDENT', 'DAY', 'EPOCH'].map(liftBinding).join('\n');
 
 const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside',
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
@@ -69,7 +69,8 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
-  'holdPanes', 'freezeHere'].map(lift).join('\n');
+  'holdPanes', 'freezeHere',
+  'monthSeries', 'monthAt'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -180,6 +181,10 @@ const mark = (r1, c1, r2, c2) => {
 };
 // What a paste would move, as the paste handler works it out.
 const marked = () => cutFrom;
+const asDate = (serial) => new Date(EPOCH + serial * DAY);
+const asSerial = (year, month, day) =>
+  Math.round((Date.UTC(year, month, day) - EPOCH) / DAY);
+const monthLength = (year, month) => new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 const sheetOf = () => sheet;
 const frozenAt = () => [sheet.frozen_rows || 0, sheet.frozen_cols || 0];
 const markFrozen = () => {};
@@ -267,6 +272,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          padFor, fitWidth, fitColumn, ink, sheetOf,
          toggle, alignTo, allWear, valueAt, setHeight, heightAt, chosenAt,
          lineAt, holdPanes, aTable, freezeHere, frozenAt,
+         monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
@@ -1214,6 +1220,108 @@ grid.freezeHere();
 is('a frozen sheet is unfrozen wherever the cursor is', grid.frozenAt(), [0, 0]);
 grid.undo();
 is('and undo puts back the freeze it had', grid.frozenAt(), [5, 3]);
+
+// ── Dates that step by calendar months ─────────────────────
+//
+// Two dates set a step the way two numbers do: 5 Jan and 12 Jan continue a
+// week at a time. But 31 Jan and 28 Feb continue 31 Mar, 30 Apr, 31 May —
+// Excel has seen a MONTH between them and is stepping by the calendar. A line
+// through those two serials gives 28-day steps and lands on 28 Mar instead.
+//
+// Every row below was read off Excel by `tools/metrics/_xlsx_fill_dates.py`.
+
+// Readable both ways, so a failure names a date rather than a five-figure
+// number nobody can check by eye.
+const dayOf = (serial) => grid.asDate(serial).toISOString().slice(0, 10);
+const serialOf = (text) => {
+  const [year, month, day] = text.split('-').map(Number);
+  return grid.asSerial(year, month - 1, day);
+};
+
+const carry = (seed, over) => {
+  const found = grid.monthSeries(seed.map(serialOf));
+  if (!found) return null;
+  const out = [];
+  for (let at = seed.length; at < seed.length + over; at++) {
+    out.push(dayOf(grid.monthAt(found, at)));
+  }
+  return out;
+};
+
+is('two month ends carry the month, and the day is clamped as it goes',
+  carry(['2026-01-31', '2026-02-28'], 4),
+  ['2026-03-31', '2026-04-30', '2026-05-31', '2026-06-30']);
+is('the same day of the month carries too',
+  carry(['2026-01-15', '2026-02-15'], 2), ['2026-03-15', '2026-04-15']);
+is('so does the first of the month',
+  carry(['2026-01-01', '2026-02-01'], 2), ['2026-03-01', '2026-04-01']);
+is('three months at a time', carry(['2026-01-01', '2026-04-01'], 3),
+  ['2026-07-01', '2026-10-01', '2027-01-01']);
+is('two months at a time, clamping where the month is short',
+  carry(['2026-01-31', '2026-03-31'], 3),
+  ['2026-05-31', '2026-07-31', '2026-09-30']);
+is('and it runs backwards', carry(['2026-03-31', '2026-02-28'], 3),
+  ['2026-01-31', '2025-12-31', '2025-11-30']);
+is('three dates a month apart carry on the same way',
+  carry(['2026-01-31', '2026-02-28', '2026-03-31'], 3),
+  ['2026-04-30', '2026-05-31', '2026-06-30']);
+is('a year is twelve months', carry(['2026-01-01', '2027-01-01'], 3),
+  ['2028-01-01', '2029-01-01', '2030-01-01']);
+is('and a year from a leap day finds the next one',
+  carry(['2024-02-29', '2025-02-28'], 3),
+  ['2026-02-28', '2027-02-28', '2028-02-29']);
+is('the new year is not a boundary', carry(['2026-12-31', '2027-01-31'], 3),
+  ['2027-02-28', '2027-03-31', '2027-04-30']);
+
+// ── and what is NOT a month ─────────────────────────────────────────────────
+//
+// These are the rows that make the rule a test rather than a guess. A gap that
+// happens to land on a month end is not a month, and reading one as a month
+// would drag a fortnightly rota onto the wrong days.
+
+is('twenty-nine days ending on a month end is not a month',
+  grid.monthSeries(['2026-01-30', '2026-02-28'].map(serialOf)), null);
+is('nor is thirty days ending on one',
+  grid.monthSeries(['2026-01-29', '2026-02-28'].map(serialOf)), null);
+is('nor thirty days that miss the month end',
+  grid.monthSeries(['2026-01-15', '2026-02-14'].map(serialOf)), null);
+is('nor a month apart on different days',
+  grid.monthSeries(['2026-01-10', '2026-02-20'].map(serialOf)), null);
+is('a week is a week', grid.monthSeries(['2026-01-05', '2026-01-12'].map(serialOf)), null);
+is('and two dates in one month have no months between them',
+  grid.monthSeries(['2026-01-05', '2026-01-06'].map(serialOf)), null);
+is('one date on its own is not a series at all',
+  grid.monthSeries([serialOf('2026-01-31')]), null);
+is('and neither is one carrying a time',
+  grid.monthSeries([serialOf('2026-01-15') + 0.5, serialOf('2026-02-15') + 0.5]), null);
+
+// The three dates have to be evenly spaced in months, not merely all on the
+// same day.
+is('an uneven run of months is not a series',
+  grid.monthSeries(['2026-01-15', '2026-02-15', '2026-05-15'].map(serialOf)), null);
+
+// ── through the fill itself ─────────────────────────────────────────────────
+//
+// The rule above only matters if a date run reaches it, which means the cells
+// have to be recognised as dates by the format they wear.
+
+grid.forget();
+grid.wear(1, 0, String(serialOf('2026-01-31')), 'mm-dd-yy');
+grid.wear(2, 0, String(serialOf('2026-02-28')), 'mm-dd-yy');
+pull(1, 0, 2, 0, 5);
+is('pulling two month ends down fills calendar months',
+  column(0, 3, 5).map((one) => dayOf(Number(one))),
+  ['2026-03-31', '2026-04-30', '2026-05-31']);
+is('and the cells keep their date format', grid.styleAt(4, 0),
+  { number_format: 'mm-dd-yy' });
+
+// The same two numbers with no date format on them are just numbers.
+grid.forget();
+grid.seed(1, 0, String(serialOf('2026-01-31')));
+grid.seed(2, 0, String(serialOf('2026-02-28')));
+pull(1, 0, 2, 0, 3);
+is('without a date format they are numbers, and step by the gap',
+  column(0, 3, 3), [String(serialOf('2026-02-28') + 28)]);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

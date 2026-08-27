@@ -1464,6 +1464,58 @@ function unitOf(cell) {
   return null;
 }
 
+// Excel counts days from the last day of 1899, so that 1 January 1900 is day
+// one. Everything here works in UTC: a fill that changed the answer between
+// one side of midnight and the other would be a fine way to lose a day.
+const DAY = 86400000;
+const EPOCH = Date.UTC(1899, 11, 30);
+
+const asDate = (serial) => new Date(EPOCH + serial * DAY);
+const asSerial = (year, month, day) =>
+  Math.round((Date.UTC(year, month, day) - EPOCH) / DAY);
+const monthLength = (year, month) => new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
+/**
+ * The calendar-month series running through `serials`, or null for anything
+ * else.
+ *
+ * Two things have to hold. The dates must all fall on the same day of the
+ * month, or all be the last day of theirs — a 29-day gap that happens to end
+ * on 28 February is not a month, and Excel does not treat it as one. And the
+ * months between them must be evenly spaced, by some number that is not zero:
+ * two dates in the same month are a gap in days, not in months.
+ */
+function monthSeries(serials) {
+  if (serials.length < 2) return null;
+  // Only whole days. A serial with a time on it is a different question and
+  // was not measured, so it goes down the ordinary numeric path.
+  if (serials.some((one) => !Number.isInteger(one))) return null;
+  const dates = serials.map(asDate);
+  const days = dates.map((one) => one.getUTCDate());
+  const ends = dates.map((one) =>
+    one.getUTCDate() === monthLength(one.getUTCFullYear(), one.getUTCMonth()));
+  const sameDay = days.every((one) => one === days[0]);
+  if (!sameDay && !ends.every(Boolean)) return null;
+
+  const months = dates.map((one) => one.getUTCFullYear() * 12 + one.getUTCMonth());
+  const step = months[1] - months[0];
+  if (step === 0) return null;
+  for (let at = 1; at < months.length; at++) {
+    if (months[at] - months[at - 1] !== step) return null;
+  }
+  return { from: months[0], step, day: days[0] };
+}
+
+/** The serial a month series holds at `index`, counting from its first date. */
+function monthAt(plan, index) {
+  const reach = plan.from + plan.step * index;
+  const year = Math.floor(reach / 12);
+  const month = reach - year * 12;
+  // The first date's day of the month, as far as this month allows: 31 January
+  // gives 30 April, and 31 May again after it.
+  return asSerial(year, month, Math.min(plan.day, monthLength(year, month)));
+}
+
 function kindOf(cell) {
   if (cell && cell.formula) return 'formula';
   if (numberOf(cell) !== null) return 'number';
@@ -1506,6 +1558,13 @@ function planRun(run, alone) {
   const kind = run.kind.split(':')[0];
   if (kind === 'number') {
     const values = run.cells.map(numberOf);
+    // Dates a whole number of months apart are a calendar series rather than a
+    // straight line, and the difference is not small: 31 Jan and 28 Feb
+    // continue 31 Mar under one rule and 28 Mar under the other.
+    if (values.length > 1 && unitOf(run.cells[0]) === 1) {
+      const months = monthSeries(values);
+      if (months) return { kind: 'months', months, style: run.cells[0].style };
+    }
     const line = fitLine(values);
     if (values.length === 1) {
       // A single number in a block still counts up, by one — measured on
@@ -1560,6 +1619,7 @@ function planRun(run, alone) {
 
 /** What a planned run holds at `index`, counting from its own first cell. */
 function runValue(plan, index, spot, source) {
+  if (plan.kind === 'months') return String(monthAt(plan.months, index));
   if (plan.kind === 'number') return trim(plan.line.base + plan.line.slope * index);
   if (plan.kind === 'list') {
     return plan.list[wrapped(plan.at + index * plan.stride, plan.list.length)];
