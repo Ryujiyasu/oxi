@@ -221,6 +221,8 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 
 /* The two arrows sit together as one control, the way a toolbar pairs them. */
 header .step { font-size: 15px; line-height: 1; padding: 5px 9px; }
+header .dress { min-width: 30px; padding: 5px 7px; line-height: 1; }
+header #left { margin-left: 6px; }
 header #back { margin-left: 6px; }
 header #on { margin-right: 4px; }
 
@@ -283,6 +285,12 @@ table { user-select: none; }
   <span class="name">Oxi</span>
   <span class="what">Spreadsheet rendering, in the browser, with no server</span>
   <span class="spacer"></span>
+  <button id="bold" class="dress" title="Bold (Ctrl+B)"><b>B</b></button>
+  <button id="italic" class="dress" title="Italic (Ctrl+I)"><i>I</i></button>
+  <button id="under" class="dress" title="Underline (Ctrl+U)"><u>U</u></button>
+  <button id="left" class="dress" title="Align left">&#8676;</button>
+  <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
+  <button id="right" class="dress" title="Align right">&#8677;</button>
   <button id="back" class="step" disabled title="Undo (Ctrl+Z)">&#8630;</button>
   <button id="on" class="step" disabled title="Redo (Ctrl+Y)">&#8631;</button>
   <button id="save" disabled>Save</button>
@@ -568,6 +576,7 @@ function draw() {
       else if (align === 'right') cell.classList.add('right');
       else if (!align && isNumber(held)) cell.classList.add('right');
       if (held.style.bold) cell.classList.add('bold');
+      if (held.style.underline) cell.style.textDecoration = 'underline';
       if (held.style.italic) cell.style.fontStyle = 'italic';
       if (held.style.font_size) {
         cell.style.fontSize = `${held.style.font_size * 96 / 72}px`;
@@ -913,6 +922,18 @@ function redo() {
   restore(built, 'now');
   undone.push(built);
   markSteps();
+}
+
+for (const [id, run] of [
+  ['bold', () => toggle('bold')],
+  ['italic', () => toggle('italic')],
+  ['under', () => toggle('underline')],
+  ['left', () => alignTo('left')],
+  ['centre', () => alignTo('center')],
+  ['right', () => alignTo('right')],
+]) {
+  const button = document.getElementById(id);
+  if (button) button.addEventListener('click', () => { run(); focusGrid(); });
 }
 
 if (backButton) backButton.addEventListener('click', () => { undo(); focusGrid(); });
@@ -1679,7 +1700,10 @@ function remember(row, col, text, before) {
 function markSaved() {
   if (!saveButton) return;
   const count = changes.size;
-  saveButton.disabled = count === 0;
+  // A column's width and a cell's formatting are changes with no cell value
+  // behind them, so counting values alone would leave the button dark with
+  // work outstanding.
+  saveButton.disabled = count === 0 && !beyondValues;
   saveButton.textContent = count === 0
     ? 'Save'
     : `Save (${count} cell${count === 1 ? '' : 's'})`;
@@ -1884,12 +1908,19 @@ function put(row, col, text, style) {
     line.cells.push(cell);
     line.cells.sort((a, b) => a.col - b.col);
   }
-  cell.formula = text.startsWith('=') ? text.slice(1) : null;
-  if (cell.formula) anyFormulas = true;
-  if (cell.formula) cell.value = { String: '' };
-  else if (text === '') cell.value = 'Empty';
-  else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
-  else cell.value = { String: text };
+  // Only when the text has actually changed. Working out afresh what a cell
+  // holds from the text it shows is lossy — a cell holding the string "007"
+  // shows "007" and would come back as the number seven — so changing only a
+  // cell's look must not send it round that loop.
+  if (before !== text) {
+    cell.formula = text.startsWith('=') ? text.slice(1) : null;
+    if (cell.formula) anyFormulas = true;
+    if (cell.formula) cell.value = { String: '' };
+    else if (text === '') cell.value = 'Empty';
+    else if (text.trim() !== '' && Number.isFinite(Number(text))) {
+      cell.value = { Number: Number(text) };
+    } else cell.value = { String: text };
+  }
   if (style !== undefined) {
     cell.style = { ...style };
     // Only the wide save path carries a cell's style, and it costs a crossing
@@ -1898,6 +1929,57 @@ function put(row, col, text, style) {
     beyondValues = true;
   }
   remember(row, col, text, before);
+}
+
+/**
+ * Change how the selected cells look, without touching what they hold.
+ *
+ * `alter` is handed a copy of each cell's style and gives one back. Excel
+ * turns a whole selection on if any of it is off — press Ctrl+B on a block
+ * where one cell is bold and the rest are not and everything goes bold — so
+ * the decision is taken once, over the block, and then applied.
+ */
+function restyle(alter) {
+  change(() => eachInRegion((row, col) => {
+    const held = heldAt(row, col);
+    const was = held ? held.style : {};
+    const now = alter(was);
+    if (sameStyle(was, now)) return;
+    // Writing the text back unchanged is how the style rides in; put() knows
+    // not to work the value out again when the text has not moved.
+    put(row, col, contentOf(held), now);
+  }));
+  draw();
+  paint();
+}
+
+/** Is every cell in the selection already wearing this? */
+function allWear(has) {
+  let seen = false;
+  let all = true;
+  eachInRegion((row, col) => {
+    const held = heldAt(row, col);
+    seen = true;
+    if (!has(held ? held.style : {})) all = false;
+  });
+  return seen && all;
+}
+
+/** Turn a yes-or-no part of the style on, or off if it is on everywhere. */
+function toggle(name) {
+  const off = allWear((style) => Boolean(style[name]));
+  restyle((style) => ({ ...style, [name]: !off }));
+}
+
+/** Line the selected cells up, or take an alignment away if it is set. */
+function alignTo(where) {
+  const off = allWear((style) => style.horizontal_align === where);
+  restyle((style) => {
+    const next = { ...style };
+    if (off) delete next.horizontal_align;
+    else next.horizontal_align = where;
+    return next;
+  });
 }
 
 /** Do two cells wear the same style? A missing one is the empty one. */
@@ -2037,6 +2119,24 @@ function onKey(event) {
       if (!jump) break;
       event.preventDefault();
       takeAll();
+      break;
+    case 'b':
+    case 'B':
+      if (!jump) break;
+      event.preventDefault();
+      toggle('bold');
+      break;
+    case 'i':
+    case 'I':
+      if (!jump) break;
+      event.preventDefault();
+      toggle('italic');
+      break;
+    case 'u':
+    case 'U':
+      if (!jump) break;
+      event.preventDefault();
+      toggle('underline');
       break;
     case 'F2':
       event.preventDefault();

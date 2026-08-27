@@ -67,7 +67,8 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
-  'padFor', 'fitWidth', 'fitColumn', 'shownText'].map(lift).join('\n');
+  'padFor', 'fitWidth', 'fitColumn', 'shownText',
+  'restyle', 'allWear', 'toggle', 'alignTo'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -178,6 +179,10 @@ const mark = (r1, c1, r2, c2) => {
 // What a paste would move, as the paste handler works it out.
 const marked = () => cutFrom;
 const sheetOf = () => sheet;
+const valueAt = (row, col) => {
+  const one = heldAt(row, col);
+  return one ? one.value : undefined;
+};
 const beyond = () => beyondValues;
 const depth = () => undone.length;
 const styleAt = (row, col) => {
@@ -210,6 +215,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          wear, styleAt, sameStyle, widthForPixels, setWidth, widthAt,
          beyond, depth, dropCut, mark, marked,
          padFor, fitWidth, fitColumn, ink, sheetOf,
+         toggle, alignTo, allWear, valueAt,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
@@ -910,6 +916,86 @@ grid.setWidth(0, 200);
 const held = grid.widthAt(0);
 grid.fitColumn(0);
 is('a column with nothing to fit is left alone', grid.widthAt(0), held);
+
+// ── Bold, italic and lining up ────────────────────────────────
+//
+// Ctrl+B is muscle memory, and a grid where it does nothing feels broken in a
+// way that is hard to name. Excel's rule for a block that is only partly bold
+// was measured rather than assumed: such a block reports its boldness as
+// neither true nor false, and Excel sets it to the opposite of THAT — so one
+// press turns the whole block on, and the next turns it all off.
+
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.select(1, 0, 1, 0);
+grid.toggle('bold');
+is('one cell goes bold', grid.styleAt(1, 0).bold, true);
+grid.toggle('bold');
+is('and comes back', grid.styleAt(1, 0).bold, false);
+
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.seed(2, 0, 'b');
+grid.seed(3, 0, 'c');
+grid.select(1, 0, 1, 0);
+grid.toggle('bold');
+grid.select(1, 0, 3, 0);
+is('a block only partly bold does not count as bold',
+  grid.allWear((style) => Boolean(style.bold)), false);
+grid.toggle('bold');
+is('so one press takes the whole block bold',
+  [1, 2, 3].map((row) => grid.styleAt(row, 0).bold), [true, true, true]);
+grid.toggle('bold');
+is('and the next takes it all off',
+  [1, 2, 3].map((row) => grid.styleAt(row, 0).bold), [false, false, false]);
+
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.select(1, 0, 1, 0);
+grid.alignTo('center');
+is('a cell can be centred', grid.styleAt(1, 0).horizontal_align, 'center');
+grid.alignTo('right');
+is('and moved to the right', grid.styleAt(1, 0).horizontal_align, 'right');
+grid.alignTo('right');
+is('and asking for the same again takes the alignment away',
+  grid.styleAt(1, 0).horizontal_align, undefined);
+
+// ── What must NOT change ────────────────────────────────────
+//
+// Changing how a cell looks used to send its value round through its text, and
+// the text of a cell holding the string "007" is "007", which reads back as
+// the number seven. Bolding a part number would have quietly renumbered it.
+
+grid.forget();
+grid.put(1, 0, 'x');
+grid.sheetOf().rows[0].cells[0].value = { String: '007' };
+grid.select(1, 0, 1, 0);
+grid.toggle('bold');
+is('bolding a cell does not re-read what it holds',
+  grid.valueAt(1, 0), { String: '007' });
+is('it only changes how it looks', grid.styleAt(1, 0).bold, true);
+
+// A formula is not turned into its own text either.
+grid.forget();
+grid.seed(1, 0, '=A9+1');
+grid.select(1, 0, 1, 0);
+grid.toggle('italic');
+is('and a formula stays a formula', grid.cells(), [['1,0', '=A9+1']]);
+
+// ── and it is a change like any other ──────────────────────────
+
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.seed(2, 0, 'b');
+grid.select(1, 0, 2, 0);
+grid.toggle('bold');
+is('changing a look needs the wider way of saving', grid.beyond(), true);
+grid.undo();
+is('and one undo unbolds the whole block',
+  [1, 2].map((row) => grid.styleAt(row, 0).bold), [undefined, undefined]);
+grid.redo();
+is('redo bolds it again',
+  [1, 2].map((row) => grid.styleAt(row, 0).bold), [true, true]);
 
 console.log(failures === 0
   ? '\nthe grid behaves'
