@@ -14,6 +14,8 @@
 //! thirty-eight seconds, so the page has to decide beforehand whether it can
 //! afford to ask.
 //!
+//! That a formula reaches the FILE intact is asked in `save.test.mjs`,
+//! alongside everything else the browser changes and the editor writes back.
 //! Run with `node web/formula.test.mjs`.
 
 import { readFile } from 'node:fs/promises';
@@ -24,7 +26,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const wasm = await import('file://' + join(here, 'oxidocs_wasm.js').replaceAll('\\', '/'));
 await wasm.default({ module_or_path: await readFile(join(here, 'oxidocs_wasm_bg.wasm')) });
 const { parse_spreadsheet, recalculate_spreadsheet, edit_xlsx,
-        edit_xlsx_from_workbook, translate_formula } = wasm;
+        translate_formula } = wasm;
 
 const page = await readFile(join(here, 'xlsx-demo.html'), 'utf8');
 
@@ -202,48 +204,6 @@ try {
   refused = true;
 }
 is('a formula the engine cannot read is refused, not passed through', refused, true);
-
-// ── A filled date has to arrive as a date ─────────────────────────
-//
-// A date is a number wearing a format. Filling one down carries the format
-// with it, and if the file cannot hold that, the cell arrives as a five-figure
-// serial — correct underneath and wrong on the face of it, which is the worst
-// way for this to fail. The narrow save path cannot carry a format; the wide
-// one has to.
-
-const dated = new Uint8Array(
-  await readFile(join(here, 'samples', 'dates-and-times.xlsx')));
-const held = (book, row) => {
-  const line = book.sheets[0].rows.find((one) => one.index === row);
-  const cell = line && line.cells.find((one) => one.col === 0);
-  return cell ? { value: cell.value, format: cell.style.number_format } : null;
-};
-
-const opened = parse_spreadsheet(dated.slice());
-const format = held(opened, 1).format;
-is('the file holds a date under a date format', format !== undefined, true);
-
-// What the page does when the handle is pulled: the next day, wearing the same
-// format as the cell it came from.
-const rows = opened.sheets[0].rows;
-rows.push({ index: 6, height: null, cells: [{
-  col: 0, value: { Number: 46053 }, formula: null, runs: [],
-  style: { ...rows.find((one) => one.index === 1).cells[0].style },
-}] });
-rows.sort((one, two) => one.index - two.index);
-
-const narrow = parse_spreadsheet(edit_xlsx(dated.slice(), [
-  { sheet_index: 0, row: 6, col: 0, new_value: '46053', value_type: 'number' },
-]));
-is('saved as a value alone, it arrives as a bare number',
-  held(narrow, 6).format, undefined);
-
-const wide = parse_spreadsheet(edit_xlsx_from_workbook(dated.slice(), opened));
-is('saved as a workbook, it arrives as a date', held(wide, 6).format, format);
-is('and holds the day it was filled with',
-  JSON.stringify(held(wide, 6).value), JSON.stringify({ Number: 46053 }));
-is('while the cell it was filled from is untouched',
-  JSON.stringify(held(wide, 1)), JSON.stringify(held(opened, 1)));
 
 console.log(failures === 0
   ? '\nformulas are worked out, and only when they can be'

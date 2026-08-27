@@ -65,7 +65,8 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'markSaved', 'markSteps', 'put', 'heldAt',
   'takeColumn', 'takeRow', 'takeAll',
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
-  'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle'].map(lift).join('\n');
+  'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
+  'widthForPixels', 'setWidth'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -78,8 +79,11 @@ let anchor = { row: 1, col: 0 };
 let reach = { row: 1, col: 0 };
 let tabHome = null;
 let dragging = false;
-const sheet = { rows: [] };
+const sheet = { rows: [], col_widths: [] };
 const sheetNow = () => sheet;
+let digitWidth = 8;
+let sizing = null;
+const showWidth = () => {};
 const countBox = { textContent: '' };
 const whereBox = { textContent: '' };
 const formulaBox = { value: '' };
@@ -100,7 +104,7 @@ const backButton = { disabled: true };
 const onButton = { disabled: true };
 let anyFormulas = false;
 let filling = null;
-let stylesMoved = false;
+let beyondValues = false;
 // Moving a formula's references is the engine's job and has its own test.
 // Here it only has to be visible when a formula is carried across.
 const translate_formula = (text, rows, cols) =>
@@ -143,8 +147,11 @@ const wear = (row, col, text, format) => {
   step = was;
   changes.clear();
   pristine.clear();
-  stylesMoved = false;
+  beyondValues = false;
 };
+const widthAt = (col) => sheet.col_widths[col];
+const beyond = () => beyondValues;
+const depth = () => undone.length;
 const styleAt = (row, col) => {
   const cell = heldAt(row, col);
   return cell ? cell.style : null;
@@ -163,12 +170,15 @@ const unsaved = () => changes.size;
 // Start over as if a fresh file had been opened.
 const forget = () => {
   sheet.rows.length = 0;
+  sheet.col_widths.length = 0;
+  beyondValues = false;
   changes.clear(); pristine.clear();
   undone.length = 0; redone.length = 0;
 };
 export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped, unitOf,
-         wear, styleAt, sameStyle,
+         wear, styleAt, sameStyle, widthForPixels, setWidth, widthAt,
+         beyond, depth,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf,
          change, undo, redo, unsaved, forget };
 `));
@@ -681,6 +691,45 @@ is('and the formatting with them', grid.styleAt(3, 0), {});
 is('two cells with no style wear the same one', grid.sameStyle(null, {}), true);
 is('and two with different formats do not',
   grid.sameStyle({ number_format: 'a' }, { number_format: 'b' }), false);
+
+// ── Dragging a column wider ─────────────────────────────────
+//
+// A stored width times the digit width IS the pixel width: Excel stores 10.625
+// for a column someone typed 10 into, and draws it 85 pixels wide. That is the
+// whole conversion, and it is exact rather than approximate — the gutter either
+// side of the text is already counted inside the stored number, which is why
+// the stored number is not the one Excel's own box shows.
+
+is('eighty-five pixels is the width Excel stores for a column typed as ten',
+  grid.widthForPixels(85), 10.625);
+is('and a hundred and seventeen is what the sample holds',
+  grid.widthForPixels(117), 14.625);
+is('a column cannot be dragged past nothing', grid.widthForPixels(-20), 0);
+
+grid.forget();
+grid.setWidth(2, 240);
+is('dragging a column writes its width', grid.widthAt(2), 30);
+// Columns before it are padded with zero, which is how the parser records
+// "this column had no <col> entry of its own" — the same as never having been
+// mentioned, and not a width of nothing.
+is('and columns before it are left saying nothing', grid.widthAt(1), 0);
+
+// A width is not something a list of cell values can carry, so saving it has
+// to take the path that sends the whole workbook.
+is('resizing needs more than a list of values', grid.beyond(), true);
+
+grid.undo();
+is('undo puts the column back', grid.widthAt(2), 0);
+grid.redo();
+is('and redo widens it again', grid.widthAt(2), 30);
+
+// Dragging to the width it already has is not a change, so it does not fill
+// the undo stack with nothing.
+grid.forget();
+grid.setWidth(1, 96);
+const deep = grid.depth();
+grid.setWidth(1, 96);
+is('dragging to the width it already has changes nothing', grid.depth(), deep);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

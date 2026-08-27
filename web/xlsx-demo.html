@@ -345,10 +345,11 @@ let fileName = 'workbook.xlsx';
 // One entry per cell that has been changed, keyed by sheet/row/column so
 // typing into the same cell twice sends one edit, not two.
 const changes = new Map();
-// Whether anything has changed that a list of cell values cannot express.
-// Filling carries the source cell's formatting, and a date that arrives
-// without its format is a five-figure number.
-let stylesMoved = false;
+// Whether anything has changed that a list of cell values cannot express: a
+// column's width, or the formatting a fill carried across. Saving those needs
+// the whole workbook to travel, and a date that arrives without its format is
+// a five-figure number.
+let beyondValues = false;
 let digitWidth = 7;
 
 /// The width of a digit in the workbook's standard font, which is the unit a
@@ -368,6 +369,16 @@ function widthOf(sheet, column) {
   const named = sheet.col_widths[column];
   if (named > 0) return named;
   return sheet.default_col_width > 0 ? sheet.default_col_width : DEFAULT_CHARACTERS;
+}
+
+// The width to store for a column someone has dragged to `pixels` wide.
+//
+// A stored width times the digit width IS the pixel width: Excel stores 10.625
+// for a column typed as 10, and 10.625 x 8 is the 85 pixels it draws. The
+// gutter either side of the text is already inside the stored number, which is
+// why it is not the number Excel's own box shows.
+function widthForPixels(pixels) {
+  return Math.max(0, pixels) / digitWidth;
 }
 
 function columnPixels(width) {
@@ -495,6 +506,16 @@ function draw() {
   table.addEventListener('mousedown', (event) => {
     const head = event.target.closest('th');
     if (head) {
+      const edge = onEdge(head, event);
+      if (edge !== null) {
+        sizing = {
+          col: edge,
+          from: event.clientX,
+          was: head.getBoundingClientRect().width,
+        };
+        event.preventDefault();
+        return;
+      }
       if (head.dataset.all) takeAll();
       else if (head.dataset.headCol !== undefined) {
         takeColumn(Number(head.dataset.headCol), event.shiftKey);
@@ -521,6 +542,11 @@ function draw() {
     if (!event.shiftKey) dragging = true;
     table.focus();
     event.preventDefault();
+  });
+  table.addEventListener('mousemove', (event) => {
+    const head = event.target.closest('th');
+    if (!head) return;
+    head.style.cursor = onEdge(head, event) !== null ? 'col-resize' : '';
   });
   table.addEventListener('mouseover', (event) => {
     if (filling) {
@@ -725,14 +751,14 @@ const DEPTH = 100;
 /** Run `what` so that everything it writes can be undone in one go. */
 function change(what) {
   if (step) { what(); return; }   // already inside a step: do not nest
-  step = { sheet: shown, cells: [] };
+  step = { sheet: shown, cells: [], columns: [] };
   const built = step;
   try {
     what();
   } finally {
     step = null;
   }
-  if (built.cells.length === 0) return;
+  if (built.cells.length === 0 && built.columns.length === 0) return;
   recompute();
   undone.push(built);
   if (undone.length > DEPTH) undone.shift();
@@ -753,11 +779,21 @@ function restore(built, side) {
     const one = built.cells[i];
     put(one.row, one.col, one[side], side === 'was' ? one.wasStyle : one.nowStyle);
   }
+  const sheet = sheetNow();
+  for (let i = built.columns.length - 1; i >= 0; i--) {
+    const one = built.columns[i];
+    if (sheet) sheet.col_widths[one.col] = one[side];
+    beyondValues = true;
+  }
   step = was;
   recompute();
   draw();
   // Show what moved. Excel selects the cells an undo touched, which is the
   // difference between trusting it and hunting for what it did.
+  if (built.cells.length === 0) {
+    paint();
+    return;
+  }
   const rows = built.cells.map((one) => one.row);
   const cols = built.cells.map((one) => one.col);
   at = { row: Math.min(...rows), col: Math.min(...cols) };
@@ -894,6 +930,46 @@ function takeAll() {
   at = { row: 1, col: 0 };
   anchor = { row: 1, col: 0 };
   goTo(bounds.rows, bounds.cols, false, true);
+}
+
+// Set while a column's edge is being dragged. Excel resizes as you pull rather
+// than on release, so the sheet reflows under the pointer and you can see what
+// you are choosing.
+let sizing = null;
+// How close to the edge counts as being on it.
+const EDGE = 4;
+
+/** The column whose right edge this press is on, or null. */
+function onEdge(head, event) {
+  if (head.dataset.headCol === undefined) return null;
+  const box = head.getBoundingClientRect();
+  if (event.clientX < box.right - EDGE) return null;
+  return Number(head.dataset.headCol);
+}
+
+/** Show a column at `pixels` wide without writing anything down yet. */
+function showWidth(col, pixels) {
+  const table = tableNow();
+  if (!table) return;
+  const head = table.querySelector(`th[data-head-col="${col}"]`);
+  if (head) head.style.width = `${Math.max(1, Math.round(pixels))}px`;
+}
+
+/** Write the dragged width into the sheet. */
+function setWidth(col, pixels) {
+  const sheet = sheetNow();
+  if (!sheet) return;
+  const width = widthForPixels(pixels);
+  const was = sheet.col_widths[col] || 0;
+  if (Math.abs(width - was) < 1e-6) return;
+  change(() => {
+    if (step) step.columns.push({ col, was, now: width });
+    while (sheet.col_widths.length <= col) sheet.col_widths.push(0);
+    sheet.col_widths[col] = width;
+    beyondValues = true;
+  });
+  draw();
+  paint();
 }
 
 /** Was this press on the fill handle rather than on the cell itself? */
@@ -1468,7 +1544,7 @@ async function save() {
     // Values alone go by the narrow path, which patches only the cells named.
     // Once formatting has moved, the whole workbook has to cross, because a
     // list of values has nowhere to say what a cell should look like.
-    const written = stylesMoved
+    const written = beyondValues
       ? edit_xlsx_from_workbook(source, book)
       : edit_xlsx(source, [...changes.values()]);
     const blob = new Blob([written], {
@@ -1485,7 +1561,7 @@ async function save() {
     source = written;
     changes.clear();
     pristine.clear();
-    stylesMoved = false;
+    beyondValues = false;
     markSaved();
   } catch (error) {
     saveButton.textContent = was;
@@ -1669,7 +1745,7 @@ function put(row, col, text, style) {
     // Only the wide save path carries a cell's style, and it costs a crossing
     // of the whole workbook, so it is taken only when a style has actually
     // moved. Without it a filled date saves as the bare number underneath it.
-    stylesMoved = true;
+    beyondValues = true;
   }
   remember(row, col, text, before);
 }
@@ -1831,7 +1907,21 @@ function onKey(event) {
   }
 }
 
-document.addEventListener('mouseup', () => {
+// Resizing has to hear the pointer wherever it goes: a drag that leaves the
+// table is still a drag.
+document.addEventListener('mousemove', (event) => {
+  if (!sizing) return;
+  event.preventDefault();
+  showWidth(sizing.col, sizing.was + (event.clientX - sizing.from));
+});
+
+document.addEventListener('mouseup', (event) => {
+  if (sizing) {
+    const held = sizing;
+    sizing = null;
+    setWidth(held.col, held.was + (event.clientX - held.from));
+    return;
+  }
   headDrag = null;
   if (filling) {
     const to = filling.to;
@@ -1871,7 +1961,7 @@ async function open(data, name) {
     fileName = name || 'workbook.xlsx';
     changes.clear();
     pristine.clear();
-    stylesMoved = false;
+    beyondValues = false;
     undone.length = 0;
     redone.length = 0;
     markSaved();
