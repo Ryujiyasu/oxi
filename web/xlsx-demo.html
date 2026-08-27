@@ -209,6 +209,7 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 }
 #drop.over { display: flex; }
 #state { padding: 40px; color: var(--dim); font-size: 14px; }
+:root { --rule-firm: #8a8f98; }
 
 /* Said once, quietly, beside the formula it applies to. */
 .bar #calcNote {
@@ -232,6 +233,21 @@ header #on { margin-right: 4px; }
    the cell you are about to type into. */
 td.pick { background: rgba(33, 115, 70, .10); }
 th.lit { background: var(--accent); color: #fff; }
+/* Rows and columns the sheet asks to be kept in view. They are ordinary cells
+   pinned where they are, so they need a background of their own — without one
+   the rows sliding underneath show through. */
+td.held, th.held { position: sticky; z-index: 3; background: #fff; }
+th.held { background: var(--head); }
+/* A cell held in both directions passes over the ones held in only one. */
+td.held.both, th.held.both { z-index: 4; }
+/* The last held row and column are ruled, so it is clear what is pinned and
+   what is sliding under it. */
+td.held.edge-hold-b, th.held.edge-hold-b { box-shadow: inset 0 -2px 0 0 var(--rule-firm); }
+td.held.edge-hold-r, th.held.edge-hold-r { box-shadow: inset -2px 0 0 0 var(--rule-firm); }
+td.held.edge-hold-b.edge-hold-r, th.held.edge-hold-b.edge-hold-r {
+  box-shadow: inset 0 -2px 0 0 var(--rule-firm), inset -2px 0 0 0 var(--rule-firm);
+}
+
 /* Cells a cut has marked. They are still there — this says where they will
    move from, and Escape takes it back. */
 td.cut { outline: 2px dashed var(--accent); outline-offset: -2px; }
@@ -498,6 +514,75 @@ function isNumber(cell) {
   return typeof cell.value === 'object' && cell.value !== null && 'Number' in cell.value;
 }
 
+/**
+ * Keep the sheet's frozen rows and columns in view while the rest scrolls.
+ *
+ * A workbook says `<pane ySplit="1" state="frozen"/>` to mean "hold the top
+ * row", counting in cells. The header strip is already pinned at the top, so a
+ * held row sits below it, and each held row below the one before — which is
+ * why the offsets are added up from the sizes the browser actually gave them
+ * rather than from the sizes the file asked for.
+ */
+function holdPanes(table, sheet) {
+  const rows = Math.max(0, sheet.frozen_rows || 0);
+  const cols = Math.max(0, sheet.frozen_cols || 0);
+  if (rows === 0 && cols === 0) return;
+
+  // Down the page: the header strip first, then each held row under it.
+  const head = table.rows[0];
+  let down = head ? head.getBoundingClientRect().height : 0;
+  const tops = [];
+  for (let at = 1; at <= rows && at < table.rows.length; at++) {
+    tops.push(down);
+    down += table.rows[at].getBoundingClientRect().height;
+  }
+  // Across: the row-number column first, then each held column beside it.
+  const corner = head && head.children[0];
+  let across = corner ? corner.getBoundingClientRect().width : 0;
+  const lefts = [];
+  for (let at = 0; at < cols; at++) {
+    lefts.push(across);
+    const cell = head && head.children[at + 1];
+    across += cell ? cell.getBoundingClientRect().width : 0;
+  }
+
+  for (let at = 1; at < table.rows.length; at++) {
+    const row = table.rows[at];
+    const held = at <= rows;
+    for (const cell of row.children) {
+      // A merged cell spans several columns, so its own column is the one it
+      // starts in — the header's position tells us nothing about it.
+      const col = cell.dataset.col === undefined ? -1 : Number(cell.dataset.col);
+      const isRowLabel = cell.dataset.headRow !== undefined;
+      const acrossHeld = isRowLabel || (col >= 0 && col < cols);
+      if (!held && !acrossHeld) continue;
+      cell.classList.add('held');
+      if (held) cell.style.top = `${tops[at - 1]}px`;
+      if (acrossHeld) cell.style.left = `${isRowLabel ? 0 : lefts[col]}px`;
+      if (held && acrossHeld) cell.classList.add('both');
+      if (held && at === rows) cell.classList.add('edge-hold-b');
+      if (acrossHeld && !isRowLabel && col === cols - 1) {
+        cell.classList.add('edge-hold-r');
+      }
+      if (acrossHeld && isRowLabel && cols === 0) cell.classList.add('edge-hold-r');
+    }
+  }
+  // The header strip has to hold its held columns too, or they slide out from
+  // under the cells they are heading.
+  if (head) {
+    for (let at = 0; at < cols && at + 1 < head.children.length; at++) {
+      const cell = head.children[at + 1];
+      cell.classList.add('held', 'both');
+      cell.style.left = `${lefts[at]}px`;
+      if (at === cols - 1) cell.classList.add('edge-hold-r');
+    }
+    if (corner) {
+      corner.classList.add('held', 'both');
+      corner.style.left = '0px';
+    }
+  }
+}
+
 function draw() {
   const sheet = book.sheets[shown];
   const merged = new Map();
@@ -692,6 +777,9 @@ function draw() {
   const previous = sheetBox.querySelector('table');
   if (previous) previous.remove();
   sheetBox.appendChild(table);
+  // Only once it is on the page: how far down a frozen row sits, and how far
+  // across a frozen column, can only be read from what was actually laid out.
+  holdPanes(table, sheet);
 }
 
 function describe() {

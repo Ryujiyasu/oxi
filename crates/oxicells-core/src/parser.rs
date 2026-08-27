@@ -31,7 +31,7 @@ fn note_unsupported(name: &str, noted: &mut Vec<String>) {
         "conditionalFormatting" => "Conditional formatting",
         "dataValidation" | "dataValidations" => "Data validation",
         "hyperlink" | "hyperlinks" => "Hyperlinks",
-        "pane" => "Frozen panes",
+        "pane" => "Split panes",
         "sheetProtection" => "Sheet protection",
         "drawing" => "Drawings",
         "legacyDrawing" => "Comments",
@@ -2366,6 +2366,8 @@ fn parse_worksheet(
     // is a plain count of characters instead, so the two cannot share a value.
     let mut default_col_width: f32 = 0.0;
     let mut default_row_height: f32 = 15.0;
+    let mut frozen_rows: u32 = 0;
+    let mut frozen_cols: u32 = 0;
     let mut default_row_custom = false;
     // The fonts <col> styles put on their columns. A row's height is
     // measured from these, not from the number the sheet or the row states.
@@ -2598,8 +2600,32 @@ fn parse_worksheet(
             }
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
-                note_unsupported(&name, &mut unsupported);
+                // A frozen pane IS read; only a draggable split is not.
+                if name != "pane"
+                    || !matches!(
+                        get_attr(&e, "state").as_deref(),
+                        Some("frozen") | Some("frozenSplit")
+                    )
+                {
+                    note_unsupported(&name, &mut unsupported);
+                }
                 match name.as_str() {
+                    // <pane xSplit="2" ySplit="3" topLeftCell="C4" state="frozen"/>
+                    "pane" => {
+                        if matches!(
+                            get_attr(&e, "state").as_deref(),
+                            Some("frozen") | Some("frozenSplit")
+                        ) {
+                            frozen_cols = get_attr(&e, "xSplit")
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .map(|v| v as u32)
+                                .unwrap_or(0);
+                            frozen_rows = get_attr(&e, "ySplit")
+                                .and_then(|v| v.parse::<f32>().ok())
+                                .map(|v| v as u32)
+                                .unwrap_or(0);
+                        }
+                    }
                     // Handle self-closing <c .../> (cell with no value)
                     "c" if in_row => {
                         let cell_ref = get_attr(&e, "r").unwrap_or_default();
@@ -2814,6 +2840,8 @@ fn parse_worksheet(
         col_fonts,
         normal_font,
         first_font,
+        frozen_rows,
+        frozen_cols,
         merge_cells,
         auto_filter,
         declared_range,

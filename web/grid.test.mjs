@@ -68,7 +68,8 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText',
-  'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight'].map(lift).join('\n');
+  'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
+  'holdPanes'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -180,6 +181,47 @@ const mark = (r1, c1, r2, c2) => {
 // What a paste would move, as the paste handler works it out.
 const marked = () => cutFrom;
 const sheetOf = () => sheet;
+
+// A table of known geometry: the header strip 20 tall, the row-label column 40
+// wide, every row 25 tall and every column 100 wide. Standing one up by hand
+// is what makes the arithmetic readable in the answers below.
+function aTable(rows, cols) {
+  const cell = (extra) => ({
+    dataset: {},
+    style: {},
+    classList: {
+      names: new Set(),
+      add(...names) { names.forEach((one) => this.names.add(one)); },
+      remove(...names) { names.forEach((one) => this.names.delete(one)); },
+      contains(one) { return this.names.has(one); },
+    },
+    getBoundingClientRect: () => extra,
+    ...{},
+  });
+  const table = { rows: [] };
+  const head = { children: [], getBoundingClientRect: () => ({ height: 20, width: 0 }) };
+  head.children.push(cell({ height: 20, width: 40 }));
+  for (let col = 0; col < cols; col++) {
+    const one = cell({ height: 20, width: 100 });
+    one.dataset.headCol = String(col);
+    head.children.push(one);
+  }
+  table.rows.push(head);
+  for (let row = 1; row <= rows; row++) {
+    const line = { children: [], getBoundingClientRect: () => ({ height: 25, width: 0 }) };
+    const label = cell({ height: 25, width: 40 });
+    label.dataset.headRow = String(row);
+    line.children.push(label);
+    for (let col = 0; col < cols; col++) {
+      const one = cell({ height: 25, width: 100 });
+      one.dataset.row = String(row);
+      one.dataset.col = String(col);
+      line.children.push(one);
+    }
+    table.rows.push(line);
+  }
+  return table;
+}
 const lineAt = (row) => sheet.rows.find((one) => one.index === row);
 const heightAt = (row) => { const one = lineAt(row); return one ? one.height : undefined; };
 const chosenAt = (row) => { const one = lineAt(row); return one ? one.custom_height : undefined; };
@@ -220,7 +262,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          beyond, depth, dropCut, mark, marked,
          padFor, fitWidth, fitColumn, ink, sheetOf,
          toggle, alignTo, allWear, valueAt, setHeight, heightAt, chosenAt,
-         lineAt,
+         lineAt, holdPanes, aTable,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
@@ -1044,6 +1086,79 @@ grid.lineAt(4).custom_height = false;
 grid.setHeight(4, 40);
 is('dragging a computed height to the same number makes it chosen',
   grid.chosenAt(4), true);
+
+// ── Holding the frozen rows and columns in view ─────────────
+//
+// A workbook says `<pane ySplit="1" state="frozen"/>` to mean "keep the top
+// row while the rest scrolls", counting in cells. The header strip is already
+// pinned, so a held row sits below it and each held row below the one before.
+// The offsets are added up from what the browser actually laid out, because
+// the sizes a file asks for and the sizes it gets are not the same thing.
+//
+// The table below is stood up by hand: header 20 tall, row labels 40 wide,
+// rows 25 tall, columns 100 wide.
+
+const pinned = (table, row, col) => {
+  const line = table.rows[row];
+  const cell = line.children[col + 1];
+  return {
+    top: cell.style.top,
+    left: cell.style.left,
+    pinned: cell.classList.contains('held'),
+    both: cell.classList.contains('both'),
+  };
+};
+
+let table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 1, frozen_cols: 0 });
+is('one held row sits just under the header strip',
+  pinned(table, 1, 0).top, '20px');
+is('and is pinned', pinned(table, 1, 0).pinned, true);
+is('the row under it is not', pinned(table, 2, 0).pinned, false);
+
+table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 3, frozen_cols: 0 });
+is('three held rows stack up under the header',
+  [1, 2, 3].map((row) => pinned(table, row, 0).top), ['20px', '45px', '70px']);
+is('and the fourth is loose', pinned(table, 4, 0).pinned, false);
+
+table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 0, frozen_cols: 1 });
+is('one held column sits beside the row labels',
+  pinned(table, 1, 0).left, '40px');
+is('the column beside it is loose', pinned(table, 1, 1).pinned, false);
+is('and every row of the held column is pinned, not just the first',
+  [1, 2, 5].every((row) => pinned(table, row, 0).pinned), true);
+
+table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 0, frozen_cols: 2 });
+is('two held columns stack up beside the labels',
+  [0, 1].map((col) => pinned(table, 1, col).left), ['40px', '140px']);
+
+// The corner: a cell held both ways has to stay put in both directions, and
+// has to pass over the cells held in only one.
+table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 3, frozen_cols: 2 });
+const corner = pinned(table, 2, 1);
+is('a cell in a held row AND a held column is held both ways',
+  [corner.top, corner.left], ['45px', '140px']);
+is('and outranks the ones held one way only', corner.both, true);
+is('a cell in a held row alone is not', pinned(table, 2, 3).both, false);
+is('nor is one in a held column alone', pinned(table, 5, 0).both, false);
+
+// A sheet that asks for nothing is left entirely alone.
+table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 0, frozen_cols: 0 });
+is('a sheet with no frozen panes is not touched',
+  [1, 3].every((row) => !pinned(table, row, 0).pinned), true);
+is('and nothing is given a position', pinned(table, 1, 0).top, undefined);
+
+// The row labels are held across as well, or they slide out from under the
+// rows they are numbering.
+table = grid.aTable(6, 4);
+grid.holdPanes(table, { frozen_rows: 1, frozen_cols: 0 });
+is('the row labels are pinned across even with no held columns',
+  table.rows[2].children[0].classList.contains('held'), true);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

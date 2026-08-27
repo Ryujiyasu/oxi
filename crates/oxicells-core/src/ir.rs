@@ -43,6 +43,14 @@ pub struct Sheet {
     /// points at, which is a different entry in books openpyxl writes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_font: Option<(String, f32)>,
+    /// How many rows are held at the top of the view while the rest scrolls,
+    /// and how many columns at the left. Both zero unless the sheet says
+    /// `<pane state="frozen">`, which counts them in cells; a plain split
+    /// states its position in twips and is a different thing entirely.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub frozen_rows: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub frozen_cols: u32,
     pub merge_cells: Vec<MergeCell>,
     /// Zero-based indices of the columns that are hidden. Columns have no
     /// record of their own, so this sits beside `col_widths`.

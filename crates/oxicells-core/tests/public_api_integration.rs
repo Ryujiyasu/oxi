@@ -199,6 +199,8 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         col_fonts: vec![],
         normal_font: None,
         first_font: None,
+        frozen_rows: 0,
+        frozen_cols: 0,
         merge_cells: vec![],
         hidden_cols: Vec::new(),
         auto_filter: None,

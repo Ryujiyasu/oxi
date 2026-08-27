@@ -26,6 +26,8 @@ fn blank_sheet(name: &str) -> Sheet {
         col_fonts: vec![],
         normal_font: None,
         first_font: None,
+        frozen_rows: 0,
+        frozen_cols: 0,
         merge_cells: Vec::new(),
         hidden_cols: Vec::new(),
         auto_filter: None,
