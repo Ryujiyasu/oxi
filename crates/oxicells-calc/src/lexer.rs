@@ -62,6 +62,10 @@ pub enum ParseError {
     UnexpectedChar(char, usize),
     UnterminatedString,
     UnterminatedSheetName,
+    /// A sheet living in another workbook: `[1]Sales!A1`, or quoted as
+    /// `'[1]May 2021'!A1`. There is nothing here to resolve it against, and
+    /// answering `#REF!` would throw away the value the file was saved with.
+    AnotherWorkbook(String),
     InvalidNumber(String),
     UnexpectedToken(String),
     UnexpectedEnd,
@@ -74,6 +78,9 @@ impl fmt::Display for ParseError {
             ParseError::UnexpectedChar(c, at) => write!(f, "unexpected character {c:?} at byte {at}"),
             ParseError::UnterminatedString => f.write_str("unterminated string literal"),
             ParseError::UnterminatedSheetName => f.write_str("unterminated quoted sheet name"),
+            ParseError::AnotherWorkbook(name) => {
+                write!(f, "sheet {name:?} is in a workbook this one only links to")
+            }
             ParseError::InvalidNumber(s) => write!(f, "invalid number literal {s:?}"),
             ParseError::UnexpectedToken(s) => write!(f, "unexpected token {s}"),
             ParseError::UnexpectedEnd => f.write_str("unexpected end of formula"),
@@ -659,6 +666,13 @@ fn lex_name(src: &str, start: usize) -> Result<(Token, usize), ParseError> {
         let (name, next) = lex_quoted_sheet(src, i)?;
         if src.as_bytes().get(next) != Some(&b'!') {
             return Err(ParseError::UnterminatedSheetName);
+        }
+        // `'[1]May 2021'!A1` is a sheet in a workbook this one only links to.
+        // Nothing here can resolve it, and resolving it to nothing means
+        // `#REF!` in place of a value the file actually holds — so the whole
+        // formula is left unread instead, and keeps what it was saved with.
+        if name.starts_with('[') {
+            return Err(ParseError::AnotherWorkbook(name));
         }
         sheet = Some(name);
         i = next + 1;

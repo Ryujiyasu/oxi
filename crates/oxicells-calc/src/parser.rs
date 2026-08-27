@@ -423,6 +423,32 @@ mod tests {
         assert_eq!(waits_for("=ROWS(INDEX(A1:C5,,B1))"), ["A1:C5", "B1"]);
     }
 
+    /// A sheet in another workbook cannot be read, and saying so is better
+    /// than answering.
+    ///
+    /// `[1]` names a workbook this file links to and does not contain. The
+    /// bare form never lexed; the quoted form did, because brackets are
+    /// ordinary characters inside a sheet name, and it went on to resolve
+    /// against a sheet that is not there. A formula left unread keeps the
+    /// value the file was saved with, which is the best answer available.
+    /// One that resolves to `#REF!` replaces that value with an error.
+    #[test]
+    fn a_sheet_in_another_workbook_is_not_read() {
+        for formula in [
+            "'[1]May 2021'!$L$2:$L$29",
+            "INDEX('[1]May 2021'!$L$2:$L$29,2)",
+            "SUM('[2]Q3'!A1:A9)",
+        ] {
+            assert!(
+                parse(formula).is_err(),
+                "{formula} names a workbook that is not here",
+            );
+        }
+        // A sheet whose name merely needs quoting is read as it always was.
+        assert!(parse("'May 2021'!$L$2:$L$29").is_ok());
+        assert!(parse("'HR '!$A3").is_ok());
+    }
+
     #[test]
     fn power_is_left_associative() {
         // Excel: 2^3^2 = 64, not 512.
