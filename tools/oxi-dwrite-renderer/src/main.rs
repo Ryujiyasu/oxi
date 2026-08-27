@@ -375,6 +375,11 @@ unsafe fn render_page_elements(
                 text_scale, is_vertical, effects, ..
             } => {
                 if exclude.iter().any(|e| e == "text") { continue; }
+                // S1243 (2026-08-27): a run can declare <w:sz w:val="0"/>
+                // (correspondence__00075980's space run) — DirectWrite's
+                // CreateTextFormat rejects a zero size with E_INVALIDARG and
+                // the whole render died. Draw nothing, like Word and GDI.
+                if *font_size <= 0.1 { continue; }
                 // Session 75 Phase D (2026-05-17): el.y is LINE BOX TOP; pass
                 // el.y + el.text_y_off as the glyph-top y to preserve pre-Phase-D
                 // pixel positions. See memory/session71_y_convention_refactor_design.md.
