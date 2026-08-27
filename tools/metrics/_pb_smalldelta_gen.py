@@ -59,6 +59,15 @@ DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>"""
 
 # tag, docDefaults sz halves, Normal sz halves, ascii font
+# MEASURED 2026-08-27 (R24): chain-pricing on EVERY arm —
+#   admin 14.25 (=chain12) / kyodo 12.75 (=chain10.5) / noddsz 14.25 /
+#   nonone 13.5 (=dd11 control) / big 16.5 / century-12 15.0.
+# Grid arms (notype/lines/linesAndChars+cs, run inline 2026-08-27): identical —
+#   the grid does NOT change the pricing. Table-style-sz arms: ts21 -> 12.75,
+#   ts28 -> 16.5 = the TABLE STYLE's rPr sz also chains. dd-ABSENT + Normal21:
+#   12.75 = chain holds without docDefaults. JP label arm (申出番号, MS Mincho
+#   10.5 natural): row 14.25 = the label line DOMINATES max(cells) — a probe
+#   label must stay small to isolate the empty.
 ARMS = [
     ("admin_dd22_n24_arial", 22, 24, "Arial"),
     ("kyodo_dd22_n21_century", 22, 21, "Century"),
@@ -66,6 +75,7 @@ ARMS = [
     ("dd22_nonone_arial", 22, None, "Arial"),
     ("big_dd22_n28_arial", 22, 28, "Arial"),
     ("dd22_n24_century", 22, 24, "Century"),
+    ("ddNONE_n21_century", None, 21, "Century"),
 ]
 
 if __name__ == "__main__":
