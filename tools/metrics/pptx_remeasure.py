@@ -69,6 +69,7 @@ def report(state: dict) -> None:
 
 
 def main() -> None:
+    exe_mtime = EXE.stat().st_mtime_ns if EXE.exists() else 0
     state = load()
     if "--report" in sys.argv:
         report(state)
@@ -77,7 +78,16 @@ def main() -> None:
     tmp = SSIMD / "_remeasure_tmp"
     for item in manifest:
         doc = f"{item['idx']:02d}"
-        if doc in state and "mean" in state[doc] and "--force" not in sys.argv:
+        # `--stale` re-does only the decks whose PNGs predate the binary, so a
+        # refresh survives being interrupted: each run picks up where the last
+        # one stopped instead of starting the 50-deck sweep again. `--force`
+        # still redoes everything.
+        if "--stale" in sys.argv:
+            pngs = sorted((SSIMD / "oxi_png" / doc).glob("slide_s*.png"))
+            fresh = pngs and min(q.stat().st_mtime_ns for q in pngs) >= exe_mtime
+            if fresh and doc in state and "mean" in state[doc]:
+                continue
+        elif doc in state and "mean" in state[doc] and "--force" not in sys.argv:
             continue
         src = ROOT / "pptx" / item["local"]
         pdf_path = SSIMD / "ppt_pdf" / f"{doc}.pdf"
