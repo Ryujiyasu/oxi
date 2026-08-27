@@ -57,8 +57,21 @@ function element(name, id) {
       contains(one) { return this.names.has(one); },
       toggle() {},
     },
-    addEventListener() {},
+    // Kept rather than dropped, so a test can do what a person would: press a
+    // key in a box and see what the page makes of it. The file picker could be
+    // driven already only because the page assigns its `onchange` outright.
+    listeners: new Map(),
+    addEventListener(kind, run) {
+      if (!this.listeners.has(kind)) this.listeners.set(kind, []);
+      this.listeners.get(kind).push(run);
+    },
     removeEventListener() {},
+    /// Run whatever is listening for `kind`, as the browser would.
+    fire(kind, event) {
+      for (const run of this.listeners.get(kind) || []) {
+        run({ preventDefault() {}, stopPropagation() {}, target: this, ...event });
+      }
+    },
     appendChild(child) { this.children.push(child); return child; },
     removeChild() {},
     remove() {},
@@ -199,6 +212,39 @@ if (picker && picker.onchange) {
     made.some((one) => one.classList.contains('held')), true);
 } else {
   is('the page has a file picker with a handler on it', false, true);
+}
+
+// ── Typing a number format, the way a person would ──────────────────────────
+//
+// The engine has always known how to render `0%`; until now the page had no
+// way to choose it. What can be asked here without reaching inside the page is
+// whether the box is listening and whether pressing Enter in it carries all
+// the way through to a redraw — `restyle` builds the table again, so a fresh
+// one appearing is the path having run end to end rather than throwing
+// somewhere in the middle.
+//
+// What it cannot ask is whether the CELL reads differently afterwards: that
+// needs a numeric cell under the cursor, and the cursor is not reachable from
+// out here. `save.test.mjs` asks the other half — that a format put on a cell
+// reaches the file and comes back.
+
+const box = nodes.get('numfmt');
+if (box && box.listeners.has('keydown')) {
+  const drawnBefore = made.filter((one) => one.tagName === 'TABLE').length;
+  box.value = '0%';
+  box.fire('keydown', { key: 'Enter' });
+  const drawnAfter = made.filter((one) => one.tagName === 'TABLE').length;
+  is('typing a format and pressing Enter draws the sheet again',
+    drawnAfter > drawnBefore, true);
+  // And a format the engine cannot make sense of must not take the page down
+  // with it — a sheet that stops responding is worse than one showing a
+  // number oddly.
+  box.value = 'not a format at all';
+  box.fire('keydown', { key: 'Enter' });
+  is('and a format that means nothing is survivable',
+    made.filter((one) => one.tagName === 'TABLE').length > drawnAfter, true);
+} else {
+  is('the page has a format box listening for keys', false, true);
 }
 
 console.log(failures === 0 ? '\nthe page loads' : `\n${failures} did not`);
