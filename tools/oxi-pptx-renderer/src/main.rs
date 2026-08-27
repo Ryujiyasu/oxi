@@ -1052,6 +1052,87 @@ fn table_line_pt(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
     }
 }
 
+/// A picture fills its geometry's bounding box unless this is set.
+fn picfillbox_on() -> bool {
+    std::env::var("OXI_PICFILLBOX_DISABLE").is_err()
+}
+
+/// The box a PICTURE is poured into: the bounding box of the geometry PATH,
+/// which is not always the shape's own box.
+///
+/// S-PICFILLBOX (2026-08-27), from the `srcrect` probe. A picture is fitted to
+/// the outline's extent, not to `a:ext`:
+///
+///     arm          shape pt      placed pt
+///     rect_all     216.0x216.0   216.0x216.0
+///     ellipse_all  216.0x216.0   216.0x216.0
+///     chord_all    216.0x216.0   184.4x216.0   <- narrower than the shape
+///
+/// For rect / ellipse / roundRect the path reaches all four edges and the two
+/// boxes coincide, so nothing moves. A `chord` stops at its chord line, and the
+/// picture is squeezed into that.
+///
+/// d44 s23 is the specimen: `chord` with `adj1=2658481` (44.31 deg) on a 312.7pt
+/// square, so the path's right edge is at `cx + rx*cos(44.31)`:
+///
+///     width  = rx * (1 + cos 44.31) = 156.35 * 1.7157 = 268.25pt
+///     height = 2 * ry                                  = 312.70pt
+///
+/// PowerPoint's own PDF places that image at 268.3 x 312.7. Oxi poured the same
+/// crop into the full square and clipped, leaving the photo ~17% too wide.
+///
+/// Only the arc presets can differ, and only when unrotated -- a rotated one
+/// keeps the shape box rather than guessing at the transformed extent.
+#[cfg(windows)]
+fn picture_fill_box(sh: &Shape) -> (f32, f32, f32, f32) {
+    let full = (sh.x, sh.y, sh.width, sh.height);
+    if !picfillbox_on() || sh.rotation != 0.0 || sh.flip_h || sh.flip_v {
+        return full;
+    }
+    let pie = matches!(sh.shape_type.as_deref(), Some("pie"));
+    if !pie && !matches!(sh.shape_type.as_deref(), Some("chord")) {
+        return full;
+    }
+    let (w, h) = (sh.width.max(0.0), sh.height.max(0.0));
+    if w == 0.0 || h == 0.0 {
+        return full;
+    }
+    let st = sh.adjustments.get("adj1").copied().unwrap_or(0.0);
+    let en = sh.adjustments.get("adj2").copied().unwrap_or(16_200_000.0);
+    let mut sw = en - st;
+    if sw <= 0.0 {
+        sw += 21_600_000.0;
+    }
+    let (rx, ry) = (w / 2.0, h / 2.0);
+    let at = |units: f32| {
+        let a = (units / 60_000.0).to_radians();
+        (rx + rx * a.cos(), ry + ry * a.sin())
+    };
+    // The extremes of an elliptical arc are its endpoints plus whichever
+    // quadrant points the sweep actually passes through.
+    let mut pts = vec![at(st), at(st + sw)];
+    for q in [0.0f32, 5_400_000.0, 10_800_000.0, 16_200_000.0] {
+        let mut d = q - st;
+        while d < 0.0 {
+            d += 21_600_000.0;
+        }
+        if d <= sw {
+            pts.push(at(st + d));
+        }
+    }
+    if pie {
+        pts.push((rx, ry)); // a wedge closes through the centre
+    }
+    let x0 = pts.iter().fold(f32::MAX, |m, p| m.min(p.0));
+    let x1 = pts.iter().fold(f32::MIN, |m, p| m.max(p.0));
+    let y0 = pts.iter().fold(f32::MAX, |m, p| m.min(p.1));
+    let y1 = pts.iter().fold(f32::MIN, |m, p| m.max(p.1));
+    if x1 - x0 <= 0.0 || y1 - y0 <= 0.0 {
+        return full;
+    }
+    (sh.x + x0, sh.y + y0, x1 - x0, y1 - y0)
+}
+
 /// A justified line keeps its own indent unless this is set.
 fn justind_on() -> bool {
     std::env::var("OXI_JUSTIND_DISABLE").is_err()
@@ -10096,10 +10177,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 let (dx, dy, dw, dh) = if imgrect_on() {
                                     // From the EXACT points, covering every
                                     // pixel the rectangle touches.
-                                    let bw = sh.width as f64 * scale;
-                                    let bh = sh.height as f64 * scale;
-                                    let x0 = sh.x as f64 * scale + bw * dl;
-                                    let y0 = sh.y as f64 * scale + bh * dt;
+                                    // The PATH's box, not the shape's (see
+                                    // `picture_fill_box`).
+                                    let (fx, fy, fw, fh) = picture_fill_box(sh);
+                                    let bw = fw as f64 * scale;
+                                    let bh = fh as f64 * scale;
+                                    let x0 = fx as f64 * scale + bw * dl;
+                                    let y0 = fy as f64 * scale + bh * dt;
                                     let x1 = x0 + bw * (1.0 - dl - dr);
                                     let y1 = y0 + bh * (1.0 - dt - db);
                                     // ★A hair of coverage is not coverage. The
