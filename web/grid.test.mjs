@@ -68,7 +68,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText',
-  'restyle', 'allWear', 'toggle', 'alignTo'].map(lift).join('\n');
+  'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -96,6 +96,7 @@ let digitWidth = 8;
 let sizing = null;
 let cutFrom = null;
 const showWidth = () => {};
+const showHeight = () => {};
 const countBox = { textContent: '' };
 const whereBox = { textContent: '' };
 const formulaBox = { value: '' };
@@ -179,6 +180,9 @@ const mark = (r1, c1, r2, c2) => {
 // What a paste would move, as the paste handler works it out.
 const marked = () => cutFrom;
 const sheetOf = () => sheet;
+const lineAt = (row) => sheet.rows.find((one) => one.index === row);
+const heightAt = (row) => { const one = lineAt(row); return one ? one.height : undefined; };
+const chosenAt = (row) => { const one = lineAt(row); return one ? one.custom_height : undefined; };
 const valueAt = (row, col) => {
   const one = heldAt(row, col);
   return one ? one.value : undefined;
@@ -215,7 +219,8 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          wear, styleAt, sameStyle, widthForPixels, setWidth, widthAt,
          beyond, depth, dropCut, mark, marked,
          padFor, fitWidth, fitColumn, ink, sheetOf,
-         toggle, alignTo, allWear, valueAt,
+         toggle, alignTo, allWear, valueAt, setHeight, heightAt, chosenAt,
+         lineAt,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
@@ -996,6 +1001,49 @@ is('and one undo unbolds the whole block',
 grid.redo();
 is('redo bolds it again',
   [1, 2].map((row) => grid.styleAt(row, 0).bold), [true, true]);
+
+// ── Dragging a row taller ────────────────────────────────────
+//
+// The file states a row's height in points where the drag is in pixels, and it
+// carries a flag beside the number saying whether the height was CHOSEN or
+// worked out from the contents. A drag is a choice, and the flag is not
+// decoration: a row given 33 points without it came back from Excel at 18.75,
+// because Excel threw the number away and worked the height out again.
+
+grid.forget();
+grid.seed(3, 0, 'a');
+grid.setHeight(3, 40);
+is('a dragged row is stated in points', grid.heightAt(3), 30);
+is('and marked as chosen rather than worked out', grid.chosenAt(3), true);
+is('a height is not something a list of values can carry', grid.beyond(), true);
+
+grid.undo();
+is('undo puts the height back', grid.heightAt(3), null);
+is('and unmarks it', grid.chosenAt(3), false);
+grid.redo();
+is('redo makes it tall again', grid.heightAt(3), 30);
+
+// A row nobody has written to can still be dragged.
+grid.forget();
+grid.setHeight(9, 96);
+is('a row with nothing in it can be dragged', grid.heightAt(9), 72);
+
+// Dragging to the height it already has, once chosen, is not a change.
+grid.forget();
+grid.setHeight(2, 40);
+const settled = grid.depth();
+grid.setHeight(2, 40);
+is('dragging to the height it already has changes nothing', grid.depth(), settled);
+
+// A row whose height was worked out rather than chosen IS changed by a drag to
+// the same number, because the drag is what makes it stick.
+grid.forget();
+grid.seed(4, 0, 'a');
+grid.lineAt(4).height = 30;
+grid.lineAt(4).custom_height = false;
+grid.setHeight(4, 40);
+is('dragging a computed height to the same number makes it chosen',
+  grid.chosenAt(4), true);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

@@ -54,6 +54,9 @@ pub struct XlsxEditor {
     edits: HashMap<(usize, u32, u32), CellEditValue>, // (sheet_idx, row, col) -> value
     /// (sheet_idx, 1-based row) -> hidden
     row_hidden: HashMap<(usize, u32), bool>,
+    /// (sheet_idx, 1-based row) -> its height in points, or `None` to put the
+    /// row back on the sheet's automatic one, and whether it was chosen.
+    row_height: HashMap<(usize, u32), (Option<f32>, bool)>,
     /// (sheet_idx, 0-based column) -> hidden
     col_hidden: HashMap<(usize, u32), bool>,
     /// (sheet_idx, 0-based column) -> width, in characters of the workbook's
@@ -101,6 +104,7 @@ impl XlsxEditor {
             workbook,
             edits: HashMap::new(),
             row_hidden: HashMap::new(),
+            row_height: HashMap::new(),
             col_hidden: HashMap::new(),
             col_width: HashMap::new(),
             merges: HashMap::new(),
@@ -253,6 +257,16 @@ impl XlsxEditor {
                 self.row_hidden.insert((index, row), hidden);
             }
 
+            for row in &after.rows {
+                let was = before.rows.iter().find(|held| held.index == row.index);
+                let had = was.and_then(|held| held.height);
+                let pinned = was.is_some_and(|held| held.custom_height);
+                if had != row.height || pinned != row.custom_height {
+                    self.row_height
+                        .insert((index, row.index), (row.height, row.custom_height));
+                }
+            }
+
             let mut cols: Vec<(u32, bool)> = Vec::new();
             for col in &after.hidden_cols {
                 if !before.hidden_cols.contains(col) {
@@ -302,6 +316,21 @@ impl XlsxEditor {
         self.row_hidden.insert((sheet_index, row), hidden);
     }
 
+    /// Sets how tall a row is, in points.
+    ///
+    /// `None` puts the row back on the height Excel works out from what is in
+    /// it. `pinned` says the height was chosen rather than computed, which is
+    /// what stops Excel working it out again the next time the file is opened.
+    pub fn set_row_height(
+        &mut self,
+        sheet_index: usize,
+        row: u32,
+        height: Option<f32>,
+        pinned: bool,
+    ) {
+        self.row_height.insert((sheet_index, row), (height, pinned));
+    }
+
     /// Hide or reveal a whole column. `col` is zero-based, as the IR counts it.
     pub fn set_col_hidden(&mut self, sheet_index: usize, col: u32, hidden: bool) {
         self.col_hidden.insert((sheet_index, col), hidden);
@@ -340,6 +369,7 @@ impl XlsxEditor {
     pub fn has_edits(&self) -> bool {
         !self.edits.is_empty()
             || !self.row_hidden.is_empty()
+            || !self.row_height.is_empty()
             || !self.col_hidden.is_empty()
             || !self.col_width.is_empty()
             || !self.merges.is_empty()
@@ -455,9 +485,19 @@ impl XlsxEditor {
             }
         }
 
-        let mut rows_by_sheet: HashMap<usize, BTreeMap<u32, bool>> = HashMap::new();
+        let mut rows_by_sheet: HashMap<usize, BTreeMap<u32, RowWant>> = HashMap::new();
         for ((sheet, row), hidden) in &self.row_hidden {
-            rows_by_sheet.entry(*sheet).or_default().insert(*row, *hidden);
+            rows_by_sheet
+                .entry(*sheet)
+                .or_default()
+                .entry(*row)
+                .or_default()
+                .hidden = Some(*hidden);
+        }
+        for ((sheet, row), (height, pinned)) in &self.row_height {
+            let want = rows_by_sheet.entry(*sheet).or_default().entry(*row).or_default();
+            want.height = Some(*height);
+            want.pinned = *pinned;
         }
         let mut cols_by_sheet: HashMap<usize, BTreeMap<u32, ColumnWant>> = HashMap::new();
         for ((sheet, col), hidden) in &self.col_hidden {
@@ -480,7 +520,7 @@ impl XlsxEditor {
 
         // Map sheet path -> everything to change in that sheet
         let empty_cells: HashMap<(u32, u32), &CellEditValue> = HashMap::new();
-        let empty_lines: BTreeMap<u32, bool> = BTreeMap::new();
+        let empty_lines: BTreeMap<u32, RowWant> = BTreeMap::new();
         let empty_cols: BTreeMap<u32, ColumnWant> = BTreeMap::new();
         let empty_styles: BTreeMap<(u32, u32), u32> = BTreeMap::new();
         let mut path_edits: HashMap<String, SheetEdits<'_>> = HashMap::new();
@@ -1320,7 +1360,17 @@ fn write_new_sheet(sheet: &crate::ir::Sheet) -> Result<Vec<u8>, XlsxError> {
             if cells.is_empty() && !row.hidden {
                 continue;
             }
-            write_inserted_row(&mut writer, row.index, cells, Some(row.hidden), &BTreeMap::new())?;
+            write_inserted_row(
+                &mut writer,
+                row.index,
+                cells,
+                Some(RowWant {
+                    hidden: Some(row.hidden),
+                    height: Some(row.height),
+                    pinned: row.custom_height,
+                }),
+                &BTreeMap::new(),
+            )?;
         }
         writer
             .write_event(Event::End(BytesEnd::new("sheetData")))
@@ -1475,6 +1525,20 @@ fn write_merges(
     writer
         .write_event(Event::End(BytesEnd::new("mergeCells")))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
+/// What a row should end up as. A field left `None` keeps whatever the sheet
+/// already says, so hiding a row does not disturb its height.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct RowWant {
+    hidden: Option<bool>,
+    /// `Some(None)` puts the row back on the sheet's automatic height.
+    height: Option<Option<f32>>,
+    /// Whether that height was chosen by hand. Excel writes `customHeight="1"`
+    /// beside a height someone dragged to and leaves it off one it worked out
+    /// itself, and the difference is whether it recomputes the row on open.
+    /// Pinning a height Excel computed would fix a number that was a cache.
+    pinned: bool,
 }
 
 /// What a column should end up as. A field left `None` keeps whatever the
@@ -1632,6 +1696,51 @@ fn close_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
 }
 
 /// Copies a start tag, pointing it at a different entry in the style sheet.
+/// Copies a row's start tag with whatever `want` decides applied to it.
+///
+/// Everything the row was carrying that this is not deciding — its span, its
+/// own format, the descent Excel notes on it — comes through untouched.
+///
+/// The flag beside the height is load-bearing. Excel writes `customHeight="1"`
+/// on a row someone dragged to a size and leaves it off one it worked out
+/// itself, and that is what decides whether it works the height out again the
+/// next time the file is opened. Pinning a height Excel computed would fix a
+/// number that was only ever a cache of what the content needed.
+fn row_as_wanted(start: &BytesStart<'_>, want: &RowWant) -> BytesStart<'static> {
+    let hidden = want.hidden.unwrap_or_else(|| {
+        matches!(get_attr(start, "hidden").as_deref(), Some("1") | Some("true"))
+    });
+    let height = match want.height {
+        Some(height) => height.map(|points| (format!("{points}"), want.pinned)),
+        None => get_attr(start, "ht").map(|text| {
+            let pinned = matches!(
+                get_attr(start, "customHeight").as_deref(),
+                Some("1") | Some("true")
+            );
+            (text, pinned)
+        }),
+    };
+    let mut rebuilt = BytesStart::new("row");
+    for attribute in start.attributes().flatten() {
+        let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+        if matches!(key.as_str(), "hidden" | "ht" | "customHeight") {
+            continue;
+        }
+        let value = String::from_utf8_lossy(&attribute.value).into_owned();
+        rebuilt.push_attribute((key.as_str(), value.as_str()));
+    }
+    if let Some((points, pinned)) = &height {
+        rebuilt.push_attribute(("ht", points.as_str()));
+        if *pinned {
+            rebuilt.push_attribute(("customHeight", "1"));
+        }
+    }
+    if hidden {
+        rebuilt.push_attribute(("hidden", "1"));
+    }
+    rebuilt
+}
+
 fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
     let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
     let mut rewritten = BytesStart::new(name);
@@ -1648,36 +1757,24 @@ fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
 }
 
 /// Copies a start tag, replacing whatever it said about being hidden.
-fn with_hidden(start: &BytesStart<'_>, hidden: bool) -> BytesStart<'static> {
-    let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
-    let mut rewritten = BytesStart::new(name);
-    for attribute in start.attributes().flatten() {
-        let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
-        if key == "hidden" {
-            continue;
-        }
-        let value = String::from_utf8_lossy(&attribute.value).into_owned();
-        rewritten.push_attribute((key.as_str(), value.as_str()));
-    }
-    if hidden {
-        rewritten.push_attribute(("hidden", "1"));
-    }
-    rewritten
-}
+/// Copies a row's start tag with whatever `want` decides applied to it.
+///
+/// Everything the row was carrying that this is not deciding — its span, its
 
 fn write_inserted_row(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     row: u32,
     cells: BTreeMap<u32, CellEditValue>,
-    hidden: Option<bool>,
+    want: Option<RowWant>,
     styles: &BTreeMap<(u32, u32), u32>,
 ) -> Result<(), XlsxError> {
     let row_text = row.to_string();
-    let mut row_start = BytesStart::new("row");
-    row_start.push_attribute(("r", row_text.as_str()));
-    if hidden == Some(true) {
-        row_start.push_attribute(("hidden", "1"));
-    }
+    let mut bare = BytesStart::new("row");
+    bare.push_attribute(("r", row_text.as_str()));
+    let row_start = match want {
+        Some(want) => row_as_wanted(&bare, &want),
+        None => bare,
+    };
     writer
         .write_event(Event::Start(row_start))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
@@ -1694,8 +1791,8 @@ fn write_inserted_row(
 /// Everything one worksheet has to change.
 struct SheetEdits<'a> {
     cells: &'a HashMap<(u32, u32), &'a CellEditValue>,
-    /// One-based row -> hidden.
-    rows: &'a BTreeMap<u32, bool>,
+    /// One-based row -> what it should become.
+    rows: &'a BTreeMap<u32, RowWant>,
     /// Zero-based column -> what it should become.
     cols: &'a BTreeMap<u32, ColumnWant>,
     /// Every merge the sheet should end up with, when they are being replaced.
@@ -1799,7 +1896,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         pending_rows.remove(&next_row);
                         if let Some(hidden) = sheet_edits.rows.get(&next_row) {
                             writer
-                                .write_event(Event::Start(with_hidden(e, *hidden)))
+                                .write_event(Event::Start(row_as_wanted(e, hidden)))
                                 .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             continue;
                         }
@@ -1974,12 +2071,12 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         // its hidden flag to survive.
                         let rows_left = std::mem::take(&mut pending_rows);
                         for row in rows_left {
-                            if let Some(true) = sheet_edits.rows.get(&row) {
+                            if sheet_edits.rows.get(&row).is_some_and(|want| want.hidden == Some(true) || want.height.is_some()) {
                                 write_inserted_row(
                                     &mut writer,
                                     row,
                                     BTreeMap::new(),
-                                    Some(true),
+                                    sheet_edits.rows.get(&row).copied(),
                                         sheet_edits.styles,
                                 )?;
                             }
@@ -2054,8 +2151,14 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         write_inserted_row(&mut writer, row, cells, hidden, sheet_edits.styles)?;
                     }
                     for row in std::mem::take(&mut pending_rows) {
-                        if let Some(true) = sheet_edits.rows.get(&row) {
-                            write_inserted_row(&mut writer, row, BTreeMap::new(), Some(true), sheet_edits.styles)?;
+                        if sheet_edits.rows.get(&row).is_some_and(|want| want.hidden == Some(true) || want.height.is_some()) {
+                            write_inserted_row(
+                                &mut writer,
+                                row,
+                                BTreeMap::new(),
+                                sheet_edits.rows.get(&row).copied(),
+                                sheet_edits.styles,
+                            )?;
                         }
                     }
                     writer
@@ -2337,14 +2440,16 @@ mod tests {
     ) -> SheetEdits<'a> {
         static NOTHING: std::sync::OnceLock<BTreeMap<u32, bool>> = std::sync::OnceLock::new();
         let nothing = NOTHING.get_or_init(BTreeMap::new);
+        static NO_ROWS: std::sync::OnceLock<BTreeMap<u32, RowWant>> =
+            std::sync::OnceLock::new();
         static NO_STYLES: std::sync::OnceLock<BTreeMap<(u32, u32), u32>> =
             std::sync::OnceLock::new();
         static NO_COLS: std::sync::OnceLock<BTreeMap<u32, ColumnWant>> =
             std::sync::OnceLock::new();
         SheetEdits {
             cells,
-            rows: nothing,
-            cols: NO_COLS.get_or_init(BTreeMap::new),
+            rows: NO_ROWS.get_or_init(BTreeMap::new),
+            cols: nothing_cols(),
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
             filter: None,
@@ -2406,16 +2511,27 @@ mod tests {
         assert!(!patched.contains("877"), "{patched}");
     }
 
+    fn nothing_cols() -> &'static BTreeMap<u32, ColumnWant> {
+        static NO_COLS: std::sync::OnceLock<BTreeMap<u32, ColumnWant>> =
+            std::sync::OnceLock::new();
+        NO_COLS.get_or_init(BTreeMap::new)
+    }
+
+    fn nothing_rows() -> &'static BTreeMap<u32, RowWant> {
+        static NO_ROWS: std::sync::OnceLock<BTreeMap<u32, RowWant>> =
+            std::sync::OnceLock::new();
+        NO_ROWS.get_or_init(BTreeMap::new)
+    }
+
     /// The edits for one sheet's columns and nothing else.
     fn cols_only(cols: &BTreeMap<u32, ColumnWant>) -> SheetEdits<'_> {
-        static NOTHING: std::sync::OnceLock<BTreeMap<u32, bool>> = std::sync::OnceLock::new();
         static NO_CELLS: std::sync::OnceLock<HashMap<(u32, u32), &CellEditValue>> =
             std::sync::OnceLock::new();
         static NO_STYLES: std::sync::OnceLock<BTreeMap<(u32, u32), u32>> =
             std::sync::OnceLock::new();
         SheetEdits {
             cells: NO_CELLS.get_or_init(HashMap::new),
-            rows: NOTHING.get_or_init(BTreeMap::new),
+            rows: nothing_rows(),
             cols,
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
@@ -2434,6 +2550,130 @@ mod tests {
 
     const BARE: &str =
         r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+
+    /// The edits for one sheet's rows and nothing else.
+    fn rows_only(rows: &BTreeMap<u32, RowWant>) -> SheetEdits<'_> {
+        static NO_CELLS: std::sync::OnceLock<HashMap<(u32, u32), &CellEditValue>> =
+            std::sync::OnceLock::new();
+        static NO_STYLES: std::sync::OnceLock<BTreeMap<(u32, u32), u32>> =
+            std::sync::OnceLock::new();
+        SheetEdits {
+            cells: NO_CELLS.get_or_init(HashMap::new),
+            rows,
+            cols: nothing_cols(),
+            merges: None,
+            styles: NO_STYLES.get_or_init(BTreeMap::new),
+            filter: None,
+        }
+    }
+
+    /// The `<row>` start tags of a patched sheet.
+    fn row_tags(xml: &str, rows: &BTreeMap<u32, RowWant>) -> String {
+        let patched = patch_worksheet_xml(xml, &rows_only(rows)).expect("should patch");
+        patched
+            .match_indices("<row ")
+            .map(|(at, _)| {
+                let end = patched[at..].find('>').expect("a row tag closes") + at;
+                patched[at..=end].to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    const THREE_ROWS: &str = concat!(
+        r#"<worksheet><sheetData>"#,
+        r#"<row r="1" spans="1:1"><c r="A1"><v>1</v></c></row>"#,
+        r#"<row r="2" spans="1:1"><c r="A2"><v>2</v></c></row>"#,
+        r#"<row r="3" spans="1:1" ht="30" customHeight="1"><c r="A3"><v>3</v></c></row>"#,
+        r#"</sheetData></worksheet>"#,
+    );
+
+    #[test]
+    fn a_height_someone_chose_is_written_as_chosen() {
+        // Excel writes `ht="30" customHeight="1"` for a row dragged to a size,
+        // and the flag is what stops it working the height out again on open.
+        let want = BTreeMap::from([(1, RowWant {
+            hidden: None, height: Some(Some(30.0)), pinned: true,
+        })]);
+        let out = row_tags(THREE_ROWS, &want);
+        assert!(out.contains(r#"<row r="1" spans="1:1" ht="30" customHeight="1">"#), "{out}");
+    }
+
+    #[test]
+    fn a_height_worked_out_rather_than_chosen_goes_in_without_the_flag() {
+        // An autofitted row carries `ht="44.25"` and no flag: the number is
+        // what the content needed, and Excel will work it out afresh.
+        let want = BTreeMap::from([(2, RowWant {
+            hidden: None, height: Some(Some(44.25)), pinned: false,
+        })]);
+        let out = row_tags(THREE_ROWS, &want);
+        assert!(out.contains(r#"<row r="2" spans="1:1" ht="44.25">"#), "{out}");
+        // Row 3 has a chosen height of its own, so the flag is looked for on
+        // row 2's tag rather than anywhere in the sheet.
+        let two = out.split(r#"<row r="3""#).next().unwrap();
+        assert!(!two.contains("customHeight"), "{out}");
+    }
+
+    #[test]
+    fn putting_a_row_back_on_automatic_takes_its_height_away() {
+        // Autofitting a row whose content fits the default drops `ht`
+        // altogether rather than writing the default number down.
+        let want = BTreeMap::from([(3, RowWant {
+            hidden: None, height: Some(None), pinned: false,
+        })]);
+        let out = row_tags(THREE_ROWS, &want);
+        assert!(out.contains(r#"<row r="3" spans="1:1">"#), "{out}");
+        assert!(!out.contains("ht="), "{out}");
+        assert!(!out.contains("customHeight"), "{out}");
+    }
+
+    #[test]
+    fn hiding_a_row_leaves_its_height_alone_and_the_other_way_round() {
+        let hide = BTreeMap::from([(3, RowWant {
+            hidden: Some(true), height: None, pinned: false,
+        })]);
+        let out = row_tags(THREE_ROWS, &hide);
+        assert!(out.contains(r#"ht="30""#), "{out}");
+        assert!(out.contains(r#"customHeight="1""#), "{out}");
+        assert!(out.contains(r#"hidden="1""#), "{out}");
+
+        let taller = BTreeMap::from([(3, RowWant {
+            hidden: None, height: Some(Some(45.0)), pinned: true,
+        })]);
+        let out = row_tags(
+            &THREE_ROWS.replace(r#"ht="30""#, r#"ht="30" hidden="1""#),
+            &taller,
+        );
+        assert!(out.contains(r#"ht="45""#), "{out}");
+        assert!(out.contains(r#"hidden="1""#), "{out}");
+    }
+
+    #[test]
+    fn a_row_keeps_whatever_else_its_tag_was_carrying() {
+        // The span and the descent Excel notes are not this edit's business,
+        // and a row that loses its span is one Excel has to work out again.
+        let want = BTreeMap::from([(1, RowWant {
+            hidden: None, height: Some(Some(22.5)), pinned: true,
+        })]);
+        let xml = THREE_ROWS.replace(
+            r#"<row r="1" spans="1:1">"#,
+            r#"<row r="1" spans="1:1" s="4" customFormat="1" x14ac:dyDescent="0.4">"#,
+        );
+        let out = row_tags(&xml, &want);
+        assert!(out.contains(r#"s="4""#), "{out}");
+        assert!(out.contains(r#"customFormat="1""#), "{out}");
+        assert!(out.contains(r#"x14ac:dyDescent="0.4""#), "{out}");
+        assert!(out.contains(r#"ht="22.5""#), "{out}");
+    }
+
+    #[test]
+    fn a_row_the_sheet_never_described_can_still_be_given_a_height() {
+        let want = BTreeMap::from([(7, RowWant {
+            hidden: None, height: Some(Some(36.0)), pinned: true,
+        })]);
+        let out = row_tags(THREE_ROWS, &want);
+        assert!(out.contains(r#"<row r="7" ht="36" customHeight="1">"#), "{out}");
+    }
 
     #[test]
     fn a_width_is_written_where_the_sheet_had_no_columns_at_all() {
@@ -2560,12 +2800,11 @@ mod tests {
         let fresh = CellEditValue::Number(46053.0);
         let over = CellEditValue::Number(7.0);
         let edits = HashMap::from([((1, 1), &fresh), ((1, 0), &over)]);
-        let rows = BTreeMap::new();
         let styles = BTreeMap::from([((1, 1), 4u32), ((1, 0), 5u32)]);
         let patched = patch_worksheet_xml(xml, &SheetEdits {
             cells: &edits,
-            rows: &rows,
-            cols: &BTreeMap::new(),
+            rows: nothing_rows(),
+            cols: nothing_cols(),
             merges: None,
             styles: &styles,
             filter: None,
@@ -2579,12 +2818,11 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
         let fresh = CellEditValue::Number(46054.0);
         let edits = HashMap::from([((3, 0), &fresh)]);
-        let rows = BTreeMap::new();
         let styles = BTreeMap::from([((3, 0), 2u32)]);
         let patched = patch_worksheet_xml(xml, &SheetEdits {
             cells: &edits,
-            rows: &rows,
-            cols: &BTreeMap::new(),
+            rows: nothing_rows(),
+            cols: nothing_cols(),
             merges: None,
             styles: &styles,
             filter: None,

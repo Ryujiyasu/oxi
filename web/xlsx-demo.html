@@ -598,6 +598,16 @@ function draw() {
   table.addEventListener('mousedown', (event) => {
     const head = event.target.closest('th');
     if (head) {
+      const under = onRowEdge(head, event);
+      if (under !== null) {
+        sizing = {
+          row: under,
+          from: event.clientY,
+          was: head.getBoundingClientRect().height,
+        };
+        event.preventDefault();
+        return;
+      }
       const edge = onEdge(head, event);
       if (edge !== null) {
         sizing = {
@@ -638,7 +648,9 @@ function draw() {
   table.addEventListener('mousemove', (event) => {
     const head = event.target.closest('th');
     if (!head) return;
-    head.style.cursor = onEdge(head, event) !== null ? 'col-resize' : '';
+    head.style.cursor = onEdge(head, event) !== null
+      ? 'col-resize'
+      : (onRowEdge(head, event) !== null ? 'row-resize' : '');
   });
   table.addEventListener('mouseover', (event) => {
     if (filling) {
@@ -851,14 +863,15 @@ const DEPTH = 100;
 /** Run `what` so that everything it writes can be undone in one go. */
 function change(what) {
   if (step) { what(); return; }   // already inside a step: do not nest
-  step = { sheet: shown, cells: [], columns: [] };
+  step = { sheet: shown, cells: [], columns: [], lines: [] };
   const built = step;
   try {
     what();
   } finally {
     step = null;
   }
-  if (built.cells.length === 0 && built.columns.length === 0) return;
+  if (built.cells.length === 0 && built.columns.length === 0
+    && built.lines.length === 0) return;
   // Whatever was marked for a cut is no longer what the clipboard holds.
   if (cutFrom) cutFrom = null;
   recompute();
@@ -885,6 +898,15 @@ function restore(built, side) {
   for (let i = built.columns.length - 1; i >= 0; i--) {
     const one = built.columns[i];
     if (sheet) sheet.col_widths[one.col] = one[side];
+    beyondValues = true;
+  }
+  for (let i = built.lines.length - 1; i >= 0; i--) {
+    const one = built.lines[i];
+    const line = sheet && sheet.rows.find((held) => held.index === one.row);
+    if (line) {
+      line.height = one[side];
+      line.custom_height = side === 'was' ? one.wasChosen : one.nowChosen;
+    }
     beyondValues = true;
   }
   step = was;
@@ -1080,6 +1102,53 @@ function setWidth(col, pixels) {
     if (step) step.columns.push({ col, was, now: width });
     while (sheet.col_widths.length <= col) sheet.col_widths.push(0);
     sheet.col_widths[col] = width;
+    beyondValues = true;
+  });
+  draw();
+  paint();
+}
+
+/** The row whose bottom edge this press is on, or null. */
+function onRowEdge(head, event) {
+  if (head.dataset.headRow === undefined) return null;
+  const box = head.getBoundingClientRect();
+  if (event.clientY < box.bottom - EDGE) return null;
+  return Number(head.dataset.headRow);
+}
+
+/** Show a row at `pixels` tall without writing anything down yet. */
+function showHeight(row, pixels) {
+  const table = tableNow();
+  if (!table) return;
+  const head = table.querySelector(`th[data-head-row="${row}"]`);
+  if (head && head.parentElement) {
+    head.parentElement.style.height = `${Math.max(1, Math.round(pixels))}px`;
+  }
+}
+
+/** Write the dragged height into the sheet. */
+function setHeight(row, pixels) {
+  const sheet = sheetNow();
+  if (!sheet) return;
+  // The file states a height in points; the drag is in pixels.
+  const points = Math.max(0, pixels) * 72 / 96;
+  let line = sheet.rows.find((one) => one.index === row);
+  const was = line ? line.height : null;
+  const wasChosen = line ? Boolean(line.custom_height) : false;
+  if (was !== null && Math.abs(points - was) < 1e-6 && wasChosen) return;
+  change(() => {
+    if (!line) {
+      line = { index: row, cells: [], height: null };
+      sheet.rows.push(line);
+      sheet.rows.sort((a, b) => a.index - b.index);
+    }
+    if (step) {
+      step.lines.push({ row, was, wasChosen, now: points, nowChosen: true });
+    }
+    line.height = points;
+    // A drag is a choice, and the flag is what stops Excel working the height
+    // out again the next time the file is opened.
+    line.custom_height = true;
     beyondValues = true;
   });
   draw();
@@ -2166,14 +2235,22 @@ function onKey(event) {
 document.addEventListener('mousemove', (event) => {
   if (!sizing) return;
   event.preventDefault();
-  showWidth(sizing.col, sizing.was + (event.clientX - sizing.from));
+  if (sizing.row !== undefined) {
+    showHeight(sizing.row, sizing.was + (event.clientY - sizing.from));
+  } else {
+    showWidth(sizing.col, sizing.was + (event.clientX - sizing.from));
+  }
 });
 
 document.addEventListener('mouseup', (event) => {
   if (sizing) {
     const held = sizing;
     sizing = null;
-    setWidth(held.col, held.was + (event.clientX - held.from));
+    if (held.row !== undefined) {
+      setHeight(held.row, held.was + (event.clientY - held.from));
+    } else {
+      setWidth(held.col, held.was + (event.clientX - held.from));
+    }
     return;
   }
   headDrag = null;

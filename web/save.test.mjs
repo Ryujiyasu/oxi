@@ -108,6 +108,37 @@ is('a width and a value travel together',
   [both.sheets[0].col_widths[1], cellAt(both, both.sheets[0].rows[0].index, 0).value],
   [22.625, { String: 'changed' }]);
 
+// ── A dragged row has to stay dragged ───────────────────────────
+//
+// A row's height comes with a flag saying whether it was chosen or worked out.
+// Measured: a row given 33 points WITHOUT the flag came back from Excel at
+// 18.75, because Excel threw the number away and worked the height out again
+// from what was in the row. So the flag is what makes a drag stick, and
+// writing a height without it writes nothing at all.
+
+const tall = parse_spreadsheet(sample.slice());
+const lines = tall.sheets[0].rows;
+const line = (n) => lines.find((one) => one.index === n);
+const wasTall = line(1).height;
+line(4).height = 40;
+line(4).custom_height = true;
+line(5).height = 33;
+line(5).custom_height = false;
+line(1).height = null;
+line(1).custom_height = false;
+const sized = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), tall));
+const back = (n) => sized.sheets[0].rows.find((one) => one.index === n);
+is('a chosen height comes back, and comes back chosen',
+  [back(4).height, back(4).custom_height], [40, true]);
+is('a worked-out one comes back without the flag',
+  [back(5).height, Boolean(back(5).custom_height)], [33, false]);
+// A row with no height of its own comes back as `undefined` rather than
+// `null`: that is how the wasm bridge spells an absent Option, and both mean
+// the same thing here.
+is('and a row put back on automatic has no height at all',
+  back(1).height ?? null, null);
+is('which is a change from what it had', wasTall !== null, true);
+
 console.log(failures === 0
   ? '\nwhat was changed is what the file holds'
   : `\n${failures} did not`);
