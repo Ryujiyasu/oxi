@@ -84,11 +84,27 @@ fn main() {
 
     #[cfg(windows)]
     {
+        // S-CLOUDFIRST (2026-08-28). ORDER decides which copy of a family the
+        // process ends up with, and the old order could never choose the cache:
+        // `install_cloud_fonts` registers a family only when GDI cannot already
+        // serve it, and the embedded parts -- loaded first -- made it serveable.
+        // d28's Open Sans was therefore never registered from the cache at all,
+        // and `skipembed_on` could not fire either, since `family_installed`
+        // ran before the cache existed.
+        //
+        // PowerPoint prefers the local copy: d28's truth PDF subsets
+        // CloudFonts\Open Sans98841561.ttf ('a' 1139, ',' 502), not the
+        // deck's embedded part ('a' 1138, ',' 530). The control is d12's Oswald,
+        // absent from the cache, where all 29 measured advances agree exactly.
+        let cloud_first = skipembed_on();
+        let mut cloud = if cloud_first { install_cloud_fonts() } else { 0 };
         let n = install_embedded_fonts(&pres);
         if n > 0 {
             eprintln!("Installed {}/{} embedded fonts", n, pres.embedded_fonts.len());
         }
-        let cloud = install_cloud_fonts();
+        if !cloud_first {
+            cloud = install_cloud_fonts();
+        }
         if cloud > 0 {
             eprintln!("Installed {cloud} cloud-cache fonts");
         }
