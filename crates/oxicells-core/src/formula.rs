@@ -39,6 +39,26 @@ pub use oxicells_calc::{
 ///
 /// Cross-sheet references cannot resolve here and become `#REF!`; use
 /// [`evaluate_workbook_formulas`] when the workbook has more than one sheet.
+/// How many of a workbook's formulas this engine cannot even read.
+///
+/// A formula that will not parse keeps the value the file was saved with, so
+/// it costs nothing visible and agrees with any oracle by default. Counting
+/// them is the only way a measurement can tell "we got this right" from "we
+/// never looked".
+pub fn unparsed_formulas(workbook: &Workbook) -> usize {
+    workbook
+        .sheets
+        .iter()
+        .flat_map(|sheet| sheet.rows.iter())
+        .flat_map(|row| row.cells.iter())
+        .filter_map(|cell| cell.formula.as_deref())
+        .filter(|formula| {
+            let text = formula.strip_prefix('=').unwrap_or(formula);
+            oxicells_calc::parse(text).is_err()
+        })
+        .count()
+}
+
 pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
     // One sheet on its own carries no workbook, so it has no names either.
     recalculate(std::slice::from_mut(sheet), &[], Overwrite::All);
@@ -83,6 +103,13 @@ fn recalculate(sheets: &mut [Sheet], names: &[(String, String)], mode: Overwrite
                 match formula_text(cell.formula.as_deref()) {
                     // A formula we cannot parse falls back to its cached value,
                     // so one bad cell does not poison everything downstream.
+                    //
+                    // Worth knowing when measuring: a formula that will not
+                    // parse therefore keeps the answer the file was saved with
+                    // and looks, to anything comparing the two, like a perfect
+                    // agreement. Improving the parser can LOWER a measured
+                    // score by letting formulas through to a gap behind them.
+                    // `unparsed_formulas` counts them so that cannot hide.
                     Some(text) if book.set_formula(&sheet.name, &addr, text).is_ok() => {}
                     _ => {
                         let _ = book.set_value(&sheet.name, &addr, to_calc(&cell.value));

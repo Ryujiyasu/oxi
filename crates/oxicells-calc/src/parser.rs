@@ -15,7 +15,9 @@
 
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::lexer::{tokenize, ParseError, Token};
-use crate::reference::{parse_a1, RangeRef, Reference};
+use crate::reference::{
+    letters_to_col, parse_a1, CellRef, RangeRef, Reference, MAX_COL, MAX_ROW,
+};
 use crate::value::Value;
 
 /// Parse a formula, with or without its leading `=`.
@@ -27,6 +29,32 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
         return Err(ParseError::TrailingInput(format!("{:?}", parser.peek())));
     }
     Ok(expr)
+}
+
+/// One side of a whole-line range: a column named by its letters, or a row
+/// named by its number. A `$` means nothing here — a whole column is the whole
+/// column however it was written down.
+enum Line {
+    Column(u32),
+    Row(u32),
+}
+
+impl Line {
+    fn of(name: &str) -> Option<Line> {
+        let bare = name.trim_start_matches('$');
+        // A row number reaches the parser as a NAME when the range names a
+        // sheet — `Data!1:1` lexes as a name of "1" — and as a number when it
+        // does not. Both are the same row.
+        if let Some(col) = letters_to_col(bare) {
+            return Some(Line::Column(col));
+        }
+        bare.parse::<f64>().ok().and_then(Line::of_row)
+    }
+
+    fn of_row(one: f64) -> Option<Line> {
+        (one >= 1.0 && one.fract() == 0.0 && one <= MAX_ROW as f64 + 1.0)
+            .then(|| Line::Row(one as u32 - 1))
+    }
 }
 
 struct Parser {
@@ -154,7 +182,66 @@ impl Parser {
         }
     }
 
+    /// `A:A` and `3:3`, as a range covering the whole column or the whole row.
+    ///
+    /// A bare column letter reaches the parser as a name, since `A` on its own
+    /// is not a cell; a bare row number reaches it as a number. Excel reads
+    /// `A:A` as the column whether or not something called `A` is also
+    /// defined, so the shape decides and the name does not get a say.
+    /// `A:A` and `3:3`, read straight off the tokens.
+    ///
+    /// It has to happen before the atoms are parsed, because that is where the
+    /// sheet is lost: `Sheet1!$D` becomes a bare name and the qualifier is
+    /// dropped on purpose, a defined name belonging to the workbook rather
+    /// than to any sheet. Reading it afterwards built `Sheet1!$D:$D` as a
+    /// range on whatever sheet the formula sat on, which found nothing and
+    /// said so with a confident nought.
+    ///
+    /// Excel reads `A:A` as the column whether or not something called `A` is
+    /// also defined, so the shape decides and the name gets no say.
+    fn whole_line(&mut self) -> Option<Expr> {
+        let (sheet, first) = match self.peek()? {
+            Token::Name { sheet, name } => (sheet.clone(), Line::of(name)?),
+            Token::Number(one) => (None, Line::of_row(*one)?),
+            _ => return None,
+        };
+        if self.tokens.get(self.pos + 1) != Some(&Token::Colon) {
+            return None;
+        }
+        let last = match self.tokens.get(self.pos + 2)? {
+            // `Sheet1!A:Sheet1!C` is legal and means the same as `Sheet1!A:C`;
+            // a different sheet on the right is not, and Excel rejects it.
+            Token::Name { sheet: other, name } => {
+                if other.is_some() && other != &sheet {
+                    return None;
+                }
+                Line::of(name)?
+            }
+            Token::Number(one) => Line::of_row(*one)?,
+            _ => return None,
+        };
+        if std::mem::discriminant(&first) != std::mem::discriminant(&last) {
+            return None;
+        }
+        self.pos += 3;
+        let range = match (first, last) {
+            (Line::Column(a), Line::Column(b)) => RangeRef::normalised(
+                CellRef::new(a, 0),
+                CellRef::new(b, MAX_ROW),
+            ),
+            (Line::Row(a), Line::Row(b)) => RangeRef::normalised(
+                CellRef::new(0, a),
+                CellRef::new(MAX_COL, b),
+            ),
+            _ => return None,
+        };
+        Some(Expr::Ref(Reference { sheet, range }))
+    }
+
     fn parse_range(&mut self) -> Result<Expr, ParseError> {
+        if let Some(whole) = self.whole_line() {
+            return Ok(whole);
+        }
         let lhs = self.parse_atom()?;
         if !self.eat(&Token::Colon) {
             return Ok(lhs);

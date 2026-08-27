@@ -22,6 +22,12 @@ fn main() {
     let mut agreed = 0usize;
     let mut asked = 0usize;
     let mut blank = 0usize;
+    // A formula that will not parse keeps the value the file was saved with,
+    // so it agrees by default and costs nothing visible. Counting them is the
+    // only way to tell "we got this right" from "we never looked" — and it is
+    // why improving the parser can make a measured score go DOWN, by letting
+    // formulas through to whatever gap sits behind them.
+    let mut unread = 0usize;
     for path in std::env::args().skip(1) {
         let data = match std::fs::read(&path) {
             Ok(data) => data,
@@ -51,6 +57,7 @@ fn main() {
         if held.is_empty() {
             continue;
         }
+        unread += oxicells_core::formula::unparsed_formulas(&book);
         // And what it comes to when worked out afresh.
         let mut again = book.clone();
         oxicells_core::formula::evaluate_workbook_formulas(&mut again);
@@ -88,10 +95,10 @@ fn main() {
         }
     }
     eprintln!(
-        "  {asked} formulas, {agreed} agreed ({:.2}%), {} came back empty",
+        "  {asked} formulas, {agreed} agreed ({:.2}%), {unread} never parsed",
         if asked == 0 { 0.0 } else { 100.0 * agreed as f64 / asked as f64 },
-        blank,
     );
+    let _ = blank;
 }
 
 /// The function a formula leads with, which is what groups its failures.

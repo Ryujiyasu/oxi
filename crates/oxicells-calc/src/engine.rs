@@ -23,7 +23,7 @@ use crate::functions::{self, block_of, reach, Arg, RangeData};
 type At = Option<(u32, u32)>;
 use crate::lexer::ParseError;
 use crate::parser::parse;
-use crate::reference::{parse_a1, CellRef, RangeRef};
+use crate::reference::{parse_a1, CellRef, RangeRef, MAX_COL, MAX_ROW};
 use crate::value::{compare, ExcelError, Value};
 
 /// Guards against defined names that refer to one another in a loop.
@@ -430,7 +430,21 @@ impl Workbook {
         })
     }
 
+    /// Every value in `range`, as a block.
+    ///
+    /// A whole-column reference names 1,048,576 cells, and building all of
+    /// them to add up the nine that are there is a way to run out of memory
+    /// rather than a way to answer. So a range reaching past what the sheet
+    /// holds is cut back to what it holds — which is what makes `SUM(A:A)` an
+    /// ordinary sum.
+    ///
+    /// The shape it comes back as is therefore the sheet's, not the
+    /// reference's, and `ROWS(A:A)` can see the difference: Excel says
+    /// 1,048,576 and this says however many rows the sheet has. That is a
+    /// wrong answer to a rare question in exchange for a right answer to a
+    /// common one.
     fn materialise(&self, sheet: &str, range: &RangeRef, skip_subtotals: bool) -> RangeData {
+        let range = &self.cut_to_fit(sheet, range);
         RangeData::from_range(range, |col, row| {
             if skip_subtotals && self.is_subtotal_cell(sheet, col, row) {
                 Value::Blank
@@ -438,6 +452,32 @@ impl Workbook {
                 self.value_at(sheet, col, row)
             }
         })
+    }
+
+    /// `range`, with any part reaching past the sheet's own contents removed.
+    ///
+    /// Only ever cuts back, never extends: a range wholly inside the sheet
+    /// comes back untouched, and a range naming a sheet that holds nothing
+    /// comes back as one cell rather than as nothing, since a block of no
+    /// cells is not a shape anything else here knows what to do with.
+    fn cut_to_fit(&self, sheet: &str, range: &RangeRef) -> RangeRef {
+        let Some(held) = self.sheets.get(sheet) else {
+            return *range;
+        };
+        // Only worth the walk when the range actually reaches past the end.
+        // A whole column is the case this is for and it is unmistakable.
+        if range.end.row < MAX_ROW && range.end.col < MAX_COL {
+            return *range;
+        }
+        let (mut last_col, mut last_row) = (0u32, 0u32);
+        for (col, row) in held.cells.keys() {
+            last_col = last_col.max(*col);
+            last_row = last_row.max(*row);
+        }
+        let mut cut = *range;
+        cut.end.row = cut.end.row.min(last_row.max(cut.start.row));
+        cut.end.col = cut.end.col.min(last_col.max(cut.start.col));
+        cut
     }
 
     fn is_subtotal_cell(&self, sheet: &str, col: u32, row: u32) -> bool {
@@ -605,6 +645,126 @@ mod tests {
                 .unwrap();
         }
         wb
+    }
+
+    #[test]
+    fn a_whole_column_is_every_cell_in_it() {
+        let mut wb = book();
+        for at in 1..=3 {
+            wb.set_value("Sheet1", &format!("A{at}"), Value::Number(at as f64))
+                .unwrap();
+            wb.set_value("Sheet1", &format!("B{at}"), Value::Number(at as f64 * 10.0))
+                .unwrap();
+        }
+        // Kept clear of rows 1 to 3 and columns A and B: an answer that sits
+        // inside the range it is summing is part of its own sum, and the first
+        // version of this put `=SUM(1:1)` in D1 and then wondered why row one
+        // came to more than row one.
+        wb.set_formula("Sheet1", "E5", "=SUM(A:A)").unwrap();
+        wb.set_formula("Sheet1", "E6", "=SUM($A:$A)").unwrap();
+        wb.set_formula("Sheet1", "E7", "=SUM(A:B)").unwrap();
+        wb.set_formula("Sheet1", "E8", "=SUM(1:1)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E5"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "E6"), Value::Number(6.0), "dollars mean nothing here");
+        assert_eq!(wb.value("Sheet1", "E7"), Value::Number(66.0));
+        assert_eq!(wb.value("Sheet1", "E8"), Value::Number(11.0), "a whole row");
+    }
+
+    #[test]
+    fn a_whole_column_keeps_the_sheet_it_was_given() {
+        // The first attempt read the range off the parsed atoms, by which
+        // point the sheet was gone: `Data!$D` becomes a bare name and the
+        // qualifier is dropped on purpose, a defined name belonging to the
+        // workbook rather than to any sheet. So `SUMIFS(Data!$D:$D, ...)` was
+        // built against whatever sheet the formula sat on, found nothing, and
+        // answered a confident nought — worse than the parse error it
+        // replaced, because a formula that will not parse at least keeps the
+        // value the file was saved with.
+        let mut wb = book();
+        wb.add_sheet("Data");
+        for at in 1..=3 {
+            wb.set_value("Data", &format!("A{at}"), Value::Number(at as f64))
+                .unwrap();
+            wb.set_value("Data", &format!("D{at}"), Value::Number(at as f64 * 100.0))
+                .unwrap();
+        }
+        // Something else entirely on the sheet the formula lives on, so a
+        // range that lost its sheet would be visibly wrong rather than empty.
+        wb.set_value("Sheet1", "A1", Value::Number(99.0)).unwrap();
+        wb.set_formula("Sheet1", "C1", "=SUM(Data!A:A)").unwrap();
+        wb.set_formula("Sheet1", "C2", "=SUM(Data!$D:$D)").unwrap();
+        wb.set_formula("Sheet1", "C3", "=SUMIFS(Data!$D:$D,Data!$A:$A,2)")
+            .unwrap();
+        wb.set_formula("Sheet1", "C4", "=SUM(Data!1:1)").unwrap();
+        wb.set_formula("Sheet1", "C5", "=SUM(A:A)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "C1"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "C2"), Value::Number(600.0));
+        assert_eq!(wb.value("Sheet1", "C3"), Value::Number(200.0));
+        assert_eq!(wb.value("Sheet1", "C4"), Value::Number(101.0), "a qualified row");
+        assert_eq!(
+            wb.value("Sheet1", "C5"),
+            Value::Number(99.0),
+            "and an unqualified one is still this sheet's",
+        );
+    }
+
+    #[test]
+    fn a_whole_column_costs_what_the_sheet_holds_not_what_it_could() {
+        // A column names 1,048,576 cells. Building all of them to add up the
+        // three that are there is a way to run out of memory rather than a way
+        // to answer, so a range reaching past the sheet is cut back to it.
+        let mut wb = book();
+        for at in 1..=3 {
+            wb.set_value("Sheet1", &format!("A{at}"), Value::Number(1.0))
+                .unwrap();
+        }
+        wb.set_formula("Sheet1", "C1", "=COUNT(A:A)").unwrap();
+        let started = std::time::Instant::now();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "C1"), Value::Number(3.0));
+        assert!(
+            started.elapsed().as_millis() < 500,
+            "a whole column took {:?}, which means it was materialised in full",
+            started.elapsed(),
+        );
+    }
+
+    #[test]
+    fn a_name_may_stand_for_a_whole_column() {
+        // Which is what several of the blind corpus's names do — `cats` is
+        // `'Exp-DB'!$B:$B` — and why reading the names was not enough on its
+        // own.
+        let mut wb = book();
+        for at in 1..=3 {
+            wb.set_value("Sheet1", &format!("B{at}"), Value::Number(at as f64))
+                .unwrap();
+        }
+        wb.define_name("col", "Sheet1!$B:$B").expect("the name parses");
+        wb.set_formula("Sheet1", "D1", "=SUM(col)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(6.0));
+    }
+
+    #[test]
+    fn an_empty_criterion_asks_for_the_empty_ones() {
+        // `COUNTIFS(B:B, x, D:D, "")` — count where D has nothing in it — is
+        // how anyone counts what is still outstanding, and a rule that says a
+        // blank matches nothing answers nought to every one of them.
+        let mut wb = book();
+        for (at, who) in ["ann", "bob", "ann"].iter().enumerate() {
+            wb.set_value("Sheet1", &format!("B{}", at + 1), Value::text(*who))
+                .unwrap();
+        }
+        // D2 is filled in; D1 and D3 are not.
+        wb.set_value("Sheet1", "D2", Value::text("done")).unwrap();
+        wb.set_formula("Sheet1", "F1", "=COUNTIFS(B:B,\"ann\",D:D,\"\")")
+            .unwrap();
+        wb.set_formula("Sheet1", "F2", "=COUNTIF(D:D,\"\")").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "F1"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "F2"), Value::Number(2.0));
     }
 
     #[test]

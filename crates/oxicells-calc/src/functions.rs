@@ -1254,7 +1254,21 @@ impl Criteria {
     }
 
     fn matches(&self, v: &Value) -> bool {
-        // A blank never satisfies a comparison criterion.
+        // `""` asks for the empty ones. `COUNTIFS(B:B, x, D:D, "")` — count
+        // where D has nothing in it — is how anyone counts what is still
+        // outstanding, and a rule that says a blank never matches anything
+        // answers nought to all of them.
+        if let Value::Text(wanted) = &self.operand {
+            if wanted.is_empty() {
+                let empty = v.is_blank() || matches!(v, Value::Text(t) if t.is_empty());
+                return match self.op {
+                    BinaryPredicate::Eq => empty,
+                    BinaryPredicate::Ne => !empty,
+                    _ => false,
+                };
+            }
+        }
+        // Otherwise a blank satisfies no comparison.
         if v.is_blank() {
             return false;
         }
