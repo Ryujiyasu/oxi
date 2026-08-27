@@ -77,6 +77,32 @@ TABLE_ARMS = [
     for p in (60000, 140000)
 ]
 
+# The LINE-GAP discriminator. The cell's bottom term is the face's descent share
+# of a 1.2em box, and for Arial and Comic Sans that matches `font_baseline_offset_em`
+# to 0.0008 em. **Jua does not**: the `ascentsplit` probe measured its face at
+# 1.0083 (line gap on the ascent side, which is where that probe put it), giving
+# a bottom term of 0.192 em, while d10 s12's own row implies 0.221.
+#
+# Jua is embedded and cannot be re-probed here, so these are the installed faces
+# that pose the same question -- USE_TYPO set AND a non-zero `sTypoLineGap`, so
+# the two readings of the gap give visibly different bottom terms:
+#
+#     face                    D0 with gap on ascent    D0 with gap ignored
+#     Gabriola                     0.2234                   0.3797
+#     Sitka Text                   0.2333                   0.2917
+#     Bahnschrift                  0.2060                   0.2473
+#
+# lnSpc must be ABOVE 100% for the arm to say anything: at n == 1 the quarter
+# never binds, D == D0, and the two D0 terms cancel out of the row height.
+GAP_FACES = ("Gabriola", "Sitka Text", "Bahnschrift")
+TABLE_ARMS += [
+    (f"tbl_{f.replace(' ', '')}_140", f, 20.0, 140000) for f in GAP_FACES
+]
+# ...and the same faces in a text FRAME at single spacing, where the first
+# baseline is `face * fs` outright, to check the face value itself against
+# `ascentsplit` rather than trusting it.
+ARMS += [(f"{f.replace(' ', '')}_100", f, 40.0, 100000) for f in GAP_FACES]
+
 
 def cell_arm(slide, name: str, face: str, sz: float, pct: int, idx: int) -> dict:
     """One 2x1 table whose single cell holds the same three paragraphs."""
