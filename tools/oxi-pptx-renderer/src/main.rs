@@ -691,8 +691,10 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     let prst = match sh.shape_type.as_deref() {
         Some(
             p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"
-                | "star10" | "wedgeRectCallout" | "blockArc"),
+                | "star10" | "wedgeRectCallout" | "blockArc" | "chord" | "rtTriangle"),
         ) if (p != "pie" || pie_on())
+            && (p != "chord" || chordclip_on())
+            && (p != "rtTriangle" || chordclip_on())
             && (p != "chevron" || chevron_on())
             && (p != "star10" || star10_on())
             && (p != "wedgeRectCallout" || wedgecallout_on())
@@ -796,6 +798,49 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
                 line(map(px, py));
             }
             line(map(rx, ry));
+        }
+        // S-CHORDCLIP (2026-08-27). `chord` is `pie` without the trip through
+        // the centre: the same elliptical arc from adj1 to adj2, closed by the
+        // straight chord back to where it started.
+        //
+        // Found by ranking the corpus on its WORST SLIDE instead of its mean.
+        // d44's deck mean is 0.9650 -- mid-pack, never in any floor list -- but
+        // its slide 23 is 0.7876, because the portrait there is a `p:pic`
+        // carrying `<a:prstGeom prst="chord">` (adj1 2673960, adj2 18921779, i.e.
+        // 44.57 deg to 315.36 deg). `emit_shape_path` did not list `chord`, so
+        // the clip declined, and PowerPoint's round portrait arrived as a
+        // rectangle: mean|err| 17.52 with 14.1% of the slide over the heavy
+        // threshold.
+        "chord" => {
+            let st = sh.adjustments.get("adj1").copied().unwrap_or(0.0);
+            let en = sh.adjustments.get("adj2").copied().unwrap_or(16_200_000.0);
+            let mut sw = en - st;
+            if sw <= 0.0 {
+                sw += 21_600_000.0;
+            }
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let at = |units: f32| {
+                let a = (units / 60_000.0).to_radians();
+                (rx + rx * a.cos(), ry + ry * a.sin())
+            };
+            let (sx, sy) = at(st);
+            let p = map(sx, sy);
+            let _ = MoveToEx(dc, p.x, p.y, None);
+            let steps = ((sw / 60_000.0).abs().ceil() as usize).clamp(2, 720);
+            for i in 1..=steps {
+                let (px, py) = at(st + sw * i as f32 / steps as f32);
+                line(map(px, py));
+            }
+            // CloseFigure draws the chord itself.
+        }
+        // ECMA-376's `rtTriangle`: the right angle at the bottom-left, so the
+        // hypotenuse runs from the top-left corner to the bottom-right. Three of
+        // d04's pictures state one.
+        "rtTriangle" => {
+            let p = map(0.0, h);
+            let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(0.0, 0.0));
+            line(map(w, h));
         }
         // S-STAR10 (2026-08-25): 14 of these are the snowflakes on d04 slide 13,
         // and with no path they were painted as their bounding box -- fourteen
@@ -968,6 +1013,11 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     let _ = CloseFigure(dc);
     let _ = EndPath(dc);
     true
+}
+
+/// `chord` and `rtTriangle` outlines clip unless this is set.
+fn chordclip_on() -> bool {
+    std::env::var("OXI_CHORDCLIP_DISABLE").is_err()
 }
 
 /// A picture is clipped to its shape's outline unless this is set.
