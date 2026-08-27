@@ -217,6 +217,7 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
   <span class="name">Oxi</span>
   <span class="what">Spreadsheet rendering, in the browser, with no server</span>
   <span class="spacer"></span>
+  <button id="save" disabled>Save</button>
   <button id="reset">Sample workbook</button>
   <label class="file">Open a .xlsx<input type="file" id="pick" accept=".xlsx"></label>
 </header>
@@ -247,7 +248,7 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 <div class="tabs" id="tabs"></div>
 
 <script type="module">
-import init, { parse_spreadsheet, format_cell_number } from './oxidocs_wasm.js';
+import init, { parse_spreadsheet, format_cell_number, edit_xlsx } from './oxidocs_wasm.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
@@ -266,6 +267,16 @@ const tabsBox = document.getElementById('tabs');
 
 let book = null;
 let shown = 0;
+// The file as it arrived. Saving patches THAT rather than writing a workbook
+// out afresh: everything the sheet carries and this page never modelled —
+// charts, pictures, print settings, the styles of cells nobody touched —
+// stays exactly as its author left it. A save that rebuilds the file from
+// what the screen knows is how an editor quietly throws that away.
+let source = null;
+let fileName = 'workbook.xlsx';
+// One entry per cell that has been changed, keyed by sheet/row/column so
+// typing into the same cell twice sends one edit, not two.
+const changes = new Map();
 let digitWidth = 7;
 
 /// The width of a digit in the workbook's standard font, which is the unit a
@@ -478,6 +489,78 @@ function describeCell(address, cell) {
     .join('');
 }
 
+// ── Keeping what was typed ──────────────────────────────────────────────────
+//
+// An edit you cannot save is not an edit. The file is patched rather than
+// rewritten: `edit_xlsx` opens the bytes that arrived, changes the cells it is
+// told about and hands the archive back, so the parts nobody touched come
+// through untouched.
+
+const saveButton = document.getElementById('save');
+
+// The type has to travel with the value, because the same text means different
+// things: `=A1` is a formula, `12` a number, `12a` text, and an empty box
+// means clear the cell rather than write the empty string into it.
+function edited(text) {
+  if (text === '') return { value_type: 'empty', new_value: '' };
+  if (text.startsWith('=')) return { value_type: 'formula', new_value: text };
+  if (text.trim() !== '' && Number.isFinite(Number(text))) {
+    return { value_type: 'number', new_value: text };
+  }
+  return { value_type: 'string', new_value: text };
+}
+
+function remember(row, col, text) {
+  const held = edited(text);
+  changes.set(`${shown},${row},${col}`, {
+    sheet_index: shown,
+    row: row,
+    col: col,
+    ...held,
+  });
+  markSaved();
+}
+
+function markSaved() {
+  if (!saveButton) return;
+  const count = changes.size;
+  saveButton.disabled = count === 0;
+  saveButton.textContent = count === 0
+    ? 'Save'
+    : `Save (${count} cell${count === 1 ? '' : 's'})`;
+}
+
+async function save() {
+  if (!source || changes.size === 0) return;
+  const was = saveButton.textContent;
+  saveButton.disabled = true;
+  saveButton.textContent = 'Saving…';
+  try {
+    const written = edit_xlsx(source, [...changes.values()]);
+    const blob = new Blob([written], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName.replace(/\.xlsx$/i, '') + '-edited.xlsx';
+    link.click();
+    URL.revokeObjectURL(link.href);
+    // What was saved is now what the file holds: the next save starts from
+    // the bytes just written, so two saves in a row do not send the first
+    // batch of edits twice.
+    source = written;
+    changes.clear();
+    markSaved();
+  } catch (error) {
+    saveButton.textContent = was;
+    saveButton.disabled = false;
+    stateBox.style.display = 'block';
+    stateBox.textContent = `Oxi could not save: ${error}`;
+  }
+}
+
+if (saveButton) saveButton.addEventListener('click', save);
+
 // ── Living in the grid ──────────────────────────────────────────────────────
 //
 // What separates a sheet from a table is that you never reach for the mouse.
@@ -620,6 +703,7 @@ function put(row, col, text) {
   else if (text === '') cell.value = 'Empty';
   else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
   else cell.value = { String: text };
+  remember(row, col, text);
 }
 
 function commit(then) {
@@ -747,6 +831,10 @@ document.addEventListener('keydown', (event) => {
 
 async function open(data, name) {
   try {
+    source = new Uint8Array(data).slice();
+    fileName = name || 'workbook.xlsx';
+    changes.clear();
+    markSaved();
     book = parse_spreadsheet(new Uint8Array(data));
   } catch (error) {
     stateBox.style.display = 'block';
