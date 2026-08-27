@@ -298,25 +298,48 @@ impl Workbook {
 
     /// Recalculate every formula in dependency order.
     pub fn recalculate(&mut self) -> RecalcReport {
+        self.work_out(None)
+    }
+
+    /// Recalculate only the formulas a change to these cells can reach.
+    ///
+    /// A change reaches whatever reads the cell, and whatever reads that, and
+    /// nothing else — which for an ordinary edit is a handful of cells out of
+    /// however many the workbook holds. Each entry is a sheet name and a
+    /// (column, row) counted from zero, as everything here counts.
+    ///
+    /// The order is the same order a full recalculation would use: the whole
+    /// graph is still built, since a cell that has just been given a formula
+    /// may read anything. What is skipped is the working out.
+    pub fn recalculate_after(&mut self, changed: &[(String, (u32, u32))]) -> RecalcReport {
+        self.work_out(Some(changed))
+    }
+
+    /// The whole of it, or only what `changed` reaches.
+    fn work_out(&mut self, changed: Option<&[(String, (u32, u32))]>) -> RecalcReport {
         if !self.now_pinned {
             self.now = Workbook::read_the_clock();
         }
         let keys = self.formula_keys();
-        let index: BTreeMap<&(String, (u32, u32)), usize> =
-            keys.iter().enumerate().map(|(i, k)| (k, i)).collect();
+        // Where the formulas are, sheet by sheet, ordered by column and then
+        // row. A range can ask this directly for the formulas it covers; the
+        // alternative is walking every cell of the sheet once per range, which
+        // is what made a 22,864-formula workbook take 37 seconds.
+        let mut at: BTreeMap<&str, BTreeMap<(u32, u32), usize>> = BTreeMap::new();
+        for (i, (sheet, coord)) in keys.iter().enumerate() {
+            at.entry(sheet.as_str()).or_default().insert(*coord, i);
+        }
 
         // Edge dep -> dependent, plus in-degree, for Kahn's algorithm.
         let mut dependents: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); keys.len()];
         let mut indegree = vec![0usize; keys.len()];
 
-        for (i, (sheet, _)) in keys.iter().enumerate() {
-            for dep in self.dependencies_of(sheet, &keys[i].1) {
-                if let Some(&j) = index.get(&dep) {
-                    if j != i && dependents[j].insert(i) {
-                        indegree[i] += 1;
-                    }
+        for (i, (sheet, coord)) in keys.iter().enumerate() {
+            self.each_dependency(sheet, coord, &at, &mut |j| {
+                if j != i && dependents[j].insert(i) {
+                    indegree[i] += 1;
                 }
-            }
+            });
         }
 
         let mut queue: VecDeque<usize> = (0..keys.len()).filter(|&i| indegree[i] == 0).collect();
@@ -331,12 +354,19 @@ impl Workbook {
             }
         }
 
+        let emitted: BTreeSet<usize> = order.iter().copied().collect();
+
+        // Which of them a change can reach. Everything, when nothing in
+        // particular changed.
+        if let Some(changed) = changed {
+            let reached = self.reached_by(changed, &keys, &at, &dependents);
+            order.retain(|i| reached.contains(i));
+        }
+
         let mut report = RecalcReport {
             evaluated: order.len(),
             circular: Vec::new(),
         };
-
-        let emitted: BTreeSet<usize> = order.iter().copied().collect();
 
         for &i in &order {
             let (sheet, coord) = &keys[i];
@@ -347,7 +377,11 @@ impl Workbook {
             self.store_cached(sheet, coord, value);
         }
 
-        // Anything Kahn could not emit sits in a cycle.
+        // Anything Kahn could not emit sits in a cycle. A partial pass says
+        // nothing about the cells it did not look at, so it leaves them be.
+        if changed.is_some() {
+            return report;
+        }
         for (i, (sheet, coord)) in keys.iter().enumerate() {
             if !emitted.contains(&i) {
                 report
@@ -372,37 +406,97 @@ impl Workbook {
         keys
     }
 
-    /// Cells this formula reads.
+    /// Every formula a change to `changed` can reach, itself included.
     ///
-    /// A range dependency is expanded against the cells that actually exist,
-    /// not against every address in the rectangle: `SUM(A:A)` must not
-    /// enumerate a million cells.
-    fn dependencies_of(&self, sheet: &str, coord: &(u32, u32)) -> Vec<(String, (u32, u32))> {
+    /// A formula is reached when it READS one of the changed cells — which is
+    /// asked of its references, since a changed cell need not be a formula and
+    /// so need not be in the graph at all — or when it reads something already
+    /// reached.
+    fn reached_by(
+        &self,
+        changed: &[(String, (u32, u32))],
+        keys: &[(String, (u32, u32))],
+        at: &BTreeMap<&str, BTreeMap<(u32, u32), usize>>,
+        dependents: &[BTreeSet<usize>],
+    ) -> BTreeSet<usize> {
+        let mut reached = BTreeSet::new();
+        let mut walking: VecDeque<usize> = VecDeque::new();
+
+        // A changed cell that is itself a formula has to be worked out again.
+        for (sheet, coord) in changed {
+            if let Some(&i) = at.get(sheet.as_str()).and_then(|held| held.get(coord)) {
+                if reached.insert(i) {
+                    walking.push_back(i);
+                }
+            }
+        }
+        // And every formula that reads one of them.
+        for (i, (sheet, coord)) in keys.iter().enumerate() {
+            if reached.contains(&i) {
+                continue;
+            }
+            let Some(expr) = self.expr_at(sheet, coord) else {
+                continue;
+            };
+            let reads_a_change = expr.value_references().iter().any(|reference| {
+                let target = reference.sheet.as_deref().unwrap_or(sheet.as_str());
+                changed.iter().any(|(where_, (col, row))| {
+                    where_ == target && reference.range.contains(*col, *row)
+                })
+            });
+            if reads_a_change && reached.insert(i) {
+                walking.push_back(i);
+            }
+        }
+        // Then outwards, to whatever reads those.
+        while let Some(i) = walking.pop_front() {
+            for &j in &dependents[i] {
+                if reached.insert(j) {
+                    walking.push_back(j);
+                }
+            }
+        }
+        reached
+    }
+
+    /// Hands every formula this one waits for to `found`, as a graph node.
+    ///
+    /// `at` says where the formulas are. Only they can be waited for — nothing
+    /// waits for a literal — so a range asks that rather than the sheet, which
+    /// is a few thousand entries instead of a few hundred thousand cells.
+    fn each_dependency(
+        &self,
+        sheet: &str,
+        coord: &(u32, u32),
+        at: &BTreeMap<&str, BTreeMap<(u32, u32), usize>>,
+        found: &mut dyn FnMut(usize),
+    ) {
         let Some(expr) = self.expr_at(sheet, coord) else {
-            return Vec::new();
+            return;
         };
-        let mut deps = Vec::new();
         // Not `references`: a range that is only being measured is not
         // something this cell waits for.
         for reference in expr.value_references() {
             let target = reference.sheet.as_deref().unwrap_or(sheet);
-            let Some(target_sheet) = self.sheets.get(target) else {
+            let Some(formulas) = at.get(target) else {
                 continue;
             };
             if reference.range.is_single() {
-                let c = reference.range.start.coord();
-                if target_sheet.cells.contains_key(&c) {
-                    deps.push((target.to_string(), c));
+                if let Some(&j) = formulas.get(&reference.range.start.coord()) {
+                    found(j);
                 }
-            } else {
-                for c in target_sheet.cells.keys() {
-                    if reference.range.contains(c.0, c.1) {
-                        deps.push((target.to_string(), *c));
-                    }
+                continue;
+            }
+            // Ordered by column and then row, so the columns the range spans
+            // are one contiguous stretch of the map and the rows are checked
+            // as they come past.
+            let (from, to) = (reference.range.start, reference.range.end);
+            for (coord, &j) in formulas.range((from.col, 0)..=(to.col, u32::MAX)) {
+                if coord.1 >= from.row && coord.1 <= to.row {
+                    found(j);
                 }
             }
         }
-        deps
     }
 
     fn expr_at(&self, sheet: &str, coord: &(u32, u32)) -> Option<Expr> {
@@ -983,6 +1077,108 @@ mod tests {
             }
         }
         wb
+    }
+
+    /// A1 and A2 hold numbers. B1 reads A1, C1 reads B1, D1 reads A2, and E1
+    /// sums both.
+    fn a_little_chain() -> Workbook {
+        let mut wb = book();
+        wb.set_value("Sheet1", "A1", Value::Number(1.0)).unwrap();
+        wb.set_value("Sheet1", "A2", Value::Number(2.0)).unwrap();
+        wb.set_formula("Sheet1", "B1", "=A1*10").unwrap();
+        wb.set_formula("Sheet1", "C1", "=B1+1").unwrap();
+        wb.set_formula("Sheet1", "D1", "=A2*100").unwrap();
+        wb.set_formula("Sheet1", "E1", "=SUM(A1:A2)").unwrap();
+        wb.recalculate();
+        wb
+    }
+
+    #[test]
+    fn a_change_reaches_what_reads_it_and_what_reads_that() {
+        // Typing into one cell of a 936,000-cell workbook made the editor work
+        // out all 22,864 of its formulas — twenty seconds. Almost none of it
+        // was needed.
+        let mut wb = a_little_chain();
+        wb.set_value("Sheet1", "A1", Value::Number(5.0)).unwrap();
+        // A1 is column 0, row 0: everything here counts from zero.
+        let report = wb.recalculate_after(&[("Sheet1".to_string(), (0, 0))]);
+        assert_eq!(wb.value("Sheet1", "B1"), Value::Number(50.0), "reads A1");
+        assert_eq!(wb.value("Sheet1", "C1"), Value::Number(51.0), "reads B1");
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(7.0), "its range holds A1");
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(200.0), "reads only A2");
+        assert_eq!(report.evaluated, 3, "B1, C1 and E1, and not D1");
+    }
+
+    #[test]
+    fn what_a_change_does_not_reach_is_left_exactly_as_it_was() {
+        // The saving is only real if the untouched cells are genuinely not
+        // worked out — so this makes one of them WRONG first, without saying
+        // so, and then checks it stays wrong. A pass that quietly recomputed
+        // everything would tidy it up and look like a pass.
+        let mut wb = a_little_chain();
+        wb.set_value("Sheet1", "A2", Value::Number(9.0)).unwrap();
+        let report = wb.recalculate_after(&[("Sheet1".to_string(), (0, 0))]);
+        assert_eq!(
+            wb.value("Sheet1", "D1"),
+            Value::Number(200.0),
+            "still the old answer, because nobody said A2 had changed",
+        );
+        assert_eq!(report.evaluated, 3);
+        // Told about it, or asked for the whole thing, it catches up.
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(900.0));
+    }
+
+    #[test]
+    fn a_cell_that_has_just_been_given_a_formula_is_worked_out() {
+        // The changed cell may be the formula itself rather than something it
+        // reads, which is what typing one into an empty cell looks like.
+        let mut wb = a_little_chain();
+        wb.set_formula("Sheet1", "F1", "=A1+A2").unwrap();
+        let report = wb.recalculate_after(&[("Sheet1".to_string(), (5, 0))]);
+        assert_eq!(wb.value("Sheet1", "F1"), Value::Number(3.0));
+        assert_eq!(report.evaluated, 1);
+    }
+
+    #[test]
+    fn a_partial_pass_agrees_with_a_whole_one() {
+        // Whatever the saving, the answers have to be the answers.
+        let mut partly = a_little_chain();
+        let mut wholly = a_little_chain();
+        for (at, value) in [("A1", 7.0), ("A2", 11.0)] {
+            partly.set_value("Sheet1", at, Value::Number(value)).unwrap();
+            wholly.set_value("Sheet1", at, Value::Number(value)).unwrap();
+        }
+        partly.recalculate_after(&[
+            ("Sheet1".to_string(), (0, 0)),
+            ("Sheet1".to_string(), (0, 1)),
+        ]);
+        wholly.recalculate();
+        for at in ["B1", "C1", "D1", "E1"] {
+            assert_eq!(
+                partly.value("Sheet1", at),
+                wholly.value("Sheet1", at),
+                "at {at}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_on_one_sheet_reaches_a_formula_on_another() {
+        let mut wb = book();
+        wb.add_sheet("Other");
+        wb.set_value("Sheet1", "A1", Value::Number(2.0)).unwrap();
+        wb.set_formula("Other", "A1", "=Sheet1!A1*3").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Other", "A1"), Value::Number(6.0));
+        wb.set_value("Sheet1", "A1", Value::Number(5.0)).unwrap();
+        let report = wb.recalculate_after(&[("Sheet1".to_string(), (0, 0))]);
+        assert_eq!(wb.value("Other", "A1"), Value::Number(15.0));
+        assert_eq!(report.evaluated, 1);
+        // And a change on the sheet it does NOT read leaves it alone.
+        wb.set_value("Sheet1", "A1", Value::Number(6.0)).unwrap();
+        wb.recalculate_after(&[("Other".to_string(), (9, 9))]);
+        assert_eq!(wb.value("Other", "A1"), Value::Number(15.0));
     }
 
     #[test]
