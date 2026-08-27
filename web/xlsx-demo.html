@@ -209,6 +209,39 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 }
 #drop.over { display: flex; }
 #state { padding: 40px; color: var(--dim); font-size: 14px; }
+
+/* A selected block is washed, and the block's outer edge is ruled, so the eye
+   reads one rectangle rather than a scatter of tinted cells. The active cell
+   inside it keeps its own outline and is left unwashed, the way Excel leaves
+   the cell you are about to type into. */
+td.pick { background: rgba(33, 115, 70, .10); }
+td.pick.here { background: transparent; }
+td.edge-t { box-shadow: inset 0 1px 0 0 var(--accent); }
+td.edge-b { box-shadow: inset 0 -1px 0 0 var(--accent); }
+td.edge-l { box-shadow: inset 1px 0 0 0 var(--accent); }
+td.edge-r { box-shadow: inset -1px 0 0 0 var(--accent); }
+td.edge-t.edge-l { box-shadow: inset 0 1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
+td.edge-t.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
+td.edge-b.edge-l { box-shadow: inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
+td.edge-b.edge-r { box-shadow: inset 0 -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
+td.edge-t.edge-b.edge-l { box-shadow: inset 0 1px 0 0 var(--accent), inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
+td.edge-t.edge-b.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset 0 -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
+td.edge-t.edge-l.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
+td.edge-b.edge-l.edge-r { box-shadow: inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
+
+/* What the selection comes to, where Excel puts it: the far end of the strip
+   the sheet tabs sit in. */
+#tally {
+  margin-left: auto;
+  padding: 0 14px;
+  color: var(--dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Dragging a range means passing the pointer over cell after cell; without
+   this the browser starts selecting their text instead. */
+table { user-select: none; }
 </style>
 </head>
 <body>
@@ -245,7 +278,7 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
   </aside>
 </main>
 
-<div class="tabs" id="tabs"></div>
+<div class="tabs" id="tabs"><span id="tally"></span></div>
 
 <script type="module">
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx } from './oxidocs_wasm.js';
@@ -418,7 +451,18 @@ function draw() {
   table.addEventListener('mousedown', (event) => {
     const cell = event.target.closest('td');
     if (!cell || !cell.dataset.row) return;
-    goTo(Number(cell.dataset.row), Number(cell.dataset.col));
+    // Shift extends from wherever the selection already starts; a plain click
+    // starts a new one and arms the drag.
+    goTo(Number(cell.dataset.row), Number(cell.dataset.col), false, event.shiftKey);
+    if (!event.shiftKey) dragging = true;
+    table.focus();
+    event.preventDefault();
+  });
+  table.addEventListener('mouseover', (event) => {
+    if (!dragging) return;
+    const cell = event.target.closest('td');
+    if (!cell || !cell.dataset.row) return;
+    goTo(Number(cell.dataset.row), Number(cell.dataset.col), false, true);
   });
   table.addEventListener('dblclick', (event) => {
     const cell = event.target.closest('td');
@@ -467,9 +511,19 @@ function describe() {
     const tab = document.createElement('button');
     tab.textContent = one.name;
     if (index === shown) tab.className = 'on';
-    tab.onclick = () => { shown = index; draw(); describe(); };
+    tab.onclick = () => {
+      shown = index;
+      draw();
+      describe();
+      // Each sheet gets its own cursor rather than inheriting a position that
+      // may not exist here; the selection does not survive the move either.
+      goTo(1, 0);
+    };
     tabsBox.appendChild(tab);
   });
+  // Redrawing the tabs empties the strip they live in, and the selection's
+  // total lives at the far end of that same strip. Put it back.
+  if (countBox) tabsBox.appendChild(countBox);
 }
 
 function describeCell(address, cell) {
@@ -488,6 +542,251 @@ function describeCell(address, cell) {
     .map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`)
     .join('');
 }
+
+// ── Selecting more than one cell ────────────────────────────────────────────
+//
+// A sheet where you can only ever be on one cell is a form. Everything people
+// actually do with a spreadsheet — total a column, copy a block into an email,
+// paste a table someone sent — starts by selecting a range, so the range is
+// what the rest of this hangs off.
+
+// A selection needs three cells, not two, and conflating any pair of them
+// gives a grid that feels almost right. `anchor` is the corner it was started
+// from and `reach` is the corner being dragged; the block is the rectangle
+// between them. `at` — declared with the rest of the cursor state below — is
+// the ACTIVE cell: the white one inside the block that takes what you type and
+// that the formula bar describes. Drag A1 to C5 in Excel and your typing still
+// goes into A1, because extending a selection moves `reach` and leaves `at`
+// where it was.
+let anchor = { row: 1, col: 0 };
+let reach = { row: 1, col: 0 };
+// True only while the mouse is down and dragging out a range, which is the one
+// time Excel shows the size instead of the address in the name box.
+let dragging = false;
+
+const countBox = document.getElementById('tally');
+
+function region() {
+  return {
+    top: Math.min(anchor.row, reach.row),
+    left: Math.min(anchor.col, reach.col),
+    bottom: Math.max(anchor.row, reach.row),
+    right: Math.max(anchor.col, reach.col),
+  };
+}
+
+function spread() {
+  const box = region();
+  return box.top !== box.bottom || box.left !== box.right;
+}
+
+function eachInRegion(visit) {
+  const box = region();
+  for (let row = box.top; row <= box.bottom; row++) {
+    for (let col = box.left; col <= box.right; col++) visit(row, col);
+  }
+}
+
+// Enough digits to be honest, without a tail of float noise behind a total that
+// is plainly a round number.
+function trim(value) {
+  const near = Math.round(value * 1e10) / 1e10;
+  return String(Number(near.toFixed(10)));
+}
+
+// Excel's status bar: how many cells hold something, and — when any of them are
+// numbers — what they come to. It is the fastest way to check a column without
+// writing a formula anywhere, which is most of what it gets used for.
+function tally() {
+  if (!countBox) return;
+  if (!spread()) { countBox.textContent = ''; return; }
+  let held = 0;
+  let numbers = 0;
+  let sum = 0;
+  eachInRegion((row, col) => {
+    const cell = heldAt(row, col);
+    const text = contentOf(cell);
+    if (text === '') return;
+    held++;
+    const value = cell && typeof cell.value === 'object' && cell.value !== null
+      ? cell.value.Number
+      : undefined;
+    if (typeof value === 'number') { numbers++; sum += value; }
+  });
+  const parts = [`Count ${held}`];
+  if (numbers > 0) {
+    parts.unshift(`Sum ${trim(sum)}`);
+    parts.unshift(`Average ${trim(sum / numbers)}`);
+  }
+  countBox.textContent = parts.join('   ');
+}
+
+function paint() {
+  const table = tableNow();
+  if (!table) return;
+  const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
+  for (const cell of table.querySelectorAll(lit)) {
+    cell.classList.remove('here', 'pick', 'edge-t', 'edge-b', 'edge-l', 'edge-r');
+  }
+  const box = region();
+  if (spread()) {
+    eachInRegion((row, col) => {
+      const cell = cellAt(row, col);
+      if (!cell) return;
+      cell.classList.add('pick');
+      if (row === box.top) cell.classList.add('edge-t');
+      if (row === box.bottom) cell.classList.add('edge-b');
+      if (col === box.left) cell.classList.add('edge-l');
+      if (col === box.right) cell.classList.add('edge-r');
+    });
+  }
+  const cell = cellAt(at.row, at.col);
+  if (cell) cell.classList.add('here');
+  // Follow the corner being dragged, not the active cell: that is the edge
+  // moving off the screen. With nothing selected they are the same cell.
+  const edge = cellAt(reach.row, reach.col) || cell;
+  if (edge) edge.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  whereBox.textContent = dragging && spread()
+    ? `${box.bottom - box.top + 1}R x ${box.right - box.left + 1}C`
+    : columnName(at.col) + at.row;
+  tally();
+}
+
+// ── Carrying cells in and out ───────────────────────────────────────────────
+//
+// Tab-separated text is what every spreadsheet puts on the clipboard and what
+// every one of them reads back, so a range copied here lands in Excel as cells
+// rather than as one long line, and a block copied from Excel arrives here the
+// same way. The HTML flavour goes alongside because that is what Excel reaches
+// for first when it is the one pasting.
+
+function fieldOf(text) {
+  // A field holding a tab, a newline or a quote has to be quoted, or the other
+  // end will read the one cell as several.
+  return /[\t\n\r"]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+}
+
+function selectionText() {
+  const box = region();
+  const lines = [];
+  for (let row = box.top; row <= box.bottom; row++) {
+    const cells = [];
+    for (let col = box.left; col <= box.right; col++) {
+      cells.push(fieldOf(contentOf(heldAt(row, col))));
+    }
+    lines.push(cells.join('\t'));
+  }
+  return lines.join('\n');
+}
+
+function selectionHtml() {
+  const box = region();
+  const safe = (text) => text.replace(/[&<>]/g, (one) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;',
+  })[one]);
+  const lines = [];
+  for (let row = box.top; row <= box.bottom; row++) {
+    const cells = [];
+    for (let col = box.left; col <= box.right; col++) {
+      cells.push('<td>' + safe(contentOf(heldAt(row, col))) + '</td>');
+    }
+    lines.push('<tr>' + cells.join('') + '</tr>');
+  }
+  return '<table>' + lines.join('') + '</table>';
+}
+
+// Split pasted text back into a grid, honouring the quoting above: a quoted
+// field may itself contain tabs and newlines, and splitting on the separators
+// alone would tear such a cell into pieces.
+function asGrid(text) {
+  const rows = [[]];
+  let field = '';
+  let quoted = false;
+  let seen = 0;
+  const push = () => { rows[rows.length - 1].push(field); field = ''; };
+  while (seen < text.length) {
+    const ch = text[seen];
+    if (quoted) {
+      if (ch === '"' && text[seen + 1] === '"') { field += '"'; seen += 2; continue; }
+      if (ch === '"') { quoted = false; seen++; continue; }
+      field += ch;
+      seen++;
+      continue;
+    }
+    if (ch === '"' && field === '') { quoted = true; seen++; continue; }
+    if (ch === '\t') { push(); seen++; continue; }
+    if (ch === '\r' || ch === '\n') {
+      push();
+      rows.push([]);
+      seen += ch === '\r' && text[seen + 1] === '\n' ? 2 : 1;
+      continue;
+    }
+    field += ch;
+    seen++;
+  }
+  push();
+  // A trailing newline is a line ending, not an empty last row.
+  const last = rows[rows.length - 1];
+  if (rows.length > 1 && last.length === 1 && last[0] === '') rows.pop();
+  return rows;
+}
+
+function pasteGrid(grid) {
+  if (grid.length === 0) return;
+  const box = region();
+  // One value into a selected block fills the block — the way it does in Excel,
+  // and the reason anyone selects a block before pasting one thing.
+  const single = grid.length === 1 && grid[0].length === 1;
+  if (single && spread()) {
+    eachInRegion((row, col) => put(row, col, grid[0][0]));
+    draw();
+    paint();
+    return;
+  }
+  const top = single ? at.row : box.top;
+  const left = single ? at.col : box.left;
+  grid.forEach((line, down) => {
+    line.forEach((text, across) => put(top + down, left + across, text));
+  });
+  draw();
+  const wide = Math.max(...grid.map((line) => line.length));
+  at = { row: top, col: left };
+  anchor = { row: top, col: left };
+  goTo(top + grid.length - 1, left + wide - 1, false, true);
+}
+
+function clearSelection() {
+  eachInRegion((row, col) => put(row, col, ''));
+  draw();
+  paint();
+}
+
+function busyElsewhere() {
+  return !book || editor || document.activeElement === formulaBox;
+}
+
+document.addEventListener('copy', (event) => {
+  if (busyElsewhere()) return;
+  event.clipboardData.setData('text/plain', selectionText());
+  event.clipboardData.setData('text/html', selectionHtml());
+  event.preventDefault();
+});
+
+document.addEventListener('cut', (event) => {
+  if (busyElsewhere()) return;
+  event.clipboardData.setData('text/plain', selectionText());
+  event.clipboardData.setData('text/html', selectionHtml());
+  event.preventDefault();
+  clearSelection();
+});
+
+document.addEventListener('paste', (event) => {
+  if (busyElsewhere()) return;
+  const text = event.clipboardData.getData('text/plain');
+  if (!text) return;
+  event.preventDefault();
+  pasteGrid(asGrid(text));
+});
 
 // ── Keeping what was typed ──────────────────────────────────────────────────
 //
@@ -618,23 +917,27 @@ function extent() {
   return { rows: table.rows.length - 1, cols: last ? last.cells.length - 2 : 0 };
 }
 
-function goTo(row, col, keepTabHome) {
+// `extend` keeps the anchor where it is and drags the far corner of the
+// selection to the new cell, which is what Shift does to every movement key.
+function goTo(row, col, keepTabHome, extend) {
   const bounds = extent();
-  at = {
+  const spot = {
     row: Math.min(Math.max(1, row), bounds.rows),
     col: Math.min(Math.max(0, col), bounds.cols),
   };
-  if (!keepTabHome) tabHome = null;
-  const table = tableNow();
-  if (!table) return;
-  for (const lit of table.querySelectorAll('td.here')) lit.classList.remove('here');
-  const cell = cellAt(at.row, at.col);
-  if (cell) {
-    cell.classList.add('here');
-    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  reach = { row: spot.row, col: spot.col };
+  if (!extend) {
+    at = { row: spot.row, col: spot.col };
+    anchor = { row: spot.row, col: spot.col };
   }
+  if (!keepTabHome) tabHome = null;
+  if (!tableNow()) return;
+  paint();
+  // The panel and the formula bar always describe the ACTIVE cell, not the
+  // range: with a block selected it is still one cell you are about to type
+  // into, and showing the block's first cell instead would be a lie about
+  // where the next keystroke lands.
   const held = heldAt(at.row, at.col);
-  whereBox.textContent = columnName(at.col) + at.row;
   formulaBox.value = contentOf(held);
   if (held) describeCell(columnName(at.col) + at.row, held);
   else cellBox.innerHTML = '<dd class="none">empty</dd>';
@@ -644,10 +947,10 @@ function goTo(row, col, keepTabHome) {
 // written cell if you are on written ground, else to the next written one.
 // It is how anyone moves about a large sheet, and stepping a row at a time is
 // not the same thing.
-function runTo(dRow, dCol) {
+function runTo(dRow, dCol, extend) {
   const bounds = extent();
-  let row = at.row;
-  let col = at.col;
+  let row = extend ? reach.row : at.row;
+  let col = extend ? reach.col : at.col;
   const filled = (r, c) => contentOf(heldAt(r, c)) !== '';
   const started = filled(row + dRow, col + dCol);
   let moved = false;
@@ -661,7 +964,7 @@ function runTo(dRow, dCol) {
     moved = true;
     if (!started && filled(row, col)) break;
   }
-  if (moved) goTo(row, col);
+  if (moved) goTo(row, col, false, extend);
 }
 
 // Typing over a cell replaces it; F2 opens it with what is already there.
@@ -706,6 +1009,30 @@ function put(row, col, text) {
   remember(row, col, text);
 }
 
+// With a block selected, Enter and Tab do not leave it: Enter walks down the
+// column and wraps to the top of the next one, Tab walks across and wraps to
+// the start of the next row. It is how a range gets filled in without ever
+// steering, and it is why people select the block first.
+function stepInside(down, across) {
+  const box = region();
+  const tall = box.bottom - box.top + 1;
+  const wideness = box.right - box.left + 1;
+  let seat = down !== 0
+    ? (at.col - box.left) * tall + (at.row - box.top) + down
+    : (at.row - box.top) * wideness + (at.col - box.left) + across;
+  const seats = tall * wideness;
+  seat = ((seat % seats) + seats) % seats;
+  const spot = down !== 0
+    ? { row: box.top + (seat % tall), col: box.left + Math.floor(seat / tall) }
+    : { row: box.top + Math.floor(seat / wideness), col: box.left + (seat % wideness) };
+  at = spot;
+  paint();  // `anchor` and `reach` stay put: the block is unchanged.
+  const held = heldAt(at.row, at.col);
+  formulaBox.value = contentOf(held);
+  if (held) describeCell(columnName(at.col) + at.row, held);
+  else cellBox.innerHTML = '<dd class="none">empty</dd>';
+}
+
 function commit(then) {
   if (!editor) return;
   const text = editor.input.value;
@@ -735,58 +1062,75 @@ function onKey(event) {
       event.preventDefault();
       const down = event.shiftKey ? -1 : 1;
       const back = tabHome;
-      commit(() => goTo(at.row + down, back === null ? at.col : back));
+      const inside = spread();
+      commit(() => inside
+        ? stepInside(down, 0)
+        : goTo(at.row + down, back === null ? at.col : back));
     } else if (event.key === 'Tab') {
       event.preventDefault();
-      if (tabHome === null) tabHome = at.col;
       const step = event.shiftKey ? -1 : 1;
+      if (spread()) { commit(() => stepInside(0, step)); return; }
+      if (tabHome === null) tabHome = at.col;
       commit(() => goTo(at.row, at.col + step, true));
     }
     return;
   }
   const jump = event.ctrlKey || event.metaKey;
+  const wide = event.shiftKey;
+  // Shift walks the corner being dragged; without it, the active cell.
+  const from = wide ? reach : at;
   switch (event.key) {
     case 'ArrowUp':
       event.preventDefault();
-      if (jump) runTo(-1, 0); else goTo(at.row - 1, at.col);
+      if (jump) runTo(-1, 0, wide); else goTo(from.row - 1, from.col, false, wide);
       break;
     case 'ArrowDown':
       event.preventDefault();
-      if (jump) runTo(1, 0); else goTo(at.row + 1, at.col);
+      if (jump) runTo(1, 0, wide); else goTo(from.row + 1, from.col, false, wide);
       break;
     case 'ArrowLeft':
       event.preventDefault();
-      if (jump) runTo(0, -1); else goTo(at.row, at.col - 1);
+      if (jump) runTo(0, -1, wide); else goTo(from.row, from.col - 1, false, wide);
       break;
     case 'ArrowRight':
       event.preventDefault();
-      if (jump) runTo(0, 1); else goTo(at.row, at.col + 1);
+      if (jump) runTo(0, 1, wide); else goTo(from.row, from.col + 1, false, wide);
       break;
     case 'Tab':
       event.preventDefault();
+      if (spread()) { stepInside(0, event.shiftKey ? -1 : 1); break; }
       if (tabHome === null) tabHome = at.col;
       goTo(at.row, at.col + (event.shiftKey ? -1 : 1), true);
       break;
     case 'Enter':
       event.preventDefault();
-      if (tabHome !== null) goTo(at.row + 1, tabHome);
+      if (spread()) stepInside(event.shiftKey ? -1 : 1, 0);
+      else if (tabHome !== null) goTo(at.row + 1, tabHome);
       else goTo(at.row + (event.shiftKey ? -1 : 1), at.col);
       break;
     case 'Home':
       event.preventDefault();
-      goTo(jump ? 1 : at.row, 0);
+      goTo(jump ? 1 : from.row, 0, false, wide);
       break;
     case 'End':
       event.preventDefault();
-      goTo(jump ? bounds.rows : at.row, bounds.cols);
+      goTo(jump ? bounds.rows : from.row, bounds.cols, false, wide);
       break;
     case 'PageDown':
       event.preventDefault();
-      goTo(at.row + 20, at.col);
+      goTo(from.row + 20, from.col, false, wide);
       break;
     case 'PageUp':
       event.preventDefault();
-      goTo(at.row - 20, at.col);
+      goTo(from.row - 20, from.col, false, wide);
+      break;
+    case 'a':
+    case 'A':
+      if (!jump) break;
+      event.preventDefault();
+      at = { row: 1, col: 0 };
+      anchor = { row: 1, col: 0 };
+      goTo(bounds.rows, bounds.cols, false, true);
       break;
     case 'F2':
       event.preventDefault();
@@ -795,9 +1139,7 @@ function onKey(event) {
     case 'Delete':
     case 'Backspace':
       event.preventDefault();
-      put(at.row, at.col, '');
-      draw();
-      goTo(at.row, at.col);
+      clearSelection();
       break;
     default:
       // A printable key starts a new value, the way it does in Excel: you do
@@ -808,6 +1150,13 @@ function onKey(event) {
       }
   }
 }
+
+document.addEventListener('mouseup', () => {
+  if (!dragging) return;
+  dragging = false;
+  // The name box goes back to the anchor's address now the size has been read.
+  paint();
+});
 
 document.addEventListener('keydown', (event) => {
   if (document.activeElement === formulaBox) {
@@ -848,7 +1197,9 @@ async function open(data, name) {
   digitWidth = measureDigit(style.font_name, style.font_size);
   draw();
   describe();
-  cellBox.innerHTML = '<dd class="none">Click a cell</dd>';
+  // A new workbook starts at its own A1 rather than wherever the last one was
+  // left, and with nothing selected from it.
+  goTo(1, 0);
 }
 
 async function openSample() {
