@@ -31654,7 +31654,48 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && (matches!(table.style.width_type.as_deref(), Some("dxa") | Some("pct"))
                             || s1163_fits)
                         && std::env::var("OXI_S766_DISABLE").is_err();
-                    if !s766_shift_whole {
+                    // S1240 (2026-08-27, default ON, opt-out OXI_S1240_DISABLE): a
+                    // MULTI-cell row does NOT widen its leading cell. The widen
+                    // above rests on S766's stated assumption that "the leading
+                    // cell's RIGHT edge is a column boundary Word keeps" — that
+                    // half was never measured (S1163 measured only the SINGLE-cell
+                    // case). MEASURED (_pb_tblindwide_gen.py, 11 arms, boundaries
+                    // read off Word's own PDF rules): the absorption moves the
+                    // WHOLE grid left, so the boundary moves with it and every
+                    // column keeps its declared gridCol.
+                    //   left_border = margin + tblInd − cellMar_left
+                    //   boundary_i  = left_border + Σ gridCol_1..i   (no widen)
+                    // The default-cellMar arms cannot see this (a doc with no
+                    // table style has cellMar ≈ 0, so absorb and no-absorb
+                    // coincide); the arms that declare a margin separate them:
+                    //   ind567 3col cellMar 200tw: Word left 90.38 = 72+28.35−10,
+                    //     boundary1 190.37 = left+100.0 EXACT (widen predicts
+                    //     200.35); Oxi gave col1 110.0 vs the grid's 100.0.
+                    //   ind113 5col cellMar 108tw (= technical__002c1ffa's own
+                    //     table, reproduced): Word left 72.26 vs absorb 72.25,
+                    //     boundary1 164.18 vs left+91.90 = 164.15 EXACT (widen
+                    //     predicts 169.55); all five columns land on the grid
+                    //     within 0.05 and each cell's text at its border + 5.4.
+                    //   cm15 + cellMar 200tw: left 100.58 = margin+tblInd, text
+                    //     at +10 — compat 15 does not absorb, so the S496 gate
+                    //     itself is re-confirmed, not widened.
+                    //   compat 11 reproduces compat 14 EXACTLY on both margin-
+                    //     bearing arms (190.37 / 164.18), so the law covers the
+                    //     whole legacy regime, not just mode 14 — that matters
+                    //     because tokyoshugyo (compat 11) is one of the three
+                    //     Phase-1 baseline docs this reaches.
+                    // WITNESS technical__002c1ffa65f3a566 (compat 14, tblInd 113,
+                    // 5-col legislation-history table, tcW == gridCol): Oxi drew
+                    // col1 at 97.30 = grid 91.90 + one cellMar, so its cell text
+                    // wrapped ~one word later than Word's per line, every row came
+                    // out shorter, and the Endnote-3 table carried a constant
+                    // sub-page offset from Word p331 onward — the doc's pcd −1
+                    // (367 pages vs 368). The single-cell paths are untouched:
+                    // S585c's over-wide clamp still depends on the widen, and it
+                    // only ever reaches a 1-cell row.
+                    let s1240_no_widen = std::env::var("OXI_S1240_DISABLE").is_err()
+                        && row.cells.len() > 1;
+                    if !s766_shift_whole && !s1240_no_widen {
                         cell_w += pad_l;
                     }
                 }
