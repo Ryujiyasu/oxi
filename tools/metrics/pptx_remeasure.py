@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -69,11 +70,33 @@ def report(state: dict) -> None:
 
 
 def main() -> None:
+    # ★One renderer at a time, enforced rather than remembered. Two instances
+    # share `_remeasure_tmp`: on 2026-08-28 a second run's rmtree deleted the
+    # first's staging directory mid-move and decks 28-31 were left with EMPTY
+    # oxi_png directories -- a silent corpus hole, not a crash. The renderer is
+    # not parallel-safe either (`pptx_render_not_parallel_safe`).
+    if "--report" in sys.argv:      # read-only: never wait on the lock
+        report(load())
+        return
+    lock = SSIMD / "_remeasure.lock"
+    try:
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        held = lock.read_text(encoding="utf-8", errors="replace").strip()
+        print(f"another remeasure holds {lock.name} (pid {held}). "
+              f"Wait for it, or delete the lock if that process is gone.")
+        return
+    try:
+        _run()
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _run() -> None:
     exe_mtime = EXE.stat().st_mtime_ns if EXE.exists() else 0
     state = load()
-    if "--report" in sys.argv:
-        report(state)
-        return
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
     tmp = SSIMD / "_remeasure_tmp"
     for item in manifest:
