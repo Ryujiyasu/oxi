@@ -59,6 +59,10 @@ pub struct XlsxEditor {
     row_height: HashMap<(usize, u32), (Option<f32>, bool)>,
     /// (sheet_idx, 0-based column) -> hidden
     col_hidden: HashMap<(usize, u32), bool>,
+    /// sheet_idx -> how many rows to hold at the top and columns at the left.
+    /// Both zero unfreezes: freezing nothing and holding nothing are the same
+    /// thing, and Excel writes the same file for either.
+    panes: HashMap<usize, (u32, u32)>,
     /// (sheet_idx, 0-based column) -> width, in characters of the workbook's
     /// default font, gutter included. This is the number the file states, not
     /// the one a person types into Excel: typing 10 stores 10.625.
@@ -107,6 +111,7 @@ impl XlsxEditor {
             row_height: HashMap::new(),
             col_hidden: HashMap::new(),
             col_width: HashMap::new(),
+            panes: HashMap::new(),
             merges: HashMap::new(),
             styles: HashMap::new(),
             filters: HashMap::new(),
@@ -292,6 +297,13 @@ impl XlsxEditor {
                 }
             }
 
+            if (before.frozen_rows, before.frozen_cols)
+                != (after.frozen_rows, after.frozen_cols)
+            {
+                self.panes
+                    .insert(index, (after.frozen_rows, after.frozen_cols));
+            }
+
             if !same_merges(&before.merge_cells, &after.merge_cells) {
                 self.merges.insert(index, after.merge_cells.clone());
             }
@@ -361,6 +373,12 @@ impl XlsxEditor {
         self.styles.insert((sheet_index, row, col), style);
     }
 
+    /// Holds `rows` at the top of the sheet and `cols` at the left while the
+    /// rest scrolls. Both zero takes the freeze away.
+    pub fn set_frozen_panes(&mut self, sheet_index: usize, rows: u32, cols: u32) {
+        self.panes.insert(sheet_index, (rows, cols));
+    }
+
     /// Puts a sheet under a filter, or takes its filter away with `None`.
     pub fn set_auto_filter(&mut self, sheet_index: usize, filter: Option<AutoFilter>) {
         self.filters.insert(sheet_index, filter);
@@ -372,6 +390,7 @@ impl XlsxEditor {
             || !self.row_height.is_empty()
             || !self.col_hidden.is_empty()
             || !self.col_width.is_empty()
+            || !self.panes.is_empty()
             || !self.merges.is_empty()
             || !self.styles.is_empty()
             || !self.filters.is_empty()
@@ -531,6 +550,7 @@ impl XlsxEditor {
             .chain(self.merges.keys())
             .chain(cell_styles.keys())
             .chain(self.filters.keys())
+            .chain(self.panes.keys())
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
         {
@@ -544,6 +564,7 @@ impl XlsxEditor {
                         merges: self.merges.get(&sheet).map(Vec::as_slice),
                         styles: cell_styles.get(&sheet).unwrap_or(&empty_styles),
                         filter: self.filters.get(&sheet),
+                        panes: self.panes.get(&sheet).copied(),
                     },
                 );
             }
@@ -1683,6 +1704,68 @@ fn write_new_cols(
     Ok(())
 }
 
+/// Writes the `<pane>` that holds `rows` at the top and `cols` at the left.
+///
+/// Nothing is written when both are zero: an unfrozen sheet has no pane at
+/// all rather than one saying it holds nothing.
+fn write_pane(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    rows: u32,
+    cols: u32,
+) -> Result<(), XlsxError> {
+    if rows == 0 && cols == 0 {
+        return Ok(());
+    }
+    let mut pane = BytesStart::new("pane");
+    if cols > 0 {
+        pane.push_attribute(("xSplit", cols.to_string().as_str()));
+    }
+    if rows > 0 {
+        pane.push_attribute(("ySplit", rows.to_string().as_str()));
+    }
+    // The first cell past the freeze, which is where the scrolling part starts.
+    let corner = format!("{}{}", col_to_letter(cols), rows + 1);
+    pane.push_attribute(("topLeftCell", corner.as_str()));
+    // Which of the four corners the cursor lands in. With only rows held there
+    // is no right-hand pane to be in, and with only columns no bottom one.
+    pane.push_attribute((
+        "activePane",
+        match (rows > 0, cols > 0) {
+            (true, true) => "bottomRight",
+            (true, false) => "bottomLeft",
+            (false, true) => "topRight",
+            (false, false) => "topLeft",
+        },
+    ));
+    pane.push_attribute(("state", "frozen"));
+    writer
+        .write_event(Event::Empty(pane))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
+/// Writes a whole `<sheetViews>` block, for a sheet that had none.
+fn write_sheet_views(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    rows: u32,
+    cols: u32,
+) -> Result<(), XlsxError> {
+    writer
+        .write_event(Event::Start(BytesStart::new("sheetViews")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    let mut view = BytesStart::new("sheetView");
+    view.push_attribute(("workbookViewId", "0"));
+    writer
+        .write_event(Event::Start(view))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    write_pane(writer, rows, cols)?;
+    writer
+        .write_event(Event::End(BytesEnd::new("sheetView")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    writer
+        .write_event(Event::End(BytesEnd::new("sheetViews")))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
 fn open_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
     writer
         .write_event(Event::Start(BytesStart::new("cols")))
@@ -1802,6 +1885,9 @@ struct SheetEdits<'a> {
     /// The filter the sheet should end up under, when it is being replaced.
     /// `Some(None)` takes an existing filter away.
     filter: Option<&'a Option<AutoFilter>>,
+    /// The rows and columns to hold in view, when they are being set. Both
+    /// zero takes the freeze away.
+    panes: Option<(u32, u32)>,
 }
 
 fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
@@ -1828,6 +1914,13 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
     let has_filter_block = xml.contains("<autoFilter");
     let mut wrote_filter = false;
     let mut skip_filter_depth = 0_u32;
+    // Whether we are inside a `<sheetView>` whose panes are being replaced.
+    // Its own attributes come through untouched — a sheet with the gridlines
+    // turned off must not have them turned back on — and only its `<pane>` and
+    // `<selection>` children are dropped, since a selection names a corner
+    // that may no longer exist.
+    let mut in_view = false;
+    let mut wrote_views = false;
 
     let mut current_row: u32 = 0;
     let mut in_row = false;
@@ -1864,6 +1957,21 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 if name == "cols" {
                     seen_cols = true;
                 }
+                if name == "sheetView" && sheet_edits.panes.is_some() {
+                    writer
+                        .write_event(Event::Start(e.clone()))
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    if let Some((rows, cols)) = sheet_edits.panes {
+                        write_pane(&mut writer, rows, cols)?;
+                    }
+                    in_view = true;
+                    wrote_views = true;
+                    continue;
+                }
+                if in_view && matches!(name.as_str(), "pane" | "selection") {
+                    skip_replaced_content_depth = 1;
+                    continue;
+                }
                 if name == "autoFilter" && sheet_edits.filter.is_some() {
                     skip_filter_depth = 1;
                     continue;
@@ -1871,6 +1979,15 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 if name == "mergeCells" && sheet_edits.merges.is_some() {
                     skip_merges_depth = 1;
                     continue;
+                }
+                if !wrote_views
+                    && sheet_edits.panes.is_some()
+                    && matches!(name.as_str(), "sheetFormatPr" | "cols" | "sheetData")
+                {
+                    if let Some((rows, cols)) = sheet_edits.panes {
+                        write_sheet_views(&mut writer, rows, cols)?;
+                    }
+                    wrote_views = true;
                 }
                 if name == "sheetData" && !seen_cols && !pending_cols.is_empty() {
                     open_cols(&mut writer)?;
@@ -2017,6 +2134,9 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     continue;
                 }
                 let name = local_name(e.name().as_ref());
+                if name == "sheetView" {
+                    in_view = false;
+                }
                 if name == "cols" {
                     write_new_cols(&mut writer, &mut pending_cols)?;
                 }
@@ -2113,6 +2233,25 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     continue;
                 }
                 let name = local_name(e.name().as_ref());
+                if name == "sheetView" && sheet_edits.panes.is_some() {
+                    // An unfrozen sheet says `<sheetView workbookViewId="0"/>`
+                    // with nothing inside it, so it has to be opened up before
+                    // a pane can be put in.
+                    writer
+                        .write_event(Event::Start(e.clone()))
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    if let Some((rows, cols)) = sheet_edits.panes {
+                        write_pane(&mut writer, rows, cols)?;
+                    }
+                    writer
+                        .write_event(Event::End(BytesEnd::new("sheetView")))
+                        .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    wrote_views = true;
+                    continue;
+                }
+                if in_view && matches!(name.as_str(), "pane" | "selection") {
+                    continue;
+                }
                 if name == "col" {
                     seen_cols = true;
                     write_col_span(&mut writer, e, &mut pending_cols)?;
@@ -2134,6 +2273,15 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 }
                 if in_cell && current_edit.is_some() && (name == "f" || name == "is") {
                     continue;
+                }
+                if !wrote_views
+                    && sheet_edits.panes.is_some()
+                    && matches!(name.as_str(), "sheetFormatPr" | "cols" | "sheetData")
+                {
+                    if let Some((rows, cols)) = sheet_edits.panes {
+                        write_sheet_views(&mut writer, rows, cols)?;
+                    }
+                    wrote_views = true;
                 }
                 if name == "sheetData" && !seen_cols && !pending_cols.is_empty() {
                     open_cols(&mut writer)?;
@@ -2453,6 +2601,7 @@ mod tests {
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
             filter: None,
+            panes: None,
         }
     }
 
@@ -2536,6 +2685,7 @@ mod tests {
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
             filter: None,
+            panes: None,
         }
     }
 
@@ -2564,6 +2714,7 @@ mod tests {
             merges: None,
             styles: NO_STYLES.get_or_init(BTreeMap::new),
             filter: None,
+            panes: None,
         }
     }
 
@@ -2808,6 +2959,7 @@ mod tests {
             merges: None,
             styles: &styles,
             filter: None,
+            panes: None,
         }).expect("should patch");
         assert!(patched.contains(r#"<c r="B1" s="4""#), "{patched}");
         assert!(patched.contains(r#"<c r="A1" s="5""#), "{patched}");
@@ -2826,6 +2978,7 @@ mod tests {
             merges: None,
             styles: &styles,
             filter: None,
+            panes: None,
         }).expect("should patch");
         assert!(patched.contains(r#"<c r="A3" s="2""#), "{patched}");
     }

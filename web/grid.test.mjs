@@ -69,7 +69,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
-  'holdPanes'].map(lift).join('\n');
+  'holdPanes', 'freezeHere'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -181,6 +181,8 @@ const mark = (r1, c1, r2, c2) => {
 // What a paste would move, as the paste handler works it out.
 const marked = () => cutFrom;
 const sheetOf = () => sheet;
+const frozenAt = () => [sheet.frozen_rows || 0, sheet.frozen_cols || 0];
+const markFrozen = () => {};
 
 // A table of known geometry: the header strip 20 tall, the row-label column 40
 // wide, every row 25 tall and every column 100 wide. Standing one up by hand
@@ -249,6 +251,8 @@ const unsaved = () => changes.size;
 // Start over as if a fresh file had been opened.
 const forget = () => {
   cutFrom = null;
+  sheet.frozen_rows = 0;
+  sheet.frozen_cols = 0;
   sheet.merge_cells.length = 0;
   sheet.rows.length = 0;
   sheet.col_widths.length = 0;
@@ -262,7 +266,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          beyond, depth, dropCut, mark, marked,
          padFor, fitWidth, fitColumn, ink, sheetOf,
          toggle, alignTo, allWear, valueAt, setHeight, heightAt, chosenAt,
-         lineAt, holdPanes, aTable,
+         lineAt, holdPanes, aTable, freezeHere, frozenAt,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
@@ -1159,6 +1163,57 @@ table = grid.aTable(6, 4);
 grid.holdPanes(table, { frozen_rows: 1, frozen_cols: 0 });
 is('the row labels are pinned across even with no held columns',
   table.rows[2].children[0].classList.contains('held'), true);
+
+// ── Setting the freeze ─────────────────────────────────────
+//
+// Excel freezes at the active cell rather than at a line you pick: standing on
+// C4 and freezing holds everything above and left of it, which is three rows
+// and two columns. The same command undoes it once a sheet is frozen, which is
+// what makes it one control rather than two.
+
+grid.forget();
+grid.select(4, 2, 4, 2);
+grid.freezeHere();
+is('freezing at C4 holds three rows and two columns', grid.frozenAt(), [3, 2]);
+
+grid.freezeHere();
+is('and doing it again lets everything go', grid.frozenAt(), [0, 0]);
+
+grid.forget();
+grid.select(2, 0, 2, 0);
+grid.freezeHere();
+is('at A2 it holds the top row and no columns', grid.frozenAt(), [1, 0]);
+
+grid.forget();
+grid.select(1, 1, 1, 1);
+grid.freezeHere();
+is('at B1 it holds the first column and no rows', grid.frozenAt(), [0, 1]);
+
+// At A1 there is nothing above or left, so there is nothing to hold.
+grid.forget();
+grid.select(1, 0, 1, 0);
+grid.freezeHere();
+is('at A1 there is nothing to hold', grid.frozenAt(), [0, 0]);
+
+// It is a change like any other.
+grid.forget();
+grid.select(3, 1, 3, 1);
+grid.freezeHere();
+is('a freeze needs the wider way of saving', grid.beyond(), true);
+grid.undo();
+is('undo lets it go', grid.frozenAt(), [0, 0]);
+grid.redo();
+is('redo holds it again', grid.frozenAt(), [2, 1]);
+
+// Unfreezing a sheet that was frozen goes back to what it was, not to nothing.
+grid.forget();
+grid.sheetOf().frozen_rows = 5;
+grid.sheetOf().frozen_cols = 3;
+grid.select(2, 0, 2, 0);
+grid.freezeHere();
+is('a frozen sheet is unfrozen wherever the cursor is', grid.frozenAt(), [0, 0]);
+grid.undo();
+is('and undo puts back the freeze it had', grid.frozenAt(), [5, 3]);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

@@ -301,6 +301,7 @@ table { user-select: none; }
   <span class="name">Oxi</span>
   <span class="what">Spreadsheet rendering, in the browser, with no server</span>
   <span class="spacer"></span>
+  <button id="freeze" title="Hold everything above and left of the cursor in view">Freeze</button>
   <button id="bold" class="dress" title="Bold (Ctrl+B)"><b>B</b></button>
   <button id="italic" class="dress" title="Italic (Ctrl+I)"><i>I</i></button>
   <button id="under" class="dress" title="Underline (Ctrl+U)"><u>U</u></button>
@@ -512,6 +513,48 @@ function shownText(cell) {
 
 function isNumber(cell) {
   return typeof cell.value === 'object' && cell.value !== null && 'Number' in cell.value;
+}
+
+/**
+ * Hold everything above and left of the cursor, or let it all go again.
+ *
+ * Excel freezes at the active cell rather than at a chosen line: standing on
+ * C4 and freezing holds three rows and two columns. The same command undoes
+ * it once a sheet is frozen, which is why this is one control and not two.
+ */
+function freezeHere() {
+  const sheet = sheetNow();
+  if (!sheet) return;
+  const on = (sheet.frozen_rows || 0) > 0 || (sheet.frozen_cols || 0) > 0;
+  const rows = on ? 0 : at.row - 1;
+  const cols = on ? 0 : at.col;
+  if (rows === (sheet.frozen_rows || 0) && cols === (sheet.frozen_cols || 0)) return;
+  change(() => {
+    if (step) {
+      step.panes.push({
+        was: [sheet.frozen_rows || 0, sheet.frozen_cols || 0],
+        now: [rows, cols],
+      });
+    }
+    sheet.frozen_rows = rows;
+    sheet.frozen_cols = cols;
+    beyondValues = true;
+  });
+  draw();
+  paint();
+  markFrozen();
+}
+
+/** Say whether the sheet on screen is frozen, on the control that does it. */
+function markFrozen() {
+  const button = document.getElementById('freeze');
+  if (!button) return;
+  const sheet = sheetNow();
+  const on = sheet && ((sheet.frozen_rows || 0) > 0 || (sheet.frozen_cols || 0) > 0);
+  button.textContent = on ? 'Unfreeze' : 'Freeze';
+  button.title = on
+    ? 'Let the held rows and columns scroll again'
+    : 'Hold everything above and left of the cursor in view';
 }
 
 /**
@@ -825,6 +868,7 @@ function describe() {
       // Each sheet gets its own cursor rather than inheriting a position that
       // may not exist here; the selection does not survive the move either.
       goTo(1, 0);
+      markFrozen();
     };
     tabsBox.appendChild(tab);
   });
@@ -951,7 +995,7 @@ const DEPTH = 100;
 /** Run `what` so that everything it writes can be undone in one go. */
 function change(what) {
   if (step) { what(); return; }   // already inside a step: do not nest
-  step = { sheet: shown, cells: [], columns: [], lines: [] };
+  step = { sheet: shown, cells: [], columns: [], lines: [], panes: [] };
   const built = step;
   try {
     what();
@@ -959,7 +1003,7 @@ function change(what) {
     step = null;
   }
   if (built.cells.length === 0 && built.columns.length === 0
-    && built.lines.length === 0) return;
+    && built.lines.length === 0 && built.panes.length === 0) return;
   // Whatever was marked for a cut is no longer what the clipboard holds.
   if (cutFrom) cutFrom = null;
   recompute();
@@ -986,6 +1030,14 @@ function restore(built, side) {
   for (let i = built.columns.length - 1; i >= 0; i--) {
     const one = built.columns[i];
     if (sheet) sheet.col_widths[one.col] = one[side];
+    beyondValues = true;
+  }
+  for (let i = built.panes.length - 1; i >= 0; i--) {
+    const [rows, cols] = built.panes[i][side];
+    if (sheet) {
+      sheet.frozen_rows = rows;
+      sheet.frozen_cols = cols;
+    }
     beyondValues = true;
   }
   for (let i = built.lines.length - 1; i >= 0; i--) {
@@ -1035,6 +1087,7 @@ function redo() {
 }
 
 for (const [id, run] of [
+  ['freeze', freezeHere],
   ['bold', () => toggle('bold')],
   ['italic', () => toggle('italic')],
   ['under', () => toggle('underline')],
@@ -2395,6 +2448,7 @@ async function open(data, name) {
   }
   shown = 0;
   weighCalc();
+  markFrozen();
   const style = book.default_style || {};
   digitWidth = measureDigit(style.font_name, style.font_size);
   draw();
