@@ -1015,6 +1015,11 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     true
 }
 
+/// A justified line keeps its own indent unless this is set.
+fn justind_on() -> bool {
+    std::env::var("OXI_JUSTIND_DISABLE").is_err()
+}
+
 /// `chord` and `rtTriangle` outlines clip unless this is set.
 fn chordclip_on() -> bool {
     std::env::var("OXI_CHORDCLIP_DISABLE").is_err()
@@ -4142,6 +4147,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             if let Some(m) = &marker {
                                 let marker_x = left_x
                                     + (((m.x_pt + m.align_off) as f64) * scale).round() as i32;
+                                if sf_debug() {
+                                    eprintln!(
+                                        "MARKER {:?} x_pt={:.2} align_off={:.2} -> px {marker_x} baseline={:.2} fs={:.1} font={:?} colour={:?} left_x={left_x}",
+                                        m.text, m.x_pt, m.align_off, m.baseline, m.fs, m.font, color.as_deref()
+                                    );
+                                }
                                 draw_text_baseline(
                                     mem_dc,
                                     marker_x,
@@ -4272,9 +4283,24 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 if is_justify && i + 1 < n_lines {
                                     // Non-final justified line: spread the
                                     // stretch over the inter-word gaps.
+                                    //
+                                    // S-JUSTIND (2026-08-27). The line still
+                                    // starts at its OWN offset: `marL` for a
+                                    // continuation line, and the hanging indent
+                                    // past the bullet for line 0. Passing the
+                                    // text area's left edge threw both away, so
+                                    // every non-final justified line began flush
+                                    // left -- and on d38 s2 the bullet, drawn
+                                    // correctly at 18.70pt, ended up printed ON
+                                    // TOP of the first word.
+                                    let jx = if justind_on() {
+                                        left_x + (x_off as f64 * scale).round() as i32
+                                    } else {
+                                        left_x
+                                    };
                                     draw_text_justify(
                                         mem_dc,
-                                        left_x,
+                                        jx,
                                         right_x,
                                         baseline,
                                         &line_text,
