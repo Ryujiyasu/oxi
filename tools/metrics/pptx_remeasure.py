@@ -120,6 +120,10 @@ def main() -> None:
 def _run() -> None:
     exe_mtime = EXE.stat().st_mtime_ns if EXE.exists() else 0
     state = load()
+    want = set()
+    for i, a in enumerate(sys.argv):
+        if a == "--decks" and i + 1 < len(sys.argv):
+            want = {d.strip().zfill(2) for d in sys.argv[i + 1].split(",") if d.strip()}
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
     # ★Per-process staging. The lock already forbids a second run, but a lock
     # can be bypassed (an older build holds none) and the failure is SILENT:
@@ -129,6 +133,11 @@ def _run() -> None:
     tmp = SSIMD / f"_remeasure_tmp_{os.getpid()}"
     for item in manifest:
         doc = f"{item['idx']:02d}"
+        # `--decks 35,36` repairs a named set. `--stale` sweeps everything the
+        # binary is newer than, which after a behaviour-neutral rebuild is the
+        # whole corpus -- two hours to redo renders already proven identical.
+        if want and doc not in want:
+            continue
         # `--stale` re-does only the decks whose PNGs predate the binary, so a
         # refresh survives being interrupted: each run picks up where the last
         # one stopped instead of starting the 50-deck sweep again. `--force`
