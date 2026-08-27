@@ -4090,8 +4090,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 sh.wrap_text,
                             );
                             if let Some(m) = &marker {
-                                let marker_x =
-                                    left_x + (m.x_pt as f64 * scale).round() as i32;
+                                let marker_x = left_x
+                                    + (((m.x_pt + m.align_off) as f64) * scale).round() as i32;
                                 draw_text_baseline(
                                     mem_dc,
                                     marker_x,
@@ -12530,6 +12530,12 @@ fn embedcollide_on() -> bool {
     std::env::var("OXI_EMBEDCOLLIDE_ENABLE").is_ok()
 }
 
+/// A centred line is centred in the width left after its indent, and carries
+/// its bullet with it, unless this is set.
+fn ctrbullet_on() -> bool {
+    std::env::var("OXI_CTRBULLET_DISABLE").is_err()
+}
+
 /// An exact `a:lnSpc/a:spcPts` line height is honoured unless this is set.
 fn lnspcpts_on() -> bool {
     std::env::var("OXI_LNSPCPTS_DISABLE").is_err()
@@ -13975,6 +13981,11 @@ struct MarkerInfo {
     x_pt: f32,
     baseline: f32,
     fs: f32,
+    /// Line 0's alignment offset. A centred or right-aligned line carries its
+    /// marker WITH it -- d24 s2's two bullets sit at 47.95 and 53.71pt in
+    /// PowerPoint's own PDF because each line is centred as a unit -- so the
+    /// marker cannot be pinned to the indent the way a left-aligned one is.
+    align_off: f32,
 }
 
 /// Lay out one paragraph: advance `cursor_pt` (text-area top) by space_before,
@@ -14200,6 +14211,7 @@ fn layout_paragraph_baselines(
                 x_pt: marker_rel,
                 baseline: 0.0, // line 0's baseline, filled in the line loop
                 fs,
+                align_off: 0.0, // filled in the line loop, with line 0's
             });
         }
         SlideBullet::AutoNum { kind, start_at } => {
@@ -14234,6 +14246,7 @@ fn layout_paragraph_baselines(
                 x_pt: marker_rel,
                 baseline: 0.0, // line 0's baseline, filled in the line loop
                 fs,
+                align_off: 0.0, // filled in the line loop, with line 0's
             });
         }
         _ => {}
@@ -14386,18 +14399,31 @@ fn layout_paragraph_baselines(
             .alignment
             .unwrap_or(m.algn.unwrap_or(SlideAlignment::Left));
         let is_justify_last = matches!(align, SlideAlignment::Justify) && i + 1 == n_lines;
+        let base_off = if i == 0 { line0_x_off } else { para_left_rel };
+        // S-CTRBULLET (2026-08-27). A centred line is centred in what is LEFT of
+        // the text area after its own indent, not in the whole area. d24 s2's
+        // column 1 is `marL=14pt indent=-7.5pt algn=ctr`: PowerPoint puts its
+        // continuation lines at 58.03 / 57.55 / 66.31pt and Oxi put them at
+        // 65.28 / 64.32 / 72.96 -- exactly marL/2 = 7.0pt right, which is what
+        // centring in the FULL width instead of the remaining width costs.
+        let avail = if ctrbullet_on() {
+            (area_w - base_off).max(0.0)
+        } else {
+            area_w
+        };
         let align_off = match align {
-            SlideAlignment::Center => (area_w - line_w).max(0.0) / 2.0,
-            SlideAlignment::Right => (area_w - line_w).max(0.0),
+            SlideAlignment::Center => (avail - line_w).max(0.0) / 2.0,
+            SlideAlignment::Right => (avail - line_w).max(0.0),
             SlideAlignment::Justify if is_justify_last => 0.0,
             _ => 0.0,
         };
         if i == 0 {
             if let Some(mk) = marker.as_mut() {
                 mk.baseline = baseline;
+                // The marker rides line 0's own offset.
+                mk.align_off = if ctrbullet_on() { align_off } else { 0.0 };
             }
         }
-        let base_off = if i == 0 { line0_x_off } else { para_left_rel };
         out.push((line.clone(), baseline, base_off + align_off));
     }
     let _ = unsafe { SelectObject(dc, old_font) };
