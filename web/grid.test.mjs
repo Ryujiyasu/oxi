@@ -65,7 +65,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'markSaved', 'markSteps', 'put', 'heldAt',
   'takeColumn', 'takeRow', 'takeAll',
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
-  'runValue', 'fillLine', 'fillTo', 'wrapped'].map(lift).join('\n');
+  'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -100,6 +100,7 @@ const backButton = { disabled: true };
 const onButton = { disabled: true };
 let anyFormulas = false;
 let filling = null;
+let stylesMoved = false;
 // Moving a formula's references is the engine's job and has its own test.
 // Here it only has to be visible when a formula is carried across.
 const translate_formula = (text, rows, cols) =>
@@ -134,6 +135,20 @@ const seat = () => ({ row: at.row, col: at.col });
 const box = () => region();
 // Only the cells that hold something: clearing one leaves the cell in place
 // with nothing in it, which is not the same as never having written there.
+// Put a value in wearing a format, as the parser would have read it.
+const wear = (row, col, text, format) => {
+  const was = step;
+  step = null;
+  put(row, col, text, { number_format: format });
+  step = was;
+  changes.clear();
+  pristine.clear();
+  stylesMoved = false;
+};
+const styleAt = (row, col) => {
+  const cell = heldAt(row, col);
+  return cell ? cell.style : null;
+};
 const cells = () => {
   const out = [];
   for (const line of sheet.rows) {
@@ -152,7 +167,8 @@ const forget = () => {
   undone.length = 0; redone.length = 0;
 };
 export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
-         takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped,
+         takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped, unitOf,
+         wear, styleAt, sameStyle,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf,
          change, undo, redo, unsaved, forget };
 `));
@@ -592,6 +608,79 @@ is('a line through equal values is flat', grid.fitLine([3, 3, 3]),
   { slope: 0, base: 3 });
 is('an index off the end of a list comes round', grid.wrapped(8, 7), 1);
 is('and off the start too', grid.wrapped(-1, 7), 6);
+
+// ── Dates ─────────────────────────────────────────────────
+//
+// A date is a number wearing a format, and that format is the only thing
+// saying so. Measured off Excel with the serials read back rather than the
+// display, which truncates to hashes in a narrow column:
+//
+//     2026/01/30 alone -> 46053, 46054, 46055     one day at a time
+//     10:30 alone      -> 11:30, 12:30            one hour at a time
+//     05 Jan, 12 Jan   -> 46041, 46048, 46055     the gap between them
+//
+// The first of those is the one that matters: a plain number selected alone
+// repeats, so without the format being read a dragged date would sit there
+// unchanged, which is not what anyone drags a date for.
+
+is('a date format is a day', grid.unitOf({ style: { number_format: 'mm-dd-yy' } }), 1);
+is('a long one too', grid.unitOf({ style: { number_format: 'yyyy年m月d日' } }), 1);
+is('a time format is an hour',
+  grid.unitOf({ style: { number_format: 'h:mm' } }), 1 / 24);
+is('elapsed hours are still hours',
+  grid.unitOf({ style: { number_format: '[h]:mm:ss' } }), 1 / 24);
+is('a date and time together is a day',
+  grid.unitOf({ style: { number_format: 'm/d/yy h:mm' } }), 1);
+is('a plain number is neither', grid.unitOf({ style: { number_format: '0.00' } }), null);
+is('and nor is one with no format at all', grid.unitOf({ style: {} }), null);
+// A format can hold letters inside quotes that mean nothing about its kind.
+is('letters in quotes do not make a date',
+  grid.unitOf({ style: { number_format: '0.0"days"' } }), null);
+is('nor does an escaped one',
+  grid.unitOf({ style: { number_format: '0.0\\d' } }), null);
+
+grid.forget();
+grid.wear(1, 0, '46052', 'mm-dd-yy');
+pull(1, 0, 1, 0, 4);
+is('a lone date moves a day at a time', column(0, 1, 4),
+  ['46052', '46053', '46054', '46055']);
+is('and the cells it filled wear its format', grid.styleAt(3, 0),
+  { number_format: 'mm-dd-yy' });
+
+grid.forget();
+grid.wear(1, 0, '0.4375', 'h:mm');
+pull(1, 0, 1, 0, 3);
+is('a lone time moves an hour at a time', column(0, 1, 3),
+  ['0.4375', '0.479166666666667', '0.520833333333333']);
+
+grid.forget();
+grid.wear(1, 0, '46027', 'mm-dd-yy');
+grid.wear(2, 0, '46034', 'mm-dd-yy');
+pull(1, 0, 2, 0, 5);
+is('two dates carry the gap between them', column(0, 1, 5),
+  ['46027', '46034', '46041', '46048', '46055']);
+
+// The format follows every kind of run, not only dates: filling is a copy of
+// the cell, and half a cell arriving is worse than none.
+grid.forget();
+grid.wear(1, 0, 'total', '@');
+pull(1, 0, 1, 0, 3);
+is('repeated text carries its format too', grid.styleAt(3, 0),
+  { number_format: '@' });
+
+// Undo has to put back the formatting as well as the value, or taking back a
+// fill leaves the cells looking like something they no longer hold.
+grid.forget();
+grid.wear(1, 0, '46052', 'mm-dd-yy');
+pull(1, 0, 1, 0, 4);
+grid.undo();
+is('undoing a fill takes the values back', column(0, 1, 4),
+  ['46052', '', '', '']);
+is('and the formatting with them', grid.styleAt(3, 0), {});
+
+is('two cells with no style wear the same one', grid.sameStyle(null, {}), true);
+is('and two with different formats do not',
+  grid.sameStyle({ number_format: 'a' }, { number_format: 'b' }), false);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

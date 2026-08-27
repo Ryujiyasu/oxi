@@ -73,6 +73,15 @@ ARMS: list[tuple[str, list, int]] = [
     ("two weekdays backwards", ["Wed", "Mon"], 4),
     ("a weekday and a month", ["Mon", "Jan"], 4),
     ("numbered text sharing no prefix", ["Item 1", "Row 5"], 4),
+    # Dates are numbers wearing a format. A lone number repeats; does a lone
+    # date? And do two dates carry the gap between them, or always a day?
+    ("one date", ["2026/01/30"], 3),
+    ("one date at a month end", ["2026/01/31"], 3),
+    ("two dates a day apart", ["2026/01/30", "2026/01/31"], 3),
+    ("two dates a week apart", ["2026/01/05", "2026/01/12"], 3),
+    ("two dates a month apart", ["2026/01/31", "2026/02/28"], 3),
+    ("a date in a block", ["2026/01/30", "a"], 4),
+    ("a time", ["10:30"], 3),
 ]
 
 
@@ -100,6 +109,12 @@ def main() -> int:
             got = [sheet.Cells(top + n, 1).Text
                    for n in range(len(seed) + pull)]
             print(f"  {what:<24}{str(seed):<22} -> {got}")
+            # A date is a number wearing a format, and the display truncates in
+            # a narrow column. The serial underneath is what the rule is about.
+            if any(one.startswith("#") for one in got):
+                raw = [sheet.Cells(top + n, 1).Value2
+                       for n in range(len(seed) + pull)]
+                print(f"  {'':<24}{'':<22}    serials {raw}")
             at = last + pull + 3
     finally:
         book.Close(SaveChanges=False)

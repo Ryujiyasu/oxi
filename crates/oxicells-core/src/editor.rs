@@ -715,15 +715,26 @@ fn write_formula(
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
+/// Write one cell.
+///
+/// `styles` says which cellXfs index each cell should carry. A cell being
+/// written for the first time has to be given its style here: nothing later
+/// puts one on it, and without it the cell comes out under General however it
+/// was styled — which is how a date lands in the file as a bare serial number.
 fn write_cell_value(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     row: u32,
     col: u32,
     value: &CellEditValue,
+    styles: &BTreeMap<(u32, u32), u32>,
 ) -> Result<(), XlsxError> {
     let reference = format!("{}{row}", col_to_letter(col));
+    let style_text = styles.get(&(row, col)).map(|index| index.to_string());
     let mut cell = BytesStart::new("c");
     cell.push_attribute(("r", reference.as_str()));
+    if let Some(style) = style_text.as_deref() {
+        cell.push_attribute(("s", style));
+    }
     if let Some(cell_type) = value.cell_type() {
         cell.push_attribute(("t", cell_type));
     }
@@ -1270,7 +1281,7 @@ fn write_new_sheet(sheet: &crate::ir::Sheet) -> Result<Vec<u8>, XlsxError> {
             if cells.is_empty() && !row.hidden {
                 continue;
             }
-            write_inserted_row(&mut writer, row.index, cells, Some(row.hidden))?;
+            write_inserted_row(&mut writer, row.index, cells, Some(row.hidden), &BTreeMap::new())?;
         }
         writer
             .write_event(Event::End(BytesEnd::new("sheetData")))
@@ -1549,6 +1560,7 @@ fn write_inserted_row(
     row: u32,
     cells: BTreeMap<u32, CellEditValue>,
     hidden: Option<bool>,
+    styles: &BTreeMap<(u32, u32), u32>,
 ) -> Result<(), XlsxError> {
     let row_text = row.to_string();
     let mut row_start = BytesStart::new("row");
@@ -1560,7 +1572,7 @@ fn write_inserted_row(
         .write_event(Event::Start(row_start))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     for (col, value) in cells {
-        write_cell_value(writer, row, col, &value)?;
+        write_cell_value(writer, row, col, &value, styles)?;
     }
     writer
         .write_event(Event::End(BytesEnd::new("row")))
@@ -1669,7 +1681,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         for row in missing_rows {
                             if let Some(cells) = pending.remove(&row) {
                                 let hidden = sheet_edits.rows.get(&row).copied();
-                                write_inserted_row(&mut writer, row, cells, hidden)?;
+                                write_inserted_row(&mut writer, row, cells, hidden, sheet_edits.styles)?;
                             }
                         }
                         in_row = true;
@@ -1708,6 +1720,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                         cell_row,
                                         col,
                                         &value,
+                                        sheet_edits.styles,
                                     )?;
                                 }
                             }
@@ -1809,6 +1822,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                     current_row,
                                     col,
                                     &value,
+                                        sheet_edits.styles,
                                 )?;
                             }
                         }
@@ -1844,7 +1858,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         let remaining = std::mem::take(&mut pending);
                         for (row, cells) in remaining {
                             let hidden = sheet_edits.rows.get(&row).copied();
-                            write_inserted_row(&mut writer, row, cells, hidden)?;
+                            write_inserted_row(&mut writer, row, cells, hidden, sheet_edits.styles)?;
                         }
                         // A row with nothing in it still has to be written for
                         // its hidden flag to survive.
@@ -1856,6 +1870,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                     row,
                                     BTreeMap::new(),
                                     Some(true),
+                                        sheet_edits.styles,
                                 )?;
                             }
                         }
@@ -1926,11 +1941,11 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     let remaining = std::mem::take(&mut pending);
                     for (row, cells) in remaining {
                         let hidden = sheet_edits.rows.get(&row).copied();
-                        write_inserted_row(&mut writer, row, cells, hidden)?;
+                        write_inserted_row(&mut writer, row, cells, hidden, sheet_edits.styles)?;
                     }
                     for row in std::mem::take(&mut pending_rows) {
                         if let Some(true) = sheet_edits.rows.get(&row) {
-                            write_inserted_row(&mut writer, row, BTreeMap::new(), Some(true))?;
+                            write_inserted_row(&mut writer, row, BTreeMap::new(), Some(true), sheet_edits.styles)?;
                         }
                     }
                     writer
@@ -1947,7 +1962,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     for row in missing_rows {
                         if let Some(cells) = pending.remove(&row) {
                             let hidden = sheet_edits.rows.get(&row).copied();
-                            write_inserted_row(&mut writer, row, cells, hidden)?;
+                            write_inserted_row(&mut writer, row, cells, hidden, sheet_edits.styles)?;
                         }
                     }
                     pending_rows.remove(&row_num);
@@ -1956,7 +1971,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                             XlsxError::InvalidData(error.to_string())
                         })?;
                         for (col, value) in cells {
-                            write_cell_value(&mut writer, row_num, col, &value)?;
+                            write_cell_value(&mut writer, row_num, col, &value, sheet_edits.styles)?;
                         }
                         writer.write_event(Event::End(BytesEnd::new("row"))).map_err(
                             |error| XlsxError::InvalidData(error.to_string()),
@@ -1980,6 +1995,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                     row_num,
                                     missing_col,
                                     &value,
+                                    sheet_edits.styles,
                                 )?;
                             }
                         }
@@ -2276,6 +2292,49 @@ mod tests {
         assert_eq!(patched.matches("<v>").count(), 1, "{patched}");
         assert!(patched.contains("<v>fresh</v>"), "{patched}");
         assert!(!patched.contains("877"), "{patched}");
+    }
+
+    #[test]
+    fn a_cell_written_for_the_first_time_wears_the_style_it_was_given() {
+        // A cell the sheet already had gets its style put on as it is copied
+        // through. A cell that did not exist goes down the insert path, which
+        // did not consult the style map at all — so it came out under General
+        // however it had been styled, and a date filled into an empty cell
+        // landed in the file as a bare serial number.
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+        let fresh = CellEditValue::Number(46053.0);
+        let over = CellEditValue::Number(7.0);
+        let edits = HashMap::from([((1, 1), &fresh), ((1, 0), &over)]);
+        let rows = BTreeMap::new();
+        let styles = BTreeMap::from([((1, 1), 4u32), ((1, 0), 5u32)]);
+        let patched = patch_worksheet_xml(xml, &SheetEdits {
+            cells: &edits,
+            rows: &rows,
+            cols: &rows,
+            merges: None,
+            styles: &styles,
+            filter: None,
+        }).expect("should patch");
+        assert!(patched.contains(r#"<c r="B1" s="4""#), "{patched}");
+        assert!(patched.contains(r#"<c r="A1" s="5""#), "{patched}");
+    }
+
+    #[test]
+    fn a_row_written_for_the_first_time_carries_its_cells_styles() {
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#;
+        let fresh = CellEditValue::Number(46054.0);
+        let edits = HashMap::from([((3, 0), &fresh)]);
+        let rows = BTreeMap::new();
+        let styles = BTreeMap::from([((3, 0), 2u32)]);
+        let patched = patch_worksheet_xml(xml, &SheetEdits {
+            cells: &edits,
+            rows: &rows,
+            cols: &rows,
+            merges: None,
+            styles: &styles,
+            filter: None,
+        }).expect("should patch");
+        assert!(patched.contains(r#"<c r="A3" s="2""#), "{patched}");
     }
 
     #[test]

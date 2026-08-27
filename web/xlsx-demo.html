@@ -315,7 +315,8 @@ table { user-select: none; }
 
 <script type="module">
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
-               recalculate_spreadsheet, translate_formula } from './oxidocs_wasm.js';
+               edit_xlsx_from_workbook, recalculate_spreadsheet,
+               translate_formula } from './oxidocs_wasm.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
@@ -344,6 +345,10 @@ let fileName = 'workbook.xlsx';
 // One entry per cell that has been changed, keyed by sheet/row/column so
 // typing into the same cell twice sends one edit, not two.
 const changes = new Map();
+// Whether anything has changed that a list of cell values cannot express.
+// Filling carries the source cell's formatting, and a date that arrives
+// without its format is a five-figure number.
+let stylesMoved = false;
 let digitWidth = 7;
 
 /// The width of a digit in the workbook's standard font, which is the unit a
@@ -746,7 +751,7 @@ function restore(built, side) {
   step = null;                    // putting a step back is not itself a step
   for (let i = built.cells.length - 1; i >= 0; i--) {
     const one = built.cells[i];
-    put(one.row, one.col, one[side]);
+    put(one.row, one.col, one[side], side === 'was' ? one.wasStyle : one.nowStyle);
   }
   step = was;
   recompute();
@@ -1034,6 +1039,22 @@ function fitLine(values) {
 // "a" are both text, and Excel counts the first up while repeating the second,
 // so they cannot be one run. Two numbered texts DO join, but only when they
 // share a prefix — which is what makes them a series rather than a coincidence.
+// What a number's format says it IS, as the step it moves by when it is
+// filled on its own. Excel's format codes settle it: a `y` or a `d` outside
+// quotes makes it a date, an `h` or an `s` without them a time. An `m` alone is
+// no help — it means a month beside y and d, and minutes beside h.
+//
+// Measured: a lone date moves a day (46052 -> 46053), a lone time an hour
+// (10:30 -> 11:30), where a lone plain number would just repeat.
+function unitOf(cell) {
+  const format = cell && cell.style && cell.style.number_format;
+  if (!format) return null;
+  const bare = format.replace(/"[^"]*"/g, '').replace(/\\./g, '');
+  if (/[yd]/i.test(bare)) return 1;
+  if (/[hs]/i.test(bare)) return 1 / 24;
+  return null;
+}
+
 function kindOf(cell) {
   if (cell && cell.formula) return 'formula';
   if (numberOf(cell) !== null) return 'number';
@@ -1077,12 +1098,18 @@ function planRun(run, alone) {
   if (kind === 'number') {
     const values = run.cells.map(numberOf);
     const line = fitLine(values);
-    // A single number in a block still counts up, by one — measured on
-    // [2, 'a'], which gives 3 and 4, not 3 and 5 or 2 and 2.
-    if (values.length === 1) line.slope = alone ? 0 : 1;
-    return { kind: 'number', line };
+    if (values.length === 1) {
+      // A single number in a block still counts up, by one — measured on
+      // [2, 'a'], which gives 3 and 4, not 3 and 5 or 2 and 2. A date or a
+      // time counts up even on its own, by its own unit.
+      const unit = unitOf(run.cells[0]);
+      line.slope = unit !== null ? unit : (alone ? 0 : 1);
+    }
+    return { kind: 'number', line, style: run.cells[0].style };
   }
-  if (kind === 'formula') return { kind: 'formula', cells: run.cells };
+  if (kind === 'formula') {
+    return { kind: 'formula', cells: run.cells, style: run.cells[0].style };
+  }
   const texts = run.cells.map((cell) => contentOf(cell));
   if (kind === 'list') {
     // Members of one list carry on along it, so long as they sit at an even
@@ -1094,7 +1121,8 @@ function planRun(run, alone) {
       : 1;
     if (found.every((one, i) =>
       wrapped(one.at - first.at, first.list.length) === i * stride)) {
-      return { kind: 'list', list: first.list, at: first.at, stride };
+      return { kind: 'list', list: first.list, at: first.at, stride,
+               style: run.cells[0].style };
     }
   }
   {
@@ -1114,10 +1142,11 @@ function planRun(run, alone) {
         width: parts[0][2].length,
         padded: parts[0][2].startsWith('0'),
         line,
+        style: run.cells[0].style,
       };
     }
   }
-  return { kind: 'repeat', texts };
+  return { kind: 'repeat', texts, style: run.cells[0].style };
 }
 
 /** What a planned run holds at `index`, counting from its own first cell. */
@@ -1189,7 +1218,11 @@ function fillLine(line, steps, forwards, place) {
     const spot = place(step);
     const index = turn * run.cells.length + (seat - run.at);
     const source = place(step, run.at + wrapped(index, run.cells.length) - seat);
-    written.push({ spot, text: runValue(plans[which], index, spot, source) });
+    written.push({
+      spot,
+      text: runValue(plans[which], index, spot, source),
+      style: plans[which].style,
+    });
   }
   return written;
 }
@@ -1228,8 +1261,8 @@ function fillTo(row, col) {
             ? (forwards ? box.right + step : box.left - step)
             : box.left + back,
         };
-      for (const { spot, text } of fillLine(line, steps, forwards, place)) {
-        put(spot.row, spot.col, text);
+      for (const { spot, text, style } of fillLine(line, steps, forwards, place)) {
+        put(spot.row, spot.col, text, style);
       }
     });
   });
@@ -1432,7 +1465,12 @@ async function save() {
   saveButton.disabled = true;
   saveButton.textContent = 'Saving…';
   try {
-    const written = edit_xlsx(source, [...changes.values()]);
+    // Values alone go by the narrow path, which patches only the cells named.
+    // Once formatting has moved, the whole workbook has to cross, because a
+    // list of values has nowhere to say what a cell should look like.
+    const written = stylesMoved
+      ? edit_xlsx_from_workbook(source, book)
+      : edit_xlsx(source, [...changes.values()]);
     const blob = new Blob([written], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
@@ -1447,6 +1485,7 @@ async function save() {
     source = written;
     changes.clear();
     pristine.clear();
+    stylesMoved = false;
     markSaved();
   } catch (error) {
     saveButton.textContent = was;
@@ -1593,12 +1632,20 @@ function edit(seed) {
 // Put the typed text into the sheet. Excel decides then and there whether it
 // is a number: `12` right-aligns, `12a` does not, and for most people that is
 // the only sign a column will add up.
-function put(row, col, text) {
+function put(row, col, text, style) {
   const sheet = sheetNow();
   if (!sheet) return;
-  const before = contentOf(heldAt(row, col));
-  if (before === text) return;
-  if (step) step.cells.push({ row, col, was: before, now: text });
+  const holding = heldAt(row, col);
+  const before = contentOf(holding);
+  // A cell that was not there wore the empty style, not "no style": undo has
+  // to be able to put a cell back to bare, and `undefined` here would mean
+  // leave whatever it is wearing alone.
+  const wasStyle = holding ? holding.style : {};
+  // A fill hands over the style of the cell it copied from; everything else
+  // leaves whatever the cell already wore.
+  const nowStyle = style === undefined ? wasStyle : style;
+  if (before === text && sameStyle(wasStyle, nowStyle)) return;
+  if (step) step.cells.push({ row, col, was: before, now: text, wasStyle, nowStyle });
   let line = sheet.rows.find((one) => one.index === row);
   if (!line) {
     line = { index: row, cells: [], height: null };
@@ -1617,7 +1664,19 @@ function put(row, col, text) {
   else if (text === '') cell.value = 'Empty';
   else if (text.trim() !== '' && Number.isFinite(Number(text))) cell.value = { Number: Number(text) };
   else cell.value = { String: text };
+  if (style !== undefined) {
+    cell.style = { ...style };
+    // Only the wide save path carries a cell's style, and it costs a crossing
+    // of the whole workbook, so it is taken only when a style has actually
+    // moved. Without it a filled date saves as the bare number underneath it.
+    stylesMoved = true;
+  }
   remember(row, col, text, before);
+}
+
+/** Do two cells wear the same style? A missing one is the empty one. */
+function sameStyle(one, two) {
+  return JSON.stringify(one || {}) === JSON.stringify(two || {});
 }
 
 // With a block selected, Enter and Tab do not leave it: Enter walks down the
@@ -1812,6 +1871,7 @@ async function open(data, name) {
     fileName = name || 'workbook.xlsx';
     changes.clear();
     pristine.clear();
+    stylesMoved = false;
     undone.length = 0;
     redone.length = 0;
     markSaved();
