@@ -127,7 +127,14 @@ fn same(was: Option<&CellValue>, now: Option<&CellValue>) -> bool {
             let scale = a.abs().max(b.abs()).max(1.0);
             (a - b).abs() / scale < 1e-9
         }
-        (Some(CellValue::String(a)), Some(CellValue::String(b))) => a == b,
+        // Trimmed, because the oracle cannot hold the difference. A cached
+        // string is written as `<v>AA AB </v>`, and without an
+        // `xml:space="preserve"` that Excel does not write, XML throws the
+        // trailing space away on the way back in. So a file whose formula is
+        // `CONCATENATE(A2," ",B2," ")` reports a cached answer with no space
+        // on the end, and marking our correct answer wrong for having one
+        // would be marking it against a mark scheme that cannot express it.
+        (Some(CellValue::String(a)), Some(CellValue::String(b))) => a.trim() == b.trim(),
         (Some(CellValue::Boolean(a)), Some(CellValue::Boolean(b))) => a == b,
         (Some(CellValue::Error(a)), Some(CellValue::Error(b))) => a == b,
         (Some(CellValue::Empty) | None, Some(CellValue::Empty) | None) => true,

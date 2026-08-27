@@ -16,6 +16,11 @@ use std::fmt;
 
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::functions::{self, block_of, reach, Arg, RangeData};
+
+/// Which cell is being worked out, when that is known. `ROW()` with no
+/// argument is the only thing that needs it, and a formula evaluated on its
+/// own rather than in a cell has no answer for it.
+type At = Option<(u32, u32)>;
 use crate::lexer::ParseError;
 use crate::parser::parse;
 use crate::reference::{parse_a1, CellRef, RangeRef};
@@ -162,7 +167,8 @@ impl Workbook {
     /// Evaluate a formula against the workbook without storing it anywhere.
     pub fn evaluate(&self, sheet: &str, formula: &str) -> Result<Value, CalcError> {
         let expr = parse(formula)?;
-        Ok(formula_result(self.eval(&expr, sheet, 0)))
+        // Nowhere in particular, so `ROW()` with no argument has no answer.
+        Ok(formula_result(self.eval(&expr, sheet, 0, None)))
     }
 
     // -- recalculation ----------------------------------------------------
@@ -211,7 +217,7 @@ impl Workbook {
             let Some(expr) = self.expr_at(sheet, coord) else {
                 continue;
             };
-            let value = formula_result(self.eval(&expr, sheet, 0));
+            let value = formula_result(self.eval(&expr, sheet, 0, Some(*coord)));
             self.store_cached(sheet, coord, value);
         }
 
@@ -298,17 +304,24 @@ impl Workbook {
             .unwrap_or(Value::Blank)
     }
 
-    fn eval(&self, expr: &Expr, sheet: &str, depth: u32) -> Value {
-        self.eval_arg(expr, sheet, depth).scalar()
+    fn eval(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Value {
+        self.eval_arg(expr, sheet, depth, at).scalar()
     }
 
-    fn eval_arg(&self, expr: &Expr, sheet: &str, depth: u32) -> Arg {
-        self.eval_arg_inner(expr, sheet, depth, false)
+    fn eval_arg(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Arg {
+        self.eval_arg_inner(expr, sheet, depth, false, at)
     }
 
     /// `skip_subtotals` drops cells that are themselves `SUBTOTAL` formulas when
     /// materialising a range. See the `SUBTOTAL` arm below for why.
-    fn eval_arg_inner(&self, expr: &Expr, sheet: &str, depth: u32, skip_subtotals: bool) -> Arg {
+    fn eval_arg_inner(
+        &self,
+        expr: &Expr,
+        sheet: &str,
+        depth: u32,
+        skip_subtotals: bool,
+        at: At,
+    ) -> Arg {
         if depth > MAX_EVAL_DEPTH {
             return Arg::Value(Value::Error(ExcelError::Num));
         }
@@ -330,12 +343,12 @@ impl Workbook {
             }
 
             Expr::Name(name) => match self.names.get(name) {
-                Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1),
+                Some(bound) => self.eval_arg(&bound.clone(), sheet, depth + 1, at),
                 None => Arg::Value(Value::Error(ExcelError::Name)),
             },
 
             Expr::Unary { op, operand } => {
-                let operand = self.eval_arg(operand, sheet, depth + 1);
+                let operand = self.eval_arg(operand, sheet, depth + 1, at);
                 match operand {
                     Arg::Value(v) => Arg::Value(apply_unary(*op, v)),
                     Arg::Range(block) => Arg::Range(RangeData {
@@ -351,9 +364,13 @@ impl Workbook {
             }
 
             Expr::Binary { op, lhs, rhs } => {
-                let a = self.eval_arg(lhs, sheet, depth + 1);
-                let b = self.eval_arg(rhs, sheet, depth + 1);
+                let a = self.eval_arg(lhs, sheet, depth + 1, at);
+                let b = self.eval_arg(rhs, sheet, depth + 1, at);
                 across(*op, &a, &b)
+            }
+
+            Expr::Function { name, args } if name == "ROW" || name == "COLUMN" => {
+                self.which_line(name, args, at)
             }
 
             Expr::Function { name, args } => {
@@ -365,11 +382,52 @@ impl Workbook {
                 let nested = name == "SUBTOTAL";
                 let evaluated: Vec<Arg> = args
                     .iter()
-                    .map(|a| self.eval_arg_inner(a, sheet, depth + 1, nested))
+                    .map(|a| self.eval_arg_inner(a, sheet, depth + 1, nested, at))
                     .collect();
                 functions::call_arg(name, &evaluated)
             }
         }
+    }
+
+    /// `ROW` and `COLUMN`, answered from the reference rather than its contents.
+    ///
+    /// With no argument they mean the cell being worked out. With a reference
+    /// they mean its rows or its columns — all of them, as a block, which is
+    /// what makes `SMALL(IF(range = x, ROW(range)), n)` pick out the nth row
+    /// where something is true. Answering only the first would give one number
+    /// where five hundred were wanted.
+    fn which_line(&self, name: &str, args: &[Expr], at: At) -> Arg {
+        let down = name == "ROW";
+        let Some(first) = args.first() else {
+            // No argument: wherever we are. Outside a cell there is no answer.
+            // Counted from one, where everything inside here counts from zero.
+            return match at {
+                Some((col, row)) => Arg::Value(Value::Number(if down {
+                    row as f64 + 1.0
+                } else {
+                    col as f64 + 1.0
+                })),
+                None => Arg::Value(Value::Error(ExcelError::Value)),
+            };
+        };
+        let Expr::Ref(reference) = first else {
+            return Arg::Value(Value::Error(ExcelError::Value));
+        };
+        let range = &reference.range;
+        let (from, to) = if down {
+            (range.start.row, range.end.row)
+        } else {
+            (range.start.col, range.end.col)
+        };
+        let many = (to.saturating_sub(from) + 1) as usize;
+        let cells: Vec<Value> = (from..=to)
+            .map(|one| Value::Number(one as f64 + 1.0))
+            .collect();
+        Arg::Range(RangeData {
+            width: if down { 1 } else { many },
+            height: if down { many } else { 1 },
+            cells,
+        })
     }
 
     fn materialise(&self, sheet: &str, range: &RangeRef, skip_subtotals: bool) -> RangeData {
@@ -547,6 +605,57 @@ mod tests {
                 .unwrap();
         }
         wb
+    }
+
+    #[test]
+    fn row_and_column_are_answered_from_the_reference() {
+        // Neither can be answered from the VALUES of the arguments, which is
+        // all the function library is ever shown: by the time `$A$2:$A$5`
+        // reaches it, it is four cell contents with no idea where they came
+        // from. So these two are settled in the engine, where the reference is
+        // still a reference.
+        let mut wb = book();
+        wb.set_formula("Sheet1", "C7", "=ROW()").unwrap();
+        wb.set_formula("Sheet1", "D8", "=COLUMN()").unwrap();
+        wb.set_formula("Sheet1", "E1", "=ROW(A5)").unwrap();
+        wb.set_formula("Sheet1", "E2", "=COLUMN(C1)").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "C7"), Value::Number(7.0));
+        assert_eq!(wb.value("Sheet1", "D8"), Value::Number(4.0));
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(5.0));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(3.0));
+    }
+
+    #[test]
+    fn row_of_a_range_is_every_row_in_it() {
+        // What makes `SMALL(IF(range = x, ROW(range)), n)` pick out the nth
+        // row where something is true. Answering only the first would give one
+        // number where five hundred were wanted, and the whole family of
+        // formulas built on it came back empty.
+        let mut wb = book();
+        for at in 2..=5 {
+            wb.set_value("Sheet1", &format!("A{at}"), Value::Number(at as f64))
+                .unwrap();
+        }
+        // 2 + 3 + 4 + 5
+        wb.set_formula("Sheet1", "C1", "=SUM(ROW(A2:A5))").unwrap();
+        // The smallest row where A holds 4, which is row 4.
+        wb.set_formula("Sheet1", "C2", "=SMALL(IF(A2:A5=4,ROW(A2:A5)),1)")
+            .unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "C1"), Value::Number(14.0));
+        assert_eq!(wb.value("Sheet1", "C2"), Value::Number(4.0));
+    }
+
+    #[test]
+    fn a_formula_evaluated_outside_a_cell_has_no_row() {
+        let wb = book();
+        assert_eq!(
+            wb.evaluate("Sheet1", "=ROW()"),
+            Ok(Value::Error(ExcelError::Value))
+        );
+        // But one with a reference still knows its own answer.
+        assert_eq!(wb.evaluate("Sheet1", "=ROW(B9)"), Ok(Value::Number(9.0)));
     }
 
     #[test]
