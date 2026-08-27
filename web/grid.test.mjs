@@ -67,7 +67,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
-  'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule',
+  'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere',
   'monthSeries', 'monthAt'].map(lift).join('\n');
@@ -94,6 +94,7 @@ function inkOf(text, style) {
 const ink = (per) => { inkPer = per; };
 const format_cell_number = (value) => String(value);
 ${liftBinding('RULES')}
+${liftBinding('THIN')}
 const sheetNow = () => sheet;
 let digitWidth = 8;
 let sizing = null;
@@ -280,7 +281,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          lineAt, holdPanes, aTable, freezeHere, frozenAt,
          monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
-         change, undo, redo, unsaved, forget, rule };
+         change, undo, redo, unsaved, forget, rule, wearRules };
 `));
 
 let failures = 0;
@@ -290,6 +291,57 @@ function is(what, got, want) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}` +
     (ok ? '' : `: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`));
 }
+
+
+// ── Ruling a block ──────────────────────────────────────────────────────────
+//
+// An outline is the outside of the SELECTION, not of every cell in it, so
+// where a cell falls decides what it gets. That is the part that goes wrong
+// quietly: ruling every cell all round looks nearly the same at a glance and
+// is a different document.
+
+const edges = (row, col) => {
+  const style = grid.styleAt(row, col) || {};
+  return [
+    style.border_top ? 't' : '',
+    style.border_bottom ? 'b' : '',
+    style.border_left ? 'l' : '',
+    style.border_right ? 'r' : '',
+  ].join('');
+};
+
+// A two-by-two block at rows 2-3, columns 1-2.
+grid.seed(2, 1, 'a'); grid.seed(2, 2, 'b');
+grid.seed(3, 1, 'c'); grid.seed(3, 2, 'd');
+grid.select(2, 1, 3, 2);
+
+grid.wearRules('outline');
+is('the top-left cell is ruled above and to its left', edges(2, 1), 'tl');
+is('the top-right above and to its right', edges(2, 2), 'tr');
+is('the bottom-left below and to its left', edges(3, 1), 'bl');
+is('the bottom-right below and to its right', edges(3, 2), 'br');
+
+grid.wearRules('all');
+is('all of them rules every edge of every cell', edges(2, 1), 'tblr');
+is('including the one in the middle of the block', edges(3, 2), 'tblr');
+
+grid.wearRules('none');
+is('and none takes them all off again', edges(2, 1), '');
+is('from every cell', edges(3, 2), '');
+
+// One edge means one line under the block, not one under every row of it.
+grid.wearRules('bottom');
+is('a bottom rules the bottom row only', edges(3, 1), 'b');
+is('and leaves the row above it alone', edges(2, 1), '');
+
+grid.wearRules('left');
+is('a left rules the left column only', edges(2, 1), 'l');
+is('and leaves the column beside it alone', edges(2, 2), '');
+
+// Asking for nothing is not a change.
+grid.wearRules('');
+is('an empty choice does nothing', edges(2, 1), 'l');
+
 
 // ── The rules a workbook actually has ───────────────────────────────────────
 //

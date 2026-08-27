@@ -308,6 +308,16 @@ table { user-select: none; }
   <button id="left" class="dress" title="Align left">&#8676;</button>
   <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
   <button id="right" class="dress" title="Align right">&#8677;</button>
+  <select id="rules" disabled title="Rules around the cells">
+    <option value="">Rules</option>
+    <option value="all">All</option>
+    <option value="outline">Outline</option>
+    <option value="top">Top</option>
+    <option value="bottom">Bottom</option>
+    <option value="left">Left</option>
+    <option value="right">Right</option>
+    <option value="none">None</option>
+  </select>
   <input id="fill" type="color" disabled title="Fill colour" />
   <button id="nofill" disabled title="No fill">&#8709;</button>
   <input id="numfmt" list="numfmts" disabled placeholder="Format"
@@ -1041,6 +1051,69 @@ function recompute() {
   }
 }
 
+// ── Ruling a block of cells ─────────────────────────────────────────────────
+//
+// A rule belongs to a cell's edge, and two cells that meet share the line
+// between them — so ruling the bottom of one row and the top of the next comes
+// to the same mark. Only one of them has to be written, and the drawing
+// settles which is shown.
+
+const rulesBox = document.getElementById('rules');
+
+// The one everybody means. Excel's own button rules thin unless told otherwise.
+const THIN = { style: 'thin', color: null };
+
+/// Rule the selection: all four edges of every cell, the outside of the block
+/// only, one named edge of it, or none at all.
+function wearRules(kind) {
+  if (!kind) return;
+  const box = region();
+  restyle((was, row, col) => {
+    switch (kind) {
+      case 'all':
+        return {
+          ...was,
+          border_top: THIN, border_bottom: THIN,
+          border_left: THIN, border_right: THIN,
+        };
+      case 'none':
+        return {
+          ...was,
+          border_top: null, border_bottom: null,
+          border_left: null, border_right: null,
+        };
+      // The outside of the block, which is why the cell's place matters.
+      case 'outline':
+        return {
+          ...was,
+          border_top: row === box.top ? THIN : was.border_top,
+          border_bottom: row === box.bottom ? THIN : was.border_bottom,
+          border_left: col === box.left ? THIN : was.border_left,
+          border_right: col === box.right ? THIN : was.border_right,
+        };
+      // One edge of the BLOCK rather than of every cell in it: ruling the
+      // bottom of a selection means one line under it, not a line under every
+      // row of it.
+      case 'top':
+        return { ...was, border_top: row === box.top ? THIN : was.border_top };
+      case 'bottom':
+        return {
+          ...was,
+          border_bottom: row === box.bottom ? THIN : was.border_bottom,
+        };
+      case 'left':
+        return { ...was, border_left: col === box.left ? THIN : was.border_left };
+      case 'right':
+        return {
+          ...was,
+          border_right: col === box.right ? THIN : was.border_right,
+        };
+      default:
+        return was;
+    }
+  });
+}
+
 // ── What colour a cell is ───────────────────────────────────────────────────
 //
 // A colour input cannot say "none" — it can only say white, and a white cell
@@ -1336,6 +1409,16 @@ for (const [id, run] of [
   if (button) button.addEventListener('click', () => { run(); focusGrid(); });
 }
 
+if (rulesBox) {
+  // A menu of actions rather than of states: what the cells are already
+  // wearing is not one of the choices, so it goes back to its own name once
+  // the choice is made.
+  rulesBox.addEventListener('change', () => {
+    wearRules(rulesBox.value);
+    rulesBox.value = '';
+    focusGrid();
+  });
+}
 if (fillBox) {
   // `input` rather than `change`: a colour picker reports as it is dragged,
   // and seeing the sheet follow is how anyone knows they have the right one.
@@ -1574,6 +1657,7 @@ function paint() {
   sayBands();
   sayFormat();
   sayFill();
+  if (rulesBox) rulesBox.disabled = !book;
   const table = tableNow();
   if (!table) return;
   const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
@@ -2476,11 +2560,16 @@ function put(row, col, text, style) {
  * where one cell is bold and the rest are not and everything goes bold — so
  * the decision is taken once, over the block, and then applied.
  */
+/// Change the style of every cell in the selection.
+///
+/// `alter` is handed the row and column as well, because some changes depend
+/// on where in the selection a cell falls: an outline rules the top of the top
+/// row and nothing else.
 function restyle(alter) {
   change(() => eachInRegion((row, col) => {
     const held = heldAt(row, col);
     const was = held ? held.style : {};
-    const now = alter(was);
+    const now = alter(was, row, col);
     if (sameStyle(was, now)) return;
     // Writing the text back unchanged is how the style rides in; put() knows
     // not to work the value out again when the text has not moved.
