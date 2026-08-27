@@ -4571,13 +4571,45 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // real size.
                                 let left = cx + (cell.mar_l as f64 * scale).round() as i32;
                                 let right = cx + pw - (cell.mar_r as f64 * scale).round() as i32;
+                                // S-CELLLNSPC (2026-08-27). The block a cell is
+                                // centred on must use the SAME line height the
+                                // row-growth rule uses -- `a:lnSpc` included.
+                                // Taking a flat 1.2 here made d23 s11's 23pt rows
+                                // (lnSpc 140%) sit 3.7-4.1pt above PowerPoint's,
+                                // while its 24.99pt rows were within 1pt: the
+                                // error tracked the SIZE, which is the signature
+                                // of a wrong multiplier rather than a wrong
+                                // origin.
                                 let line_h = |p: &oxislides_core::ir::SlideParagraph| {
                                     let fs = p
                                         .runs
                                         .iter()
                                         .find_map(|r| r.font_size)
                                         .unwrap_or(18.0);
-                                    (fs, fs as f64 * scale * 1.2)
+                                    // ★The default branch must keep the ORIGINAL
+                                    // f64 arithmetic. Routing it through
+                                    // `table_line_pt` rounded `fs * 1.2` in f32
+                                    // first, which moved pixels on decks the
+                                    // rule does not otherwise touch -- the
+                                    // opt-out stopped reproducing d23's cache
+                                    // byte for byte even though the logic was
+                                    // unchanged.
+                                    let adv = if !tblrowln_on() {
+                                        fs as f64 * scale * 1.2
+                                    } else if let Some(exact) =
+                                        p.line_spacing_pts.filter(|v| *v > 0.0)
+                                    {
+                                        exact as f64 * scale
+                                    } else {
+                                        let mult = match p.line_spacing {
+                                            Some(pct) if pct > 0.0 => {
+                                                (1.0625 * pct as f64).max(1.2)
+                                            }
+                                            _ => 1.2,
+                                        };
+                                        fs as f64 * scale * mult
+                                    };
+                                    (fs, adv)
                                 };
                                 // The block a centred or bottom-anchored cell is
                                 // positioned by is as tall as the WRAPPED text,
@@ -4734,8 +4766,28 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 // the face's ascent (Arial
                                                 // 0.9727), while TextOut anchors
                                                 // by tmAscent.
-                                                let base_pt = cursor_y as f32 / scale as f32
-                                                    + font_baseline_offset_em(&family) * fs;
+                                                // With a line box TALLER than the
+                                                // default 1.2, the extra leading
+                                                // goes ABOVE the text: the
+                                                // baseline sits one descent up
+                                                // from the box's BOTTOM, not one
+                                                // ascent down from its top. At
+                                                // lnSpc 100% the two are the same
+                                                // statement, since 1.2 = ascent +
+                                                // descent, so this leaves every
+                                                // ordinary cell where it was.
+                                                //
+                                                // d23 s11, PowerPoint's own PDF:
+                                                //   sz 23.00  412.08 + 34.22 - 5.34 = 440.96  (441.00)
+                                                //   sz 24.99  338.47 + 37.18 - 5.80 = 369.85  (369.77)
+                                                let asc = font_baseline_offset_em(&family);
+                                                let base_pt = if tblrowln_on() {
+                                                    cursor_y as f32 / scale as f32
+                                                        + (advance / scale) as f32
+                                                        - (1.2 - asc) * fs
+                                                } else {
+                                                    cursor_y as f32 / scale as f32 + asc * fs
+                                                };
                                                 draw_text_baseline_wiu(
                                                     mem_dc,
                                                     lx,
