@@ -1015,6 +1015,43 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     true
 }
 
+/// A table row's line height honours the cell's `a:lnSpc` unless this is set.
+fn tblrowln_on() -> bool {
+    std::env::var("OXI_TBLROWLN_DISABLE").is_err()
+}
+
+/// One line's height inside a table cell, in points.
+///
+/// S-TBLROWLN (2026-08-27), from the `tablerow` probe -- 12 arms, each read off
+/// PowerPoint's own PDF where table rules are vector rectangles and the heights
+/// are exact to 0.01pt:
+///
+///     row_height = max(declared_h, 2*marT + max(1.2, 1.0625*lnSpc_pct) * sz * lines)
+///
+/// Two things the probe settled that guessing had got wrong. The multiplier is
+/// **face-independent**: Arial, Georgia and Verdana all give exactly 36.00pt at
+/// 30pt, so it is not the font's own line height. And a percentage `lnSpc` does
+/// NOT scale the 1.2 -- 140.013% would then be 1.68016, and it measures 1.4876.
+/// The percentage scales **1.0625 (17/16)**, with 1.2 as a FLOOR, which is why
+/// `lnSpc` of 100% and no `lnSpc` at all are indistinguishable.
+///
+/// d10 s12's header is the specimen: 29.99pt Jua, `marT=marB=19.711pt`,
+/// `spcPct 140013`. Declared 81.31pt, PowerPoint draws 83.84, and Oxi drew the
+/// declared value -- so every rule below the header sat 2.53pt high across a
+/// large table.
+fn table_line_pt(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
+    if !tblrowln_on() {
+        return fs * 1.2;
+    }
+    if let Some(exact) = p.line_spacing_pts.filter(|v| *v > 0.0) {
+        return exact;
+    }
+    match p.line_spacing {
+        Some(pct) if pct > 0.0 => fs * (1.0625 * pct).max(1.2),
+        _ => fs * 1.2,
+    }
+}
+
 /// A justified line keeps its own indent unless this is set.
 fn justind_on() -> bool {
     std::env::var("OXI_JUSTIND_DISABLE").is_err()
@@ -4384,7 +4421,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                             .flatten()
                                             .filter(|_| emptycell_on());
                                         if let Some(sz) = empty_sz {
-                                            text += sz * 1.2;
+                                            text += table_line_pt(sz, p);
                                             continue;
                                         }
                                         match p.runs.iter().find_map(|r| r.font_size) {
@@ -4424,7 +4461,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         .max(1);
                                                     }
                                                 }
-                                                text += fs * 1.2 * n as f32;
+                                                text += table_line_pt(fs, p) * n as f32;
                                             }
                                             None => sized = false,
                                         }
