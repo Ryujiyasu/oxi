@@ -308,6 +308,8 @@ table { user-select: none; }
   <button id="left" class="dress" title="Align left">&#8676;</button>
   <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
   <button id="right" class="dress" title="Align right">&#8677;</button>
+  <button id="addBand" disabled title="Insert rows or columns (Ctrl+Shift+Plus)">Insert</button>
+  <button id="cutBand" disabled title="Delete rows or columns (Ctrl+Minus)">Delete</button>
   <button id="back" class="step" disabled title="Undo (Ctrl+Z)">&#8630;</button>
   <button id="on" class="step" disabled title="Redo (Ctrl+Y)">&#8631;</button>
   <button id="save" disabled>Save</button>
@@ -344,7 +346,7 @@ table { user-select: none; }
 <script type="module">
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                edit_xlsx_from_workbook, recalculate_spreadsheet,
-               translate_formula } from './oxidocs_wasm.js';
+               translate_formula, shift_band } from './oxidocs_wasm.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
@@ -952,7 +954,15 @@ function recompute() {
   if (!book || !anyFormulas || !liveCalc) return;
   const started = performance.now();
   try {
-    book = recalculate_spreadsheet(book);
+    // The browser has no clock the engine can reach, so it is told what the
+    // moment is. A serial: whole days since the last day of 1899, and the
+    // time of day after the point, taken in local time because that is the
+    // day the person at the keyboard is having.
+    const now = new Date();
+    const noon = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const days = Math.round((noon - new Date(1899, 11, 30)) / 86400000);
+    const part = (now - noon) / 86400000;
+    book = recalculate_spreadsheet(book, days + part);
   } catch (error) {
     // A formula the evaluator cannot read is not a reason to stop showing the
     // sheet; leave every cached value as it was.
@@ -966,6 +976,70 @@ function recompute() {
     liveCalc = false;
     sayCalc('too slow to work out formulas as you type — Excel will do it on open');
   }
+}
+
+// ── Whole rows and whole columns ────────────────────────────────────────────
+//
+// Putting a row in moves more of a workbook than any other edit: every formula
+// that names a row below it, on this sheet and on any other; the merges over
+// it; the table it falls inside; the frozen rows above it. The engine does all
+// of that, so the page's part is only to say which band and how many, and to
+// be able to put it back.
+
+const addBandButton = document.getElementById('addBand');
+const cutBandButton = document.getElementById('cutBand');
+
+/// Which band the selection covers, or null when it covers neither.
+///
+/// Excel's Insert takes whole rows or whole columns. A selection that reaches
+/// from the first row to the last IS a column selection, however it was made —
+/// dragging the headers and dragging the cells come to the same thing.
+function bandOfSelection() {
+  const bounds = extent();
+  const box = region();
+  const wholeColumns = box.top <= 1 && box.bottom >= bounds.rows;
+  const wholeRows = box.left <= 0 && box.right >= bounds.cols;
+  // A sheet one row tall makes every selection "whole columns" as well as
+  // "whole rows"; rows are the commoner intent, so they win.
+  if (wholeRows) return { rows: true, at: box.top, count: box.bottom - box.top + 1 };
+  if (wholeColumns) return { rows: false, at: box.left, count: box.right - box.left + 1 };
+  return null;
+}
+
+function sayBands() {
+  const can = Boolean(book) && Boolean(bandOfSelection());
+  if (addBandButton) addBandButton.disabled = !can;
+  if (cutBandButton) cutBandButton.disabled = !can;
+}
+
+/// Put rows or columns in, or take them out, and remember enough to undo it.
+///
+/// A structural change rewrites the whole sheet, so it cannot be recorded as
+/// the cell-by-cell deltas an ordinary edit is. It does not have to be:
+/// `shift_band` builds a NEW workbook rather than changing this one, so the
+/// one we had is still whole and can simply be kept. Undo is then a swap.
+function shiftBand(count) {
+  const band = bandOfSelection();
+  if (!band || !book) return;
+  const sheet = sheetNow();
+  if (!sheet) return;
+  change(() => {
+    const was = book;
+    try {
+      book = shift_band(book, sheet.name, band.rows, band.at, count * band.count);
+    } catch (error) {
+      book = was;
+      sayCalc(`rows could not be moved: ${error}`);
+      return;
+    }
+    step.books = [{ was, now: book }];
+  });
+  beyondValues = true;
+  weighCalc();
+  describe();
+  draw();
+  paint();
+  sayBands();
 }
 
 // ── Taking it back ──────────────────────────────────────────────────────────
@@ -995,7 +1069,7 @@ const DEPTH = 100;
 /** Run `what` so that everything it writes can be undone in one go. */
 function change(what) {
   if (step) { what(); return; }   // already inside a step: do not nest
-  step = { sheet: shown, cells: [], columns: [], lines: [], panes: [] };
+  step = { sheet: shown, cells: [], columns: [], lines: [], panes: [], books: [] };
   const built = step;
   try {
     what();
@@ -1003,7 +1077,8 @@ function change(what) {
     step = null;
   }
   if (built.cells.length === 0 && built.columns.length === 0
-    && built.lines.length === 0 && built.panes.length === 0) return;
+    && built.lines.length === 0 && built.panes.length === 0
+    && built.books.length === 0) return;
   // Whatever was marked for a cut is no longer what the clipboard holds.
   if (cutFrom) cutFrom = null;
   recompute();
@@ -1022,6 +1097,12 @@ function restore(built, side) {
   }
   const was = step;
   step = null;                    // putting a step back is not itself a step
+  // A whole-workbook swap comes first: the cell deltas of the same step, if it
+  // somehow had any, are about the workbook this puts back.
+  for (let i = (built.books || []).length - 1; i >= 0; i--) {
+    book = built.books[i][side];
+    beyondValues = true;
+  }
   for (let i = built.cells.length - 1; i >= 0; i--) {
     const one = built.cells[i];
     put(one.row, one.col, one[side], side === 'was' ? one.wasStyle : one.nowStyle);
@@ -1051,7 +1132,14 @@ function restore(built, side) {
   }
   step = was;
   recompute();
+  if ((built.books || []).length > 0) {
+    // The sheet is a different shape now, so everything drawn from it has to
+    // be worked out again rather than patched.
+    weighCalc();
+    describe();
+  }
   draw();
+  sayBands();
   // Show what moved. Excel selects the cells an undo touched, which is the
   // difference between trusting it and hunting for what it did.
   if (built.cells.length === 0) {
@@ -1099,6 +1187,12 @@ for (const [id, run] of [
   if (button) button.addEventListener('click', () => { run(); focusGrid(); });
 }
 
+if (addBandButton) {
+  addBandButton.addEventListener('click', () => { shiftBand(1); focusGrid(); });
+}
+if (cutBandButton) {
+  cutBandButton.addEventListener('click', () => { shiftBand(-1); focusGrid(); });
+}
 if (backButton) backButton.addEventListener('click', () => { undo(); focusGrid(); });
 if (onButton) onButton.addEventListener('click', () => { redo(); focusGrid(); });
 
@@ -1307,6 +1401,9 @@ function onHandle(cell, event) {
 }
 
 function paint() {
+  // Whether whole rows or whole columns are selected decides whether Insert
+  // and Delete mean anything, and that changes with every movement.
+  sayBands();
   const table = tableNow();
   if (!table) return;
   const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
@@ -2389,6 +2486,21 @@ function onKey(event) {
       if (!jump) break;
       event.preventDefault();
       takeAll();
+      break;
+    // Excel's own shortcuts. Which character the plus key reports depends on
+    // the keyboard and on whether Shift is down, so every spelling of it is
+    // taken rather than guessing at one.
+    case '+':
+    case ';':
+    case '=':
+      if (!jump) break;
+      event.preventDefault();
+      shiftBand(1);
+      break;
+    case '-':
+      if (!jump) break;
+      event.preventDefault();
+      shiftBand(-1);
       break;
     case 'b':
     case 'B':

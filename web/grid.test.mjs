@@ -97,6 +97,10 @@ const sheetNow = () => sheet;
 let digitWidth = 8;
 let sizing = null;
 let cutFrom = null;
+// The toolbar's Insert and Delete follow the selection, so painting it asks
+// whether whole rows or columns are picked. The page grew this dependency when
+// bands were added.
+const sayBands = () => {};
 const showWidth = () => {};
 const showHeight = () => {};
 const countBox = { textContent: '' };
