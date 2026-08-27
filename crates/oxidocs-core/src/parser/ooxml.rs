@@ -315,7 +315,22 @@ impl OoxmlParser {
             }
 
             // Continuous section: merge into previous page instead of creating a new one
-            if section.properties.section_type.as_deref() == Some("continuous") && !pages.is_empty()
+            // S1245 (2026-08-27, default ON, opt-out OXI_S1245_DISABLE): a
+            // continuous section whose PAGE SIZE differs from the previous
+            // section's — even by one twip — starts a NEW page (Word's
+            // documented promotion; legal__0019967c ends content on p241 and
+            // Word still emits a blank p242 for its trailing 11907×16840
+            // continuous stub after a 11906×16838 body — the EN-250 census
+            // pcd −1).
+            let s1245_size_break = std::env::var("OXI_S1245_DISABLE").is_err()
+                && section.properties.section_type.as_deref() == Some("continuous")
+                && pages.last().map_or(false, |last: &Page| {
+                    (last.size.width - section.properties.page_size.width).abs() > 0.01
+                        || (last.size.height - section.properties.page_size.height).abs() > 0.01
+                });
+            if section.properties.section_type.as_deref() == Some("continuous")
+                && !pages.is_empty()
+                && !s1245_size_break
             {
                 let last: &mut Page = pages.last_mut().unwrap();
                 // S394: also update LRPB count when extending existing section
