@@ -397,7 +397,20 @@ impl Workbook {
     }
 
     fn eval(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Value {
-        self.eval_arg(expr, sheet, depth, at).scalar()
+        let worked = self.eval_arg(expr, sheet, depth, at);
+        match &worked {
+            // A block that was worked out spills: this cell shows the first of
+            // it and the rest fills the cells below, which is why a file holds
+            // the formula in that cell alone. A bare range reference is not
+            // that — `=A1:A5` in one cell is the old implicit intersection —
+            // so it goes on being refused.
+            Arg::Range(block) if block.cells.len() > 1 => block
+                .cells
+                .first()
+                .cloned()
+                .unwrap_or(Value::Error(ExcelError::NA)),
+            _ => worked.scalar(),
+        }
     }
 
     fn eval_arg(&self, expr: &Expr, sheet: &str, depth: u32, at: At) -> Arg {
@@ -1358,17 +1371,64 @@ mod tests {
     }
 
     #[test]
-    fn an_array_that_reaches_a_cell_still_will_not_fit_in_one() {
-        // Nothing about this changed, and it is worth pinning that it did not:
-        // a block of answers written into a single cell is #VALUE!, as it was
-        // before any of this and as it is in Excel without dynamic arrays.
+    fn a_block_of_answers_spills_and_the_cell_shows_the_first() {
+        // This test used to assert the opposite — that a block written into
+        // one cell is `#VALUE!`, "as it is in Excel without dynamic arrays".
+        // Excel was asked, and with A1:A3 holding 1, 2, 3 it fills D1:D3 with
+        // 2, 3, 4: the block spills and D1 shows the first of it. A bare range
+        // reference does the same, `=A1:A3` in D1 giving 1.
+        //
+        // It matters here because a file stores such a formula in the anchor
+        // cell alone, so the first element is the value the workbook was saved
+        // holding.
         let mut wb = two_columns();
         wb.set_formula("Sheet1", "D1", "=A1:A3+1").unwrap();
+        wb.set_formula("Sheet1", "D2", "=A1:A3").unwrap();
+        wb.set_formula("Sheet1", "D3", "=IF(A1:A3>1,10,0)").unwrap();
         wb.recalculate();
-        assert_eq!(
-            wb.value("Sheet1", "D1"),
-            Value::Error(ExcelError::Value)
-        );
+        assert_eq!(wb.value("Sheet1", "D1"), Value::Number(2.0));
+        assert_eq!(wb.value("Sheet1", "D2"), Value::Number(1.0));
+        assert_eq!(wb.value("Sheet1", "D3"), Value::Number(0.0), "1 is not > 1");
+    }
+
+    #[test]
+    fn the_three_that_hand_back_a_block() {
+        // UNIQUE keeps the first of each distinct row, SORT puts the rows in
+        // order, FILTER keeps the ones a second block says to keep. Each shows
+        // the first of its block in the cell it is written in, and each is
+        // still a whole block to whatever is wrapped around it.
+        let mut wb = book();
+        for (at, (name, pay)) in [("pear", 1.0), ("apple", 2.0), ("pear", 3.0),
+                                  ("plum", 4.0), ("apple", 5.0)].iter().enumerate() {
+            wb.set_value("Sheet1", &format!("A{}", at + 1), Value::text(*name)).unwrap();
+            wb.set_value("Sheet1", &format!("B{}", at + 1), Value::Number(*pay)).unwrap();
+        }
+        for (at, formula) in [
+            "=UNIQUE(A1:A5)",
+            "=COUNTA(UNIQUE(A1:A5))",
+            "=COUNTA(UNIQUE(A1:A5,FALSE,TRUE))",
+            "=SORT(A1:A5)",
+            "=SORT(A1:A5,1,-1)",
+            "=FILTER(A1:A5,B1:B5>3)",
+            "=COUNTA(FILTER(A1:A5,B1:B5>3))",
+            "=FILTER(A1:A5,B1:B5>99,\"none\")",
+            "=FILTER(A1:A5,B1:B5>99)",
+            "=_xlfn._xlws.SORT(_xlfn.UNIQUE(A1:A5))",
+        ].iter().enumerate() {
+            wb.set_formula("Sheet1", &format!("D{}", at + 1), formula).unwrap();
+        }
+        wb.recalculate();
+        let shown = |at: &str| wb.value("Sheet1", at);
+        assert_eq!(shown("D1"), Value::text("pear"), "the first as it stands");
+        assert_eq!(shown("D2"), Value::Number(3.0), "pear, apple, plum");
+        assert_eq!(shown("D3"), Value::Number(1.0), "only plum appears once");
+        assert_eq!(shown("D4"), Value::text("apple"));
+        assert_eq!(shown("D5"), Value::text("plum"), "the last one, first");
+        assert_eq!(shown("D6"), Value::text("plum"), "rows 4 and 5 survive");
+        assert_eq!(shown("D7"), Value::Number(2.0));
+        assert_eq!(shown("D8"), Value::text("none"), "nothing kept, so the spare");
+        assert_eq!(shown("D9"), Value::Error(ExcelError::NA), "and nothing to say");
+        assert_eq!(shown("D10"), Value::text("apple"), "the prefixes come off");
     }
 
     #[test]

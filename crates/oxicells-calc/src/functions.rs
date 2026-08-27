@@ -277,7 +277,7 @@ fn one_at_a_time(name: &str) -> bool {
         // one piece of text
             | "LEN" | "LEFT" | "RIGHT" | "MID" | "LOWER" | "UPPER" | "TRIM"
             | "FIND" | "SEARCH" | "SUBSTITUTE" | "REPLACE" | "REPT" | "EXACT"
-            | "CHAR" | "CODE" | "UNICODE" | "TEXT" | "VALUE"
+            | "CHAR" | "CODE" | "UNICODE" | "TEXT" | "VALUE" | "PROPER" | "T"
         // one date
             | "DATE" | "DATEDIF" | "DAY" | "DAYS" | "EDATE" | "EOMONTH"
             | "HOUR" | "MINUTE" | "MONTH" | "SECOND" | "TIME" | "WEEKDAY"
@@ -302,6 +302,13 @@ pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
         if let Some(line) = a_whole_line(args) {
             return line;
         }
+    }
+    // The three that hand back a block rather than a value.
+    if matches!(name, "UNIQUE" | "SORT" | "FILTER") {
+        return match a_block_of_rows(name, args) {
+            Ok(block) => block,
+            Err(why) => Arg::Value(Value::Error(why)),
+        };
     }
     if one_at_a_time(name) {
         let width = args.iter().map(|one| block_of(one).width).max().unwrap_or(1);
@@ -982,6 +989,97 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
             }
         }
 
+        // The date a given number of WORKING days away: weekends are stepped
+        // over, and so is any day named in the third argument.
+        //
+        // The corpus writes `WORKDAY(date,"")`, which Excel refuses — a text
+        // second argument is `#VALUE!` — so getting the refusal right is as
+        // much of the answer as getting the arithmetic right.
+        "WORKDAY" => {
+            let start = serial(&args[0])?;
+            let days = num(args.get(1).ok_or(ExcelError::Value)?)? as i64;
+            let mut holidays: Vec<i64> = Vec::new();
+            if let Some(given) = args.get(2) {
+                for one in given.flatten() {
+                    if one.is_blank() {
+                        continue;
+                    }
+                    holidays.push(serial(&Arg::Value(one))?);
+                }
+            }
+            let step = if days < 0 { -1 } else { 1 };
+            let mut at = start;
+            let mut left = days.abs();
+            while left > 0 {
+                at += step;
+                if at < 0 {
+                    return Err(ExcelError::Num);
+                }
+                // Saturday and Sunday are 6 and 7 when Monday is 1.
+                if weekday_with_type(at, 2)? >= 6 || holidays.contains(&at) {
+                    continue;
+                }
+                left -= 1;
+            }
+            Ok(Value::Number(at as f64))
+        }
+
+        // Join what you are given with a separator between. Unlike CONCAT it
+        // can be told to leave out the blanks, which is the whole point of it:
+        // a list of five cells of which two are empty joins with two
+        // separators, not four.
+        "TEXTJOIN" => {
+            if args.len() < 3 {
+                return Err(ExcelError::Value);
+            }
+            let between = text(&args[0])?;
+            let skip_blanks = args[1].scalar().to_logical()?;
+            let mut pieces: Vec<String> = Vec::new();
+            for one in &args[2..] {
+                for cell in one.flatten() {
+                    if let Value::Error(why) = cell {
+                        return Err(why);
+                    }
+                    let piece = text(&Arg::Value(cell))?;
+                    if skip_blanks && piece.is_empty() {
+                        continue;
+                    }
+                    pieces.push(piece);
+                }
+            }
+            Ok(Value::text(pieces.join(&between)))
+        }
+
+        // Each word's first letter made a capital and the rest small. A word
+        // starts wherever a letter follows something that is not a letter, so
+        // `o'neill-smith` becomes `O'Neill-Smith`, which is Excel's answer
+        // whatever one thinks of the name.
+        "PROPER" => {
+            let source = text(one_arg(args)?)?;
+            let mut out = String::with_capacity(source.len());
+            let mut starting = true;
+            for character in source.chars() {
+                if starting {
+                    out.extend(character.to_uppercase());
+                } else {
+                    out.extend(character.to_lowercase());
+                }
+                // A word runs on only through LETTERS. Excel makes
+                // "ANNA MARIA 3rd" into "Anna Maria 3Rd" — the r after the
+                // digit starts a word as surely as the one after a space.
+                starting = !character.is_alphabetic();
+            }
+            Ok(Value::text(out))
+        }
+
+        // The text of what you are given, and nothing at all if it is not
+        // text. A number is not text, and neither is a logical.
+        "T" => Ok(match one_arg(args)?.scalar() {
+            Value::Text(held) => Value::Text(held),
+            Value::Error(why) => return Err(why),
+            _ => Value::text(""),
+        }),
+
         // Which week of the year a date falls in. The second argument says
         // which day starts a week; 1 (or nothing) is Sunday, 2 is Monday.
         "WEEKNUM" => {
@@ -1244,6 +1342,143 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
 
         _ => Err(ExcelError::Name),
     }
+}
+
+/// UNIQUE, SORT and FILTER: a block in, a block out.
+fn a_block_of_rows(name: &str, args: &[Arg]) -> Result<Arg, ExcelError> {
+    if args.is_empty() {
+        return Err(ExcelError::Value);
+    }
+    let table = args[0].as_range();
+    // `by_col` says to do the whole thing sideways. Turning the block on its
+    // side, working on rows as usual, and turning it back is the same answer
+    // with none of the second implementation.
+    let sideways = match name {
+        "UNIQUE" => reads_true(args.get(1)),
+        "SORT" => reads_true(args.get(3)),
+        _ => false,
+    };
+    let table = if sideways { on_its_side(&table) } else { table };
+    let mut rows: Vec<Vec<Value>> = (0..table.height)
+        .map(|row| (0..table.width).map(|col| table.at(col, row)).collect())
+        .collect();
+
+    match name {
+        "UNIQUE" => {
+            // The third argument asks for the rows that appear EXACTLY once,
+            // which is a different question from the distinct rows.
+            let once_only = reads_true(args.get(2));
+            let mut kept: Vec<Vec<Value>> = Vec::new();
+            for row in &rows {
+                let seen = rows.iter().filter(|other| same_row(other, row)).count();
+                let already = kept.iter().any(|other| same_row(other, row));
+                if already || (once_only && seen > 1) {
+                    continue;
+                }
+                kept.push(row.clone());
+            }
+            rows = kept;
+        }
+        "SORT" => {
+            // Which column to order by, counted from one, and which way.
+            let by = match args.get(1) {
+                Some(one) => num(one)? as usize,
+                None => 1,
+            };
+            let descending = match args.get(2) {
+                Some(one) => num(one)? < 0.0,
+                None => false,
+            };
+            if by < 1 || by > table.width {
+                return Err(ExcelError::Value);
+            }
+            let mut failed = None;
+            rows.sort_by(|left, right| {
+                match compare(&left[by - 1], &right[by - 1]) {
+                    Ok(side) => {
+                        if descending {
+                            side.reverse()
+                        } else {
+                            side
+                        }
+                    }
+                    Err(why) => {
+                        failed = Some(why);
+                        Ordering::Equal
+                    }
+                }
+            });
+            if let Some(why) = failed {
+                return Err(why);
+            }
+        }
+        _ => {
+            // FILTER: a second block, as tall as this one, saying which rows
+            // to keep.
+            let asked = args.get(1).ok_or(ExcelError::Value)?.flatten();
+            if asked.len() != rows.len() {
+                return Err(ExcelError::Value);
+            }
+            let mut kept = Vec::new();
+            for (row, wanted) in rows.into_iter().zip(asked) {
+                if let Value::Error(why) = wanted {
+                    return Err(why);
+                }
+                if wanted.to_logical()? {
+                    kept.push(row);
+                }
+            }
+            rows = kept;
+        }
+    }
+
+    if rows.is_empty() {
+        // Nothing left. FILTER's third argument says what to show instead;
+        // without one there is no answer to give.
+        return match args.get(2) {
+            Some(instead) if name == "FILTER" => Ok(Arg::Value(instead.scalar())),
+            _ => Err(ExcelError::NA),
+        };
+    }
+    let width = rows[0].len();
+    let height = rows.len();
+    let block = RangeData {
+        width,
+        height,
+        cells: rows.into_iter().flatten().collect(),
+    };
+    Ok(Arg::Range(if sideways { on_its_side(&block) } else { block }))
+}
+
+/// The same block with its rows and columns exchanged.
+fn on_its_side(block: &RangeData) -> RangeData {
+    let mut cells = Vec::with_capacity(block.cells.len());
+    for col in 0..block.width {
+        for row in 0..block.height {
+            cells.push(block.at(col, row));
+        }
+    }
+    RangeData {
+        width: block.height,
+        height: block.width,
+        cells,
+    }
+}
+
+/// An optional argument that has to be true to count, and is false when it is
+/// not there.
+fn reads_true(arg: Option<&Arg>) -> bool {
+    arg.map(|one| one.scalar().to_logical().unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// Two rows holding the same things. UNIQUE compares whole rows, so two rows
+/// alike in every column are one row twice.
+fn same_row(a: &[Value], b: &[Value]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(one, other)| matches!(compare(one, other), Ok(Ordering::Equal)))
 }
 
 /// The line an INDEX asks for when it leaves out a row or a column, or `None`
@@ -1600,6 +1835,67 @@ mod tests {
         assert_eq!(call("WEEKNUM", &[v(44197.0)]), n(1.0));
         // 2024-01-01 was itself a Monday, so both counts agree.
         assert_eq!(call("WEEKNUM", &[v(45292.0), v(21.0)]), n(1.0));
+    }
+
+    /// Every expectation here is what Excel 16 returned for that formula.
+    #[test]
+    fn a_working_day_steps_over_the_weekend_and_over_the_holidays() {
+        assert_eq!(call("WORKDAY", &[v(45292.0), v(5.0)]), n(45299.0));
+        // 2024-01-01 was a Monday, so five working days on is the next Monday.
+        assert_eq!(call("WORKDAY", &[v(45292.0), v(-3.0)]), n(45287.0));
+        assert_eq!(call("WORKDAY", &[v(45292.0), v(0.0)]), n(45292.0));
+        assert_eq!(call("WORKDAY", &[v(45293.0), v(1.0)]), n(45294.0));
+        // A day named as a holiday is stepped over like a Saturday.
+        assert_eq!(
+            call("WORKDAY", &[v(45292.0), v(5.0), v(45294.0)]),
+            n(45300.0)
+        );
+        // The corpus writes `WORKDAY(date,"")`, and Excel refuses it.
+        assert_eq!(
+            call("WORKDAY", &[v(45292.0), t("")]),
+            Value::Error(ExcelError::Value)
+        );
+    }
+
+    #[test]
+    fn a_join_can_be_told_to_leave_the_blanks_out() {
+        // Four cells of which two hold nothing. Leaving them out gives one
+        // separator; keeping them gives three, one of them trailing.
+        let cells = range(
+            &[
+                Value::text("one"),
+                Value::text(""),
+                Value::text("three"),
+                Value::Blank,
+            ],
+            1,
+        );
+        assert_eq!(
+            call("TEXTJOIN", &[t(", "), Arg::Value(Value::Logical(true)), cells.clone()]),
+            Value::text("one, three")
+        );
+        assert_eq!(
+            call("TEXTJOIN", &[t(", "), Arg::Value(Value::Logical(false)), cells]),
+            Value::text("one, , three, ")
+        );
+        assert_eq!(
+            call("TEXTJOIN", &[t("-"), Arg::Value(Value::Logical(true)), t("a"), t("b")]),
+            Value::text("a-b")
+        );
+    }
+
+    #[test]
+    fn a_word_runs_on_through_letters_and_nothing_else() {
+        assert_eq!(call("PROPER", &[t("o'neill-smith jr")]), Value::text("O'Neill-Smith Jr"));
+        // The digit ends the word, so the r after it is a capital.
+        assert_eq!(call("PROPER", &[t("ANNA MARIA 3rd")]), Value::text("Anna Maria 3Rd"));
+    }
+
+    #[test]
+    fn the_text_of_a_thing_that_is_not_text_is_nothing_at_all() {
+        assert_eq!(call("T", &[t("one")]), Value::text("one"));
+        assert_eq!(call("T", &[v(7.0)]), Value::text(""));
+        assert_eq!(call("T", &[Arg::Value(Value::Logical(true))]), Value::text(""));
     }
 
     #[test]
