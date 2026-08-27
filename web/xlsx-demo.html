@@ -229,6 +229,8 @@ header #on { margin-right: 4px; }
    inside it keeps its own outline and is left unwashed, the way Excel leaves
    the cell you are about to type into. */
 td.pick { background: rgba(33, 115, 70, .10); }
+th.lit { background: var(--accent); color: #fff; }
+th[data-head-col], th[data-head-row], th[data-all] { cursor: cell; }
 td.pick.here { background: transparent; }
 td.edge-t { box-shadow: inset 0 1px 0 0 var(--accent); }
 td.edge-b { box-shadow: inset 0 -1px 0 0 var(--accent); }
@@ -415,10 +417,14 @@ function draw() {
 
   const table = document.createElement('table');
   const head = table.insertRow();
-  head.appendChild(document.createElement('th')).className = 'row';
+  const corner = document.createElement('th');
+  corner.className = 'row';
+  corner.dataset.all = '1';
+  head.appendChild(corner);
   for (let col = 0; col <= lastColumn; col++) {
     const cell = document.createElement('th');
     cell.textContent = columnName(col);
+    cell.dataset.headCol = col;
     cell.style.width = `${columnPixels(widthOf(sheet, col))}px`;
     head.appendChild(cell);
   }
@@ -428,6 +434,7 @@ function draw() {
     const label = document.createElement('th');
     label.className = 'row';
     label.textContent = index;
+    label.dataset.headRow = index;
     row.appendChild(label);
 
     const source = held.get(index);
@@ -467,6 +474,20 @@ function draw() {
   }
   table.tabIndex = 0;
   table.addEventListener('mousedown', (event) => {
+    const head = event.target.closest('th');
+    if (head) {
+      if (head.dataset.all) takeAll();
+      else if (head.dataset.headCol !== undefined) {
+        takeColumn(Number(head.dataset.headCol), event.shiftKey);
+        headDrag = 'col';
+      } else if (head.dataset.headRow !== undefined) {
+        takeRow(Number(head.dataset.headRow), event.shiftKey);
+        headDrag = 'row';
+      }
+      table.focus();
+      event.preventDefault();
+      return;
+    }
     const cell = event.target.closest('td');
     if (!cell || !cell.dataset.row) return;
     // Shift extends from wherever the selection already starts; a plain click
@@ -477,6 +498,16 @@ function draw() {
     event.preventDefault();
   });
   table.addEventListener('mouseover', (event) => {
+    if (headDrag) {
+      const head = event.target.closest('th');
+      if (!head) return;
+      if (headDrag === 'col' && head.dataset.headCol !== undefined) {
+        takeColumn(Number(head.dataset.headCol), true);
+      } else if (headDrag === 'row' && head.dataset.headRow !== undefined) {
+        takeRow(Number(head.dataset.headRow), true);
+      }
+      return;
+    }
     if (!dragging) return;
     const cell = event.target.closest('td');
     if (!cell || !cell.dataset.row) return;
@@ -753,6 +784,9 @@ let reach = { row: 1, col: 0 };
 // True only while the mouse is down and dragging out a range, which is the one
 // time Excel shows the size instead of the address in the name box.
 let dragging = false;
+// Set while a drag started on a header, so the drag takes whole columns or
+// whole rows rather than the cells the pointer happens to cross.
+let headDrag = null;
 
 const countBox = document.getElementById('tally');
 
@@ -811,6 +845,23 @@ function tally() {
   countBox.textContent = parts.join('   ');
 }
 
+function takeColumn(col, extend) {
+  if (!extend) { at = { row: 1, col }; anchor = { row: 1, col }; }
+  goTo(extent().rows, col, false, true);
+}
+
+function takeRow(row, extend) {
+  if (!extend) { at = { row, col: 0 }; anchor = { row, col: 0 }; }
+  goTo(row, extent().cols, false, true);
+}
+
+function takeAll() {
+  const bounds = extent();
+  at = { row: 1, col: 0 };
+  anchor = { row: 1, col: 0 };
+  goTo(bounds.rows, bounds.cols, false, true);
+}
+
 function paint() {
   const table = tableNow();
   if (!table) return;
@@ -829,6 +880,15 @@ function paint() {
       if (col === box.left) cell.classList.add('edge-l');
       if (col === box.right) cell.classList.add('edge-r');
     });
+  }
+  for (const head of table.querySelectorAll('th.lit')) head.classList.remove('lit');
+  for (const head of table.querySelectorAll('th[data-head-col]')) {
+    const col = Number(head.dataset.headCol);
+    if (col >= box.left && col <= box.right) head.classList.add('lit');
+  }
+  for (const head of table.querySelectorAll('th[data-head-row]')) {
+    const row = Number(head.dataset.headRow);
+    if (row >= box.top && row <= box.bottom) head.classList.add('lit');
   }
   const cell = cellAt(at.row, at.col);
   if (cell) cell.classList.add('here');
@@ -1346,9 +1406,7 @@ function onKey(event) {
     case 'A':
       if (!jump) break;
       event.preventDefault();
-      at = { row: 1, col: 0 };
-      anchor = { row: 1, col: 0 };
-      goTo(bounds.rows, bounds.cols, false, true);
+      takeAll();
       break;
     case 'F2':
       event.preventDefault();
@@ -1370,6 +1428,7 @@ function onKey(event) {
 }
 
 document.addEventListener('mouseup', () => {
+  headDrag = null;
   if (!dragging) return;
   dragging = false;
   // The name box goes back to the anchor's address now the size has been read.

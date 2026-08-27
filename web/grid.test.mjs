@@ -43,7 +43,8 @@ function lift(name) {
 const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside',
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
   'asGrid', 'change', 'restore', 'undo', 'redo', 'remember', 'edited',
-  'markSaved', 'markSteps', 'put', 'heldAt'].map(lift).join('\n');
+  'markSaved', 'markSteps', 'put', 'heldAt',
+  'takeColumn', 'takeRow', 'takeAll'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -124,6 +125,7 @@ const forget = () => {
   undone.length = 0; redone.length = 0;
 };
 export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
+         takeColumn, takeRow, takeAll,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf,
          change, undo, redo, unsaved, forget };
 `));
@@ -367,6 +369,45 @@ grid.select(1, 0, 1, 0);
 grid.change(() => grid.put(1, 0, 'x'));
 grid.change(() => grid.put(1, 0, 'y'));
 is('editing one cell twice is one thing to save', grid.unsaved(), 1);
+
+// ── Taking a whole column or row ──────────────────────────────
+//
+// Clicking a header takes the line it heads, end to end, and leaves the active
+// cell at the near end — so typing starts at the top of the column you just
+// clicked, not at the bottom of the sheet. The harness reports 500 rows and 50
+// columns, which is what the sheet on screen would be.
+
+grid.forget();
+grid.select(9, 9, 9, 9);
+grid.takeColumn(3, false);
+is('a column header takes the column, top to bottom', grid.box(),
+  { top: 1, left: 3, bottom: 500, right: 3 });
+is('and leaves the cursor at the top of it', grid.seat(), { row: 1, col: 3 });
+
+grid.takeColumn(5, true);
+is('shift-clicking another header takes the run between them', grid.box(),
+  { top: 1, left: 3, bottom: 500, right: 5 });
+is('and the cursor stays where the run began', grid.seat(), { row: 1, col: 3 });
+
+grid.takeColumn(1, true);
+is('a run can be extended backwards past where it started', grid.box(),
+  { top: 1, left: 1, bottom: 500, right: 3 });
+
+grid.forget();
+grid.select(9, 9, 9, 9);
+grid.takeRow(4, false);
+is('a row header takes the row, end to end', grid.box(),
+  { top: 4, left: 0, bottom: 4, right: 50 });
+is('and leaves the cursor at the near end', grid.seat(), { row: 4, col: 0 });
+
+grid.takeRow(6, true);
+is('rows extend the same way', grid.box(),
+  { top: 4, left: 0, bottom: 6, right: 50 });
+
+grid.takeAll();
+is('the corner takes the sheet', grid.box(),
+  { top: 1, left: 0, bottom: 500, right: 50 });
+is('with the cursor at A1', grid.seat(), { row: 1, col: 0 });
 
 console.log(failures === 0
   ? '\nthe grid behaves'
