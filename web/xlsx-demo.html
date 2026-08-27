@@ -308,6 +308,25 @@ table { user-select: none; }
   <button id="left" class="dress" title="Align left">&#8676;</button>
   <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
   <button id="right" class="dress" title="Align right">&#8677;</button>
+  <input id="numfmt" list="numfmts" disabled placeholder="Format"
+         title="How the numbers look. Any Excel format code, or pick one." />
+  <datalist id="numfmts">
+    <option value="General">1234.5678 &#8594; 1234.5678</option>
+    <option value="0">1234.5678 &#8594; 1235</option>
+    <option value="0.00">1234.5678 &#8594; 1234.57</option>
+    <option value="#,##0">1234.5678 &#8594; 1,235</option>
+    <option value="#,##0.00">1234.5678 &#8594; 1,234.57</option>
+    <option value="0%">0.15 &#8594; 15%</option>
+    <option value="0.00%">0.15 &#8594; 15.00%</option>
+    <option value="$#,##0.00">1234.5678 &#8594; $1,234.57</option>
+    <option value="&#165;#,##0">1234.5678 &#8594; &#165;1,235</option>
+    <option value="&#8364;#,##0.00">1234.5678 &#8594; &#8364;1,234.57</option>
+    <option value="yyyy-mm-dd">45297 &#8594; 2024-01-06</option>
+    <option value="d mmm yyyy">45297 &#8594; 6 Jan 2024</option>
+    <option value="h:mm">0.75 &#8594; 18:00</option>
+    <option value="h:mm AM/PM">0.75 &#8594; 6:00 PM</option>
+    <option value="0.00E+00">1234.5678 &#8594; 1.23E+03</option>
+  </datalist>
   <button id="addBand" disabled title="Insert rows or columns (Ctrl+Shift+Plus)">Insert</button>
   <button id="cutBand" disabled title="Delete rows or columns (Ctrl+Minus)">Delete</button>
   <button id="back" class="step" disabled title="Undo (Ctrl+Z)">&#8630;</button>
@@ -978,6 +997,58 @@ function recompute() {
   }
 }
 
+// ── How the numbers look ────────────────────────────────────────────────────
+//
+// A number format decides what a cell SHOWS without touching what it holds:
+// 0.15 under `0%` is fifteen per cent and is still 0.15 to everything that
+// reads it. The engine has known how to render them all along — the page had
+// no way to choose one.
+
+const formatBox = document.getElementById('numfmt');
+
+// Excel's Ctrl+Shift shortcuts, by the key and by the physical key — a
+// keyboard that is not American sends a different character for the same
+// place on the row, and it is the place Excel means.
+const FORMAT_KEYS = {
+  Digit1: '#,##0.00', '!': '#,##0.00',
+  Digit2: 'h:mm', '"': 'h:mm', '@': 'h:mm',
+  Digit3: 'd mmm yy', '#': 'd mmm yy',
+  Digit4: '$#,##0.00', '$': '$#,##0.00',
+  Digit5: '0%', '%': '0%',
+  Digit6: '0.00E+00', '^': '0.00E+00', '&': '0.00E+00',
+  // General, which is the absence of a format.
+  Backquote: '', '~': '', '`': '',
+};
+
+/// Put `code` on every cell in the selection. An empty code means General,
+/// which is the absence of a format rather than a format of its own.
+function wearFormat(code) {
+  const wanted = code.trim();
+  restyle((was) => ({
+    ...was,
+    number_format: wanted === '' || wanted.toLowerCase() === 'general'
+      ? null
+      : wanted,
+  }));
+}
+
+/// Show the selection's format, or nothing when they disagree.
+function sayFormat() {
+  if (!formatBox) return;
+  formatBox.disabled = !book;
+  if (!book || document.activeElement === formatBox) return;
+  let seen = null;
+  let agree = true;
+  eachInRegion((row, col) => {
+    const held = heldAt(row, col);
+    const held_format = (held && held.style && held.style.number_format) || '';
+    if (seen === null) seen = held_format;
+    else if (seen !== held_format) agree = false;
+  });
+  formatBox.value = agree && seen ? seen : '';
+  formatBox.placeholder = agree ? 'General' : 'Mixed';
+}
+
 // ── Whole rows and whole columns ────────────────────────────────────────────
 //
 // Putting a row in moves more of a workbook than any other edit: every formula
@@ -1187,6 +1258,17 @@ for (const [id, run] of [
   if (button) button.addEventListener('click', () => { run(); focusGrid(); });
 }
 
+if (formatBox) {
+  // Enter applies it and hands the keyboard back to the grid; leaving the box
+  // applies it too, since typing a code and clicking away plainly means it.
+  formatBox.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    wearFormat(formatBox.value);
+    focusGrid();
+  });
+  formatBox.addEventListener('change', () => wearFormat(formatBox.value));
+}
 if (addBandButton) {
   addBandButton.addEventListener('click', () => { shiftBand(1); focusGrid(); });
 }
@@ -1404,6 +1486,7 @@ function paint() {
   // Whether whole rows or whole columns are selected decides whether Insert
   // and Delete mean anything, and that changes with every movement.
   sayBands();
+  sayFormat();
   const table = tableNow();
   if (!table) return;
   const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
@@ -2486,6 +2569,15 @@ function onKey(event) {
       if (!jump) break;
       event.preventDefault();
       takeAll();
+      break;
+    // Excel puts the common number formats on Ctrl+Shift and the digit row.
+    // The digits themselves are what arrive on a US layout; `event.code` is
+    // what arrives on the others, so both are read.
+    case '!': case '"': case '#': case '$': case '%': case '&':
+    case '~': case '`':
+      if (!jump || !event.shiftKey) break;
+      event.preventDefault();
+      wearFormat(FORMAT_KEYS[event.code] || FORMAT_KEYS[event.key] || '');
       break;
     // Excel's own shortcuts. Which character the plus key reports depends on
     // the keyboard and on whether Shift is down, so every spelling of it is

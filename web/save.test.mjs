@@ -139,6 +139,51 @@ is('and a row put back on automatic has no height at all',
   back(1).height ?? null, null);
 is('which is a change from what it had', wasTall !== null, true);
 
+// ── A chosen number format has to reach the file ────────────────────────────
+//
+// A number format decides what a cell SHOWS without touching what it holds, so
+// nothing about the value proves it travelled: 0.15 under `0%` is still 0.15.
+// Only reading the format back does.
+//
+// Two roads out of the writer, and both are worth asking about. A format Excel
+// already has a number for goes out as that number; one it has not gets a
+// `<numFmt>` of its own written into the styles.
+
+const formatting = parse_spreadsheet(sample.slice());
+// Row 4 is the first with a full set of columns; row 1 holds only a title.
+const figures = formatting.sheets[0].rows.find((one) => one.index === 4);
+const firstRow = figures.index;
+const cells = figures.cells;
+cells[0].value = { Number: 0.15 };
+cells[0].style = { ...cells[0].style, number_format: '0%' };
+cells[1].value = { Number: 1234.5678 };
+cells[1].style = { ...cells[1].style, number_format: '#,##0.00' };
+cells[2].value = { Number: 45297 };
+cells[2].style = { ...cells[2].style, number_format: 'd mmm yyyy' };
+
+const formatted = parse_spreadsheet(
+  edit_xlsx_from_workbook(sample.slice(), formatting));
+const wearing = (col) => {
+  const cell = cellAt(formatted, firstRow, col);
+  return cell && cell.style ? cell.style.number_format ?? null : null;
+};
+is('a built-in format comes back', wearing(0), '0%');
+is('and so does another', wearing(1), '#,##0.00');
+is('a custom one comes back as written', wearing(2), 'd mmm yyyy');
+is('and the value underneath is untouched by any of it',
+  cellAt(formatted, firstRow, 0).value, { Number: 0.15 });
+
+// Taking a format off leaves the cell General, which is no format at all.
+const plain = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), (() => {
+  const one = parse_spreadsheet(
+    edit_xlsx_from_workbook(sample.slice(), formatting));
+  const cell = cellAt(one, firstRow, 0);
+  cell.style = { ...cell.style, number_format: null };
+  return one;
+})()));
+is('and a format taken off is gone',
+  cellAt(plain, firstRow, 0).style.number_format ?? null, null);
+
 console.log(failures === 0
   ? '\nwhat was changed is what the file holds'
   : `\n${failures} did not`);
