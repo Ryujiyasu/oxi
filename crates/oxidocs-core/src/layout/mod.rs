@@ -97,6 +97,48 @@ fn is_break_after(ch: char) -> bool {
     )
 }
 
+/// S1241 (2026-08-27, default ON, opt-out `OXI_S1241_DISABLE`): whitespace that
+/// is a LINE-BREAK opportunity, as opposed to `char::is_whitespace`.
+///
+/// Rust reports U+00A0 NO-BREAK SPACE as whitespace (it is `White_Space=yes`),
+/// so any token walk written as `!c.is_whitespace()` silently treats an NBSP as
+/// a word boundary — which is the one thing an NBSP exists to prevent.
+///
+/// MEASURED (`tools/metrics/_pb_nbsp_gen.py` + `_pb_nbsp_body_gen.py`, 76 arms
+/// = 2 contexts x 2 shapes x 19 widths, Word PDF). Each context sweeps the wrap
+/// boundary across `alpha beta Sch<sep>1234 gamma`; the SP shape (ordinary
+/// space) is the discriminator, since it must break where the NB shape must not:
+///
+///   cell, 80pt   SP «alpha beta Sch | 1234 gamma»   NB «alpha beta | Sch~1234 | gamma»
+///   cell, 90pt   SP «alpha beta Sch | 1234 gamma»   NB «alpha beta | Sch~1234 gamma»
+///   cell, 55pt   SP «alpha | beta Sch | 1234 …»     NB «alpha | beta | Sch~1234 | gamma»
+///
+/// Word never splits `Sch<NBSP>1234` at ANY of the 19 widths — the joined token
+/// is atomic and the break goes BEFORE it. Outside the band both shapes agree,
+/// which is the control: the NBSP only matters when a break would land on it.
+///
+/// SCOPE = the S818 cell token walk only. The BODY path was measured in the same
+/// sweep and is already correct (38/38 arms match Word: `break_into_lines` tests
+/// `ch == ' '` explicitly and never saw the NBSP as a space), so this is a
+/// cell-render/estimate-only defect. Oxi's cell path matched Word on 19/19 SP
+/// arms and differed on exactly the 6 NB arms whose break lands on the NBSP.
+///
+/// WITNESS technical__002c1ffa65f3a566 (3187 NBSPs — `Sch\u{a0}1`, `Part\u{a0}2`,
+/// `Division\u{a0}5`): its Endnote-3 table ended a line with «Sch» and began the
+/// next with «1 (items», where Word keeps «Sch 1 (items 92–98),» whole. The extra
+/// break opportunities let the greedy wrap pack lines fuller, so rows came out
+/// short — Word spends 240.5pt on one p329 stretch where Oxi spent 216.5 — and a
+/// 7-line row Word pushes whole (cantSplit) fitted instead. That is the residual
+/// pcd −1 after S1240.
+///
+/// Deliberately NOT applied to the `s1082_last_word` probe in the same function:
+/// that is a different rule (compat-15 + justified only) and was not measured
+/// here.
+fn is_break_space(ch: char) -> bool {
+    ch.is_whitespace()
+        && !(ch == '\u{00A0}' && std::env::var("OXI_S1241_DISABLE").is_err())
+}
+
 /// Word's default 8-color rotation for tracked-change author tints. The
 /// author's `color_index` in `Document.authors` selects a slot here.
 ///
@@ -35341,7 +35383,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 )
                                                 .is_err()
                                                     && (if s818_cell {
-                                                        !ch.is_whitespace()
+                                                        !is_break_space(ch) // S1241
                                                     } else {
                                                         ch.is_ascii_alphanumeric()
                                                     })
@@ -35367,9 +35409,11 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     // (calibrated form-family balance).
                                                     let p_alnum =
                                                         |c: char| c.is_ascii_alphanumeric();
-                                                    let p_token = |c: char| !c.is_whitespace();
+                                                    // S1241: NBSP is not a break
+                                                    // opportunity -> not a token boundary.
+                                                    let p_token = |c: char| !is_break_space(c);
                                                     let p_opp = |c: char| {
-                                                        !c.is_whitespace() && !is_break_after(c)
+                                                        !is_break_space(c) && !is_break_after(c)
                                                     };
                                                     let preds: &[&dyn Fn(char) -> bool] =
                                                         if s818_cell {
@@ -40881,7 +40925,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         !self.doc_body_has_real_cjk && std::env::var("OXI_S818_DISABLE").is_err();
                     if std::env::var("OXI_CELLWORD_DISABLE").is_err()
                         && (if s818_cell {
-                            !ch.is_whitespace()
+                            !is_break_space(ch) // S1241
                         } else {
                             ch.is_ascii_alphanumeric()
                         })
@@ -40895,8 +40939,9 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 })))
                     {
                         let p_alnum = |c: char| c.is_ascii_alphanumeric();
-                        let p_token = |c: char| !c.is_whitespace();
-                        let p_opp = |c: char| !c.is_whitespace() && !is_break_after(c);
+                        // S1241: NBSP is not a break opportunity -> not a token boundary.
+                        let p_token = |c: char| !is_break_space(c);
+                        let p_opp = |c: char| !is_break_space(c) && !is_break_after(c);
                         let preds: &[&dyn Fn(char) -> bool] = if s818_cell {
                             &[&p_token, &p_opp]
                         } else {
