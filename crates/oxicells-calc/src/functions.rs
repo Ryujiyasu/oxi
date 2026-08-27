@@ -145,6 +145,20 @@ pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
     against == pattern.len()
 }
 
+/// The ISO week: weeks start on Monday and week one is the one holding the
+/// year's first Thursday, so a date in early January can belong to the year
+/// before it.
+fn weeknum_iso(serial: i64) -> Result<Value, ExcelError> {
+    // The Thursday of this date's week settles which year the week belongs to.
+    let weekday = weekday_with_type(serial, 2)?; // Monday = 1
+    let thursday = serial - (weekday - 1) + 3;
+    let year = datetime::date_from_serial(thursday)?.year;
+    let first = datetime::serial_from_date(year, 1, 1)?;
+    let first_weekday = weekday_with_type(first, 2)?;
+    let first_thursday = first - (first_weekday - 1) + 3;
+    Ok(Value::Number(((thursday - first_thursday) / 7 + 1) as f64))
+}
+
 /// Does this candidate answer to this key, the way an exact lookup asks?
 ///
 /// Text against text with a `*` or a `?` in it is a pattern; everything else
@@ -883,6 +897,114 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
 
         // ---- lookup --------------------------------------------------------
+        // Look through one list, take from another. No counting of columns,
+        // which is what it was made to get rid of.
+        "XLOOKUP" => {
+            if args.len() < 3 {
+                return Err(ExcelError::Value);
+            }
+            let key = args[0].scalar();
+            let looked = args[1].flatten();
+            let taken = args[2].flatten();
+            let how = match args.get(4) {
+                Some(one) => num(one)? as i32,
+                None => 0,
+            };
+            let downwards = match args.get(5) {
+                Some(one) => num(one)? >= 0.0,
+                None => true,
+            };
+            let order: Vec<usize> = if downwards {
+                (0..looked.len()).collect()
+            } else {
+                (0..looked.len()).rev().collect()
+            };
+            let found = match how {
+                // Exact, and 2 is exact with wildcards — which `answers_to`
+                // already reads when the key carries one.
+                0 | 2 => order.into_iter().find(|at| answers_to(&looked[*at], &key)),
+                // Exact or the nearest one under it, and 1 the nearest over.
+                -1 | 1 => {
+                    let mut best: Option<(usize, Value)> = None;
+                    for at in order {
+                        let candidate = &looked[at];
+                        if candidate.is_blank() {
+                            continue;
+                        }
+                        let Ok(side) = compare(candidate, &key) else {
+                            continue;
+                        };
+                        let usable = if how == -1 {
+                            side != Ordering::Greater
+                        } else {
+                            side != Ordering::Less
+                        };
+                        if !usable {
+                            continue;
+                        }
+                        if side == Ordering::Equal {
+                            best = Some((at, candidate.clone()));
+                            break;
+                        }
+                        // The nearest so far on the right side of the key.
+                        let nearer = match &best {
+                            None => true,
+                            Some((_, held)) => match compare(candidate, held) {
+                                Ok(Ordering::Greater) => how == -1,
+                                Ok(Ordering::Less) => how == 1,
+                                _ => false,
+                            },
+                        };
+                        if nearer {
+                            best = Some((at, candidate.clone()));
+                        }
+                    }
+                    best.map(|(at, _)| at)
+                }
+                _ => return Err(ExcelError::Value),
+            };
+            match found.and_then(|at| taken.get(at).cloned()) {
+                Some(value) => Ok(value),
+                // The fourth argument is what to say when there is nothing,
+                // and without one it is #N/A as any lookup would be.
+                None => match args.get(3) {
+                    Some(one) => Ok(one.scalar()),
+                    None => Err(ExcelError::NA),
+                },
+            }
+        }
+
+        // Which week of the year a date falls in. The second argument says
+        // which day starts a week; 1 (or nothing) is Sunday, 2 is Monday.
+        "WEEKNUM" => {
+            let serial = serial(&args[0])?;
+            let starts = match args.get(1) {
+                Some(one) => num(one)? as i64,
+                None => 1,
+            };
+            // Excel's 11 to 17 are Monday through Sunday; 1 and 2 are Sunday
+            // and Monday. Everything becomes "how far into the week is Sunday".
+            let shift = match starts {
+                1 | 17 => 0,
+                2 | 11 => 1,
+                12 => 2,
+                13 => 3,
+                14 => 4,
+                15 => 5,
+                16 => 6,
+                21 => return weeknum_iso(serial),
+                _ => return Err(ExcelError::Num),
+            };
+            let year = datetime::date_from_serial(serial)?.year;
+            let first = datetime::serial_from_date(year, 1, 1)?;
+            // Which day of the week the year opened on, counted from the day
+            // the week is taken to start.
+            let opened = (weekday_with_type(first, 1)? - 1 - shift).rem_euclid(7);
+            Ok(Value::Number(
+                ((serial - first + opened) / 7 + 1) as f64,
+            ))
+        }
+
         "VLOOKUP" | "HLOOKUP" => {
             if args.len() < 3 {
                 return Err(ExcelError::Value);
@@ -1343,6 +1465,88 @@ mod tests {
     }
 
     #[test]
+    fn a_lookup_takes_from_one_list_what_it_found_in_another() {
+        // XLOOKUP is VLOOKUP with the column-counting taken out: the list to
+        // search and the list to fetch from are two separate arguments, so
+        // nothing depends on which column happens to be third.
+        let keys = range(&[Value::text("apple"), Value::text("pear"), Value::text("plum")], 1);
+        let pay = range(&[n(10.0), n(20.0), n(30.0)], 1);
+        assert_eq!(call("XLOOKUP", &[t("pear"), keys.clone(), pay.clone()]), n(20.0));
+        // Missing is #N/A, as any lookup would be, unless a fourth argument
+        // says what to put there instead.
+        assert_eq!(
+            call("XLOOKUP", &[t("fig"), keys.clone(), pay.clone()]),
+            Value::Error(ExcelError::NA)
+        );
+        assert_eq!(
+            call("XLOOKUP", &[t("fig"), keys.clone(), pay.clone(), t("none")]),
+            Value::text("none")
+        );
+    }
+
+    #[test]
+    fn a_lookup_can_settle_for_the_nearest_on_one_side() {
+        let sizes = range(&[n(10.0), n(20.0), n(30.0)], 1);
+        let names = range(&[Value::text("S"), Value::text("M"), Value::text("L")], 1);
+        // -1 takes the nearest at or under the key, 1 the nearest at or over.
+        // Nothing is sorted first, unlike VLOOKUP's approximate match.
+        assert_eq!(
+            call("XLOOKUP", &[v(25.0), sizes.clone(), names.clone(), v(0.0), v(-1.0)]),
+            Value::text("M")
+        );
+        assert_eq!(
+            call("XLOOKUP", &[v(25.0), sizes.clone(), names.clone(), v(0.0), v(1.0)]),
+            Value::text("L")
+        );
+        // An exact hit is still preferred over either neighbour.
+        assert_eq!(
+            call("XLOOKUP", &[v(20.0), sizes.clone(), names.clone(), v(0.0), v(-1.0)]),
+            Value::text("M")
+        );
+    }
+
+    #[test]
+    fn a_lookup_may_be_asked_to_start_at_the_bottom() {
+        // Two rows answer; which one is returned is the whole point of the
+        // sixth argument.
+        let keys = range(&[Value::text("a"), Value::text("b"), Value::text("a")], 1);
+        let pay = range(&[n(1.0), n(2.0), n(3.0)], 1);
+        assert_eq!(call("XLOOKUP", &[t("a"), keys.clone(), pay.clone()]), n(1.0));
+        assert_eq!(
+            call("XLOOKUP", &[t("a"), keys, pay, v(0.0), v(0.0), v(-1.0)]),
+            n(3.0)
+        );
+    }
+
+    #[test]
+    fn a_week_number_depends_on_which_day_opens_the_week() {
+        // 2024-01-07 is a Sunday. It opens week 2 when weeks start on Sunday
+        // and closes week 1 when they start on Monday, so a WEEKNUM that
+        // ignored its second argument would still pass a Monday test.
+        assert_eq!(call("WEEKNUM", &[v(45298.0)]), n(2.0));
+        assert_eq!(call("WEEKNUM", &[v(45298.0), v(2.0)]), n(1.0));
+        // 11 to 17 are Monday through Sunday, so 11 says what 2 says.
+        assert_eq!(call("WEEKNUM", &[v(45298.0), v(11.0)]), n(1.0));
+        assert_eq!(call("WEEKNUM", &[v(45298.0), v(17.0)]), n(2.0));
+        assert_eq!(
+            call("WEEKNUM", &[v(45292.0), v(9.0)]),
+            Value::Error(ExcelError::Num)
+        );
+    }
+
+    #[test]
+    fn the_iso_week_can_belong_to_the_year_before_it() {
+        // ISO weeks start on Monday and week one is the one holding the year's
+        // first Thursday. 2021-01-01 was a Friday, so its week's Thursday fell
+        // in 2020 and the date is in week 53 of that year — while the ordinary
+        // count calls it week 1 of 2021.
+        assert_eq!(call("WEEKNUM", &[v(44197.0), v(21.0)]), n(53.0));
+        assert_eq!(call("WEEKNUM", &[v(44197.0)]), n(1.0));
+        // 2024-01-01 was itself a Monday, so both counts agree.
+        assert_eq!(call("WEEKNUM", &[v(45292.0), v(21.0)]), n(1.0));
+    }
+
+    #[test]
     fn a_star_stands_for_any_run_of_characters() {
         assert!(wildcard_match("life insurance", "life*"));
         assert!(wildcard_match("life insurance", "*insurance"));
@@ -1710,7 +1914,7 @@ mod tests {
 
     #[test]
     fn unknown_functions_report_name_error() {
-        assert_eq!(call("XLOOKUP", &[v(1.0)]), Value::Error(ExcelError::Name));
+        assert_eq!(call("NOTAFUNCTION", &[v(1.0)]), Value::Error(ExcelError::Name));
     }
 
     #[test]
