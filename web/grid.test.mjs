@@ -57,7 +57,7 @@ function liftBinding(name) {
 // The fill's tables come across as they are written, not as a copy: the eleven
 // lists were read out of Excel, and a test holding its own copy of them would
 // go on passing after the page's had drifted.
-const tables = ['LISTS', 'TAIL'].map(liftBinding).join('\n');
+const tables = ['LISTS', 'TAIL', 'INDENT'].map(liftBinding).join('\n');
 
 const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside',
   'pasteGrid', 'clearSelection', 'goTo', 'contentOf', 'selectionText', 'fieldOf',
@@ -66,7 +66,8 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'takeColumn', 'takeRow', 'takeAll',
   'seriesOf', 'numberOf', 'fitLine', 'kindOf', 'runsOf', 'inList', 'planRun',
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
-  'widthForPixels', 'setWidth', 'dropCut'].map(lift).join('\n');
+  'widthForPixels', 'setWidth', 'dropCut',
+  'padFor', 'fitWidth', 'fitColumn', 'shownText'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
 // sheet is the same shape the parser hands back — rows holding cells — so the
@@ -79,7 +80,16 @@ let anchor = { row: 1, col: 0 };
 let reach = { row: 1, col: 0 };
 let tabHome = null;
 let dragging = false;
-const sheet = { rows: [], col_widths: [] };
+const sheet = { rows: [], col_widths: [], merge_cells: [] };
+const book = { default_style: { font_size: 11 } };
+// Every character is ten pixels wide at 11pt and scales with the size, so the
+// arithmetic under test is visible in the answer rather than buried in a font.
+let inkPer = 10;
+function inkOf(text, style) {
+  return text.length * inkPer * ((style.font_size || 11) / 11);
+}
+const ink = (per) => { inkPer = per; };
+const format_cell_number = (value) => String(value);
 const sheetNow = () => sheet;
 let digitWidth = 8;
 let sizing = null;
@@ -167,6 +177,7 @@ const mark = (r1, c1, r2, c2) => {
 };
 // What a paste would move, as the paste handler works it out.
 const marked = () => cutFrom;
+const sheetOf = () => sheet;
 const beyond = () => beyondValues;
 const depth = () => undone.length;
 const styleAt = (row, col) => {
@@ -187,6 +198,7 @@ const unsaved = () => changes.size;
 // Start over as if a fresh file had been opened.
 const forget = () => {
   cutFrom = null;
+  sheet.merge_cells.length = 0;
   sheet.rows.length = 0;
   sheet.col_widths.length = 0;
   beyondValues = false;
@@ -197,6 +209,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          takeColumn, takeRow, takeAll, fillTo, fitLine, wrapped, unitOf,
          wear, styleAt, sameStyle, widthForPixels, setWidth, widthAt,
          beyond, depth, dropCut, mark, marked,
+         padFor, fitWidth, fitColumn, ink, sheetOf,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget };
 `));
@@ -809,6 +822,94 @@ grid.seed(1, 0, 'a');
 grid.mark(1, 0, 1, 0);
 grid.change(() => grid.put(9, 9, 'something else'));
 is('editing anything drops the mark', grid.marked(), null);
+
+// ── Fitting a column to what is in it ──────────────────────
+//
+// Double-clicking a column's edge makes it as wide as the widest thing it has
+// to show. The padding either side was read off Excel: 'M', 'MM', 'MMM' come
+// out 26, 40 and 54 pixels — fourteen a letter and twelve left over — and 'i'
+// and a kanji agree on the same twelve from quite different letter widths.
+// It grows with the type, stepping by two for every seven pixels of em.
+
+is('twelve pixels at the size nearly everything uses', grid.padFor(11), 12);
+is('ten at the smallest', grid.padFor(6), 10);
+is('still twelve just below the step', grid.padFor(11.5), 12);
+is('fourteen just above it', grid.padFor(12), 14);
+is('fourteen up to the next step', grid.padFor(16.5), 14);
+is('sixteen above that', grid.padFor(17), 16);
+is('and eighteen further up', grid.padFor(24), 18);
+is('a size of nothing is read as the ordinary one', grid.padFor(0), 12);
+
+// ── what the width is measured from ─────────────────────────────────────────
+
+grid.forget();
+grid.ink(10);
+grid.seed(1, 0, 'abcde');
+is('the widest text plus the padding', grid.fitWidth(0), 50 + 12);
+
+grid.seed(5, 0, 'abcdefghij');
+is('the whole column, not the first row of it', grid.fitWidth(0), 100 + 12);
+
+grid.seed(3, 1, 'x');
+is('and each column answers for itself', grid.fitWidth(1), 10 + 12);
+
+is('a column with nothing in it has no answer', grid.fitWidth(9), null);
+
+// A cell states its own size, and the padding follows that cell rather than
+// the workbook's.
+grid.forget();
+grid.wear(1, 0, 'ab', null);
+grid.styleAt(1, 0).font_size = 24;
+is('a bigger cell is measured, and padded, at its own size',
+  grid.fitWidth(0), 2 * 10 * (24 / 11) + 18);
+
+// ── what it leaves out ──────────────────────────────────────────────────────
+//
+// Merged cells are ignored entirely, which is why autofit so often looks like
+// it did nothing. A wrapped cell is left out too: Excel picks a width there to
+// suit the row's height, and the same words in the same font came out 55px in
+// one sheet and 79px in another.
+
+grid.forget();
+grid.ink(10);
+grid.seed(1, 0, 'a very long piece of text');
+grid.sheetOf().merge_cells.push({ start_row: 1, start_col: 0, end_row: 1, end_col: 1 });
+is('a merged cell is not what the column is fitted to', grid.fitWidth(0), null);
+
+grid.forget();
+grid.seed(1, 0, 'short');
+grid.seed(2, 0, 'a very long piece of text');
+grid.styleAt(2, 0).wrap_text = true;
+is('and neither is a wrapped one', grid.fitWidth(0), 5 * 10 + 12);
+
+// An indent pushes the text in, and the column makes room for it: measured as
+// twelve pixels a level, so 'Hello' goes from 47px to 83px at three.
+grid.forget();
+grid.seed(1, 0, 'abc');
+grid.styleAt(1, 0).indent = 3;
+is('an indent is made room for', grid.fitWidth(0), 30 + 3 * 12 + 12);
+
+// ── and what it then does ───────────────────────────────────────────────────
+
+grid.forget();
+grid.ink(10);
+grid.seed(1, 0, 'abcde');
+grid.fitColumn(0);
+is('fitting writes the width, rounded up to a whole pixel',
+  grid.widthAt(0), Math.ceil(62) / 8);
+is('and it is a change like any other, to be taken back', grid.beyond(), true);
+grid.undo();
+is('undo puts the column back', grid.widthAt(0), 0);
+
+// A column of nothing but merged cells is left exactly as it is rather than
+// closed up to nothing.
+grid.forget();
+grid.seed(1, 0, 'text');
+grid.sheetOf().merge_cells.push({ start_row: 1, start_col: 0, end_row: 1, end_col: 1 });
+grid.setWidth(0, 200);
+const held = grid.widthAt(0);
+grid.fitColumn(0);
+is('a column with nothing to fit is left alone', grid.widthAt(0), held);
 
 console.log(failures === 0
   ? '\nthe grid behaves'

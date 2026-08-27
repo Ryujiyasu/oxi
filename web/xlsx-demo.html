@@ -357,6 +357,76 @@ let digitWidth = 7;
 
 /// The width of a digit in the workbook's standard font, which is the unit a
 /// column width is stated in.
+/** How wide `text` is, drawn the way the cell holding it is drawn. */
+function inkOf(text, style) {
+  const canvas = inkOf.canvas || (inkOf.canvas = document.createElement('canvas'));
+  const pen = canvas.getContext('2d');
+  const standard = (book && book.default_style) || {};
+  const points = style.font_size || standard.font_size || 11;
+  const family = style.font_name || standard.font_name || 'Calibri';
+  pen.font = `${style.italic ? 'italic ' : ''}${style.bold ? 'bold ' : ''}`
+    + `${points * 96 / 72}px "${family}", Calibri, sans-serif`;
+  return pen.measureText(text).width;
+}
+
+// The room Excel leaves either side of the text. Twelve pixels at the sizes
+// anyone actually uses, growing by two for every seven pixels of em: ten at
+// 6pt, twelve to 11.5, fourteen to 16.5, sixteen to 22, eighteen to 27.
+function padFor(points) {
+  const em = (points || 11) * 96 / 72;
+  return 10 + 2 * Math.max(0, 1 + Math.floor((em - 26 / 3) / 7));
+}
+
+// An indent pushes the text in, and the column has to make room for it:
+// "Hello" comes out 47px plain and 83px indented three.
+const INDENT = 12;
+
+/**
+ * How wide column `col` has to be to show everything in it.
+ *
+ * Returns null when there is nothing to fit, which is not the same as a width
+ * of nothing: a column of merged cells has no answer, and Excel leaves it
+ * exactly as it is rather than closing it up.
+ */
+function fitWidth(col) {
+  const sheet = sheetNow();
+  if (!sheet) return null;
+  const covered = new Set();
+  for (const merge of sheet.merge_cells || []) {
+    for (let row = merge.start_row; row <= merge.end_row; row++) {
+      for (let across = merge.start_col; across <= merge.end_col; across++) {
+        covered.add(`${row},${across}`);
+      }
+    }
+  }
+  let widest = null;
+  for (const line of sheet.rows) {
+    const cell = line.cells.find((one) => one.col === col);
+    if (!cell) continue;
+    // Merged cells are ignored, which is why autofit so often looks like it
+    // did nothing at all. And a wrapped cell is not fitted to its text either:
+    // Excel picks a width to suit the row's height there, and the same words
+    // in the same font came out two different widths in two sheets.
+    if (covered.has(`${line.index},${col}`)) continue;
+    if (cell.style.wrap_text) continue;
+    const text = shownText(cell);
+    if (text === '') continue;
+    const points = cell.style.font_size;
+    const wants = inkOf(text, cell.style)
+      + (cell.style.indent || 0) * INDENT
+      + padFor(points);
+    if (widest === null || wants > widest) widest = wants;
+  }
+  return widest;
+}
+
+/** Make column `col` as wide as its contents, as a double-click does. */
+function fitColumn(col) {
+  const wants = fitWidth(col);
+  if (wants === null) return;
+  setWidth(col, Math.ceil(wants));
+}
+
 function measureDigit(name, points) {
   const canvas = measureDigit.canvas ||= document.createElement('canvas');
   const pen = canvas.getContext('2d');
@@ -499,11 +569,21 @@ function draw() {
       else if (!align && isNumber(held)) cell.classList.add('right');
       if (held.style.bold) cell.classList.add('bold');
       if (held.style.italic) cell.style.fontStyle = 'italic';
-      if (held.style.font_size) cell.style.fontSize = `${held.style.font_size}px`;
+      if (held.style.font_size) {
+        cell.style.fontSize = `${held.style.font_size * 96 / 72}px`;
+      }
       if (held.style.font_name) cell.style.fontFamily = `"${held.style.font_name}", sans-serif`;
       if (held.style.font_color) cell.style.color = `#${held.style.font_color}`;
       if (held.style.bg_color) cell.style.background = `#${held.style.bg_color}`;
     }
+  }
+  // The whole grid is written in the workbook's own font at its own size,
+  // rather than at whatever the stylesheet happens to say. A cell that names
+  // neither is drawn in this, which is what Excel does with it.
+  const standard = (book && book.default_style) || {};
+  table.style.fontSize = `${(standard.font_size || 11) * 96 / 72}px`;
+  if (standard.font_name) {
+    table.style.fontFamily = `"${standard.font_name}", Calibri, sans-serif`;
   }
   table.tabIndex = 0;
   table.addEventListener('mousedown', (event) => {
@@ -575,6 +655,14 @@ function draw() {
     goTo(Number(cell.dataset.row), Number(cell.dataset.col), false, true);
   });
   table.addEventListener('dblclick', (event) => {
+    const head = event.target.closest('th');
+    if (head) {
+      // On the edge it fits the column; anywhere else on a header it does not
+      // mean anything, and opening a cell for editing certainly is not it.
+      const edge = onEdge(head, event);
+      if (edge !== null) fitColumn(edge);
+      return;
+    }
     const cell = event.target.closest('td');
     if (cell && cell.dataset.row) edit(null);
   });
