@@ -33681,6 +33681,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     }
                                                 }
                                             }
+                                            if std::env::var("OXI_DBG1244").is_ok()
+                                                && para
+                                                    .runs
+                                                    .iter()
+                                                    .any(|r| r.text.contains("To be a member"))
+                                            {
+                                                eprintln!("[DBG1244] ch={:?} cw={:.3}", ch, cw);
+                                            }
                                             // S691 (2026-06-29) FALSIFIED: forcing full-width digits (U+FF1x)
                                             // to font_size in the cell break (OXI_FWDIGIT) was a NO-OP — the
                                             // 第N条-marker break-width discrepancy (--dump-layout 9.5/char vs
@@ -35592,9 +35600,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     &RunStyle::default(),
                                                     &para.style,
                                                 );
+                                                // R24 (2026-08-27): COM probe _pb_smalldelta_gen
+                                                // (6 arms) prices the size-less empty at the
+                                                // CHAIN for EVERY Δ (kyodo shape dd11/Normal10.5
+                                                // → 12.75 = chain; admin dd11/Normal12 → 14.25 =
+                                                // chain) — the ≥1.5 guard is a compensation
+                                                // shield, not the law. Threshold stays until the
+                                                // exposed JP compensations (tokumei_08_07 −0.041,
+                                                // ukhealthform −0.031) are dissected; tune with
+                                                // OXI_S1231_TH.
+                                                let s1231_th: f32 = std::env::var("OXI_S1231_TH")
+                                                    .ok()
+                                                    .and_then(|v| v.parse().ok())
+                                                    .unwrap_or(1.5);
                                                 if std::env::var("OXI_S1231_DISABLE").is_err()
                                                     && (chain - self.default_font_size).abs()
-                                                        >= 1.5
+                                                        >= s1231_th
                                                 {
                                                     chain
                                                 } else {
