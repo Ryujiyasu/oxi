@@ -866,6 +866,69 @@ mod tests {
         wb
     }
 
+    /// Three rows of three, so a whole column and a whole row are told apart
+    /// by their sums.
+    fn a_block() -> Workbook {
+        let mut wb = book();
+        for row in 1..=3u32 {
+            for (at, col) in ["A", "B", "C"].iter().enumerate() {
+                wb.set_value(
+                    "Sheet1",
+                    &format!("{col}{row}"),
+                    Value::Number(((row - 1) * 3 + at as u32 + 1) as f64),
+                )
+                .unwrap();
+            }
+        }
+        wb
+    }
+
+    #[test]
+    fn an_index_that_leaves_out_a_row_is_the_whole_column() {
+        // An omission and an explicit zero ask the same thing, and a zero in
+        // the other place asks for a row instead. Both zeros is everything.
+        let mut wb = a_block();
+        wb.set_formula("Sheet1", "E1", "=SUM(INDEX(A1:C3,,2))").unwrap();
+        wb.set_formula("Sheet1", "E2", "=SUM(INDEX(A1:C3,0,2))").unwrap();
+        wb.set_formula("Sheet1", "E3", "=SUM(INDEX(A1:C3,2,0))").unwrap();
+        wb.set_formula("Sheet1", "E4", "=SUM(INDEX(A1:C3,0,0))").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(15.0), "2 + 5 + 8");
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(15.0));
+        assert_eq!(wb.value("Sheet1", "E3"), Value::Number(15.0), "4 + 5 + 6");
+        assert_eq!(wb.value("Sheet1", "E4"), Value::Number(45.0));
+    }
+
+    #[test]
+    fn a_whole_line_index_is_an_array_the_rest_can_work_on() {
+        // The point of returning a line rather than a cell: it is compared
+        // against a value to make a column of trues, and those pick out row
+        // numbers. `SMALL(IF(INDEX(range,,n)=x, ROW(range)), k)` — the k-th row
+        // that matches — is how the corpus asks its commonest question, and
+        // every part of it needs the array.
+        let mut wb = a_block();
+        wb.set_formula("Sheet1", "E1", "=SUM(IF(INDEX(A1:C3,,2)>2,1,0))").unwrap();
+        wb.set_formula("Sheet1", "E2", "=SMALL(IF(INDEX(A1:C3,,2)>2,ROW(A1:A3)),1)")
+            .unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(2.0), "5 and 8");
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(2.0), "the first is row 2");
+    }
+
+    #[test]
+    fn an_index_still_addresses_one_cell_when_it_is_asked_to() {
+        let mut wb = a_block();
+        wb.set_formula("Sheet1", "E1", "=INDEX(A1:C3,2,3)").unwrap();
+        // One index into a single column is still counted along it.
+        wb.set_formula("Sheet1", "E2", "=INDEX(A1:A3,2)").unwrap();
+        // A line outside the range is the ordinary refusal.
+        wb.set_formula("Sheet1", "E3", "=SUM(INDEX(A1:C3,,9))").unwrap();
+        wb.recalculate();
+        assert_eq!(wb.value("Sheet1", "E1"), Value::Number(6.0));
+        assert_eq!(wb.value("Sheet1", "E2"), Value::Number(4.0));
+        assert_eq!(wb.value("Sheet1", "E3"), Value::Error(ExcelError::Ref));
+    }
+
     #[test]
     fn a_table_column_is_the_cells_under_its_heading() {
         // `Table1[Description]` means the data, not the heading — which is why

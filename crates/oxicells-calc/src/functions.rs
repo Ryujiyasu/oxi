@@ -295,6 +295,14 @@ fn one_at_a_time(name: &str) -> bool {
 /// and only knows what to do with one value.
 pub fn call_arg(name: &str, args: &[Arg]) -> Arg {
     let name = plain(name);
+    // An INDEX missing one of its two indexes means a whole line rather than
+    // one cell, and a whole line is an array — which `call` has no way to
+    // return.
+    if name == "INDEX" {
+        if let Some(line) = a_whole_line(args) {
+            return line;
+        }
+    }
     if one_at_a_time(name) {
         let width = args.iter().map(|one| block_of(one).width).max().unwrap_or(1);
         let height = args.iter().map(|one| block_of(one).height).max().unwrap_or(1);
@@ -1235,6 +1243,54 @@ fn dispatch(name: &str, args: &[Arg]) -> Result<Value, ExcelError> {
         }
 
         _ => Err(ExcelError::Name),
+    }
+}
+
+/// The line an INDEX asks for when it leaves out a row or a column, or `None`
+/// when it is addressing one cell after all.
+///
+/// `INDEX(range,,3)` and `INDEX(range,0,3)` are the same request: the third
+/// column entire. `INDEX(range,3,0)` is the third row. `INDEX(range,0,0)` is
+/// everything. Anything else is one cell and belongs to `index_at`.
+fn a_whole_line(args: &[Arg]) -> Option<Arg> {
+    if args.len() < 3 {
+        return None;
+    }
+    let table = args[0].as_range();
+    let (row, col) = (a_missing_index(&args[1])?, a_missing_index(&args[2])?);
+    let taken = |rows: std::ops::Range<usize>, cols: std::ops::Range<usize>| {
+        let (width, height) = (cols.len(), rows.len());
+        let mut cells = Vec::with_capacity(width * height);
+        for r in rows {
+            for c in cols.clone() {
+                cells.push(table.at(c, r));
+            }
+        }
+        Arg::Range(RangeData {
+            width,
+            height,
+            cells,
+        })
+    };
+    match (row, col) {
+        (0, 0) => Some(taken(0..table.height, 0..table.width)),
+        (0, col) if col <= table.width => Some(taken(0..table.height, col - 1..col)),
+        (row, 0) if row <= table.height => Some(taken(row - 1..row, 0..table.width)),
+        // A line outside the range is the ordinary `#REF!`, which `index_at`
+        // already says.
+        (0, _) | (_, 0) => Some(Arg::Value(Value::Error(ExcelError::Ref))),
+        _ => None,
+    }
+}
+
+/// What an index argument says, when it says a whole line: an omitted argument
+/// and an explicit zero both do. A number, a range, or anything unreadable
+/// does not, and `None` leaves the ordinary path to deal with it.
+fn a_missing_index(arg: &Arg) -> Option<usize> {
+    match arg {
+        Arg::Value(Value::Blank) => Some(0),
+        Arg::Value(Value::Number(n)) if *n >= 0.0 => Some(*n as usize),
+        _ => None,
     }
 }
 
