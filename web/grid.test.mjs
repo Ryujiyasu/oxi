@@ -68,6 +68,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules', 'findNext',
+  'calcCost',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere',
   'monthSeries', 'monthAt'].map(lift).join('\n');
@@ -84,7 +85,17 @@ let reach = { row: 1, col: 0 };
 let tabHome = null;
 let dragging = false;
 const sheet = { rows: [], col_widths: [], merge_cells: [] };
-const book = { default_style: { font_size: 11 } };
+let book = { default_style: { font_size: 11 } };
+// A workbook of a given size, for asking what the page thinks it would cost to
+// work out. Only the shape matters to that question.
+const shapeBook = (cells, formulas) => {
+  const line = { index: 1, cells: [] };
+  for (let i = 0; i < cells; i++) {
+    line.cells.push({ col: i, value: 'Empty', style: {},
+                      formula: i < formulas ? '=A1' : null, runs: [] });
+  }
+  book = { default_style: { font_size: 11 }, sheets: [{ rows: [line] }] };
+};
 // Every character is ten pixels wide at 11pt and scales with the size, so the
 // arithmetic under test is visible in the answer rather than buried in a font.
 let inkPer = 10;
@@ -281,7 +292,8 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          lineAt, holdPanes, aTable, freezeHere, frozenAt,
          monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
-         change, undo, redo, unsaved, forget, rule, wearRules, findNext };
+         change, undo, redo, unsaved, forget, rule, wearRules, findNext,
+         calcCost, shapeBook };
 `));
 
 let failures = 0;
@@ -292,6 +304,35 @@ function is(what, got, want) {
     (ok ? '' : `: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`));
 }
 
+
+
+
+// ── What the page thinks an answer would cost ───────────────────────────────
+//
+// The sheet asks this before asking the engine anything, and turns off its own
+// arithmetic when the answer is too dear. So the constants in it are what
+// decide whether an ordinary workbook works out its own formulas at all — and
+// they were forty times too heavy on the formula term, which shut the gate on
+// a sheet of two thousand cells that takes forty-six milliseconds.
+//
+// The numbers here are measured through the wasm bridge from the page's side.
+// If they are edited, it should be because something was measured again.
+
+const wouldRun = (cells, formulas) => {
+  grid.shapeBook(cells, formulas);
+  return grid.calcCost() <= 300;
+};
+is('a sheet of a hundred and forty formulas runs — it takes 7ms',
+  wouldRun(149, 139), true);
+is('and one of two thousand cells and a hundred formulas — 46ms',
+  wouldRun(2207, 133), true);
+is('five thousand cells with no formulas runs — 88ms',
+  wouldRun(5465, 0), true);
+// Over the budget, and rightly: these really are too slow to do as you type.
+is('fourteen thousand cells and two thousand formulas does not — 344ms',
+  wouldRun(14568, 2529), false);
+is('and six hundred thousand cells certainly does not — 22 seconds',
+  wouldRun(645209, 0), false);
 
 
 // ── Finding something ───────────────────────────────────────────────────────

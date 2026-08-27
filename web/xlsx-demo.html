@@ -978,12 +978,14 @@ function describeCell(address, cell) {
 // browser — a formula must not mean one thing here and another when the file
 // is opened.
 //
-// It cannot always be asked. Recalculation is all-or-nothing today: the whole
-// dependency graph is rebuilt each time, which costs about a microsecond a
-// cell plus a millisecond and a half a formula. On the median workbook that is
-// a few milliseconds; on the largest in the corpus — 936,000 cells, 22,864
-// formulas — it is thirty-eight seconds. So the page works out whether it can
-// afford the answer before asking for it, and says plainly when it cannot.
+// It cannot always be asked. What it costs is now almost entirely the crossing
+// itself: the whole workbook goes over the wasm bridge and comes back, which is
+// paid per CELL. The engine works out only what a change reaches, so the
+// formulas are close to free beside it. On the median workbook the whole thing
+// is a few milliseconds; on the largest in the corpus — 936,000 cells — it is
+// forty seconds, and a workbook of the same size with NO formulas at all still
+// takes twenty-two. So the page works out whether it can afford the answer
+// before asking for it, and says plainly when it cannot.
 
 // Anything past this and the sheet would visibly stop responding.
 const PATIENCE = 300;
@@ -1003,11 +1005,25 @@ function calcCost() {
     }
   }
   anyFormulas = formulas > 0;
-  // Measured on the corpus: the graph build is per cell, the evaluation per
-  // formula, and crossing the wasm bridge doubles the per-cell part. The point
-  // of the estimate is only to catch the workbooks that would hang, so it is
-  // deliberately pessimistic rather than precise.
-  return cells / 40 + formulas * 2;
+  // Measured through the bridge from this side, middle of three runs:
+  //
+  //        cells  formulas   recalc
+  //          149       139      7ms
+  //        2,207       133     46ms
+  //       14,568     2,529    344ms
+  //        5,465         0     88ms
+  //      645,209         0  22,077ms
+  //      936,444    22,864  42,136ms
+  //
+  // A cell costs 13µs at a thousand of them and 34µs at six hundred thousand,
+  // so the per-cell term is deliberately heavy: the point is to catch what
+  // would hang, and erring that way costs a note rather than a frozen page.
+  // The fixed part is the call itself.
+  //
+  // Erring the other way is cheap as well, which is what makes this safe to
+  // keep near the measurements: `recompute` times what it really took and
+  // shuts the gate itself if this was optimistic.
+  return 10 + cells / 30 + formulas / 20;
 }
 
 function sayCalc(why) {
