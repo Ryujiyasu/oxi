@@ -41,30 +41,38 @@ SCRATCH = Path(r"C:\tmp\xlsx_shape_lift")
 BOOK = SCRATCH / "lift.xlsx"
 EMU = 9525.0
 
-SPACING = 10            # rows a case
-LINES = 2
+# Rows a case. Ninety-six arms at ten rows outgrew the range Excel drew and
+# the last fifty-two never appeared; one line needs far less than that.
+SPACING = 6
+# ONE line an arm. Two would let a large face at a small pinned pitch overlap
+# its own next line and merge the ink, and the second line is not needed: what
+# is being read is where the FIRST baseline sits in the pitch.
+LINES = 1
 # A letter that sits ON the baseline, so its ink foot IS the baseline and the
 # face's ascent never has to be known.
 WORD = "A"
 FACES = ["メイリオ", "游ゴシック", "Yu Gothic UI", "ＭＳ Ｐゴシック"]
-SIZES = [9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0]
-# One pinned pitch, stated in hundredths of a point. The lift is what is being
-# measured and it does not move with the pitch (`_xlsx_shape_pitch.py`: dead
-# constant over eight of them), so one is enough and a big one keeps the two
-# lines apart.
-PITCH = 2100
+SIZES = [10.0, 12.0, 16.0, 20.0]
+# Pinned pitches, in hundredths of a point. The one-pitch reading said the
+# lift does not move with the pitch; widening the sizes showed it does —
+# 游ゴシック 16pt steps its baseline 6 then 10 across 20, 28 and 40 pixels
+# where three quarters would step 6 then 9. So pitch is a sweep axis now, not
+# a constant, and the two are read together rather than as slope and
+# intercept from two separate sweeps.
+PITCHES = [1200, 1500, 1800, 2100, 2400, 3000]
 
 
 def cases():
-    return [(face, size) for face in FACES for size in SIZES]
+    return [(face, size, pitch)
+            for face in FACES for size in SIZES for pitch in PITCHES]
 
 
 def anchors_xml():
     held = []
-    for index, (face, points) in enumerate(cases()):
+    for index, (face, points, pitch) in enumerate(cases()):
         one = (
             f'<a:p><a:pPr algn="l">'
-            f'<a:lnSpc><a:spcPts val="{PITCH}"/></a:lnSpc></a:pPr>'
+            f'<a:lnSpc><a:spcPts val="{pitch}"/></a:lnSpc></a:pPr>'
             f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}">'
             f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
             f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
@@ -225,12 +233,10 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    pitch_px = PITCH / 100.0 * 96.0 / 72.0
-    print(f"pinned pitch {PITCH / 100:.0f}pt = {pitch_px:.2f}px, "
-          f"0.75 of it = {0.75 * pitch_px:.2f}")
-    print(f"{'face':<14}{'pt':>6}{'em':>8}{'desc':>6}{'exact desc':>12}"
-          f"{'asc':>6}{'height':>8}{'Excel lift':>12}{'ours lift':>11}")
-    for index, (face, points) in enumerate(cases()):
+    print(f"{'face':<14}{'pt':>6}{'pitch':>7}{'em':>8}{'desc':>6}"
+          f"{'exact desc':>12}{'asc':>6}{'exact asc':>11}{'height':>8}"
+          f"{'Excel base':>12}{'ours base':>11}")
+    for index, (face, points, pitch) in enumerate(cases()):
         top = edges.get(index * SPACING)
         foot = edges.get(index * SPACING + SPACING - 1)
         if top is None or foot is None or foot > min(truth.shape[0], mine.shape[0]):
@@ -242,13 +248,16 @@ def main():
         em = points * 96.0 / 72.0
         told = metrics(face, round(em))
         big = metrics(face, 2048)
-        # lift = 0.75 x pitch - (baseline - block top), read off each picture.
+        # Where the baseline sits below the block's top. `A` puts its ink foot
+        # one pixel below the baseline in every arm of the earlier sweep, so
+        # the reading less one IS the baseline.
         block = tops[index]
-        print(f"{face:<14}{points:>6}{em:>8.3f}{told['tmDescent']:>6}"
-              f"{big['tmDescent'] / 2048 * em:>12.3f}{told['tmAscent']:>6}"
+        pitch_px = pitch / 100.0 * 96.0 / 72.0
+        print(f"{face:<14}{points:>6}{pitch_px:>7.2f}{em:>8.3f}"
+              f"{told['tmDescent']:>6}{big['tmDescent'] / 2048 * em:>12.3f}"
+              f"{told['tmAscent']:>6}{big['tmAscent'] / 2048 * em:>11.3f}"
               f"{told['tmHeight']:>8}"
-              f"{0.75 * pitch_px - (theirs[0] - block):>12.2f}"
-              f"{0.75 * pitch_px - (ours[0] - block):>11.2f}")
+              f"{theirs[0] - block - 1:>12.0f}{ours[0] - block - 1:>11.0f}")
 
 
 if __name__ == "__main__":

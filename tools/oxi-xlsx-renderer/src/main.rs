@@ -1049,6 +1049,19 @@ pub(crate) fn shape_ascent(face: &str, points: f32, bold: bool, italic: bool) ->
     Some(up * points * 96.0 / 72.0)
 }
 
+/// How far the face falls below its baseline, unrounded.
+///
+/// The device's own descent is already whole, and a pinned line's lift is
+/// derived from a number that is not: `_xlsx_shape_lift.py` sweeps four faces
+/// at four sizes against six pinned pitches, and the lift the exact descent
+/// predicts is right for メイリオ, Yu Gothic UI and ＭＳ Ｐゴシック at every
+/// size where the device's is wrong for メイリオ at 16 point.
+#[cfg(windows)]
+pub(crate) fn shape_descent(face: &str, points: f32, bold: bool, italic: bool) -> Option<f32> {
+    let (tall, up, _) = face_per_em(face, bold, italic)?;
+    Some((tall - up) * points * 96.0 / 72.0)
+}
+
 /// A face's line height and ascent as shares of the em, measured once.
 ///
 /// Taken at 2048 pixels so the device's own rounding is a thousandth of the
@@ -4692,9 +4705,42 @@ mod windows_draw {
                 lines.push((index, line, start));
                 pitch.push(tall * scale);
                 leading.push(match pinned {
-                    Some((ascent, descent, _)) => {
+                    Some((ascent, device, _)) => {
                         let em = paragraph.size * 96.0 / 72.0;
-                        let lift = (descent - em / 4.0).max(0.0).floor();
+                        // The face's EXACT descent against a WHOLE quarter of
+                        // the em. `_xlsx_shape_lift.py` reads the lift off
+                        // Excel over four faces, four sizes and six pinned
+                        // pitches — 96 arms, and the lift holds still across
+                        // the pitch in 14 of the 16 face-and-size pairs, so
+                        // three quarters is the slope and this is the whole
+                        // of the rest. What changes is the DESCENT: the exact
+                        // one, not the device's already-rounded one, which is
+                        // the same thing SX118 found for the ascent. It gets
+                        // メイリオ right at 10, 12, 14, 16 and 20 point where
+                        // the device's descent misses 16 — `002`'s title
+                        // pins its fourth line there — and Yu Gothic UI and
+                        // ＭＳ Ｐゴシック at every size.
+                        //
+                        // …and a three eighths of a pixel that is FITTED, not
+                        // derived. With the exact descent alone the floor is a
+                        // pixel short at 11 point (`dc4fcff7f5f8_001` pins
+                        // three panels there) and right at 16; with the
+                        // device's it is the other way about. Over メイリオ at
+                        // 9, 10, 11, 12, 14, 16 and 20 point the two bracket
+                        // the answer, and `floor(exact - em/4 + c)` reproduces
+                        // all seven for any c between 0.214 and 0.454.
+                        //
+                        // 游ゴシック still wants one more pixel than this at 16
+                        // and 20 point, and no arithmetic over the em, the
+                        // ascent, the descent or the line box gives it — a
+                        // search over 840 candidate formulas tops out at 14 of
+                        // 16 and every one of those misses メイリオ at 14.
+                        // Left wrong and written down rather than carved out
+                        // per face.
+                        let descent = super::shape_descent(
+                            &face, paragraph.size, paragraph.bold, paragraph.italic)
+                            .unwrap_or(device);
+                        let lift = (descent - em / 4.0 + 0.375).max(0.0).floor();
                         // The ink of a pinned line may well start above the
                         // line: a pitch smaller than the face asks for is
                         // exactly what a pinned pitch is usually for.
