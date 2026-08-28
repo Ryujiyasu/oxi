@@ -38,6 +38,10 @@ RENDERER = REPO / "tools" / "oxi-xlsx-renderer" / "target" / "release" / "oxi-xl
 SCRATCH = Path(r"C:\tmp\xlsx_shape_origin_down")
 LETTER = "日"
 FACE, POINTS = "ＭＳ ゴシック", 14.0
+# The face and size the one corpus shape that moved is set in: its theme names
+# 游ゴシック for Japanese and the runs say 12 point. A rule settled on one
+# face is not settled until the face that disagreed has been asked too.
+FACE2, POINTS2 = "游ゴシック", 12.0
 # A pixel is 0.75pt, so these step the top a quarter of a pixel at a time.
 TOPS = [30.0, 30.1875, 30.375, 30.5625, 30.75, 30.9375, 31.125, 31.3125]
 WIDE, TALL = 90.0, 40.0
@@ -77,15 +81,46 @@ def build(made: Path) -> bool:
             # and the reader found no ink in any of them, while ours drew its
             # own default black and looked like the only side working.
             frame.TextRange.Font.Fill.ForeColor.RGB = 0
-            # Nudge both by the same fraction of a point.
+            # And the shape the corpus actually holds: text that WRAPS, more
+            # lines than the box has room for, and overflow clipped. The
+            # single-line arm above settled the rounding; `tb_r8_jizensoudan`
+            # then went the other way, and its shape differs in exactly these
+            # three things.
+            many = sheet.Shapes.AddShape(1, 380.0, here, WIDE, TALL)
+            many.Fill.Visible = False
+            many.Line.Visible = False
+            frame = many.TextFrame2
+            frame.WordWrap = True
+            frame.AutoSize = 0
+            frame.VerticalAnchor = 1          # top
+            frame.TextRange.Text = (LETTER * 6 + chr(13)) * 4
+            frame.TextRange.Font.Size = POINTS
+            frame.TextRange.Font.Name = FACE
+            frame.TextRange.Font.NameFarEast = FACE
+            frame.TextRange.Font.Fill.ForeColor.RGB = 0
+            other = sheet.Shapes.AddShape(1, 560.0, here, WIDE, TALL)
+            other.Fill.Visible = False
+            other.Line.Visible = False
+            frame = other.TextFrame2
+            frame.WordWrap = True
+            frame.AutoSize = 0
+            frame.VerticalAnchor = 1          # top
+            frame.TextRange.Text = (LETTER * 6 + chr(13)) * 4
+            frame.TextRange.Font.Size = POINTS2
+            frame.TextRange.Font.Name = FACE2
+            frame.TextRange.Font.NameFarEast = FACE2
+            frame.TextRange.Font.Fill.ForeColor.RGB = 0
+            # Nudge all four by the same fraction of a point.
             box.Top = here + (top - 30.0)
             words.Top = here + (top - 30.0)
+            many.Top = here + (top - 30.0)
+            other.Top = here + (top - 30.0)
         book.SaveAs(str(made), FileFormat=51)
         for _ in range(10):
             try:
                 sheet.Activate()
                 sheet.Range(sheet.Cells(1, 1), sheet.Cells(
-                    int(len(TOPS) * (TALL + GAP) / 15) + 12, 16)).CopyPicture(
+                    int(len(TOPS) * (TALL + GAP) / 15) + 12, 28)).CopyPicture(
                     Appearance=1, Format=2)
             except Exception:
                 time.sleep(0.6)
@@ -123,18 +158,25 @@ def main() -> int:
     )
     mine = np.asarray(Image.open(SCRATCH / "oxi.png").convert("L")) < 140
     band = round((TALL + GAP) * 96 / 72)
-    print(f"  {'top pt':>9}{'px':>8}   {'Excel box/ink/inset':>22}{'Oxi box/ink/inset':>22}")
+    print(f"  {'top pt':>9}{'px':>8}   {'Excel box/one/wrap/other':>26}{'Oxi box/one/wrap/other':>26}")
     agree = 0
     for at, top in enumerate(TOPS):
         y0, y1 = at * band, (at + 1) * band
         held = []
         for dark in (truth, mine):
             box = first_ink(dark, y0, y1, 30, 140)
-            ink = first_ink(dark, y0, y1, 270, 400)
-            held.append((box, ink, None if box is None or ink is None else ink - box))
+            one = first_ink(dark, y0, y1, 270, 400)
+            wrapped = first_ink(dark, y0, y1, 510, 640)
+            second = first_ink(dark, y0, y1, 750, 880)
+            held.append((
+                box,
+                None if box is None or one is None else one - box,
+                None if box is None or wrapped is None else wrapped - box,
+                None if box is None or second is None else second - box,
+            ))
         same = held[0] == held[1]
         agree += same
-        print(f"  {top:>9}{top * 96 / 72:>8.2f}   {str(held[0]):>22}{str(held[1]):>22}"
+        print(f"  {top:>9}{top * 96 / 72:>8.2f}   {str(held[0]):>26}{str(held[1]):>26}"
               f"{'' if same else '  <<'}")
     print(f"  {agree} of {len(TOPS)} arms agree")
     return 0
