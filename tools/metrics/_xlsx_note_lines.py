@@ -62,6 +62,13 @@ ARMS = [
     ("メイリオ", 14.0, 6, 83.0),
     ("游ゴシック", 14.0, 4, 60.0),
 ]
+# A fresh note's own margins, asked of COM: 7.2pt either side and 3.6pt above
+# and below. `002` states 2.5mm and 2.3mm instead, and the parser hardcodes
+# THOSE for every note — so a note that states none is set 4 pixels too low.
+# These arms sweep the top margin to see whether Excel moves the first line
+# with it one for one, which is what decides whether reading the file's inset
+# is the whole fix.
+MARGINS = [0.0, 3.6, 7.2, 10.8]
 SAID = "国立国会図書館"
 ROW_STEP = 12          # rows between one note and the next
 WIDE = 200.0
@@ -87,6 +94,17 @@ def build(made: Path) -> None:
             frame.Characters().Font.Name = face
             frame.Characters().Font.Size = size
             note.Visible = True
+        for at, margin in enumerate(MARGINS):
+            cell = sheet.Cells(2 + (len(ARMS) + at) * ROW_STEP, 2)
+            note = cell.AddComment(chr(10).join([SAID] * 3))
+            shape = note.Shape
+            shape.Width = WIDE
+            shape.Height = TALL
+            frame = shape.TextFrame
+            frame.Characters().Font.Name = "ＭＳ Ｐゴシック"
+            frame.Characters().Font.Size = 14.0
+            frame.MarginTop = margin
+            note.Visible = True
         if made.exists():
             made.unlink()
         book.SaveAs(str(made), FileFormat=51)
@@ -105,7 +123,9 @@ def shoot(made: Path) -> bool:
         for _ in range(10):
             try:
                 sheet.Activate()
-                sheet.Range(f"A1:M{4 + len(ARMS) * ROW_STEP}").CopyPicture(
+                sheet.Range(
+                    f"A1:M{4 + (len(ARMS) + len(MARGINS)) * ROW_STEP}"
+                ).CopyPicture(
                     Appearance=1, Format=2
                 )
             except Exception:
@@ -122,44 +142,44 @@ def shoot(made: Path) -> bool:
         excel.Quit()
 
 
-def boxes(grey: np.ndarray) -> list[int]:
-    """The top rule of every note in the picture.
+def notes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Every note in the picture, as the box its FILL covers.
 
-    Found by the LENGTH of the rule rather than by looking where a note was
-    asked for: Excel places a note beside its cell and moves it to keep it on
-    the sheet, so where it ends up is not where the cell is. A cell holding a
-    note also wears a small mark in its corner, and taking that for the box
-    makes the two sides measure from different things.
+    Found by the fill rather than by the rules around it. Pairing a top rule
+    with a foot rule needs to know how tall the box is, which is one of the
+    things being varied, and the pairing came apart as soon as two heights were
+    in play — Excel's side found twenty-one boxes where ours found sixteen and
+    the arms after the first few were reading different notes.
+
+    A note's paper is the one colour on the sheet: 255,255,225, which Excel and
+    the renderer both use for a note that names no fill of its own.
     """
-    rows = (grey < 128).sum(axis=1)
-    long_ = []
-    inside = False
-    for y, held in enumerate(rows):
-        if held > 100:
-            if not inside:
-                long_.append(y)
-            inside = True
-        else:
-            inside = False
-    # A note contributes two long rules, its top and its foot, exactly the
-    # box's height apart. Pairing them is what tells a top from a foot; taking
-    # every long rule for a top reads each note twice.
-    held = set(long_)
-    heights = {int(one[3] * 96 / 72) for one in ARMS}
-    return [
-        y
-        for y in long_
-        if any(y + tall + d in held for tall in heights for d in (-2, -1, 0, 1, 2))
-    ]
+    paper = (rgb[:, :, 0] == 255) & (rgb[:, :, 1] == 255) & (rgb[:, :, 2] == 225)
+    wide = paper.sum(axis=1)
+    bands, run = [], []
+    for y, held in enumerate(wide):
+        if held > 40:
+            run.append(y)
+        elif run:
+            bands.append(run)
+            run = []
+    if run:
+        bands.append(run)
+    out = []
+    for band in bands:
+        columns = np.nonzero(paper[band[0] : band[-1] + 1].any(axis=0))[0]
+        out.append((band[0], band[-1], int(columns[0]), int(columns[-1])))
+    return out
 
 
-def read(grey: np.ndarray, edge: int, tall: int) -> str:
-    """Where each line of ink begins below a note's top rule."""
-    band = grey[edge : edge + tall]
-    rows = (band < 128).sum(axis=1)
-    # More than the box's own side rules leave on a row, so an empty row
-    # inside the note is not read as a line of text.
-    lit = [i for i, v in enumerate(rows) if v > 8 and i > 2]
+def read(rgb: np.ndarray, note: tuple[int, int, int, int]) -> str:
+    """Where each line of ink begins, counted from the top of the paper."""
+    top, bottom, left, right = note
+    ink = (rgb[top : bottom + 1, left : right + 1] < 128).all(axis=2)
+    rows = ink.sum(axis=1)
+    # More than the box's own side rules leave on a row, so an empty row inside
+    # the note is not read as a line of text.
+    lit = [i for i, v in enumerate(rows) if v > 8]
     if not lit:
         return "no text"
     runs, start, last = [], lit[0], lit[0]
@@ -169,12 +189,9 @@ def read(grey: np.ndarray, edge: int, tall: int) -> str:
             start = i
         last = i
     runs.append(start)
-    # The last run is the box's own bottom rule, not a line of text.
-    if len(runs) > 1 and rows[runs[-1]] > 100:
-        runs = runs[:-1]
     pitches = [runs[i + 1] - runs[i] for i in range(len(runs) - 1)]
     return (
-        f"first +{runs[0]:<3} pitch "
+        f"first +{runs[0]:<3} lines {len(runs)}  pitch "
         + (",".join(str(one) for one in pitches) if pitches else "-")
     )
 
@@ -189,29 +206,39 @@ def main() -> int:
         if not shoot(made):
             print("  Excel would not hand over a picture")
             return 1
-    truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L")).astype(int)
+    truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("RGB")).astype(int)
     drawing = dict(os.environ)
-    drawing["OXI_XLSX_RANGE"] = f"1,1,{4 + len(ARMS) * ROW_STEP},13"
+    drawing["OXI_XLSX_RANGE"] = f"1,1,{4 + (len(ARMS) + len(MARGINS)) * ROW_STEP},13"
     subprocess.run(
         [str(RENDERER), str(made), str(SCRATCH / "oxi.png"), "96"],
         capture_output=True, text=True, encoding="utf-8", env=drawing,
     )
-    mine = np.asarray(Image.open(SCRATCH / "oxi.png").convert("L")).astype(int)
+    mine = np.asarray(Image.open(SCRATCH / "oxi.png").convert("RGB")).astype(int)
+    theirs, ours = notes(truth), notes(mine)
     print(f"  Excel {truth.shape[1]}x{truth.shape[0]}, Oxi {mine.shape[1]}x{mine.shape[0]}")
-    theirs, ours = boxes(truth), boxes(mine)
-    print(f"  Excel drew {len(theirs)} box(es), Oxi {len(ours)}")
-    tall = int(TALL * 96 / 72)
-    print(f"  {'face':<16}{'pt':>5}{'n':>3}{'tall':>7}  {'box':>10}   {'Excel':<26}Oxi")
+    print(f"  Excel drew {len(theirs)} note(s), Oxi {len(ours)}")
+    if len(theirs) != len(ours):
+        print("  the two sides do not hold the same notes; nothing to compare")
+        return 1
+    print(f"  {'face':<16}{'pt':>5}{'n':>3}{'tall':>7}  {'paper':>11}"
+          f"  {'Excel':<30}Oxi")
     agree = 0
     for at, (face, size, lines, tall) in enumerate(ARMS):
-        if at >= len(theirs) or at >= len(ours):
+        if at >= len(theirs):
             break
-        room = int(tall * 96 / 72)
-        one, two = read(truth, theirs[at], room), read(mine, ours[at], room)
+        one, two = read(truth, theirs[at]), read(mine, ours[at])
         agree += one == two
-        print(f"  {face:<16}{size:>5}{lines:>3}{tall:>7}  {theirs[at]:>5}/{ours[at]:<4}"
-              f"   {one:<26}{two}{'' if one == two else '  <<'}")
-    print(f"  {agree} of {min(len(ARMS), len(theirs), len(ours))} arms agree")
+        print(f"  {face:<16}{size:>5}{lines:>3}{tall:>7}"
+              f"  {theirs[at][0]:>5}/{ours[at][0]:<5}"
+              f"  {one:<30}{two}{'' if one == two else '  <<'}")
+    print(f"  {agree} of {min(len(ARMS), len(theirs))} arms agree")
+    print(f"  {'top margin':>12}   {'Excel':<30}Oxi")
+    for at, margin in enumerate(MARGINS):
+        seat = len(ARMS) + at
+        if seat >= len(theirs) or seat >= len(ours):
+            break
+        print(f"  {margin:>10}pt   {read(truth, theirs[seat]):<30}"
+              f"{read(mine, ours[seat])}")
     return 0
 
 
