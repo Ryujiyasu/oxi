@@ -43,6 +43,7 @@ RENDERER = (
 SCRATCH = Path(r"C:\tmp\xlsx_bent_connector")
 
 EMU = 12700          # per point
+EMU_PX = 9525        # per pixel at 96dpi
 TURNS = [0, 5400000, 10800000, 16200000]     # 0, 90, 180, 270 degrees
 FLIPS = [(False, False), (True, False), (False, True), (True, True)]
 ARMS = [(turn, flip) for turn in TURNS for flip in FLIPS]
@@ -61,6 +62,10 @@ COL_STEP, ROW_STEP = 4, 8
 # for the 31 columns and 60 rows copied, which is where these come from; the
 # run says so again, so a change in either is seen rather than assumed.
 COL_PX, ROW_PX = 64, 20
+# How far into its row each arm starts, in EMU. Zero puts every corner on a
+# whole pixel, which is the one place a soft edge and a hard one look the
+# same; half a pixel is what tells them apart.
+DOWN = 0
 
 
 def cell_of(at: int) -> tuple[int, int]:
@@ -89,7 +94,7 @@ def drawing_xml() -> str:
         shapes.append(
             f"<xdr:oneCellAnchor>"
             f"<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>"
-            f"<xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+            f"<xdr:row>{row}</xdr:row><xdr:rowOff>{DOWN}</xdr:rowOff></xdr:from>"
             f"<xdr:ext cx=\"{int(WIDE * EMU)}\" cy=\"{int(TALL * EMU)}\"/>"
             f"<xdr:cxnSp macro=\"\"><xdr:nvCxnSpPr>"
             f"<xdr:cNvPr id=\"{at + 2}\" name=\"bent {at}\"/>"
@@ -206,7 +211,7 @@ def shoot(made: Path) -> bool:
         excel.Quit()
 
 
-def limb(dark: np.ndarray, at: int) -> str:
+def limb(dark: np.ndarray, at: int, grey: np.ndarray | None = None) -> str:
     """The two arms of one L, read out of the picture as rows and columns.
 
     A quarter-turn box is a different shape from the one the anchor states, so
@@ -228,38 +233,48 @@ def limb(dark: np.ndarray, at: int) -> str:
     down = int(cols.argmax())
     lit_x = np.nonzero(window[across])[0]
     lit_y = np.nonzero(window[:, down])[0]
+    # How dark the darkest row of the arm is. A hard rule reaches 0; a rule
+    # spread over a boundary stops at about half, which is the whole question.
+    shade = int(grey[top:bottom, left:right][across].min()) if grey is not None else -1
     return (
         f"y={across + top - int(y * 96 / 72):>4} x {lit_x[0] + left - int(x * 96 / 72):>4}"
         f"..{lit_x[-1] + left - int(x * 96 / 72):>4}   "
         f"x={down + left - int(x * 96 / 72):>4} y {lit_y[0] + top - int(y * 96 / 72):>4}"
-        f"..{lit_y[-1] + top - int(y * 96 / 72):>4}"
+        f"..{lit_y[-1] + top - int(y * 96 / 72):>4}  ink {shade:>3}"
     )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
+    parser.add_argument("--half", action="store_true",
+                        help="start every arm half a pixel into its row")
     args = parser.parse_args()
+    global DOWN
+    if args.half:
+        DOWN = EMU_PX // 2
     made = SCRATCH / "bent.xlsx"
     if not args.reuse:
         build(made)
         if not shoot(made):
             print("  Excel would not hand over a picture")
             return 1
-    truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("L")) < 140
+    truth_grey = np.asarray(Image.open(SCRATCH / "excel.png").convert("L")).astype(int)
+    truth = truth_grey < 140
     drawing = dict(os.environ)
     drawing["OXI_XLSX_RANGE"] = "1,1,60,31"
     subprocess.run(
         [str(RENDERER), str(made), str(SCRATCH / "oxi.png"), "96"],
         capture_output=True, text=True, encoding="utf-8", env=drawing,
     )
-    mine = np.asarray(Image.open(SCRATCH / "oxi.png").convert("L")) < 140
+    mine_grey = np.asarray(Image.open(SCRATCH / "oxi.png").convert("L")).astype(int)
+    mine = mine_grey < 140
     print(f"  Excel {truth.shape[1]}x{truth.shape[0]}, Oxi {mine.shape[1]}x{mine.shape[0]}")
     print(f"  {'turn':>5} {'flip':<5} {'Excel':<44}{'Oxi'}")
     agree = 0
     for at, (turn, (flip_h, flip_v)) in enumerate(ARMS):
         flip = ("H" if flip_h else "") + ("V" if flip_v else "") or "-"
-        one, two = limb(truth, at), limb(mine, at)
+        one, two = limb(truth, at, truth_grey), limb(mine, at, mine_grey)
         same = one == two
         agree += same
         print(f"  {turn // 60000:>5} {flip:<5} {one:<44}{two}{'' if same else '  <<'}")
