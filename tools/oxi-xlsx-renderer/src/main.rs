@@ -4457,6 +4457,16 @@ mod windows_draw {
         let inset = |emu: i64| (emu as f32 / super::EMU * scale).round() as i32;
         let room_of = |emu: i64| emu as f32 / super::EMU * scale;
         let pulled = pull.round() as i32;
+        // Excel snaps a text edge to a SIXTEENTH of a pixel before putting it
+        // on a whole one, which moves the boundary down by a thirty-second:
+        // 0.46875 rather than 0.5. `_xlsx_shape_top_boundary.py` and
+        // `_xlsx_shape_left_boundary.py` step the edge a thousandth of a pixel
+        // at a time across it — the top steps between 0.468 and 0.469, the
+        // left between 0.4683 and 0.4693, and both brackets hold 15/32 and
+        // exclude a twip's 0.4667. Two lanes with insets 0.6 of a pixel apart
+        // step 0.4 of a pixel apart, which is what says the SUM is what gets
+        // rounded rather than the edge on its own.
+        let sixteenth = |value: f32| ((value * 16.0).round() / 16.0).round() as i32;
         // Excel sets the text from the EXACT edge plus the exact inset, put on
         // a whole pixel once. Rounding the box first and the inset second
         // costs a pixel wherever the box's own edge falls two thirds of the way
@@ -4468,8 +4478,8 @@ mod windows_draw {
         // this one.
         let (from_left, from_right) = match edges.filter(|_| pull == 0.0) {
             Some((left, right)) => (
-                (left + room_of(said.insets.0)).round() as i32 + pulled,
-                (right - room_of(said.insets.2)).round() as i32 - pulled,
+                sixteenth(left + room_of(said.insets.0)) + pulled,
+                sixteenth(right - room_of(said.insets.2)) - pulled,
             ),
             None => (
                 box_.left + inset(said.insets.0) + pulled,
@@ -4509,7 +4519,6 @@ mod windows_draw {
         // `tb_r8_jizensoudan`'s panel is what this is worth: its top is 8.6865
         // and its inset 4.8, and 13.4865 rounds to 13 where Excel draws 14 —
         // the sixteenth takes it to 13.5 and up.
-        let sixteenth = |value: f32| ((value * 16.0).round() / 16.0).round() as i32;
         let top = match top_edge.filter(|_| pull == 0.0) {
             Some(top) => sixteenth(top + room_of(said.insets.1)) + pulled,
             None => box_.top + inset(said.insets.1) + pulled,
