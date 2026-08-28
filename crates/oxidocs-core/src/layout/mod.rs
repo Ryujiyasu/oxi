@@ -7827,6 +7827,49 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                 // the "follower" it measured was the whole table.
                                 // Row height from the same throwaway probe (never an
                                 // estimate: S970's estimate_table_row_natural_h is 4x off).
+                                // S1248 (2026-08-28, default ON, opt-out
+                                // OXI_S1248_DISABLE): what the heading has to sit
+                                // with is the table's leading keepNext ROW-CHAIN,
+                                // not merely its first row. S1038 measured one row
+                                // and S1024 measures the whole table only when
+                                // EVERY non-final row is chained; a table whose
+                                // chain stops part-way falls between them.
+                                // DERIVED, `_pb_kntbl2` KN arm (Word PDF truth, 21
+                                // filler counts): caption keepNext, rows 0..2
+                                // keepNext, rows 3..4 plain. Word keeps the whole
+                                // thing on p1 up to fill 53 and moves caption AND
+                                // rows 0..2 to p2 at fill 54 -- the filler count at
+                                // which row 3 stops fitting. Row 2 keeps with row 3,
+                                // row 1 with row 2, row 0 with row 1, the caption
+                                // with row 0: one link fails and the chain travels
+                                // whole. Measuring only the first row put the move at
+                                // fill 61, leaving the caption orphaned for 7 arms.
+                                // The chain is the leading run of keepNext rows PLUS
+                                // the row it keeps with; with no leading keepNext row
+                                // this is 1 row = S1038 unchanged.
+                                let s1248_chain_rows = if std::env::var("OXI_S1248_DISABLE").is_ok()
+                                {
+                                    1
+                                } else {
+                                    let kn = |ri: usize| -> bool {
+                                        next_table
+                                            .rows
+                                            .get(ri)
+                                            .and_then(|r| r.cells.first())
+                                            .and_then(|c| {
+                                                c.blocks.iter().find_map(|b| match b {
+                                                    Block::Paragraph(p) => Some(p.style.keep_next),
+                                                    _ => None,
+                                                })
+                                            })
+                                            .unwrap_or(false)
+                                    };
+                                    let mut k = 0usize;
+                                    while k < next_table.rows.len() && kn(k) {
+                                        k += 1;
+                                    }
+                                    (k + 1).min(next_table.rows.len().max(1))
+                                };
                                 let first_row_h = if std::env::var("OXI_S1038_DISABLE").is_ok()
                                     || self.doc_body_has_real_cjk
                                     || next_table.rows.is_empty()
@@ -7834,7 +7877,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                     0.0
                                 } else {
                                     let mut one = next_table.clone();
-                                    one.rows.truncate(1);
+                                    one.rows.truncate(s1248_chain_rows);
                                     let mut rp: Vec<LayoutPage> = Vec::new();
                                     let mut re: Vec<LayoutElement> = Vec::new();
                                     let mut rc = LayoutCursor::new(start_y);
@@ -31329,11 +31372,28 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     row_height, cursor.cursor_y, page_bottom, page_bottom - cursor.cursor_y,
                     table.style.position.is_some(), txt);
             }
+            // S1247 (2026-08-28, default ON, opt-out OXI_S1247_DISABLE): a row
+            // that itself carries keepNext is a link in a chain, and Word does
+            // not split a link. DERIVED, `_pb_kntbl2` KN arm (Word PDF truth, 21
+            // filler counts): the probe's rows 0..2 all carry keepNext on their
+            // leftmost cell's first paragraph, and Word SPLITS the tall row at no
+            // filler count at all -- it goes from wholly on p1 (fill<=53) to
+            // wholly on p2 (fill>=54) with no intermediate state, while the same
+            // table without the row keepNext (the NOKN/BARE arms) splits it 3/2,
+            // 2/3 across fills 55..57. So it is the row's own keepNext that
+            // forbids the split, not the caption's.
+            // `has_lrpb_mid_row` stays exempt: a mid-row lastRenderedPageBreak is
+            // Word's own record that it DID split this row, and a recording
+            // outranks a derived rule (the same precedence S1246 gives LRPB).
+            let s1247_chain_row = std::env::var("OXI_S1247_DISABLE").is_err()
+                && !has_lrpb_mid_row
+                && s1083_kn(row_idx);
             let needs_row_split = row_overflows
                 && !row.cant_split
                 && has_content
                 && (is_single_cell_row || has_lrpb_mid_row || s754_split)
                 && !widow_break_needed
+                && !s1247_chain_row
                 && !image_atomic_push;
 
             // S1058 (2026-08-02, default ON, opt-out OXI_S1058_DISABLE): the
