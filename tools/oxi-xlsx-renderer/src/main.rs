@@ -1321,6 +1321,28 @@ pub(crate) fn drawing_edges(
     Some((left, right))
 }
 
+/// Where a drawing's top edge falls before it was put on a whole pixel.
+///
+/// The sides are given by `drawing_edges`, and Excel adds the inset to the
+/// exact edge and rounds ONCE. The top follows the same rule: swept an eighth
+/// of a pixel at a time over five shapes — a single line, a wrapped and
+/// clipped block of four paragraphs, a second face and size, and a bordered
+/// box — `_xlsx_shape_origin_down.py` reads 8 arms of 8 with the exact top
+/// and the exact inset rounded together, where rounding them separately reads
+/// 6 of 8.
+#[cfg(windows)]
+pub(crate) fn drawing_top(
+    drawn: &oxicells_core::ir::Drawing,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<f32> {
+    // Taken at its word, as the sides are: what the clamp in `anchored_box`
+    // answers is how big Excel draws the SHAPE, which is a different question
+    // from where it sets the text.
+    let top = row_edge(layout, drawn.from.row)?;
+    Some(top + drawn.from.row_off as f32 / EMU * scale)
+}
+
 /// The face Excel draws when the workbook asks for one this machine has not.
 ///
 /// Not the name, and not the PANOSE the file carries: `_xlsx_missing_face_map.py`
@@ -3007,16 +3029,28 @@ mod windows_draw {
     /// The corpus's 2245 shapes are 1641 lines, 453 rectangles and 82 rounded
     /// ones; the rest — braces, arrows, flowchart boxes — are left undrawn
     /// rather than drawn as something they are not.
+    /// A drawing's box before its edges were put on whole pixels.
+    ///
+    /// The rounded rectangle is what gets drawn; these are what the TEXT
+    /// inside it is measured and placed from, and they are carried together
+    /// because Excel adds the insets to them and rounds once.
+    #[derive(Clone, Copy)]
+    struct Exact {
+        /// The width a line is broken against (see `drawing_room`).
+        room: Option<f32>,
+        /// The side edges, which is where the text starts from
+        /// (see `drawing_edges`).
+        sides: Option<(f32, f32)>,
+        /// And the top edge (see `drawing_top`).
+        top: Option<f32>,
+    }
+
     unsafe fn shape(
         dc: HDC,
         shape: &oxicells_core::ir::Shape,
         box_: RECT,
-        // The box's width before its edges were rounded, which is what a line
-        // is broken against (see `drawing_room`).
-        room: Option<f32>,
-        // And the side edges themselves, which is where the text starts from
-        // (see `drawing_edges`).
-        edges: Option<(f32, f32)>,
+        // The box before its edges were put on whole pixels.
+        exact: Exact,
         scale: f32,
         normal: Option<&(String, f32)>,
     ) {
@@ -3560,9 +3594,10 @@ mod windows_draw {
                     said,
                     Frame {
                         box_,
-                        exact: room,
+                        exact: exact.room,
                         pull: preset_pull(&shape.geometry, box_),
-                        edges,
+                        edges: exact.sides,
+                        top_edge: exact.top,
                     },
                     scale,
                     normal,
@@ -4225,12 +4260,15 @@ mod windows_draw {
                 right: box_.left + ((frame.x + frame.w) * across as f64).round() as i32,
                 bottom: box_.top + ((frame.y + frame.h) * down as f64).round() as i32,
             };
-            shape(dc, held, over, None, None, scale, normal);
+            // A shape inside a group is placed by the group's own fractions,
+            // which have already been put on whole pixels here; it has no
+            // exact edge of its own to add an inset to.
+            shape(dc, held, over, Exact { room: None, sides: None, top: None }, scale, normal);
             if let Some(said) = &held.text {
                 says(
                     dc,
                     said,
-                    Frame { box_: over, exact: None, pull: 0.0, edges: None },
+                    Frame { box_: over, exact: None, pull: 0.0, edges: None, top_edge: None },
                     scale,
                     normal,
                     false,
@@ -4399,6 +4437,8 @@ mod windows_draw {
         /// The box's own side edges before they were put on whole pixels.
         /// Excel adds the inset to these and rounds ONCE (`drawing_edges`).
         edges: Option<(f32, f32)>,
+        /// And its top edge, which follows the same rule (`drawing_top`).
+        top_edge: Option<f32>,
     }
 
     unsafe fn says(
@@ -4413,7 +4453,7 @@ mod windows_draw {
         // and size in a shape is 36.5.
         note: bool,
     ) {
-        let Frame { box_, exact, pull, edges } = frame;
+        let Frame { box_, exact, pull, edges, top_edge } = frame;
         let inset = |emu: i64| (emu as f32 / super::EMU * scale).round() as i32;
         let room_of = |emu: i64| emu as f32 / super::EMU * scale;
         let pulled = pull.round() as i32;
@@ -4455,9 +4495,28 @@ mod windows_draw {
                     .collect::<Vec<_>>(),
             );
         }
+        // The top is the exact edge plus the exact inset, put on a pixel once,
+        // the same way the sides are — but the boundary it turns on is not the
+        // half. `_xlsx_shape_top_boundary.py` steps the edge a thousandth of a
+        // pixel at a time across it, with the inset written 0, 3.6 and 7.2
+        // points in three lanes: all three step at the same SUM fraction, so
+        // it is the sum being put on a pixel, and they step between 0.468 and
+        // 0.469 — which brackets 15/32. So Excel snaps the sum to a SIXTEENTH
+        // of a pixel first and rounds that, moving the boundary down by a
+        // thirty-second. A twip's worth of quantising (0.4667) is ruled out by
+        // the same reading.
+        //
+        // `tb_r8_jizensoudan`'s panel is what this is worth: its top is 8.6865
+        // and its inset 4.8, and 13.4865 rounds to 13 where Excel draws 14 —
+        // the sixteenth takes it to 13.5 and up.
+        let sixteenth = |value: f32| ((value * 16.0).round() / 16.0).round() as i32;
+        let top = match top_edge.filter(|_| pull == 0.0) {
+            Some(top) => sixteenth(top + room_of(said.insets.1)) + pulled,
+            None => box_.top + inset(said.insets.1) + pulled,
+        };
         let area = RECT {
             left: from_left,
-            top: box_.top + inset(said.insets.1) + pulled,
+            top,
             right: from_right,
             bottom: box_.bottom - inset(said.insets.3) - pulled,
         };
@@ -6739,8 +6798,11 @@ mod windows_draw {
                             dc,
                             held,
                             box_,
-                            super::drawing_room(drawn, layout, scale),
-                            super::drawing_edges(drawn, layout, scale),
+                            Exact {
+                                room: super::drawing_room(drawn, layout, scale),
+                                sides: super::drawing_edges(drawn, layout, scale),
+                                top: super::drawing_top(drawn, layout, scale),
+                            },
                             scale,
                             sheet.normal_font.as_ref(),
                         )
@@ -6859,7 +6921,7 @@ mod windows_draw {
                 says(
             dc,
             &note.text,
-            Frame { box_, exact: None, pull: 0.0, edges: None },
+            Frame { box_, exact: None, pull: 0.0, edges: None, top_edge: None },
             scale,
             sheet.normal_font.as_ref(),
             true,
