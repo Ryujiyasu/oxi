@@ -224,6 +224,32 @@ is('a fill taken off is gone, not turned white',
 is('and the rule under it stayed',
   cellAt(stripped, 4, 0).style.border_bottom.style, 'thick');
 
+// ── Cells drawn as one ───────────────────────────────────────────────────
+//
+// A merge is a list on the sheet, not a mark on a cell, and a sheet that has
+// never had one has no `<mergeCells>` element for it to go in. Taking the last
+// one off has to take the element with it, which is the other half of the same
+// writer.
+
+const joined = parse_spreadsheet(sample.slice());
+is('the sample starts with nothing merged', joined.sheets[0].merge_cells, []);
+joined.sheets[0].merge_cells = [
+  { start_row: 1, start_col: 0, end_row: 1, end_col: 3 },
+  { start_row: 4, start_col: 0, end_row: 5, end_col: 0 },
+];
+const merged = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), joined));
+is('a merge comes back with the corners it was given',
+  merged.sheets[0].merge_cells.map((one) =>
+    [one.start_row, one.start_col, one.end_row, one.end_col].join(':')).sort(),
+  ['1:0:1:3', '4:0:5:0']);
+
+const split = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), (() => {
+  const one = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), joined));
+  one.sheets[0].merge_cells = [];
+  return one;
+})()));
+is('and taking them all off leaves none behind', split.sheets[0].merge_cells, []);
+
 console.log(failures === 0
   ? '\nwhat was changed is what the file holds'
   : `\n${failures} did not`);

@@ -68,6 +68,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'runValue', 'fillLine', 'fillTo', 'wrapped', 'unitOf', 'sameStyle',
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules', 'findNext',
+  'span', 'mergesMet', 'setMerges', 'wearMerge',
   'calcCost',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere',
@@ -270,6 +271,11 @@ const cells = () => {
   return out.sort();
 };
 const unsaved = () => changes.size;
+// The merges the sheet holds, as corners, so a test can say what shape it
+// expects rather than compare objects.
+const merged = () => (sheet.merge_cells || [])
+  .map((one) => [one.start_row, one.start_col, one.end_row, one.end_col].join(':'))
+  .sort();
 // Start over as if a fresh file had been opened.
 const forget = () => {
   cutFrom = null;
@@ -293,6 +299,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget, rule, wearRules, findNext,
+         wearMerge, merged, mergesMet,
          calcCost, shapeBook };
 `));
 
@@ -421,6 +428,77 @@ is('and leaves the column beside it alone', edges(2, 2), '');
 // Asking for nothing is not a change.
 grid.wearRules('');
 is('an empty choice does nothing', edges(2, 1), 'l');
+
+
+// ── Cells drawn as one ───────────────────────────────────────────────────────
+//
+// A merge is a rectangle on the sheet rather than something a cell wears, so
+// it needs its own undo slot, and what it does to the cells under it is the
+// part that is easy to get wrong: only the top-left keeps what it held, and
+// taking the merge back has to bring the rest of the values with it.
+
+grid.forget();
+grid.seed(2, 1, 'title'); grid.seed(2, 2, 'lost'); grid.seed(3, 1, 'gone');
+grid.select(2, 1, 3, 2);
+grid.wearMerge('cells');
+is('merging leaves one block with the selection’s corners',
+  grid.merged(), ['2:1:3:2']);
+is('the top-left keeps what it held and the rest is emptied',
+  grid.cells(), [['2,1', 'title']]);
+is('a merge cannot be saved as a list of values', grid.beyond(), true);
+
+grid.undo();
+is('undo takes the merge off again', grid.merged(), []);
+is('and brings the values it emptied back',
+  grid.cells(), [['2,1', 'title'], ['2,2', 'lost'], ['3,1', 'gone']]);
+grid.redo();
+is('redo puts it back', grid.merged(), ['2:1:3:2']);
+
+// Excel’s own button centres as well as merges, which is what a heading over
+// a table wants and is why that is the one people press.
+grid.forget();
+grid.seed(1, 0, 'heading');
+grid.select(1, 0, 1, 2);
+grid.wearMerge('centre');
+is('merge and centre centres the cell that is left',
+  grid.styleAt(1, 0).horizontal_align, 'center');
+
+// Across merges each ROW of the selection on its own — a stack of headings in
+// one go — rather than making one block of the lot.
+grid.forget();
+grid.select(1, 0, 3, 1);
+grid.wearMerge('across');
+is('across merges row by row', grid.merged(), ['1:0:1:1', '2:0:2:1', '3:0:3:1']);
+grid.forget();
+grid.select(1, 0, 3, 0);
+grid.wearMerge('across');
+is('a single column has nothing to merge across', grid.merged(), []);
+
+// Two merges may not cross, so one that the new block only half covers goes
+// rather than being left sticking out of it.
+grid.forget();
+grid.select(1, 0, 1, 1);
+grid.wearMerge('cells');
+grid.select(1, 1, 1, 3);
+grid.wearMerge('cells');
+is('a merge the new one overlaps is replaced, not left crossing it',
+  grid.merged(), ['1:1:1:3']);
+
+grid.select(1, 0, 1, 3);
+grid.wearMerge('unmerge');
+is('unmerging takes off every merge the selection meets', grid.merged(), []);
+
+// The menu offers nothing where there is nothing to do, and asking anyway is
+// not a change: a lone unmerged cell has neither a block to merge nor a merge
+// to take off.
+grid.forget();
+grid.seed(1, 0, 'a');
+grid.select(1, 0, 1, 0);
+grid.wearMerge('cells');
+is('one cell on its own is not a merge', grid.merged(), []);
+is('and asking for it was not a step to take back', grid.depth(), 0);
+grid.wearMerge('unmerge');
+is('nor is unmerging what is not merged', grid.depth(), 0);
 
 
 // ── The rules a workbook actually has ───────────────────────────────────────

@@ -247,5 +247,26 @@ if (box && box.listeners.has('keydown')) {
   is('the page has a format box listening for keys', false, true);
 }
 
+// ── The merge menu ──────────────────────────────────────────────────────────
+//
+// Same shape of question as the format box: whether the control is listening
+// and whether choosing from it runs all the way through. The cursor out here
+// is on one cell, which is nothing to merge, so what this shows is that the
+// path holds and the menu goes back to its own name — not that a block was
+// merged. `grid.test.mjs` asks what merging does to the cells, and
+// `save.test.mjs` asks whether it reaches the file.
+
+const menu = nodes.get('merge');
+if (menu && menu.listeners.has('change')) {
+  const drawnBefore = made.filter((one) => one.tagName === 'TABLE').length;
+  menu.value = 'cells';
+  menu.fire('change', {});
+  is('choosing from the merge menu runs through to a redraw',
+    made.filter((one) => one.tagName === 'TABLE').length > drawnBefore, true);
+  is('and the menu goes back to its own name', menu.value, '');
+} else {
+  is('the page has a merge menu listening for a choice', false, true);
+}
+
 console.log(failures === 0 ? '\nthe page loads' : `\n${failures} did not`);
 process.exit(failures === 0 ? 0 : 1);

@@ -319,6 +319,13 @@ table { user-select: none; }
     <option value="right">Right</option>
     <option value="none">None</option>
   </select>
+  <select id="merge" disabled title="Draw a block of cells as one">
+    <option value="">Merge</option>
+    <option value="centre">Merge &amp; centre</option>
+    <option value="cells">Merge cells</option>
+    <option value="across">Merge across</option>
+    <option value="unmerge">Unmerge</option>
+  </select>
   <input id="fill" type="color" disabled title="Fill colour" />
   <button id="nofill" disabled title="No fill">&#8709;</button>
   <input id="numfmt" list="numfmts" disabled placeholder="Format"
@@ -719,6 +726,13 @@ function draw() {
       lastRow = Math.max(lastRow, row.index);
       lastColumn = Math.max(lastColumn, cell.col);
     }
+  }
+  // A merge is part of the sheet whether anything is written in it or not, so
+  // the grid has to reach far enough to draw one: a block merged across empty
+  // columns would otherwise span past the last one there is.
+  for (const merge of sheet.merge_cells || []) {
+    lastRow = Math.max(lastRow, merge.end_row);
+    lastColumn = Math.max(lastColumn, merge.end_col);
   }
   lastColumn = Math.max(lastColumn, 3);
   lastRow = Math.max(lastRow, 8);
@@ -1210,6 +1224,85 @@ function sayFill() {
   fillBox.value = agree && seen ? `#${seen}` : '#ffffff';
 }
 
+// ── Cells drawn as one ──────────────────────────────────────────────────────
+//
+// A merge is not something a cell wears. It is a list on the SHEET saying
+// which rectangles are drawn as one cell, so it cannot ride in on `restyle`
+// the way a border or a fill does, and it needs its own slot in an undo step.
+//
+// Only the top-left of a merge keeps what it held — Excel warns before it
+// throws the rest away. Here the cells it empties are written inside the same
+// step, so taking the merge back brings their values with it.
+
+const mergeBox = document.getElementById('merge');
+
+function span(top, left, bottom, right) {
+  return { start_row: top, start_col: left, end_row: bottom, end_col: right };
+}
+
+/** The merges this sheet has that meet the selection. */
+function mergesMet(sheet) {
+  const box = region();
+  return (sheet.merge_cells || []).filter((one) =>
+    one.start_row <= box.bottom && one.end_row >= box.top
+    && one.start_col <= box.right && one.end_col >= box.left);
+}
+
+/** Replace the sheet's merges, remembering the list it had. */
+function setMerges(sheet, merges) {
+  if (step) step.merges.push({ sheet, was: (sheet.merge_cells || []).slice(), now: merges });
+  sheet.merge_cells = merges;
+  // A merge is not a cell value, so the narrow save path has nowhere to put it.
+  beyondValues = true;
+}
+
+/**
+ * Merge the selection, or take merges off it.
+ *
+ * `centre` and `cells` make one block of the whole selection; `across` makes
+ * one of each row of it, which is how a stack of headings gets merged in a
+ * single go. Any merge the selection touches goes either way: unmerging is
+ * that on its own, and a merge left half-overlapping a new one would cross it.
+ */
+function wearMerge(kind) {
+  if (!kind) return;
+  const sheet = sheetNow();
+  if (!sheet) return;
+  const box = region();
+  change(() => {
+    const met = new Set(mergesMet(sheet));
+    const kept = (sheet.merge_cells || []).filter((one) => !met.has(one));
+    const made = [];
+    if (kind === 'across') {
+      // A single column has nothing to merge across, row by row or otherwise.
+      if (box.left !== box.right) {
+        for (let row = box.top; row <= box.bottom; row++) {
+          made.push(span(row, box.left, row, box.right));
+        }
+      }
+    } else if (kind !== 'unmerge' && spread()) {
+      made.push(span(box.top, box.left, box.bottom, box.right));
+    }
+    if (met.size === 0 && made.length === 0) return;
+    setMerges(sheet, kept.concat(made));
+    for (const one of made) {
+      for (let row = one.start_row; row <= one.end_row; row++) {
+        for (let col = one.start_col; col <= one.end_col; col++) {
+          if (row === one.start_row && col === one.start_col) continue;
+          put(row, col, '');
+        }
+      }
+      if (kind !== 'centre') continue;
+      const held = heldAt(one.start_row, one.start_col);
+      const was = held ? held.style : {};
+      put(one.start_row, one.start_col, contentOf(held),
+        { ...was, horizontal_align: 'center' });
+    }
+  });
+  draw();
+  paint();
+}
+
 // ── How the numbers look ────────────────────────────────────────────────────
 //
 // A number format decides what a cell SHOWS without touching what it holds:
@@ -1353,7 +1446,9 @@ const DEPTH = 100;
 /** Run `what` so that everything it writes can be undone in one go. */
 function change(what) {
   if (step) { what(); return; }   // already inside a step: do not nest
-  step = { sheet: shown, cells: [], columns: [], lines: [], panes: [], books: [] };
+  step = {
+    sheet: shown, cells: [], columns: [], lines: [], panes: [], books: [], merges: [],
+  };
   const built = step;
   try {
     what();
@@ -1362,7 +1457,7 @@ function change(what) {
   }
   if (built.cells.length === 0 && built.columns.length === 0
     && built.lines.length === 0 && built.panes.length === 0
-    && built.books.length === 0) return;
+    && built.books.length === 0 && built.merges.length === 0) return;
   // Whatever was marked for a cut is no longer what the clipboard holds.
   if (cutFrom) cutFrom = null;
   recompute();
@@ -1392,6 +1487,14 @@ function restore(built, side) {
     put(one.row, one.col, one[side], side === 'was' ? one.wasStyle : one.nowStyle);
   }
   const sheet = sheetNow();
+  // A merge belongs to the sheet it was made on, which need not be the one in
+  // front of us — every other slot of a step is read back through `sheetNow`,
+  // and this one was written with the sheet it touched.
+  for (let i = built.merges.length - 1; i >= 0; i--) {
+    const one = built.merges[i];
+    one.sheet.merge_cells = one[side];
+    beyondValues = true;
+  }
   for (let i = built.columns.length - 1; i >= 0; i--) {
     const one = built.columns[i];
     if (sheet) sheet.col_widths[one.col] = one[side];
@@ -1485,6 +1588,15 @@ if (rulesBox) {
   rulesBox.addEventListener('change', () => {
     wearRules(rulesBox.value);
     rulesBox.value = '';
+    focusGrid();
+  });
+}
+if (mergeBox) {
+  // Like the rules menu, a list of actions rather than of states: the name
+  // comes back once the choice is made.
+  mergeBox.addEventListener('change', () => {
+    wearMerge(mergeBox.value);
+    mergeBox.value = '';
     focusGrid();
   });
 }
@@ -1728,6 +1840,12 @@ function paint() {
   sayFill();
   if (rulesBox) rulesBox.disabled = !book;
   if (findBox) findBox.disabled = !book;
+  // Merging needs more than one cell, and unmerging needs one that is already
+  // merged; with a single unmerged cell picked the menu has nothing to offer.
+  if (mergeBox) {
+    const sheet = sheetNow();
+    mergeBox.disabled = !sheet || (!spread() && mergesMet(sheet).length === 0);
+  }
   const table = tableNow();
   if (!table) return;
   const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
