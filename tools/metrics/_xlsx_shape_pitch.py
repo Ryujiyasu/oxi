@@ -58,23 +58,55 @@ SPACINGS += [(f"pct {value}", f'<a:lnSpc><a:spcPct val="{value}"/></a:lnSpc>')
              for value in (70000, 80000, 90000, 100000, 115000, 150000)]
 
 
+# Which of the four lines are bold. `tb_r8_jizensoudan`'s panel steps 27, 27
+# in Excel and 27, 28 here, and the line the extra pixel arrives at is the one
+# whose paragraph carries `b="1"` — so whether a bold line asks for a taller
+# box is the question. "pppp" is the control; it has to come back level.
+# `m` is a line that also holds a LATIN run at the same size — which is what
+# the corpus panel's second and third paragraphs do (`+mn-lt` beside
+# `+mn-ea`), and the extra pixel arrives at exactly those lines.
+WEIGHTS = ["pppp", "pbpb", "bbbb", "pmpm", "mmmm"]
+LATIN = "Calibri"
+# The Latin word on a mixed line. `Dg` was tried first and answers a
+# different question: the `g` has a DESCENDER, which raises the line on its
+# own. The corpus panel's Latin runs are `D`, `E`, `F`, `R` — no descender
+# anywhere — and Excel steps those lines no further than a plain one.
+LATIN_WORD = "D"
+
+
 def cases():
-    return [(face, points, f"{name} {anchor}", (spec, anchor))
-            for face, points in FONTS
-            for name, spec in SPACINGS
-            for anchor in ANCHORS]
+    plain = [(face, points, f"{name} {anchor}", (spec, anchor, "pppp"))
+             for face, points in FONTS
+             for name, spec in SPACINGS
+             for anchor in ANCHORS]
+    # The weights are swept only against the spacing the corpus shape states,
+    # which is none at all: a hundred more cases would not fit the picture.
+    weighed = [(face, points, f"none t {mark}", ("", "t", mark))
+               for face, points in FONTS
+               for mark in WEIGHTS[1:]]
+    return plain + weighed
 
 
 def anchors_xml():
     held = []
     for index, (face, points, _name, told) in enumerate(cases()):
-        spec, anchor = told
-        runs = "".join(
-            f'<a:p><a:pPr algn="l">{spec}</a:pPr><a:r>'
-            f'<a:rPr lang="ja-JP" sz="{int(points * 100)}">'
-            f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
-            f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
-            for _ in range(LINES))
+        spec, anchor, weights = told
+        def one(line: int) -> str:
+            bold = ' b="1"' if weights[line] == "b" else ""
+            said = (
+                f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}"{bold}>'
+                f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
+                f"</a:rPr><a:t>{WORD}</a:t></a:r>"
+            )
+            if weights[line] == "m":
+                said += (
+                    f'<a:r><a:rPr lang="en-US" sz="{int(points * 100)}">'
+                    f'<a:latin typeface="{LATIN}"/><a:ea typeface="{LATIN}"/>'
+                    f"</a:rPr><a:t>{LATIN_WORD}</a:t></a:r>"
+                )
+            return f'<a:p><a:pPr algn="l">{spec}</a:pPr>{said}</a:p>'
+
+        runs = "".join(one(line) for line in range(LINES))
         held.append(
             f"<xdr:oneCellAnchor>"
             f"<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
@@ -206,7 +238,7 @@ def main():
         at += heights[index]
 
     print(f"{'face':<14}{'pt':>5}{'lnSpc':>14}"
-          f"{'Excel base1':>12}{'pitch':>8}{'ours base1':>12}{'pitch':>8}{'lines':>7}")
+          f"{'Excel base1':>12}{'steps':>12}{'ours base1':>12}{'steps':>12}{'lines':>7}")
     for index, (face, points, name, _held) in enumerate(cases()):
         top = edges.get(index * SPACING)
         foot = edges.get(index * SPACING + SPACING - 1)
@@ -214,12 +246,17 @@ def main():
             continue
         theirs = feet(truth, top, foot, lane)
         ours = feet(mine, top, foot, lane)
-        step = lambda held: (f"{(held[-1] - held[0]) / (len(held) - 1):.2f}"
-                             if len(held) > 1 else "-")
+        # Each step, not their average. With the line kinds alternating the
+        # steps alternate too, and an average hides which of them moved —
+        # `pmpm` read 19.67 against Excel's 20.00 and said nothing about where
+        # the pixel went.
+        step = lambda held: (
+            ",".join(str(held[i + 1] - held[i]) for i in range(len(held) - 1))
+            if len(held) > 1 else "-")
         flag = "" if (theirs[:1] == ours[:1] and step(theirs) == step(ours)) else "  <<"
         print(f"{face:<14}{points:>5}{name:>14}"
-              f"{theirs[0] if theirs else -1:>12}{step(theirs):>8}"
-              f"{ours[0] if ours else -1:>12}{step(ours):>8}"
+              f"{theirs[0] if theirs else -1:>12}{step(theirs):>12}"
+              f"{ours[0] if ours else -1:>12}{step(ours):>12}"
               f"{f'{len(theirs)}/{len(ours)}':>7}{flag}")
 
 
