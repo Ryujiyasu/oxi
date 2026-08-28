@@ -1059,7 +1059,7 @@ fn table_line_pt(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
     if !tblrowln_on() {
         return fs * 1.2;
     }
-    if let Some(exact) = p.line_spacing_pts.filter(|v| *v > 0.0) {
+    if let Some(exact) = exact_line_pt(p) {
         return exact;
     }
     match p.line_spacing {
@@ -1109,13 +1109,41 @@ fn table_line_pt(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
 /// ★The earlier attempt (S-CELLADV) changed the pitch alone and lost 0 to 10:
 /// the same closure sizes the block, so every SINGLE-LINE cell moved, including
 /// d23 s11 at -0.0487. Pitch and block have to change together or not at all.
+/// Whether a fixed line spacing is rounded the way PowerPoint rounds it.
+fn lnspcround_on() -> bool {
+    std::env::var("OXI_LNSPCROUND_DISABLE").is_err()
+}
+
+/// A fixed `a:lnSpc/a:spcPts` as PowerPoint uses it: **rounded to the nearest
+/// whole point**, ties away from zero.
+///
+/// S-LNSPCROUND (2026-08-29). The file's hundredths are not honoured. blind 31
+/// s24 declares 32.20 and the truth PDF steps **32.000**; s12's 33.59 steps
+/// 34.00; 36/37's 37.79 steps 37.99 and their 29.40 steps 29.03 -- while every
+/// integer value (105.00, 28.00) lands within 0.005pt. Oxi set the declared
+/// value and drifted 0.2pt a line: 2.88pt over the fifteen lines of 31 s24,
+/// with every line break and every line width matching to 0.48pt, which is what
+/// makes the pitch the only suspect.
+///
+/// The tie is the probe's (`gen_pptx_lnspcround.py`, 11 arms, Arial 12pt,
+/// `wrap="none"`): 20.40 -> 20.002, 20.49 -> 20.002, **20.50 -> 21.006**,
+/// 20.51 -> 21.006, 21.50 -> 21.999, 33.59 -> 34.001, 120.50 -> 120.985.
+/// Half-up, not half-even.
+///
+/// ★Rounded HERE and not in the parser: the IR keeps what the file says, so a
+/// round-trip save cannot write 3200 back over a deck's 3220.
+fn exact_line_pt(p: &oxislides_core::ir::SlideParagraph) -> Option<f32> {
+    let v = p.line_spacing_pts.filter(|v| *v > 0.0 && lnspcpts_on())?;
+    Some(if lnspcround_on() { v.round() } else { v })
+}
+
 fn cellbox_on() -> bool {
     std::env::var("OXI_CELLBOX_DISABLE").is_err()
 }
 
 /// The lnSpc multiple a paragraph asks for, as `first_baseline_off` wants it.
 fn lnspc_multiple(fs: f32, p: &oxislides_core::ir::SlideParagraph) -> f32 {
-    if let Some(exact) = p.line_spacing_pts.filter(|v| *v > 0.0) {
+    if let Some(exact) = exact_line_pt(p) {
         if fs > 0.0 {
             return exact / (fs * 1.2);
         }
@@ -5090,9 +5118,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     // unchanged.
                                     let adv = if !tblrowln_on() {
                                         fs as f64 * scale * 1.2
-                                    } else if let Some(exact) =
-                                        p.line_spacing_pts.filter(|v| *v > 0.0)
-                                    {
+                                    } else if let Some(exact) = exact_line_pt(p) {
                                         exact as f64 * scale
                                     } else {
                                         let mult = match p.line_spacing {
@@ -14856,10 +14882,8 @@ fn layout_paragraph_baselines(
     // 0.9159 and the step becomes 107.25pt against PowerPoint's measured 107.06
     // / 106.95. Oxi stepped the flat 117.10 and its three baselines fell 9.91 /
     // 19.97 / 29.66pt below PowerPoint's.
-    let n = para
-        .line_spacing_pts
-        .filter(|_| lnspcpts_on())
-        .filter(|pts| *pts > 0.0 && fs > 0.0)
+    let n = exact_line_pt(para)
+        .filter(|_| fs > 0.0)
         .map(|pts| pts / (fs * 1.2))
         .or(para.line_spacing)
         .or(m.line_spacing)

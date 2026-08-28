@@ -829,6 +829,12 @@ pub struct SlideParagraph {
     /// overrides the multiple. d36's title asks for 107.25pt on 97.58pt type,
     /// where the 1.2 default would step 117.10pt -- so its three title lines
     /// drifted 9.9 / 20.0 / 29.7pt below PowerPoint's.
+    ///
+    /// This is what the FILE says, hundredths and all. PowerPoint rounds it to
+    /// the nearest whole point (ties up) before using it -- 32.20 steps 32.000,
+    /// 33.59 steps 34.00 -- but the rounding belongs to the renderer, so a
+    /// round-trip save cannot write 3200 back over a deck's 3220. See
+    /// `exact_line_pt` in `tools/oxi-pptx-renderer`.
     #[serde(default)]
     pub line_spacing_pts: Option<f32>,
     /// Space before this paragraph, in points (`a:spcBef/a:spcPts` val/100).
