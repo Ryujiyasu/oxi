@@ -43,6 +43,19 @@ WORD = "A"
 # question is what metric of the face predicts the residual.
 FONTS = [("Yu Gothic UI", 12.0), ("Yu Gothic UI", 11.0), ("メイリオ", 11.0),
          ("ＭＳ Ｐゴシック", 11.0), ("游ゴシック", 11.0)]
+# A pinned pitch lifts the line by `descent - em/4`, and the renderer takes
+# the FLOOR of that. Every arm above lands on a fraction of 0.0 or 0.333,
+# where floor and round are the same number — so the sweep has never asked
+# which of them Excel uses. These five land on 0.667:
+#
+#     メイリオ 10pt   6 - 3.333 = 2.667      メイリオ 16pt   9 - 5.333 = 3.667
+#     游ゴシック 10pt  4 - 3.333 = 0.667      游ゴシック 16pt  6 - 5.333 = 0.667
+#     Yu Gothic UI 16pt                      6 - 5.333 = 0.667
+#
+# `002`'s title shape pins its fourth line at 30 point in メイリオ 16, and
+# that line is the one pixel this cannot see.
+FONTS += [("メイリオ", 10.0), ("メイリオ", 16.0), ("游ゴシック", 10.0),
+          ("游ゴシック", 16.0), ("Yu Gothic UI", 16.0)]
 # The two anchors gave the same first baseline in every one of the earlier
 # thirty-two rows, so only the top one is worth the rows.
 ANCHORS = ["t"]
