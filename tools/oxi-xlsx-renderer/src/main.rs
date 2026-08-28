@@ -4411,6 +4411,25 @@ mod windows_draw {
                 box_.right - inset(said.insets.2) - pulled,
             ),
         };
+        if std::env::var("OXI_XLSX_DUMP_TEXTBOX").is_ok() {
+            eprintln!(
+                "textbox box {},{} to {},{}  insets {:?}  inset_px {}  pull {pull}  says {:?}",
+                box_.left,
+                box_.top,
+                box_.right,
+                box_.bottom,
+                said.insets,
+                inset(said.insets.1),
+                said.paragraphs
+                    .iter()
+                    .map(|held| (
+                        held.face.clone(),
+                        held.size,
+                        held.text.chars().take(6).collect::<String>(),
+                    ))
+                    .collect::<Vec<_>>(),
+            );
+        }
         let area = RECT {
             left: from_left,
             top: box_.top + inset(said.insets.1) + pulled,
