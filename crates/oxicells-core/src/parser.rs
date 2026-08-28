@@ -1374,6 +1374,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
         line: None,
         flip_h: false,
         flip_v: false,
+        rotation: 0,
         text: None,
     };
     let mut shape = blank_shape.clone();
@@ -1546,6 +1547,9 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "xfrm" if in_sp_pr => {
                     shape.flip_h = is_true(get_attr(e, "flipH").as_deref());
                     shape.flip_v = is_true(get_attr(e, "flipV").as_deref());
+                    shape.rotation = get_attr(e, "rot")
+                        .and_then(|held| held.parse().ok())
+                        .unwrap_or(0);
                 }
                 // An adjust handle, which a preset reads its own shape from.
                 // Only the ones inside a `prstGeom` count: a `custGeom` states

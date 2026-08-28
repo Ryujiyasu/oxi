@@ -290,6 +290,10 @@ fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
+}
+
 /// A corner of a drawing: the cell it hangs from, and how far into that cell
 /// it sits. The offsets are EMU — 914400 to the inch, so 9525 to a pixel at
 /// 96 dpi.
@@ -415,6 +419,12 @@ pub struct Shape {
     pub flip_h: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip_v: bool,
+    /// How far round the shape is turned, in sixtieth-thousandths of a degree,
+    /// clockwise. The turn is about the box's centre, and the anchor states
+    /// the box the turn LEAVES it in: a tall shape turned a quarter is hung
+    /// from an anchor as wide as the shape was tall.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub rotation: i32,
     /// What the shape says, when it says anything. 198 of the corpus's 2202
     /// shapes hold text, and they are the large ones: a banner across the top
     /// of a sheet, a heading over a table.

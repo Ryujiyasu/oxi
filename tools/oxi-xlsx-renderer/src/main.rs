@@ -3102,19 +3102,20 @@ mod windows_draw {
 
         match shape.geometry.as_str() {
             // A line runs from one corner of its box to the other, and a
-            // flipped one from the corners the other way round.
-            "line" | "straightConnector1" => {
+            // flipped one from the corners the other way round. An elbow
+            // connector runs along one whole side and then down the next; the
+            // corner it turns at is whichever of the box's four the flips and
+            // the turn put it at, which `laid` works out.
+            "line" | "straightConnector1" | "bentConnector2" => {
                 if rule.is_some() {
-                    let (from_x, to_x) = if shape.flip_h {
-                        (box_.right, box_.left)
+                    let unit: &[(f32, f32)] = if shape.geometry == "bentConnector2" {
+                        &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
                     } else {
-                        (box_.left, box_.right)
+                        &[(0.0, 0.0), (1.0, 1.0)]
                     };
-                    let (from_y, to_y) = if shape.flip_v {
-                        (box_.bottom, box_.top)
-                    } else {
-                        (box_.top, box_.bottom)
-                    };
+                    let path = laid(unit, shape, box_);
+                    let (from_x, from_y) = (path[0].x, path[0].y);
+                    let (to_x, to_y) = (path[path.len() - 1].x, path[path.len() - 1].y);
                     // A rule an odd number of pixels wide reaches one pixel
                     // further than its path, exactly as each dash of a broken
                     // one does — a solid rule is a single stretch of ink, and
@@ -3144,11 +3145,17 @@ mod windows_draw {
                                 && held.cap.as_deref() != Some("rnd")
                         })
                         .map_or(0, |_| 1);
+                    // The pixel goes on past the end of the LAST leg, which
+                    // for a bare line is the whole of it.
+                    let before = path[path.len() - 2];
                     let (reach_x, reach_y) = (
-                        to_x + (to_x - from_x).signum() * stretch,
-                        to_y + (to_y - from_y).signum() * stretch,
+                        to_x + (to_x - before.x).signum() * stretch,
+                        to_y + (to_y - before.y).signum() * stretch,
                     );
-                    let _ = MoveToEx(dc, from_x, from_y, None);
+                    let _ = MoveToEx(dc, path[0].x, path[0].y, None);
+                    for step in 1..path.len() - 1 {
+                        let _ = LineTo(dc, path[step].x, path[step].y);
+                    }
                     let _ = LineTo(dc, reach_x, reach_y);
                     // And whatever the rule wears at its ends. Measured off
                     // Excel's own picture by `_xlsx_arrow_head.py`, which
@@ -3166,9 +3173,14 @@ mod windows_draw {
                     // there, so that part is a fit rather than a law.
                     if let Some(ruled) = shape.line.as_ref() {
                         let thick = ((ruled.width as f32 / super::EMU) * scale).max(1.0);
+                        // A head points along the leg it sits on, not at
+                        // the far end of the path: an elbow's two legs run at
+                        // right angles, and aiming across the corner would
+                        // put the arrow at forty-five degrees to both.
+                        let after = path[1];
                         for (worn, tip, tail) in [
-                            (ruled.tail_end.as_deref(), (to_x, to_y), (from_x, from_y)),
-                            (ruled.head_end.as_deref(), (from_x, from_y), (to_x, to_y)),
+                            (ruled.tail_end.as_deref(), (to_x, to_y), (before.x, before.y)),
+                            (ruled.head_end.as_deref(), (from_x, from_y), (after.x, after.y)),
                         ] {
                             let Some(worn) = worn else { continue };
                             let (long, wide) = match worn {
@@ -4229,6 +4241,56 @@ mod windows_draw {
     /// Excel's own are a tenth of an inch either side and a twentieth above
     /// and below — wrapped in what is left, and the block of lines is put
     /// against the top, the middle or the foot by the body's anchor.
+    /// Carry a preset's path into the box its anchor gives it.
+    ///
+    /// The path is stated in fractions of the shape's OWN box, which is
+    /// mirrored before it is turned. The anchor holds the box the turn LEAVES
+    /// the shape in — a tall shape turned a quarter hangs from an anchor as
+    /// wide as it was tall — so a point is placed in the unit square, mirrored,
+    /// turned, and only then given the anchor's own width and height.
+    ///
+    /// Measured, `_xlsx_bent_connector.py`: sixteen elbow connectors, every
+    /// quarter turn against every pair of flips, read out of Excel's own
+    /// picture. The corner the elbow turns at lands on all four corners of the
+    /// box in the order this produces, and the ink spans the anchor's box in
+    /// every one of them — Excel does not grow the box to hold a turned shape.
+    ///
+    /// Only quarter turns. The corpus states five turns and all five are one;
+    /// anything else is left lying where it was written rather than guessed at.
+    pub(super) fn laid(
+        points: &[(f32, f32)],
+        shape: &oxicells_core::ir::Shape,
+        box_: RECT,
+    ) -> Vec<POINT> {
+        let quarters = {
+            let round = shape.rotation.rem_euclid(21_600_000);
+            (round % 5_400_000 == 0).then_some(round / 5_400_000)
+        };
+        let wide = (box_.right - box_.left) as f32;
+        let tall = (box_.bottom - box_.top) as f32;
+        points
+            .iter()
+            .map(|&(mut across, mut down)| {
+                if shape.flip_h {
+                    across = 1.0 - across;
+                }
+                if shape.flip_v {
+                    down = 1.0 - down;
+                }
+                let (across, down) = match quarters {
+                    Some(1) => (1.0 - down, across),
+                    Some(2) => (1.0 - across, 1.0 - down),
+                    Some(3) => (down, 1.0 - across),
+                    _ => (across, down),
+                };
+                POINT {
+                    x: box_.left + (across * wide).round() as i32,
+                    y: box_.top + (down * tall).round() as i32,
+                }
+            })
+            .collect()
+    }
+
     /// What a preset's own text rectangle pulls in from each edge of the box.
     ///
     /// A rounded rectangle's text does not start at its edge: the preset's
@@ -6720,6 +6782,56 @@ mod tests {
         for (left, right) in [small, middle, large] {
             assert_eq!(left - right, 1.0);
         }
+    }
+
+    /// The corner an elbow connector turns at, once the flips and the turn
+    /// have been applied. Measured against Excel, `_xlsx_bent_connector.py`:
+    /// sixteen arms, every quarter turn against every pair of flips, and the
+    /// corner lands on all four corners of the box in this order.
+    ///
+    /// The box itself does not change shape. A quarter turn about the centre
+    /// would swap a box's sides, but the anchor already holds the box the turn
+    /// LEAVES the shape in — Excel reports a turned connector's own width and
+    /// height the other way round from the anchor it hangs in — so the path is
+    /// placed in the anchor's box and nothing is swapped here.
+    #[test]
+    fn a_turned_elbow_meets_at_the_corner_excel_puts_it() {
+        use oxicells_core::ir::Shape;
+        let box_ = windows::Win32::Foundation::RECT {
+            left: 0, top: 0, right: 128, bottom: 80,
+        };
+        let elbow = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)];
+        let bent = |rotation: i32, flip_h: bool, flip_v: bool| {
+            let shape = Shape {
+                geometry: "bentConnector2".to_string(),
+                fill: None,
+                line: None,
+                adjusts: Vec::new(),
+                path: None,
+                flip_h,
+                flip_v,
+                rotation,
+                text: None,
+            };
+            let laid = super::windows_draw::laid(&elbow, &shape, box_);
+            (laid[1].x, laid[1].y)
+        };
+        // Unturned, the bend is at the top right: the path runs along the top
+        // and then down the far side.
+        assert_eq!(bent(0, false, false), (128, 0));
+        assert_eq!(bent(0, true, false), (0, 0));
+        assert_eq!(bent(0, false, true), (128, 80));
+        assert_eq!(bent(0, true, true), (0, 80));
+        // A quarter turn clockwise carries that corner round with it.
+        assert_eq!(bent(5_400_000, false, false), (128, 80));
+        assert_eq!(bent(10_800_000, false, false), (0, 80));
+        assert_eq!(bent(16_200_000, false, false), (0, 0));
+        // And the flips happen first: mirrored, then turned.
+        assert_eq!(bent(5_400_000, true, false), (128, 0));
+        assert_eq!(bent(16_200_000, true, false), (0, 80));
+        // A turn that is not a quarter is left where it was written rather
+        // than guessed at — the corpus states five turns and all five are one.
+        assert_eq!(bent(2_700_000, false, false), (128, 0));
     }
 
     /// Where a line of text is allowed to end. Read back out of Excel's own
