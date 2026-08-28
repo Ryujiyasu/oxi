@@ -62,13 +62,11 @@ ARMS = [
     ("メイリオ", 14.0, 6, 83.0),
     ("游ゴシック", 14.0, 4, 60.0),
 ]
-# A fresh note's own margins, asked of COM: 7.2pt either side and 3.6pt above
-# and below. `002` states 2.5mm and 2.3mm instead, and the parser hardcodes
-# THOSE for every note — so a note that states none is set 4 pixels too low.
-# These arms sweep the top margin to see whether Excel moves the first line
-# with it one for one, which is what decides whether reading the file's inset
-# is the whole fix.
-MARGINS = [0.0, 3.6, 7.2, 10.8]
+# The top margin is NOT swept here. Arms added past the sixteenth fall off the
+# bottom of the picture Excel hands over, and the reader then pairs them with
+# earlier notes and reports four identical rows — which read as "Excel ignores
+# the inset" and is not true. `_xlsx_note_002.py` asks that of the real note
+# instead, and Excel moves its first line one pixel for one pixel of inset.
 SAID = "国立国会図書館"
 ROW_STEP = 12          # rows between one note and the next
 WIDE = 200.0
@@ -94,17 +92,6 @@ def build(made: Path) -> None:
             frame.Characters().Font.Name = face
             frame.Characters().Font.Size = size
             note.Visible = True
-        for at, margin in enumerate(MARGINS):
-            cell = sheet.Cells(2 + (len(ARMS) + at) * ROW_STEP, 2)
-            note = cell.AddComment(chr(10).join([SAID] * 3))
-            shape = note.Shape
-            shape.Width = WIDE
-            shape.Height = TALL
-            frame = shape.TextFrame
-            frame.Characters().Font.Name = "ＭＳ Ｐゴシック"
-            frame.Characters().Font.Size = 14.0
-            frame.MarginTop = margin
-            note.Visible = True
         if made.exists():
             made.unlink()
         book.SaveAs(str(made), FileFormat=51)
@@ -123,9 +110,7 @@ def shoot(made: Path) -> bool:
         for _ in range(10):
             try:
                 sheet.Activate()
-                sheet.Range(
-                    f"A1:M{4 + (len(ARMS) + len(MARGINS)) * ROW_STEP}"
-                ).CopyPicture(
+                sheet.Range(f"A1:M{4 + len(ARMS) * ROW_STEP}").CopyPicture(
                     Appearance=1, Format=2
                 )
             except Exception:
@@ -208,7 +193,7 @@ def main() -> int:
             return 1
     truth = np.asarray(Image.open(SCRATCH / "excel.png").convert("RGB")).astype(int)
     drawing = dict(os.environ)
-    drawing["OXI_XLSX_RANGE"] = f"1,1,{4 + (len(ARMS) + len(MARGINS)) * ROW_STEP},13"
+    drawing["OXI_XLSX_RANGE"] = f"1,1,{4 + len(ARMS) * ROW_STEP},13"
     subprocess.run(
         [str(RENDERER), str(made), str(SCRATCH / "oxi.png"), "96"],
         capture_output=True, text=True, encoding="utf-8", env=drawing,
@@ -232,13 +217,6 @@ def main() -> int:
               f"  {theirs[at][0]:>5}/{ours[at][0]:<5}"
               f"  {one:<30}{two}{'' if one == two else '  <<'}")
     print(f"  {agree} of {min(len(ARMS), len(theirs))} arms agree")
-    print(f"  {'top margin':>12}   {'Excel':<30}Oxi")
-    for at, margin in enumerate(MARGINS):
-        seat = len(ARMS) + at
-        if seat >= len(theirs) or seat >= len(ours):
-            break
-        print(f"  {margin:>10}pt   {read(truth, theirs[seat]):<30}"
-              f"{read(mine, ours[seat])}")
     return 0
 
 

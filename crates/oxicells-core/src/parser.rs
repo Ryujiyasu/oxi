@@ -2070,6 +2070,27 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
 /// them: the text in `xl/comments{n}.xml`, keyed by cell, and the box in the
 /// VML beside it, which states it in points from the sheet's corner and says
 /// whether Excel shows it.
+/// A VML length, in points, taken from the start of `said`.
+///
+/// VML writes a size in whatever unit suits it — `175.5pt`, `2.5mm`, `8in` —
+/// and a bare number is points. Anything after the number that is not a unit
+/// it knows is ignored, so the same reader takes `width:175.5pt;` and the
+/// `2.3mm` of an inset list.
+fn vml_length(said: &str) -> Option<f32> {
+    let said = said.trim_start();
+    let end = said
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+        .unwrap_or(said.len());
+    let number: f32 = said[..end].parse().ok()?;
+    Some(match said[end..].chars().take(2).collect::<String>().as_str() {
+        held if held.starts_with("in") => number * 72.0,
+        held if held.starts_with("mm") => number * 72.0 / 25.4,
+        held if held.starts_with("cm") => number * 72.0 / 2.54,
+        held if held.starts_with("px") => number * 72.0 / 96.0,
+        _ => number,
+    })
+}
+
 fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
     use crate::ir::{Anchor, Comment, ShapeParagraph, ShapeText};
 
@@ -2209,18 +2230,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         // Excel sizes a note to its text and writes the answer there.
         let measure = |name: &str| -> Option<f32> {
             let at = shape.find(name)? + name.len();
-            let rest = &shape[at..];
-            let end = rest
-                .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
-                .unwrap_or(rest.len());
-            let number: f32 = rest[..end].parse().ok()?;
-            Some(match rest[end..].chars().take(2).collect::<String>().as_str() {
-                held if held.starts_with("in") => number * 72.0,
-                held if held.starts_with("mm") => number * 72.0 / 25.4,
-                held if held.starts_with("cm") => number * 72.0 / 2.54,
-                held if held.starts_with("px") => number * 72.0 / 96.0,
-                _ => number,
-            })
+            vml_length(&shape[at..])
         };
         let (Some(wide), Some(tall)) = (measure("width:"), measure("height:")) else {
             continue;
@@ -2241,6 +2251,35 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
                 }
             })
             .unwrap_or_else(|| "FFFFE1".to_string());
+        // What a note keeps between its box and its text. One that states
+        // nothing keeps 7.2 points either side and 3.6 above and below, which
+        // is what Excel makes a note with — asked of COM of a fresh one.
+        //
+        // Excel honours the vertical part exactly. `_xlsx_note_002.py` writes
+        // the corpus floor's own note with top insets of 0, 3.6, 7.2 and 20
+        // points and Excel puts its first line 5, 10, 15 and 32 pixels below
+        // the box's rule: one pixel of text for one pixel of inset. Only one
+        // workbook of the corpus states an inset at all (50 notes, all
+        // `2.5mm,2.3mm`); the other 280 notes state none, and were being given
+        // that workbook's numbers.
+        let inset = shape
+            .split("inset=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .map(|held| {
+                let mut parts = held.split(',');
+                let mut next = |fallback: f32| -> f32 {
+                    match parts.next().map(str::trim) {
+                        Some(one) if !one.is_empty() => {
+                            vml_length(one).unwrap_or(fallback)
+                        }
+                        _ => fallback,
+                    }
+                };
+                (next(7.2), next(3.6), next(7.2), next(3.6))
+            })
+            .unwrap_or((7.2, 3.6, 7.2, 3.6));
+        let emu = |points: f32| (points * 12700.0).round() as i64;
         held.push(Comment {
             from: corner(left, dx, top, dy),
             size: (wide, tall),
@@ -2248,8 +2287,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
             text: ShapeText {
                 paragraphs: paragraphs.clone(),
                 anchor: Some("t".to_string()),
-                // 2.5mm and 2.3mm, which is what the VML states.
-                insets: (90000, 82800, 90000, 82800),
+                insets: (emu(inset.0), emu(inset.1), emu(inset.2), emu(inset.3)),
                 wrap: true,
                 // A note keeps its text inside its box, and the file never
                 // says so — a note has no body properties at all, unlike a
@@ -4096,6 +4134,37 @@ mod tests {
 }
 
 #[cfg(test)]
+mod note_room {
+    /// A note keeps 7.2 points either side and 3.6 above and below unless it
+    /// says otherwise, which is what Excel makes one with. The corpus's floor
+    /// workbook states 2.5mm and 2.3mm instead, and those were being given to
+    /// every note in every workbook.
+    #[test]
+    fn a_note_keeps_the_room_it_states_and_excels_own_when_it_states_none() {
+        let vml = |textbox: &str| {
+            format!(
+                "<v:shape style='position:absolute;width:100pt;height:50pt'                 fillcolor=\"#ffffe1\"><v:textbox {textbox}/><x:ClientData>                 <x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor>                 <x:Row>1</x:Row><x:Column>1</x:Column><x:Visible/>                 </x:ClientData></v:shape>"
+            )
+        };
+        let comments = "<comments><authors><author>a</author></authors>            <commentList><comment ref=\"B2\" authorId=\"0\"><text><r>            <t>said</t></r></text></comment></commentList></comments>";
+        let bare = super::parse_comments(comments, &vml("style='mso-direction-alt:auto'"));
+        assert_eq!(bare.len(), 1);
+        assert_eq!(bare[0].text.insets, (91440, 45720, 91440, 45720));
+        let stated = super::parse_comments(
+            comments,
+            &vml("style='mso-direction-alt:auto' inset=\"2.5mm,2.3mm,2.5mm,2.3mm\""),
+        );
+        assert_eq!(stated[0].text.insets, (90000, 82800, 90000, 82800));
+        // Excel writes only the part it changed, leaving the rest to default.
+        let partial = super::parse_comments(
+            comments,
+            &vml("style='mso-direction-alt:auto' inset=\",0\""),
+        );
+        assert_eq!(partial[0].text.insets, (91440, 0, 91440, 45720));
+    }
+}
+
+#[cfg(test)]
 mod theme_tints {
     use super::tinted;
 
@@ -4123,4 +4192,5 @@ mod theme_tints {
         close_to(&tinted("FFFFFF", -0.5), "808080");
         assert_eq!(tinted("156082", 0.0), "156082");
     }
+
 }
