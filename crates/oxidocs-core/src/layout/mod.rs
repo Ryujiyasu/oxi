@@ -1552,6 +1552,116 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
         }
     }
     for_each_block_tree(doc, |blocks| visit(blocks, final_view));
+    merge_marked_paragraph_breaks(doc, final_view);
+}
+
+/// S1249 (2026-08-28, default ON, opt-out OXI_S1249_DISABLE): a paragraph whose
+/// MARK is deleted joins the paragraph after it.
+///
+/// `filter_runs_for_show_revisions` drops deleted RUNS, which is only half of
+/// what accepting a revision does. `<w:pPr><w:rPr><w:del/>` deletes the pilcrow
+/// itself, and accepting that MERGES the paragraph with its successor -- the
+/// break, and the paragraph spacing around it, stop existing.
+///
+/// DERIVED on `legal__0010437a7f75f636` (blind50, the pcd!=0 head of the EN
+/// queue). The document carries 61 deleted paragraph marks, and Word's own
+/// accepted truth has exactly 62 fewer paragraphs than its as-authored one
+/// (8665 -> 8603). Oxi kept all 61 breaks, so every one of them contributed a
+/// paragraph gap Word does not have: on p159 the run of paragraphs sits ~63pt
+/// low and the gap before `[(9) deleted]` is 21.7pt wider than Word's, which is
+/// what finally pushes the 3-line `[Rule 10 inserted ...]` note off the page and
+/// -- because the next heading starts a fresh page anyway -- leaves Oxi with a
+/// 3-line page Word does not have.
+///
+/// The SURVIVING mark is the successor's, so the merged paragraph keeps the
+/// SUCCESSOR's properties and the deleted-mark paragraph contributes only its
+/// runs, prepended. Merging runs backwards over a chain of consecutive deleted
+/// marks falls out of iterating from the end.
+///
+/// Both of those are Word's, measured on a minimal repro
+/// (`tools/metrics/_pb_delmark_{gen,read}.py`, revisions accepted, PDF span
+/// origins) with the two paragraphs given different left indents so the merged
+/// line's x names the winner:
+///
+///     arm     Word                              Oxi
+///     CTRL    HEAD 128.66 / TAIL 200.69         128.70 / 200.70     two paragraphs
+///     MERGE   HEADTAIL    200.69                200.70              successor's indent
+///     CHAIN   ONETWOTHREE 200.69                200.70              chain collapses
+///
+/// ★NOT IMPLEMENTED, and measured so the gap is known rather than assumed: a
+/// deleted mark on the LAST paragraph of its container. Word merges it with the
+/// container's own closing mark, which this pass has no successor for.
+///
+///     LAST    body's final mark deleted -- Word drops the indent (TAIL 56.64,
+///             merging into the section's implicit final paragraph); Oxi keeps
+///             it at 200.70.
+///     CELL    the last mark in a one-cell table deleted -- Word merges the cell
+///             text into the body paragraph AFTER the table and the row stops
+///             existing (`HEADTAILAFTER` on one line, no table); Oxi keeps the
+///             table and its paragraph.
+///
+/// Neither corner appears in the corpus (no golden document has a deleted
+/// paragraph mark at all, and 0010437a's 61 are all mid-body), and the CELL one
+/// dissolves a table row, so it wants its own derivation rather than an
+/// extrapolation from this pass.
+///
+/// `Original` view is the mirror (an INSERTED mark does not exist yet), so the
+/// same pass runs with the opposite predicate.
+fn merge_marked_paragraph_breaks(doc: &mut Document, final_view: bool) {
+    if std::env::var("OXI_S1249_DISABLE").is_ok() {
+        return;
+    }
+    fn merges(p: &Paragraph, final_view: bool) -> bool {
+        match p.paragraph_mark_revision.as_ref() {
+            None => false,
+            Some(tc) => {
+                let deleted = matches!(tc.change_type.as_str(), "delete" | "moveFrom");
+                if final_view {
+                    deleted
+                } else {
+                    matches!(tc.change_type.as_str(), "insert" | "moveTo")
+                }
+            }
+        }
+    }
+    fn visit(blocks: &mut Vec<Block>, final_view: bool) {
+        for block in blocks.iter_mut() {
+            if let Block::Table(t) = block {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        visit(&mut cell.blocks, final_view);
+                    }
+                }
+            }
+        }
+        // From the end, so a chain of marked paragraphs collapses in one sweep.
+        // The LAST block of a list has nothing to join and keeps its break --
+        // Word cannot merge a paragraph with a successor that is not there.
+        let mut i = blocks.len();
+        while i > 1 {
+            i -= 1;
+            let merge = match (&blocks[i - 1], &blocks[i]) {
+                (Block::Paragraph(a), Block::Paragraph(_)) => merges(a, final_view),
+                _ => false,
+            };
+            if !merge {
+                continue;
+            }
+            let head = match blocks.remove(i - 1) {
+                Block::Paragraph(p) => p,
+                other => {
+                    blocks.insert(i - 1, other);
+                    continue;
+                }
+            };
+            if let Block::Paragraph(next) = &mut blocks[i - 1] {
+                let mut runs = head.runs;
+                runs.append(&mut next.runs);
+                next.runs = runs;
+            }
+        }
+    }
+    for_each_block_tree(doc, |blocks| visit(blocks, final_view));
 }
 
 fn apply_revision_styling_to_run(
