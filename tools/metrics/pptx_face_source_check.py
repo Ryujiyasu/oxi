@@ -10,6 +10,14 @@ case this can judge.
     python tools/metrics/pptx_face_source_check.py --asof 2026-08-09
 
 Reports agree / disagree / undecidable (the two copies share a version string).
+
+★A deck whose truth PDF STENCILS its text is skipped, and must be: when
+PowerPoint cannot embed a face it was asked for it rasterises the run and writes
+the text a second time, invisibly (`/ca 0`), in Calibri, so the PDF's font list
+then describes that SEARCH LAYER and not one pixel of the ink. Reading it as the
+ink's font is what produced S-CFFPART's "PowerPoint falls back to Calibri for a
+CFF part", which the ink refutes (blind 31 s2's line widths are Open Sauce's to
+1.5pt). `pptx_pdf_stencil_census.py` is the detector.
 """
 from __future__ import annotations
 
@@ -23,6 +31,8 @@ import zipfile
 from pathlib import Path
 
 import pymupdf
+
+from pptx_pdf_stencil_census import page_stats
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -103,6 +113,15 @@ def main() -> None:
     for doc in docs:
         src = next(ROOT / "pptx" / i["local"] for i in manifest if f"{i['idx']:02d}" == doc)
         pdf = pymupdf.open(ROOT / "ssim_pptx" / "ppt_pdf" / f"{doc}.pdf")
+        inv = tot = 0
+        for pno in range(len(pdf)):
+            a, b, _ = page_stats(pdf, pno)
+            inv, tot = inv + a, tot + b
+        if tot and inv / tot > 0.2:
+            print(f"  {doc}: SKIPPED -- {inv} of {tot} text ops are invisible, so this "
+                  f"PDF's fonts are its search layer, not its ink")
+            pdf.close()
+            continue
         seen, in_pdf = set(), set()
         for pno in range(len(pdf)):
             for xref, _e, _t, _b, _r, _en in pdf.get_page_fonts(pno):
