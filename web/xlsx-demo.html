@@ -34,7 +34,11 @@ header {
   padding: 10px 16px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  /* The bar holds enough controls to run off a narrow window, and one that
+     runs off is one whose last few buttons do not exist as far as anyone
+     using it is concerned. */
+  flex-wrap: wrap;
+  gap: 8px 14px;
   flex-shrink: 0;
 }
 header .name { font-weight: 700; letter-spacing: .3px; }
@@ -319,6 +323,22 @@ table { user-select: none; }
     <option value="right">Right</option>
     <option value="none">None</option>
   </select>
+  <input id="face" list="faces" disabled placeholder="Font"
+         title="The typeface the cells are set in" />
+  <datalist id="faces"></datalist>
+  <input id="points" list="sizes" disabled placeholder="Size"
+         title="How big the text is, in points" />
+  <datalist id="sizes">
+    <option value="8"></option><option value="9"></option>
+    <option value="10"></option><option value="11"></option>
+    <option value="12"></option><option value="14"></option>
+    <option value="16"></option><option value="18"></option>
+    <option value="20"></option><option value="24"></option>
+    <option value="28"></option><option value="36"></option>
+    <option value="48"></option><option value="72"></option>
+  </datalist>
+  <input id="ink" type="color" disabled title="Text colour" />
+  <button id="autoink" disabled title="Automatic text colour">Auto</button>
   <select id="merge" disabled title="Draw a block of cells as one">
     <option value="">Merge</option>
     <option value="centre">Merge &amp; centre</option>
@@ -1303,6 +1323,108 @@ function wearMerge(kind) {
   paint();
 }
 
+// ── The face the text is set in ─────────────────────────────────────────────
+//
+// Bold, italic and underline were settable from the start, but the typeface,
+// its size and its colour were only ever read and drawn. A heading is a bigger
+// font far more often than it is a bold one.
+//
+// Both boxes are open lists rather than menus: a file may name any face at
+// all, and Excel takes any size from 1 to 409, so a menu would be a list of
+// the ones we happened to think of. What the face box offers is the faces this
+// workbook already uses, which is what someone editing it usually wants and is
+// the only list we can know is right — the browser will not say which fonts
+// the machine has.
+
+const faceBox = document.getElementById('face');
+const faceList = document.getElementById('faces');
+const sizeBox = document.getElementById('points');
+const inkBox = document.getElementById('ink');
+const autoInkButton = document.getElementById('autoink');
+
+/** Every typeface this workbook names, in the order they are first met. */
+function facesUsed() {
+  const seen = [];
+  const add = (name) => { if (name && !seen.includes(name)) seen.push(name); };
+  add((book.default_style || {}).font_name);
+  for (const sheet of book.sheets) {
+    for (const line of sheet.rows) {
+      for (const cell of line.cells) add(cell.style.font_name);
+    }
+  }
+  return seen;
+}
+
+/** Offer the workbook's own faces. Called when a workbook is opened. */
+function sayFaces() {
+  if (!faceList || !book) return;
+  faceList.innerHTML = '';
+  for (const name of facesUsed()) {
+    const option = document.createElement('option');
+    option.value = name;
+    faceList.appendChild(option);
+  }
+}
+
+/** Set the selection in a named face, or hand it back to the standard one. */
+function wearFace(name) {
+  restyle((was) => ({ ...was, font_name: name.trim() || null }));
+}
+
+/**
+ * Size the selection, in points.
+ *
+ * Excel's own box takes 1 to 409 and refuses the rest; anything outside that
+ * is a slip rather than a wish, and a cell of size zero cannot be undone by
+ * looking at it.
+ */
+function wearSize(points) {
+  const size = Number(points);
+  if (!Number.isFinite(size) || size < 1 || size > 409) return;
+  restyle((was) => ({ ...was, font_size: size }));
+}
+
+/** Colour the text, or with `null` hand it back to automatic. */
+function wearInk(colour) {
+  restyle((was) => ({ ...was, font_color: colour }));
+}
+
+/** What the selection is set in, when it agrees on one. */
+function agreedOn(part) {
+  let seen = null;
+  let agree = true;
+  eachInRegion((row, col) => {
+    const held = heldAt(row, col);
+    const worn = (held && held.style && held.style[part]) ?? null;
+    if (seen === null) seen = worn;
+    else if (seen !== worn) agree = false;
+  });
+  return agree ? seen : null;
+}
+
+/** Show the selection's face, size and colour — blank where they differ. */
+function sayFace() {
+  const can = Boolean(book);
+  for (const control of [faceBox, sizeBox, inkBox, autoInkButton]) {
+    if (control) control.disabled = !can;
+  }
+  if (!can) return;
+  const standard = book.default_style || {};
+  // A cell that names neither is set in the workbook's own font, so that is
+  // what the boxes show rather than nothing: it is what the cell IS in.
+  if (faceBox && document.activeElement !== faceBox) {
+    faceBox.value = agreedOn('font_name') ?? standard.font_name ?? '';
+  }
+  if (sizeBox && document.activeElement !== sizeBox) {
+    const points = agreedOn('font_size') ?? standard.font_size ?? null;
+    sizeBox.value = points === null ? '' : String(points);
+  }
+  // Automatic text is black, which is also what the picker would offer for a
+  // cell that names no colour. The two are different in the file, which is why
+  // giving it back is a control of its own.
+  if (inkBox) inkBox.value = `#${agreedOn('font_color') ?? '000000'}`;
+}
+
 // ── How the numbers look ────────────────────────────────────────────────────
 //
 // A number format decides what a cell SHOWS without touching what it holds:
@@ -1591,6 +1713,33 @@ if (rulesBox) {
     focusGrid();
   });
 }
+if (faceBox) {
+  // Enter applies it and hands the keyboard back; leaving the box applies it
+  // too, since typing a name and clicking away plainly means it.
+  faceBox.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    wearFace(faceBox.value);
+    focusGrid();
+  });
+  faceBox.addEventListener('change', () => wearFace(faceBox.value));
+}
+if (sizeBox) {
+  sizeBox.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    wearSize(sizeBox.value);
+    focusGrid();
+  });
+  sizeBox.addEventListener('change', () => wearSize(sizeBox.value));
+}
+if (inkBox) {
+  inkBox.addEventListener('input',
+    () => wearInk(inkBox.value.replace('#', '').toUpperCase()));
+}
+if (autoInkButton) {
+  autoInkButton.addEventListener('click', () => { wearInk(null); focusGrid(); });
+}
 if (mergeBox) {
   // Like the rules menu, a list of actions rather than of states: the name
   // comes back once the choice is made.
@@ -1838,6 +1987,7 @@ function paint() {
   sayBands();
   sayFormat();
   sayFill();
+  sayFace();
   if (rulesBox) rulesBox.disabled = !book;
   if (findBox) findBox.disabled = !book;
   // Merging needs more than one cell, and unmerging needs one that is already
@@ -3090,6 +3240,9 @@ async function open(data, name) {
   digitWidth = measureDigit(style.font_name, style.font_size);
   draw();
   describe();
+  // Which faces to offer is a question about the whole workbook, so it is
+  // asked once when one is opened rather than on every movement.
+  sayFaces();
   // A new workbook starts at its own A1 rather than wherever the last one was
   // left, and with nothing selected from it.
   goTo(1, 0);

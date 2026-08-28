@@ -224,6 +224,35 @@ is('a fill taken off is gone, not turned white',
 is('and the rule under it stayed',
   cellAt(stripped, 4, 0).style.border_bottom.style, 'thick');
 
+// ── The face a cell is set in ───────────────────────────────────────────────
+//
+// A face, a size and a colour go out in a `<font>` of their own, and an
+// automatic colour is the absence of one rather than black — the same
+// distinction as a fill that is white against a cell with no fill.
+
+const set = parse_spreadsheet(sample.slice());
+const setRow = set.sheets[0].rows.find((one) => one.index === 4);
+setRow.cells[0].style = {
+  ...setRow.cells[0].style,
+  font_name: 'Meiryo', font_size: 18, font_color: '0070C0',
+};
+setRow.cells[1].style = {
+  ...setRow.cells[1].style, font_name: null, font_size: 8, font_color: null,
+};
+const dressedUp = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), set));
+const face = (col) => cellAt(dressedUp, 4, col).style;
+is('a face comes back', face(0).font_name, 'Meiryo');
+is('with the size it was given', face(0).font_size, 18);
+is('and the colour', face(0).font_color, '0070C0');
+// A cell that names no face is set in the workbook's own, and that is what
+// it reads back as: the parser answers with the face the cell IS in, so
+// there is no such thing on this side as a cell naming nothing.
+is('a cell put back on the standard face comes back set in it',
+  face(1).font_name, dressedUp.default_style.font_name);
+is('and automatic text has no colour of its own',
+  face(1).font_color ?? null, null);
+is('while the size it was given stayed', face(1).font_size, 8);
+
 // ── Cells drawn as one ───────────────────────────────────────────────────
 //
 // A merge is a list on the sheet, not a mark on a cell, and a sheet that has

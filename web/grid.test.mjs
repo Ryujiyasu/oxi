@@ -69,6 +69,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'widthForPixels', 'setWidth', 'dropCut',
   'padFor', 'fitWidth', 'fitColumn', 'shownText', 'rule', 'wearRules', 'findNext',
   'span', 'mergesMet', 'setMerges', 'wearMerge',
+  'wearFace', 'wearSize', 'wearInk', 'agreedOn',
   'calcCost',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
   'holdPanes', 'freezeHere',
@@ -300,6 +301,7 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget, rule, wearRules, findNext,
          wearMerge, merged, mergesMet,
+         wearFace, wearSize, wearInk, agreedOn,
          calcCost, shapeBook };
 `));
 
@@ -428,6 +430,53 @@ is('and leaves the column beside it alone', edges(2, 2), '');
 // Asking for nothing is not a change.
 grid.wearRules('');
 is('an empty choice does nothing', edges(2, 1), 'l');
+
+
+// ── The face the text is set in ─────────────────────────────────────────────
+//
+// Everything else about how a cell looks was settable; the typeface, its size
+// and its colour were drawn and read back but could not be chosen.
+
+grid.forget();
+grid.seed(1, 0, 'a'); grid.seed(1, 1, 'b');
+grid.select(1, 0, 1, 1);
+grid.wearFace('Meiryo');
+is('a face is put on every cell of the block',
+  [grid.styleAt(1, 0).font_name, grid.styleAt(1, 1).font_name],
+  ['Meiryo', 'Meiryo']);
+grid.wearFace('   ');
+is('and a name of nothing hands the cells back to the standard font',
+  grid.styleAt(1, 0).font_name, null);
+
+grid.wearSize('14');
+is('a size is a number, not the text of one', grid.styleAt(1, 0).font_size, 14);
+// Excel's own box takes 1 to 409 and refuses the rest. A cell at nought points
+// cannot be put right by looking at it, so a slip must not reach the file.
+const wasSized = grid.styleAt(1, 0).font_size;
+grid.wearSize('0');
+grid.wearSize('500');
+grid.wearSize('not a number');
+is('a size outside what Excel takes is refused',
+  grid.styleAt(1, 0).font_size, wasSized);
+
+grid.wearInk('FF0000');
+is('text takes a colour', grid.styleAt(1, 0).font_color, 'FF0000');
+grid.wearInk(null);
+is('and automatic is the absence of one, not black',
+  grid.styleAt(1, 0).font_color, null);
+
+// What the boxes show for a block: the one thing it agrees on, or nothing.
+grid.forget();
+grid.seed(1, 0, 'a'); grid.seed(1, 1, 'b');
+grid.select(1, 0, 1, 1);
+grid.wearFace('Meiryo');
+is('a block that agrees says what it is set in',
+  grid.agreedOn('font_name'), 'Meiryo');
+grid.select(1, 1, 1, 1);
+grid.wearFace('Century');
+grid.select(1, 0, 1, 1);
+is('and one that does not says nothing at all',
+  grid.agreedOn('font_name'), null);
 
 
 // ── Cells drawn as one ───────────────────────────────────────────────────────
