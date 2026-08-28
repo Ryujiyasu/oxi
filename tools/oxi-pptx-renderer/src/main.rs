@@ -2355,6 +2355,229 @@ fn cloud_font_root() -> Option<std::path::PathBuf> {
     root.is_dir().then_some(root)
 }
 
+/// Advances read from the CACHE's copy of a family rather than the deck's,
+/// unless this is set.
+///
+/// S-CLOUDADV (2026-08-28). d28 s13 wraps one line early in PowerPoint and not
+/// in Oxi, and the whole difference is 1.25pt of master-unit sum over 39 glyphs.
+/// Oxi's advances come from GDI after `TTLoadEmbeddedFont` has decompressed the
+/// deck's MicroType Express part; PowerPoint's PDF subset does not agree with
+/// them, and DOES agree, to the unit, with the plain .ttf sitting in
+/// `FontCache\CloudFonts\Open Sans\`:
+///
+///     'a'   ','     source
+///     1139   502    PowerPoint's subset  /  the cache file
+///     1138   530    the embedded part as GDI hands it back
+///
+/// Skipping the embedded part entirely was the first attempt and it is WRONG:
+/// d18 embeds Montserrat with a `bold` slot and no `regular`, PowerPoint sets
+/// that whole deck in Montserrat-Bold because the inventory forces it, and
+/// resolving to the cache's fuller family cost -0.0222 there. Face selection
+/// must keep following the embedded inventory. Only the NUMBERS come from the
+/// cache, and only for a family it actually holds.
+/// Shipped default-ON 2026-08-28. A/B over the 27 decks that name a cached
+/// family, plus three controls: 24 +0.000890 (s3 +0.0160), 28 +0.002533
+/// (s13 +0.0415, MIN 0.9024 -> 0.9314), **28 of 30 decks byte-identical, 18
+/// slides up, 0 down**. The two that move are the two Open Sans decks, which is
+/// the only family in this corpus where the cache and the embedded part
+/// genuinely differ in advances (v1.10 against v3.00x); Montserrat, Barlow and
+/// Nunito agree between their two copies, so nothing there can move.
+///
+/// ★The trigger is narrower than the law behind it. What decides which copy
+/// PowerPoint uses is whether the PART's own face collides with one this machine
+/// already serves (S-FACECOLLIDE), not whether the cache holds the family. On
+/// this corpus the two coincide -- every part carries its real family name, so
+/// the Open Sans parts collide -- but a deck whose part is filed under a name
+/// the machine does not have would measure from a font it is not drawing.
+fn cloudadv_on() -> bool {
+    std::env::var("OXI_CLOUDADV_DISABLE").is_err()
+}
+
+/// One table of a raw sfnt blob, by tag.
+#[cfg(windows)]
+fn sfnt_table<'a>(data: &'a [u8], tag: &[u8; 4]) -> Option<&'a [u8]> {
+    const SFNT: [[u8; 4]; 3] = [[0x00, 0x01, 0x00, 0x00], *b"OTTO", *b"true"];
+    if !SFNT.iter().any(|t| t.as_slice() == data.get(0..4).unwrap_or_default()) {
+        return None;
+    }
+    let tables = u16::from_be_bytes([*data.get(4)?, *data.get(5)?]) as usize;
+    for index in 0..tables {
+        let rec = 12 + 16 * index;
+        if data.get(rec..rec + 4)? == tag {
+            let at = |o: usize| -> Option<u32> {
+                Some(u32::from_be_bytes([
+                    *data.get(rec + o)?,
+                    *data.get(rec + o + 1)?,
+                    *data.get(rec + o + 2)?,
+                    *data.get(rec + o + 3)?,
+                ]))
+            };
+            let off = at(8)? as usize;
+            let len = at(12)? as usize;
+            return data.get(off..off.checked_add(len)?);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// family (lowercased) -> the cache's files for it, with the style each claims.
+    static CLOUD_FILES: std::cell::OnceCell<
+        std::collections::HashMap<String, Vec<(std::path::PathBuf, u16, bool)>>,
+    > = const { std::cell::OnceCell::new() };
+    static CLOUD_ADV: std::cell::RefCell<
+        std::collections::HashMap<(String, u16, bool), Option<FaceAdvances>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Every cache file, indexed by family, with the weight and slant it declares.
+#[cfg(windows)]
+fn cloud_file_index() -> std::collections::HashMap<String, Vec<(std::path::PathBuf, u16, bool)>> {
+    let mut out: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
+    let Some(root) = cloud_font_root() else {
+        return out;
+    };
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if ext != "ttf" && ext != "otf" {
+                continue;
+            }
+            let Ok(blob) = std::fs::read(&path) else {
+                continue;
+            };
+            let Some(family) = sfnt_family(&blob) else {
+                continue;
+            };
+            // OS/2: usWeightClass at 4, fsSelection bit 0 = italic.
+            let (weight, italic) = match sfnt_table(&blob, b"OS/2") {
+                Some(os2) => (
+                    be16(os2, 4).unwrap_or(400),
+                    be16(os2, 62).map(|f| f & 1 != 0).unwrap_or(false),
+                ),
+                None => (400, false),
+            };
+            out.entry(family.to_ascii_lowercase())
+                .or_default()
+                .push((path, weight, italic));
+        }
+    }
+    out
+}
+
+/// The weight and slant GDI actually SERVES for a request -- which is not the
+/// request when the deck's inventory cannot honour it.
+///
+/// d18 embeds Montserrat with a bold slot and no regular, so a weight-400 ask
+/// is drawn in the bold. Measuring that line against the cache's REGULAR is how
+/// the first version of this lost 0.0116 on that deck: the numbers must come
+/// from the face being drawn, not from the face being asked for.
+#[cfg(windows)]
+fn drawn_style(family: &str, bold: bool, italic: bool) -> Option<(u16, bool)> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let (face, weight, want_italic) = styled_face(family, bold, italic);
+    let dc = probe_dc();
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -2048,
+            0,
+            0,
+            0,
+            weight,
+            u32::from(want_italic),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return None;
+        }
+        let old = SelectObject(dc, font);
+        let mut tm = TEXTMETRICW::default();
+        let ok = GetTextMetricsW(dc, &mut tm).as_bool();
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        ok.then(|| (tm.tmWeight as u16, tm.tmItalic != 0))
+    }
+}
+
+/// The cache's advances for one styled face, or None when it holds no such face.
+#[cfg(windows)]
+fn cloud_face_advances(family: &str, bold: bool, italic: bool) -> Option<FaceAdvances> {
+    let (served_weight, served_italic) = drawn_style(family, bold, italic)?;
+    let key = (family.to_ascii_lowercase(), served_weight, served_italic);
+    if let Some(hit) = CLOUD_ADV.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let value = (|| {
+        let files = CLOUD_FILES.with(|c| c.get_or_init(cloud_file_index).get(&key.0).cloned())?;
+        // ★The cache must hold the SAME WEIGHT, not merely the same side of
+        // bold. d26's embedded "Montserrat" part is a MEDIUM (PowerPoint's PDF
+        // subsets Montserrat-Medium, 'a' 598 at upem 1000) and the cache holds
+        // only Regular and Bold; bucketing by `>= 600` handed a 500-weight line
+        // the Regular's numbers and cost -0.0115 there. No matching weight means
+        // no substitution -- GDI's copy of the embedded part stays in charge.
+        let path = files
+            .iter()
+            .find(|(_, w, i)| {
+                *i == served_italic && w.abs_diff(served_weight) <= 50
+            })
+            .map(|(p, _, _)| p.clone())?;
+        let blob = std::fs::read(path).ok()?;
+        let head = sfnt_table(&blob, b"head")?;
+        let upem = f32::from(be16(head, 18)?);
+        if upem <= 0.0 {
+            return None;
+        }
+        let hhea = sfnt_table(&blob, b"hhea")?;
+        let num_h = be16(hhea, 34)? as usize;
+        if num_h == 0 {
+            return None;
+        }
+        let hmtx = sfnt_table(&blob, b"hmtx")?;
+        let cmap = sfnt_table(&blob, b"cmap")?;
+        let mut by_cp = std::collections::HashMap::new();
+        for (cp, gid) in cmap_by_code_point(cmap)? {
+            let g = (gid as usize).min(num_h - 1);
+            if let Some(a) = be16(hmtx, 4 * g) {
+                by_cp.insert(cp, a);
+            }
+        }
+        (!by_cp.is_empty()).then_some(FaceAdvances { upem, by_cp })
+    })();
+    CLOUD_ADV.with(|c| c.borrow_mut().insert(key, value.clone()));
+    value
+}
+
+/// One glyph advance in EM from the cache's copy of `family`.
+#[cfg(windows)]
+fn cloud_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+    let face = cloud_face_advances(family, bold, italic)?;
+    let raw = *face.by_cp.get(&(ch as u32))?;
+    Some(f32::from(raw) / face.upem)
+}
+
 /// The typographic family of an sfnt blob: name ID 16, else name ID 1.
 ///
 /// ID 16 is the one that groups the weights (`IBM Plex Sans` for both the
@@ -12285,6 +12508,7 @@ fn skipembed_on() -> bool {
 
 /// The design advances of one face, keyed by code point, in font units.
 #[cfg(windows)]
+#[derive(Clone)]
 struct FaceAdvances {
     upem: f32,
     by_cp: std::collections::HashMap<u32, u16>,
@@ -12722,7 +12946,10 @@ fn master_units(
     }
     let mut sum: i64 = 0;
     for ch in text.chars() {
-        let em = font_adv::hmtx_advance_em(family, ch)
+        let em = cloudadv_on()
+            .then(|| cloud_advance_em(family, bold, italic, ch))
+            .flatten()
+            .or_else(|| font_adv::hmtx_advance_em(family, ch))
             .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, bold, italic, ch))?;
         sum += f64::from((em * fs + spc) * 8.0).round() as i64;
@@ -12793,7 +13020,10 @@ fn master_units_runs(
             }
             seen += n;
         }
-        let em = font_adv::hmtx_advance_em(family, ch)
+        let em = cloudadv_on()
+            .then(|| cloud_advance_em(family, run_bold, run_italic, ch))
+            .flatten()
+            .or_else(|| font_adv::hmtx_advance_em(family, ch))
             .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, run_bold, run_italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, run_bold, run_italic, ch))?;
         sum += f64::from((em * run_fs + run_track) * 8.0).round() as i64;
