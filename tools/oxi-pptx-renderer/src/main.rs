@@ -12501,9 +12501,49 @@ fn family_installed(family: &str) -> bool {
 }
 
 /// A deck's embedded parts are skipped for a family the machine already has,
-/// when this is set (opt-in while it is being measured).
+/// unless this is set. Also puts `install_cloud_fonts` BEFORE the parts, so a
+/// cached family counts as "already has" -- see the call site.
+///
+/// PowerPoint decides this per TYPEFACE THE RUN ASKS FOR. If the machine
+/// resolves that typeface -- an installed font, or a family Office has in its
+/// cloud cache -- PowerPoint draws the local copy and the deck's part is unused;
+/// otherwise it loads the part. The part's own internal family name does NOT
+/// enter into it, which is what a whole day of measuring the OTHER unit cost:
+/// blind 23 files ten parts under four typefaces and every part's internal
+/// family is "Montserrat", so dropping parts by their own identity collapsed 217
+/// runs onto one face (-0.0241). Its refreshed truth shows PowerPoint moving
+/// exactly one of the four to the cache -- the plain "Montserrat" -- and keeping
+/// Black, SemiBold and ExtraBold, which the cache does not hold.
+///
+/// ★The -0.0222 on blind 18 that parked this in S-CLOUDFIRST was measured
+/// against that deck's 2026-08-09 truth, and PowerPoint does not produce that
+/// PDF any more: Montserrat Bold reached the cache on 2026-08-18. Re-exported and
+/// re-measured, 18 is the single biggest gain here. **A reference that predates
+/// the font cache falsifies the correct behaviour.**
+///
+/// Shipped default-ON 2026-08-28. A/B over all 27 blind decks the rule can reach
+/// (`pptx_skipembed_census.py`), against truth PDFs re-exported the same day:
+///
+///     12 +0.029634  MIN 0.8585 -> 0.9115      11 -0.000208
+///     18 +0.021219  MIN 0.8844 -> 0.9562      24 -0.000068
+///     26 +0.020310  MIN 0.8740 -> 0.9708      05 -0.000038
+///     07 +0.014120  MIN 0.9360 -> 0.9642      32 -0.000038
+///     28 +0.001083   17 +0.000962             30 -0.000005
+///     44 +0.000698   04 +0.000385
+///     31 +0.000344   06 +0.000251
+///     08 +0.000251   47 +0.000025
+///     10 byte-identical: 01 09 15 21 23 36 37 46 49 50
+///
+///     net +0.088925 over 17 decks that moved; 12 up, 5 down
+///
+/// The gains are decks rendering in the wrong WEIGHT, not a better font. 18 and
+/// 26 embed a family's BOLD parts and no regular one, so while the parts are
+/// present every run is bold; dropping them lets the cache's Regular answer. 23
+/// being byte-identical says the same thing from the other side: Montserrat
+/// v7.200 and v8.000 draw these glyphs identically, so changing the SOURCE alone
+/// moves nothing.
 fn skipembed_on() -> bool {
-    std::env::var("OXI_SKIPEMBED_ENABLE").is_ok()
+    std::env::var("OXI_SKIPEMBED_DISABLE").is_err()
 }
 
 /// The design advances of one face, keyed by code point, in font units.
