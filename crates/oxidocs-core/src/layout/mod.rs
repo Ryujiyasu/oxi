@@ -38240,6 +38240,123 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     }
                 }
+                // S1246 (2026-08-28, default ON, opt-out OXI_S1246_DISABLE):
+                // a paragraph inside a splitting table row does not leave its
+                // LAST line alone on the continuation page.
+                //
+                // DERIVED, `tools/metrics/_pb_widow_{gen,read}.py` (Word PDF truth,
+                // the same 5-line paragraph laid out once in the body and once in a
+                // 2-cell row, 4 shapes x 12 filler counts):
+                //     fill      BODY   BODYOFF      CELL   CELLOFF
+                //       58       3/2       4/1       3/2       4/1
+                //       59       3/2       3/2       3/2       3/2
+                //       60       2/3       2/3       2/3       2/3
+                //       61       0/5       1/4       0/5       1/4
+                // Word's CELL column IS its BODY column, and w:widowControl w:val="0"
+                // restores the natural split in both. Oxi matched Word in the body and
+                // scored 4/1 and 1/4 in the cell -- CELL and CELLOFF identical at every
+                // arm, i.e. the flag never reached the row split.
+                //
+                // PER CELL, NOT PER ROW (`_pb_rowwidow_*`, a short cell A beside a
+                // taller cell B, Word PDF): the adjustment moves ONE cell's line, not
+                // the row's cut. MED fill58 (A 5 lines, B 9) reads
+                //     p1  A01 B01 / A02 B02 / A03 B03 / __  B04
+                //     p2  A04 B05 / A05 B06 / __  B07 ...
+                // -- A stops a line above B on the same page, and both cells resume at
+                // the SAME continuation y (which S1093 already produces). So the rule
+                // caps each paragraph's kept-line count; it must not pull the row's
+                // shared `split_y`, which is what an earlier version of this did (it
+                // dragged B to 3/6 and cost Phase 1 a document).
+                //
+                // SCOPE 1 -- natural splits only, mirroring S819 and S1092. An
+                // LRPB-pulled `split_y` is a break position Word itself recorded in the
+                // file, so it already carries whatever Word decided about widows.
+                // uklocalspending p21 row 1 is the witness the S819 note describes:
+                // saved split 708.8, one line above it, and Word keeps that lone line.
+                //
+                // SCOPE 2 -- only where 2 lines can still be KEPT (n >= 4). Where the
+                // pull would leave 1 or 0, Word's behaviour is measured but NOT
+                // resolved, so this rule declines rather than guess:
+                //   `_pb_rowwidow` SHORT fill60 -- A is 3 lines splitting 2/1, and Word
+                //     moves the WHOLE ROW to p2 (A 0/3, B 0/9);
+                //   uklocalspending p36 row 2 -- 3-line cells splitting 2/1 beside a
+                //     15-line cell, and Word keeps the 2/1, leaving the lone line.
+                // Same shape, opposite outcome, with COM reporting WidowControl=-1 on
+                // the uklocalspending cells. PRESHORT/PRETWO rule out "the row is the
+                // table's first row"; the row is ~263pt so it is not "taller than a
+                // page"; the remaining candidates (space before/after, lineRule
+                // atLeast, cell count, following rows) are untested. Until one of them
+                // separates the two, the n<=3 region keeps today's behaviour.
+                let s1246_limit: std::collections::HashMap<(usize, usize), f32> =
+                    if s819_natural_split && std::env::var("OXI_S1246_DISABLE").is_err() {
+                        // Lines of each cell paragraph, as (top, bottom) per distinct
+                        // baseline -- a line can be several elements (one run each, and
+                        // a justified line is one element per word).
+                        let mut plines: std::collections::HashMap<(usize, usize), Vec<(f32, f32)>> =
+                            Default::default();
+                        for e in row_elements.iter() {
+                            if !matches!(e.content, LayoutContent::Text { .. }) {
+                                continue;
+                            }
+                            if let (Some(ci), Some(pi)) = (e.cell_col_index, e.cell_paragraph_index)
+                            {
+                                let v = plines.entry((ci, pi)).or_default();
+                                match v.iter_mut().find(|(t, _)| (*t - e.y).abs() < 0.1) {
+                                    Some(l) => l.1 = l.1.max(e.y + e.height),
+                                    None => v.push((e.y, e.y + e.height)),
+                                }
+                            }
+                        }
+                        let mut out = std::collections::HashMap::new();
+                        for (key, mut lines) in plines {
+                            if lines.len() < 4 {
+                                continue;
+                            }
+                            let widow_on = row
+                                .cells
+                                .get(key.0)
+                                .and_then(|c| {
+                                    c.blocks
+                                        .iter()
+                                        .filter_map(|b| match b {
+                                            Block::Paragraph(p) => Some(p),
+                                            _ => None,
+                                        })
+                                        .nth(key.1)
+                                })
+                                .map_or(false, |p| p.style.widow_control);
+                            if !widow_on {
+                                continue;
+                            }
+                            lines.sort_by(|a, b| {
+                                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            // The same keep test the partition below applies, so this
+                            // count is the count that would actually be kept.
+                            let n = lines.len();
+                            let k = lines
+                                .iter()
+                                .filter(|l| {
+                                    let extra = if s1092
+                                        && s1092_last
+                                            .get(&key)
+                                            .map_or(false, |b| (l.1 - *b).abs() < 0.01)
+                                    {
+                                        *s1092_after.get(&key).unwrap_or(&0.0)
+                                    } else {
+                                        0.0
+                                    };
+                                    l.1 + extra <= split_y + 0.1 - s819_q
+                                })
+                                .count();
+                            if k == n - 1 {
+                                out.insert(key, lines[n - 2].0);
+                            }
+                        }
+                        out
+                    } else {
+                        Default::default()
+                    };
                 // Partition elements: those fitting on current page vs overflow
                 let mut current_page_elems: Vec<LayoutElement> = Vec::new();
                 let mut next_page_elems: Vec<LayoutElement> = Vec::new();
@@ -38397,7 +38514,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             } else {
                                 0.0
                             };
-                            if elem_bottom + s1092_extra <= split_y + 0.1 - s819_q {
+                            // S1246: this paragraph may not keep a line at or
+                            // below its widow limit, even though the line fits.
+                            let s1246_lim = elem
+                                .cell_col_index
+                                .zip(elem.cell_paragraph_index)
+                                .and_then(|k| s1246_limit.get(&k))
+                                .copied()
+                                .unwrap_or(f32::INFINITY);
+                            if elem_bottom + s1092_extra <= split_y + 0.1 - s819_q
+                                && elem.y < s1246_lim - 0.1
+                            {
                                 current_page_elems.push(elem);
                             } else {
                                 let shift = split_y - page_top;
