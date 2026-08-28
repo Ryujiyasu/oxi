@@ -110,17 +110,36 @@ def build(made: Path) -> bool:
             frame.TextRange.Font.Name = FACE2
             frame.TextRange.Font.NameFarEast = FACE2
             frame.TextRange.Font.Fill.ForeColor.RGB = 0
-            # Nudge all four by the same fraction of a point.
+            # And one with a BORDER. Every shape above is drawn with no line at
+            # all, and the corpus shape that disagreed carries `w="28575"` —
+            # 2.25 points, three pixels, straddling the box's own edge. A rule
+            # settled on borderless shapes says nothing about that.
+            ruled = sheet.Shapes.AddShape(1, 740.0, here, WIDE, TALL)
+            ruled.Fill.Visible = False
+            ruled.Line.Visible = True
+            ruled.Line.Weight = 2.25
+            ruled.Line.ForeColor.RGB = 0
+            frame = ruled.TextFrame2
+            frame.WordWrap = True
+            frame.AutoSize = 0
+            frame.VerticalAnchor = 1          # top
+            frame.TextRange.Text = (LETTER * 6 + chr(13)) * 4
+            frame.TextRange.Font.Size = POINTS2
+            frame.TextRange.Font.Name = FACE2
+            frame.TextRange.Font.NameFarEast = FACE2
+            frame.TextRange.Font.Fill.ForeColor.RGB = 0
+            # Nudge all five by the same fraction of a point.
             box.Top = here + (top - 30.0)
             words.Top = here + (top - 30.0)
             many.Top = here + (top - 30.0)
             other.Top = here + (top - 30.0)
+            ruled.Top = here + (top - 30.0)
         book.SaveAs(str(made), FileFormat=51)
         for _ in range(10):
             try:
                 sheet.Activate()
                 sheet.Range(sheet.Cells(1, 1), sheet.Cells(
-                    int(len(TOPS) * (TALL + GAP) / 15) + 12, 28)).CopyPicture(
+                    int(len(TOPS) * (TALL + GAP) / 15) + 12, 34)).CopyPicture(
                     Appearance=1, Format=2)
             except Exception:
                 time.sleep(0.6)
@@ -158,7 +177,7 @@ def main() -> int:
     )
     mine = np.asarray(Image.open(SCRATCH / "oxi.png").convert("L")) < 140
     band = round((TALL + GAP) * 96 / 72)
-    print(f"  {'top pt':>9}{'px':>8}   {'Excel box/one/wrap/other':>26}{'Oxi box/one/wrap/other':>26}")
+    print(f"  {'top pt':>9}{'px':>8}   {'Excel box/one/wrap/oth/ruled':>30}{'Oxi box/one/wrap/oth/ruled':>30}")
     agree = 0
     for at, top in enumerate(TOPS):
         y0, y1 = at * band, (at + 1) * band
@@ -168,15 +187,22 @@ def main() -> int:
             one = first_ink(dark, y0, y1, 270, 400)
             wrapped = first_ink(dark, y0, y1, 510, 640)
             second = first_ink(dark, y0, y1, 750, 880)
+            # Inside the bordered box, past its own top rule: what is wanted is
+            # the text, and a 2.25pt rule straddling the edge answers first —
+            # it reaches ABOVE the box top, so the search starts below it. The
+            # window stays clear of the box's SIDE rules as well: they put ink on
+            # every row inside it and the reader answers `box + 6` for every arm.
+            boxed = None if box is None else first_ink(dark, box + 6, y1, 1010, 1090)
             held.append((
                 box,
                 None if box is None or one is None else one - box,
                 None if box is None or wrapped is None else wrapped - box,
                 None if box is None or second is None else second - box,
+                None if box is None or boxed is None else boxed - box,
             ))
         same = held[0] == held[1]
         agree += same
-        print(f"  {top:>9}{top * 96 / 72:>8.2f}   {str(held[0]):>26}{str(held[1]):>26}"
+        print(f"  {top:>9}{top * 96 / 72:>8.2f}   {str(held[0]):>30}{str(held[1]):>30}"
               f"{'' if same else '  <<'}")
     print(f"  {agree} of {len(TOPS)} arms agree")
     return 0
