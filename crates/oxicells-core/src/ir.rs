@@ -325,6 +325,14 @@ pub struct Drawing {
     /// annotated with in a part of its own, anchored that way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<Frame>,
+    /// True when the anchor above was WORKED OUT rather than read: a shape
+    /// inside a group is placed by mapping its own box through the group's
+    /// transform, and it then hangs from the cell the GROUP hangs from with
+    /// the whole distance folded into the offset. Such an offset routinely
+    /// runs past its cell, which a file's own never does — and Excel holds a
+    /// file's offset inside its cell, so the two cannot be treated alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub grouped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

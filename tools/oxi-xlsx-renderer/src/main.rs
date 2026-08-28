@@ -1095,13 +1095,20 @@ pub(crate) fn drawing_box(
     layout: &Geometry,
     scale: f32,
 ) -> Option<windows::Win32::Foundation::RECT> {
-    // A drawing's anchor is not clamped to its cell, though Excel clamps one
-    // it reads out of a file. The offsets that reach here are not always the
-    // file's: a shape inside a group is flattened into an anchor of its own,
-    // and the distance the group carries it lands in the offset, which then
-    // runs past the cell for a reason Excel never sees. Clamping those cost
-    // `glossary_05` 0.0013 — the group's own text re-wrapped.
-    anchored_box(&drawn.from, drawn.to.as_ref(), drawn.extent, layout, scale, false)
+    // An anchor the FILE states is held inside its cell, the way Excel holds
+    // it. One this worked out for itself is not: a shape inside a group hangs
+    // from the cell the group hangs from with the whole distance folded into
+    // the offset, so it runs past that cell for a reason Excel never sees.
+    // Clamping those too cost `glossary_05` 0.0013 — the group's own text
+    // re-wrapped a character.
+    anchored_box(
+        &drawn.from,
+        drawn.to.as_ref(),
+        drawn.extent,
+        layout,
+        scale,
+        !drawn.grouped,
+    )
 }
 
 /// The left edge of a column, wherever it sits against the drawn range.

@@ -2014,6 +2014,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                     )),
                                     kind,
                                     frame: None,
+                                    grouped: true,
                                 },
                                 if picture { embed.take() } else { None },
                             ));
@@ -2049,6 +2050,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                                     extent: extent.take(),
                                     kind,
                                     frame: held,
+                                    grouped: false,
                                 },
                                 if named { embed.take() } else { None },
                             ));
