@@ -39704,6 +39704,62 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             page_top + overflow_on_next - (pages_used as f32 * content_height),
                         );
                     }
+                    // S1250 (2026-08-28, **PARKED opt-in `OXI_S1250`**, default
+                    // byte-identical):
+                    // every formula above measures TEXT. `last_cont_top` is the
+                    // last text element's top and the cursor is derived from it,
+                    // so an IMAGE sitting below the last text line of the
+                    // continuation is not counted and the next row is placed on
+                    // top of it.
+                    //
+                    // DERIVED on educational__002a301d7c46ba6e (blindC50, the
+                    // last pcd!=0 document of the EN sets). Its one table:
+                    //
+                    //     row=1  entry 263.998  h=348.003
+                    //     row=2  entry 613.000  h=386.864   <- overflows p5
+                    //     row=3  entry 154.199  h=16.000    <- p6
+                    //
+                    // Row 2 still had ~280pt to place on p6 and got 64: the
+                    // continuation's text ends at ~140 and its 226.4pt image
+                    // starts at 154.2, so `last_cont_top + lh` lands the cursor
+                    // AT the image's top. Rows 3, 4 and 5 are then drawn over the
+                    // picture (dump: image y=154.2..380.6 with text at 170.2 and
+                    // 202.2 inside it), and the page ends short -- the document's
+                    // +1. The second image on the same page, whose row does not
+                    // straddle, is placed correctly, which is what isolates this
+                    // to the continuation formula rather than to image height.
+                    //
+                    // The clamp only ever moves the cursor DOWN, and only when a
+                    // picture reaches past where the text-derived formula put it,
+                    // so a continuation carrying no image is byte-identical.
+                    // Images only: a border or a shading band spans the row box
+                    // and would re-introduce the geometry these formulas exist to
+                    // replace.
+                    //
+                    // ★PARKED, and the reason is the point. The clamp does fix the
+                    // defect -- the corpus dump goes from 1 large image with text
+                    // drawn inside it to 0 -- but the document then renders 12
+                    // pages against Word's 10, where it rendered 11 before. Two
+                    // errors were partly cancelling: the lost image height was
+                    // giving back space that something upstream over-consumes.
+                    // Shipping the half that is understood makes the page count
+                    // worse, which the Phase-1 gate rightly refuses, so the
+                    // derivation is banked behind an opt-in until the upstream
+                    // over-consumption is found. The first thread to pull: with
+                    // the clamp on, the earlier table's row 1 moves from
+                    // entry 690.3 to a fresh page at 169.6, and even WITHOUT the
+                    // clamp that row starts 252pt below the end of row 0 (418.2 +
+                    // 20.3 = 438.5 -> 690.3) -- a gap no row height explains.
+                    if std::env::var("OXI_S1250").is_ok() {
+                        let cont_image_bottom = elements
+                            .iter()
+                            .filter(|e| matches!(&e.content, LayoutContent::Image { .. }))
+                            .map(|e| e.y + e.height)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        if cont_image_bottom.is_finite() && cursor.cursor_y < cont_image_bottom {
+                            cursor.set(cont_image_bottom);
+                        }
+                    }
                 } else if s754_split && !is_single_cell_row && !has_lrpb_mid_row {
                     // S754: multi-cell content split — the geometric fallback
                     // (row_bottom − split_y) lands the cursor ABOVE the actual
