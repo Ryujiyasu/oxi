@@ -3857,9 +3857,16 @@ mod windows_draw {
         }
 
         // The axes, over the plot and under nothing.
+        // An axis that states no line of its own is drawn in `898989`, not in
+        // black. Asked of `a08feeb4a00b_zuhyo`'s own chart, whose value axis
+        // states nothing and comes out 137,137,137: given an explicit black it
+        // comes out 0, given `898989` it comes out 137 again, and given red it
+        // comes out red — so the grey is a colour and not a line too thin to
+        // fill its pixel. `_xlsx_chart_axis.py`. Six axes of the corpus state
+        // no line, all in the five `zuhyo` workbooks.
         let axis_pen = |line: &Option<oxicells_core::ir::ShapeLine>| {
             let stated = line.clone().unwrap_or(oxicells_core::ir::ShapeLine {
-                color: "000000".into(),
+                color: "898989".into(),
                 width: 3175,
                 dash: None,
                 cap: None,
