@@ -39,6 +39,51 @@ def doc_id_from_filename(fname: str) -> str:
     return base.split("_")[0]
 
 
+
+def open_clean(word, path):
+    """Open a document whose TRACKED CHANGES cannot distort the measurement.
+
+    Word's markup mode is a sticky APPLICATION preference, not a document
+    property, so the same file measures differently on two machines -- or on the
+    same machine on two days. `legal__0010437a7f75f636` (130 deletions) counts
+    628 pages with All Markup and 625 without, and the benchmark held both: a
+    pagination JSON captured at 628 against an SSIM reference PDF captured at
+    625, with the queue reading the difference as an Oxi defect.
+
+    No markup is the state to measure, because the renderers ask for it: the GDI
+    and DWrite mains set `ShowRevisions::Final` (S483) to match the clean-view
+    ground-truth PNGs.
+
+    ★Hiding markup through the VIEW does not work. With
+    `View.RevisionsFilter.Markup = 0` this document reports
+    ComputeStatistics(2)=625 while its last paragraph still reports
+    Information(3)=628 -- an impossible pair -- and `Repaginate()` plus a 5s
+    settle do not move it. Per-paragraph page numbers keep the markup-shown
+    pagination while the page COUNT follows the view.
+
+    Accepting the revisions in the throwaway copy removes the deleted text from
+    the document itself, which is exactly what ShowRevisions::Final renders. Both
+    numbers then come from one state: 625 pages, last paragraph on page 625.
+
+    Revision-free documents keep the previous read-only path untouched.
+    """
+    doc = word.Documents.Open(path, ReadOnly=True)
+    try:
+        n = doc.Revisions.Count
+    except Exception:
+        n = 0
+    if not n:
+        return doc
+    doc.Close(False)
+    doc = word.Documents.Open(path, ReadOnly=False)
+    try:
+        doc.Revisions.AcceptAll()
+        doc.Repaginate()
+        time.sleep(1.0)
+    except Exception:
+        pass
+    return doc
+
 def measure_doc(word, docx_path: str) -> dict:
     # S432: some baseline docs (3a4f) fail/hang on Documents.Open of the
     # original (protected-view / lock); a %TEMP% copy opens cleanly (per
@@ -50,7 +95,7 @@ def measure_doc(word, docx_path: str) -> dict:
     fd, tmp_copy = tempfile.mkstemp(suffix=".docx", prefix="ppw_")
     os.close(fd)
     shutil.copy(docx_path, tmp_copy)
-    doc = word.Documents.Open(tmp_copy, ReadOnly=True)
+    doc = open_clean(word, tmp_copy)
     time.sleep(0.3)
     try:
         try:
