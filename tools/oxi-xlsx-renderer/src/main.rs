@@ -3959,7 +3959,26 @@ mod windows_draw {
                 }
                 let mut measured = SIZE::default();
                 let _ = GetTextExtentPoint32W(dc, letters, &mut measured);
-                let _ = TextOutW(dc, plot.left, up_at(value) - measured.cy / 2, letters);
+                // A value-axis label stands off from the axis, and the stand-off
+                // grows with the text. Measured on `a08feeb4a00b_zuhyo`'s own
+                // chart at twelve sizes (`_xlsx_chart_label_gap.py`): the ink
+                // stops 10, 13, 15, 17, 18, 19, 22, 24, 29, 32, 36 and 44 pixels
+                // short of the axis at 6 to 24 point, which is four thirds of
+                // the em to within a pixel and a third at every one of them.
+                // Ours stopped 2 short at every size — the label was set flush
+                // against the axis and only the glyph's own bearing stood in
+                // the way. Which way the tick marks point changes nothing:
+                // `in`, `out`, `none` and `cross` all read 18 at 10 point.
+                // The size is in points and `scale` is the device's own, so
+                // the em in pixels carries the 96-over-72 as well.
+                let em = label_size * scale * 96.0 / 72.0;
+                let stand_off = (em * 4.0 / 3.0).round() as i32 - 2;
+                let _ = TextOutW(
+                    dc,
+                    plot.left - stand_off.max(0),
+                    up_at(value) - measured.cy / 2,
+                    letters,
+                );
             }
             SelectObject(dc, held);
             let _ = DeleteObject(font);
