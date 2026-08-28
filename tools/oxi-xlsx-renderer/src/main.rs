@@ -1095,7 +1095,67 @@ pub(crate) fn drawing_box(
     layout: &Geometry,
     scale: f32,
 ) -> Option<windows::Win32::Foundation::RECT> {
-    anchored_box(&drawn.from, drawn.to.as_ref(), drawn.extent, layout, scale)
+    // A drawing's anchor is not clamped to its cell, though Excel clamps one
+    // it reads out of a file. The offsets that reach here are not always the
+    // file's: a shape inside a group is flattened into an anchor of its own,
+    // and the distance the group carries it lands in the offset, which then
+    // runs past the cell for a reason Excel never sees. Clamping those cost
+    // `glossary_05` 0.0013 — the group's own text re-wrapped.
+    anchored_box(&drawn.from, drawn.to.as_ref(), drawn.extent, layout, scale, false)
+}
+
+/// The left edge of a column, wherever it sits against the drawn range.
+#[cfg(windows)]
+fn column_edge(layout: &Geometry, col: u32) -> Option<f32> {
+    match col.checked_sub(layout.first_column) {
+        Some(column) => match layout.columns.get(column as usize) {
+            Some(edge) => Some(*edge),
+            // Past the right of the range, where the picture stops but the
+            // sheet does not.
+            None => layout
+                .after_columns
+                .get(column as usize - layout.columns.len())
+                .copied(),
+        },
+        None => layout.before_columns.get(col as usize).copied(),
+    }
+}
+
+/// The top edge of a row. The drawing part counts rows from zero; the layout
+/// counts them from one, the way the sheet states them.
+#[cfg(windows)]
+fn row_edge(layout: &Geometry, row: u32) -> Option<f32> {
+    match (row + 1).checked_sub(layout.first_row) {
+        Some(index) => match layout.rows.get(index as usize) {
+            Some(edge) => Some(*edge),
+            None => layout
+                .after_rows
+                .get(index as usize - layout.rows.len())
+                .copied(),
+        },
+        None => layout.before_rows.get(row as usize).copied(),
+    }
+}
+
+/// Where an anchor's offset lands, given the cell's own edges.
+///
+/// An offset is measured INTO a cell and cannot leave it. Asked of Excel by
+/// `_xlsx_anchor_overrun.py`, which writes far corners reaching 0 to 100
+/// pixels past a twenty-pixel row and 0 to 300 past a seventy-two pixel
+/// column and reads back how big each shape came out: the offset stops at the
+/// cell's own edge, 9 of 9 arms down and 7 of 7 across, where taking it at its
+/// word fits only the arms that never overrun.
+///
+/// It is not a rare thing to write. `002` — the corpus floor — pins a note
+/// whose box ends at row 3 plus 34 pixels where that row is 27 high, and
+/// Excel ends the note at the top of row 4.
+#[cfg(windows)]
+fn along(edge: f32, next: Option<f32>, off: i64, scale: f32, hold: bool) -> f32 {
+    let want = off as f32 / EMU * scale;
+    match next {
+        Some(next) if hold => edge + want.clamp(0.0, (next - edge).max(0.0)),
+        _ => edge + want,
+    }
 }
 
 /// The box between two anchors, or between one and a stated size.
@@ -1106,59 +1166,24 @@ pub(crate) fn anchored_box(
     extent: Option<(i64, i64)>,
     layout: &Geometry,
     scale: f32,
+    hold: bool,
 ) -> Option<windows::Win32::Foundation::RECT> {
     // The two axes are asked separately, because a corner can be readable in
     // one and not the other: `002`'s note reaches column 92 of a sheet drawn
     // to 93 — off the picture — while its row is right there. Giving up on
     // both because one is missing loses the row that IS the answer.
     let across = |anchor: &oxicells_core::ir::Anchor| -> Option<i32> {
-        let left = match anchor.col.checked_sub(layout.first_column) {
-            Some(column) => match layout.columns.get(column as usize) {
-                Some(edge) => *edge,
-                None => *layout
-                    .after_columns
-                    .get(column as usize - layout.columns.len())?,
-            },
-            None => *layout.before_columns.get(anchor.col as usize)?,
-        };
-        Some((left + anchor.col_off as f32 / EMU * scale).round() as i32)
+        let left = column_edge(layout, anchor.col)?;
+        let next = column_edge(layout, anchor.col + 1);
+        Some(along(left, next, anchor.col_off, scale, hold).round() as i32)
     };
     let down = |anchor: &oxicells_core::ir::Anchor| -> Option<i32> {
-        let top = match (anchor.row + 1).checked_sub(layout.first_row) {
-            Some(row) => match layout.rows.get(row as usize) {
-                Some(edge) => *edge,
-                None => *layout.after_rows.get(row as usize - layout.rows.len())?,
-            },
-            None => *layout.before_rows.get(anchor.row as usize)?,
-        };
-        Some((top + anchor.row_off as f32 / EMU * scale).round() as i32)
+        let top = row_edge(layout, anchor.row)?;
+        let next = row_edge(layout, anchor.row + 1);
+        Some(along(top, next, anchor.row_off, scale, hold).round() as i32)
     };
     let at = |anchor: &oxicells_core::ir::Anchor| -> Option<(i32, i32)> {
-        // The drawing part counts both from zero; the layout counts columns
-        // from zero and rows from one, the way the sheet states them. A cell
-        // before the range has its own place, back from the left edge.
-        let left = match anchor.col.checked_sub(layout.first_column) {
-            Some(column) => match layout.columns.get(column as usize) {
-                Some(edge) => *edge,
-                // Past the right of the range, where the picture stops but
-                // the sheet does not.
-                None => *layout
-                    .after_columns
-                    .get(column as usize - layout.columns.len())?,
-            },
-            None => *layout.before_columns.get(anchor.col as usize)?,
-        };
-        let top = match (anchor.row + 1).checked_sub(layout.first_row) {
-            Some(row) => match layout.rows.get(row as usize) {
-                Some(edge) => *edge,
-                None => *layout.after_rows.get(row as usize - layout.rows.len())?,
-            },
-            None => *layout.before_rows.get(anchor.row as usize)?,
-        };
-        Some((
-            (left + anchor.col_off as f32 / EMU * scale).round() as i32,
-            (top + anchor.row_off as f32 / EMU * scale).round() as i32,
-        ))
+        Some((across(anchor)?, down(anchor)?))
     };
     let (left, top) = at(from)?;
     let (right, bottom) = match (to, extent) {
@@ -1213,16 +1238,14 @@ pub(crate) fn anchored_room(
     layout: &Geometry,
     scale: f32,
 ) -> Option<f32> {
+    // The offset is taken at its word here, where the drawn box clamps it to
+    // the cell. The two are different numbers on purpose: what Excel was asked
+    // was how big it draws the SHAPE, and the room a line breaks in was
+    // derived on its own (`_xlsx_shape_room.py`). Clamping here as well moved
+    // `glossary_05`'s flowchart text a character and cost 0.0013, which is the
+    // measurement saying the two do not share the rule.
     let at = |anchor: &oxicells_core::ir::Anchor| -> Option<f32> {
-        let left = match anchor.col.checked_sub(layout.first_column) {
-            Some(column) => match layout.columns.get(column as usize) {
-                Some(edge) => *edge,
-                None => *layout
-                    .after_columns
-                    .get(column as usize - layout.columns.len())?,
-            },
-            None => *layout.before_columns.get(anchor.col as usize)?,
-        };
+        let left = column_edge(layout, anchor.col)?;
         Some(left + anchor.col_off as f32 / EMU * scale)
     };
     let left = at(from)?;
@@ -1247,16 +1270,14 @@ pub(crate) fn drawing_edges(
     layout: &Geometry,
     scale: f32,
 ) -> Option<(f32, f32)> {
+    // The offset is taken at its word here, where the drawn box clamps it to
+    // the cell. The two are different numbers on purpose: what Excel was asked
+    // was how big it draws the SHAPE, and the room a line breaks in was
+    // derived on its own (`_xlsx_shape_room.py`). Clamping here as well moved
+    // `glossary_05`'s flowchart text a character and cost 0.0013, which is the
+    // measurement saying the two do not share the rule.
     let at = |anchor: &oxicells_core::ir::Anchor| -> Option<f32> {
-        let left = match anchor.col.checked_sub(layout.first_column) {
-            Some(column) => match layout.columns.get(column as usize) {
-                Some(edge) => *edge,
-                None => *layout
-                    .after_columns
-                    .get(column as usize - layout.columns.len())?,
-            },
-            None => *layout.before_columns.get(anchor.col as usize)?,
-        };
+        let left = column_edge(layout, anchor.col)?;
         Some(left + anchor.col_off as f32 / EMU * scale)
     };
     let left = at(&drawn.from)?;
@@ -6690,12 +6711,19 @@ mod windows_draw {
                     (note.size.0 * super::EMU * 96.0 / 72.0) as i64,
                     (note.size.1 * super::EMU * 96.0 / 72.0) as i64,
                 );
+                // A note's anchor is written in the file as a cell and a count
+                // of pixels into it, and Excel holds that count inside the
+                // cell: `_xlsx_anchor_overrun.py` reads back 9 of 9 heights
+                // and 7 of 7 widths that stop at the cell's own edge. `002`
+                // pins a note ending at row 3 plus 34 pixels where that row is
+                // 27 high, and Excel ends it at the top of row 4.
                 let Some(box_) = super::anchored_box(
                     &note.from,
                     note.to.as_ref(),
                     Some(extent),
                     layout,
                     scale,
+                    true,
                 ) else {
                     continue;
                 };
