@@ -4651,12 +4651,21 @@ mod windows_draw {
             // the start of the block is the half-leading plus this ascent,
             // and nothing else: 31 arms of 31, where the next best candidate
             // holds 13 and a start on a whole pixel holds 8.
-            let up = (!note)
-                .then(|| {
-                    super::shape_ascent(&face, paragraph.size, paragraph.bold, paragraph.italic)
-                })
-                .flatten()
-                .unwrap_or(0.0);
+            // A note is laid out by the engine that lays out cells, and that
+            // one does not ask the device where the baseline is either: it
+            // reads the measured table, whose second column is how far down
+            // the line box the baseline sits. `line_box` hands both back and
+            // this path was throwing the second away, leaving GDI's own
+            // rounded ascent to stand in for it — メイリオ at 14 point is 20
+            // there where the table says 21, which is `002`'s two notes a
+            // pixel high apiece.
+            let up = if note {
+                super::line_box(&face, paragraph.size, paragraph.bold, paragraph.italic)
+                    .map_or(0.0, |(_, baseline)| baseline)
+            } else {
+                super::shape_ascent(&face, paragraph.size, paragraph.bold, paragraph.italic)
+                    .unwrap_or(0.0)
+            };
             if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
                 for line in &broken {
                     let run = super::shape_run(
@@ -4689,10 +4698,8 @@ mod windows_draw {
                         // The ink of a pinned line may well start above the
                         // line: a pitch smaller than the face asks for is
                         // exactly what a pinned pitch is usually for.
-                        // A note is placed by the top of its line, so it keeps
-                        // the device's own ascent; a shape is placed by the
-                        // baseline and does not need one.
-                        (0.75 * tall - lift - if note { ascent } else { 0.0 }) * scale
+                        let _ = ascent;
+                        (0.75 * tall - lift) * scale
                     }
                     // A paragraph that asks for a SHARE of the font's own
                     // pitch moves its baseline three quarters of the CHANGE —
@@ -4784,11 +4791,11 @@ mod windows_draw {
             );
         }
 
-        // A shape's line is placed by its BASELINE, which is the number Excel
-        // rounds; a note's is placed by the top of the line, which is where
-        // the engine that lays out cells puts it. Nothing follows this on the
+        // A line is placed by its BASELINE, which is the number Excel rounds
+        // — for a note as well as a shape, the two differing only in where
+        // the baseline sits below the line's top. Nothing follows this on the
         // sheet, so the alignment stays as it is left.
-        SetTextAlign(dc, if note { TA_TOP } else { TA_BASELINE } | TA_LEFT);
+        SetTextAlign(dc, TA_BASELINE | TA_LEFT);
         for (step, (index, line, from)) in lines.iter().enumerate() {
             let paragraph = &said.paragraphs[*index];
             // A face this machine has not got is not GDI's business to
