@@ -72,6 +72,11 @@ def build(made: Path) -> bool:
             frame.TextRange.Font.Size = POINTS
             frame.TextRange.Font.Name = FACE
             frame.TextRange.Font.NameFarEast = FACE
+            # Black, said out loud. A shape made with no fill keeps the text
+            # colour its theme gives it, which is WHITE — Excel drew every arm
+            # and the reader found no ink in any of them, while ours drew its
+            # own default black and looked like the only side working.
+            frame.TextRange.Font.Fill.ForeColor.RGB = 0
             # Nudge both by the same fraction of a point.
             box.Top = here + (top - 30.0)
             words.Top = here + (top - 30.0)
