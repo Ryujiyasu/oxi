@@ -1030,18 +1030,44 @@ pub(crate) fn reserved_room(format: &str, negative: bool) -> (Vec<char>, Vec<cha
 /// spaces its lines exactly as it does with 国国国国.
 #[cfg(windows)]
 pub(crate) fn shape_line(face: &str, points: f32, bold: bool, italic: bool) -> Option<(f32, f32)> {
+    let (per_em, _, japanese) = face_per_em(face, bold, italic)?;
+    let em = points * 96.0 / 72.0;
+    let natural = per_em * em;
+    Some((natural * if japanese { 1.3 } else { 1.0 }, natural))
+}
+
+/// How far the baseline sits below the top of a line, unrounded.
+///
+/// GDI hands out an ascent already rounded to the device, and drawing with
+/// `TA_TOP` makes the renderer use that one — but Excel keeps the exact
+/// ascent and rounds the BASELINE. Over a block of lines the two answers part
+/// company wherever the fraction crosses a half: `tb_r8_jizensoudan`'s third
+/// line came out a pixel low for exactly that reason.
+#[cfg(windows)]
+pub(crate) fn shape_ascent(face: &str, points: f32, bold: bool, italic: bool) -> Option<f32> {
+    let (_, up, _) = face_per_em(face, bold, italic)?;
+    Some(up * points * 96.0 / 72.0)
+}
+
+/// A face's line height and ascent as shares of the em, measured once.
+///
+/// Taken at 2048 pixels so the device's own rounding is a thousandth of the
+/// answer, which is what lets the exact size do the rest.
+#[cfg(windows)]
+fn face_per_em(face: &str, bold: bool, italic: bool) -> Option<(f32, f32, bool)> {
     use std::sync::Mutex;
     use windows::Win32::Graphics::Gdi::*;
 
-    // The font's line height per em, and whether it is an East Asian face.
-    static KNOWN: Mutex<Option<std::collections::HashMap<(String, bool, bool), (f32, bool)>>> =
+    // The font's line height and ascent per em, and whether it is an East
+    // Asian face.
+    static KNOWN: Mutex<Option<std::collections::HashMap<(String, bool, bool), (f32, f32, bool)>>> =
         Mutex::new(None);
     const MEASURED_AT: i32 = 2048;
 
     let key = (face.to_string(), bold, italic);
     let mut held = KNOWN.lock().ok()?;
     let known = held.get_or_insert_with(std::collections::HashMap::new);
-    let (per_em, japanese) = match known.get(&key) {
+    let found = match known.get(&key) {
         Some(found) => *found,
         None => unsafe {
             let named: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
@@ -1073,15 +1099,14 @@ pub(crate) fn shape_line(face: &str, points: f32, bold: bool, italic: bool) -> O
             }
             let found = (
                 metrics.tmHeight as f32 / MEASURED_AT as f32,
+                metrics.tmAscent as f32 / MEASURED_AT as f32,
                 metrics.tmCharSet == SHIFTJIS_CHARSET.0 as u8,
             );
             known.insert(key, found);
             found
         },
     };
-    let em = points * 96.0 / 72.0;
-    let natural = per_em * em;
-    Some((natural * if japanese { 1.3 } else { 1.0 }, natural))
+    Some(found)
 }
 
 /// Where a drawing lands on the sheet, in the picture's own pixels.
@@ -4459,7 +4484,8 @@ mod windows_draw {
         // is written in.
         let mut lines: Vec<(usize, String, usize)> = Vec::new();
         let mut pitch: Vec<f32> = Vec::new();
-        let mut leading: Vec<i32> = Vec::new();
+        // How far below each line's top its BASELINE sits, unrounded.
+        let mut leading: Vec<f32> = Vec::new();
         for (index, paragraph) in said.paragraphs.iter().enumerate() {
             // A face this machine has not got is not GDI's business to
             // guess: Excel answers by the run's charset (see `face_in_place`).
@@ -4548,6 +4574,21 @@ mod windows_draw {
                     counter.shape_of(&face, paragraph.size, paragraph.bold, paragraph.italic)
                 })
             });
+            // Excel keeps the face's EXACT ascent and rounds the baseline it
+            // lands on; the device hands out an ascent already rounded, and
+            // drawing by the top of the line would use that one. Over
+            // twenty-four lines, four faces and eight sizes
+            // (`_xlsx_shape_pitch_size.py` solving the pair the tops imply,
+            // `_xlsx_block_start_law.py` holding each candidate against it)
+            // the start of the block is the half-leading plus this ascent,
+            // and nothing else: 31 arms of 31, where the next best candidate
+            // holds 13 and a start on a whole pixel holds 8.
+            let up = (!note)
+                .then(|| {
+                    super::shape_ascent(&face, paragraph.size, paragraph.bold, paragraph.italic)
+                })
+                .flatten()
+                .unwrap_or(0.0);
             if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
                 for line in &broken {
                     let run = super::shape_run(
@@ -4580,7 +4621,10 @@ mod windows_draw {
                         // The ink of a pinned line may well start above the
                         // line: a pitch smaller than the face asks for is
                         // exactly what a pinned pitch is usually for.
-                        ((0.75 * tall - lift - ascent) * scale).round() as i32
+                        // A note is placed by the top of its line, so it keeps
+                        // the device's own ascent; a shape is placed by the
+                        // baseline and does not need one.
+                        (0.75 * tall - lift - if note { ascent } else { 0.0 }) * scale
                     }
                     // A paragraph that asks for a SHARE of the font's own
                     // pitch moves its baseline three quarters of the CHANGE —
@@ -4594,7 +4638,7 @@ mod windows_draw {
                     // four pixels out at 80%.
                     None => {
                         let settled = ((own - natural) / 2.0).max(0.0);
-                        ((settled + 0.75 * (tall - own)) * scale).round() as i32
+                        (settled + 0.75 * (tall - own) + up) * scale
                     }
                 });
             }
@@ -4672,10 +4716,11 @@ mod windows_draw {
             );
         }
 
-        // A line of a shape's text is placed by its top, not its baseline.
-        // Nothing follows this on the sheet, so the alignment stays as it is
-        // left.
-        SetTextAlign(dc, TA_TOP | TA_LEFT);
+        // A shape's line is placed by its BASELINE, which is the number Excel
+        // rounds; a note's is placed by the top of the line, which is where
+        // the engine that lays out cells puts it. Nothing follows this on the
+        // sheet, so the alignment stays as it is left.
+        SetTextAlign(dc, if note { TA_TOP } else { TA_BASELINE } | TA_LEFT);
         for (step, (index, line, from)) in lines.iter().enumerate() {
             let paragraph = &said.paragraphs[*index];
             // A face this machine has not got is not GDI's business to
@@ -4789,7 +4834,15 @@ mod windows_draw {
                     Some("r") => area.right - width,
                     _ => area.left,
                 };
-                let down = at.round() as i32 + leading[step];
+                let down = (at + leading[step]).round() as i32;
+                if std::env::var("OXI_XLSX_DUMP_BLOCK").is_ok() {
+                    eprintln!(
+                        "  line {step} at={at:.3} down={down} baseline_off={:.3} face={face} size={} text={:?}",
+                        leading[step],
+                        paragraph.size,
+                        line.chars().take(8).collect::<String>()
+                    );
+                }
                 let mut x = left;
                 let mut taken = 0usize;
                 for (bold, underline, painted, piece) in &worn {
