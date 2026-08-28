@@ -1193,13 +1193,33 @@ fn xf_xml(
     if number_format_id != 0 {
         xf.push_str(" applyNumberFormat=\"1\"");
     }
-    match style.horizontal_align.as_deref() {
-        Some(alignment) => {
-            xf.push_str(" applyAlignment=\"1\">");
-            xf.push_str(&format!("<alignment horizontal=\"{}\"/>", escape(alignment)));
-            xf.push_str("</xf>");
-        }
-        None => xf.push_str("/>"),
+    // Everything an `<alignment>` can say goes in one element, so it is built
+    // up rather than written from the first part that happens to be set. Wrap,
+    // indent and the vertical part were read all along and never written: a
+    // cell told to wrap looked right on screen and came back unwrapped, which
+    // is worse than not being able to tell it to.
+    let mut alignment = String::new();
+    if let Some(horizontal) = style.horizontal_align.as_deref() {
+        alignment.push_str(&format!(" horizontal=\"{}\"", escape(horizontal)));
+    }
+    if let Some(vertical) = style.vertical_align.as_deref() {
+        alignment.push_str(&format!(" vertical=\"{}\"", escape(vertical)));
+    }
+    if style.wrap_text {
+        alignment.push_str(" wrapText=\"1\"");
+    }
+    if style.shrink_to_fit {
+        alignment.push_str(" shrinkToFit=\"1\"");
+    }
+    if style.indent > 0 {
+        alignment.push_str(&format!(" indent=\"{}\"", style.indent));
+    }
+    if alignment.is_empty() {
+        xf.push_str("/>");
+    } else {
+        xf.push_str(" applyAlignment=\"1\">");
+        xf.push_str(&format!("<alignment{alignment}/>"));
+        xf.push_str("</xf>");
     }
     xf
 }
@@ -2575,6 +2595,34 @@ mod tests {
         assert!(patched.contains(r#"<fgColor rgb="FFFFFF00"/>"#));
         assert!(patched.contains(r#"<color rgb="FFFF0000"/>"#));
         assert!(patched.contains(r#"<top style="thin">"#));
+    }
+
+    /// Wrapping, the vertical part and an indent were read out of a file and
+    /// never written back, so a cell told to wrap came back unwrapped. They
+    /// share one element with the horizontal part rather than each getting one.
+    #[test]
+    fn everything_an_alignment_says_is_written_in_one_element() {
+        let laid_out = CellStyle {
+            horizontal_align: Some("left".to_string()),
+            vertical_align: Some("top".to_string()),
+            wrap_text: true,
+            shrink_to_fit: true,
+            indent: 2,
+            ..CellStyle::default()
+        };
+        let (patched, _) = patch_styles_xml(STYLES, &[laid_out]).expect("appends");
+        assert!(patched.contains(
+            r#"<alignment horizontal="left" vertical="top" wrapText="1" shrinkToFit="1" indent="2"/>"#
+        ));
+    }
+
+    /// A style that lines nothing up writes no `<alignment>` at all: an empty
+    /// one would claim the cell states something it does not.
+    #[test]
+    fn a_style_that_lines_nothing_up_writes_no_alignment() {
+        let plain = CellStyle { bold: true, ..CellStyle::default() };
+        let (patched, _) = patch_styles_xml(STYLES, &[plain]).expect("appends");
+        assert!(!patched.contains("<alignment"));
     }
 
     #[test]

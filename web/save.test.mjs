@@ -253,6 +253,26 @@ is('and automatic text has no colour of its own',
   face(1).font_color ?? null, null);
 is('while the size it was given stayed', face(1).font_size, 8);
 
+// ── How the text sits in the cell ───────────────────────────────────────────
+//
+// Wrapping, the vertical part and an indent were read out of a file all along
+// and never written back: a cell told to wrap looked right on screen and came
+// back on one line, which is worse than not being able to tell it to. They
+// share one `<alignment>` with the horizontal part.
+
+const laid = parse_spreadsheet(sample.slice());
+const laidRow = laid.sheets[0].rows.find((one) => one.index === 4);
+laidRow.cells[0].style = {
+  ...laidRow.cells[0].style,
+  wrap_text: true, vertical_align: 'top', indent: 2, horizontal_align: 'left',
+};
+const sitting = parse_spreadsheet(edit_xlsx_from_workbook(sample.slice(), laid));
+const sits = cellAt(sitting, 4, 0).style;
+is('a cell told to wrap comes back wrapping', sits.wrap_text, true);
+is('with the part of the cell it sits in', sits.vertical_align, 'top');
+is('the indent it was given', sits.indent, 2);
+is('and the horizontal part it already had', sits.horizontal_align, 'left');
+
 // ── Cells drawn as one ───────────────────────────────────────────────────
 //
 // A merge is a list on the sheet, not a mark on a cell, and a sheet that has
