@@ -247,6 +247,34 @@ if (box && box.listeners.has('keydown')) {
   is('the page has a format box listening for keys', false, true);
 }
 
+// ── A cell told to wrap ─────────────────────────────────────────────────────
+//
+// The grid drew every cell on one line, so a form whose headings wrap came out
+// with the headings cut off. The fixture holds the pair the rule turns on,
+// measured in Excel: the same wrapped text in a row of 30pt whose height was
+// CHOSEN stays at 30 and is cut off, and in a row that chose none comes back
+// at 93.75 — so the chosen height is a lid and the other is not.
+
+if (picker && picker.onchange) {
+  const bytes = await readFile(join(here, '..', 'crates', 'oxicells-core',
+    'tests', 'fixtures', 'wrapped.xlsx'));
+  made.length = 0;
+  await picker.onchange({ target: { files: [{
+    name: 'wrapped.xlsx',
+    arrayBuffer: async () =>
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  }] } });
+  const wrapping = made.filter((one) => one.classList.contains('wrap'));
+  is('a cell told to wrap is drawn wrapping', wrapping.length, 2);
+  const lids = wrapping
+    .map((one) => one.children.find((child) => child.style.height))
+    .filter(Boolean);
+  is('the one in a row of chosen height is held to it', lids.length, 1);
+  is('and held to the row it is in', lids[0] && lids[0].style.height, '40px');
+} else {
+  is('the page has a file picker to open the wrapped fixture with', false, true);
+}
+
 // ── The merge menu ──────────────────────────────────────────────────────────
 //
 // Same shape of question as the format box: whether the control is listening

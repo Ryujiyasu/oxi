@@ -74,6 +74,13 @@ th, td {
   white-space: nowrap;
   height: 20px;
 }
+/* A cell told to wrap wraps, and breaks mid-word where it has to: Japanese
+   has no spaces to break at, and a heading in a narrow column would otherwise
+   run out of it. */
+td.wrap { white-space: pre-wrap; word-break: break-word; }
+/* A row whose height was chosen holds its text to it — a table row grows to
+   its content otherwise, and Excel cuts the text off there instead. */
+td.wrap > div { overflow: hidden; }
 th {
   background: var(--head);
   color: var(--dim);
@@ -312,6 +319,7 @@ table { user-select: none; }
   <button id="left" class="dress" title="Align left">&#8676;</button>
   <button id="centre" class="dress" title="Centre">&#8677;&#8676;</button>
   <button id="right" class="dress" title="Align right">&#8677;</button>
+  <button id="wrap" class="dress" title="Wrap the text inside the cell">&#8617;</button>
   <input id="find" disabled placeholder="Find" title="Find (Ctrl+F). Enter for the next, Shift+Enter for the one before." />
   <select id="rules" disabled title="Rules around the cells">
     <option value="">Rules</option>
@@ -787,6 +795,14 @@ function draw() {
     // A height in points becomes whole pixels by truncation, the way Excel
     // draws it.
     if (height) row.style.height = `${Math.trunc(height * 96 / 72)}px`;
+    // A CHOSEN height is what a wrapped cell is held to; a height Excel
+    // worked out for itself is a cache of what the row needed, and Excel
+    // works it out again. Measured: the same wrapped text in a row of 30pt
+    // with the flag stays at 30 and is cut off, and in a row without it
+    // comes back 93.75 — `tests/fixtures/wrapped.xlsx` is that pair.
+    const chosen = source && source.custom_height && source.height
+      ? Math.trunc(source.height * 96 / 72)
+      : null;
 
     for (let col = 0; col <= lastColumn; col++) {
       const box = merged.get(`${index},${col}`);
@@ -804,7 +820,19 @@ function draw() {
       cell.tabIndex = -1;
       const held = source && source.cells.find((one) => one.col === col);
       if (!held) continue;
-      cell.textContent = shownText(held);
+      if (held.style.wrap_text) {
+        cell.classList.add('wrap');
+        // A merged block is as tall as the rows it spans, not as its first
+        // one, so it is left to the block rather than cut to one row of it.
+        const box = document.createElement('div');
+        if (chosen && !merged.get(`${index},${col}`)) {
+          box.style.height = `${chosen}px`;
+        }
+        box.textContent = shownText(held);
+        cell.appendChild(box);
+      } else {
+        cell.textContent = shownText(held);
+      }
       const align = held.style.horizontal_align;
       if (align === 'center') cell.classList.add('centre');
       else if (align === 'right') cell.classList.add('right');
@@ -1691,6 +1719,7 @@ for (const [id, run] of [
   ['left', () => alignTo('left')],
   ['centre', () => alignTo('center')],
   ['right', () => alignTo('right')],
+  ['wrap', () => toggle('wrap_text')],
 ]) {
   const button = document.getElementById(id);
   if (button) button.addEventListener('click', () => { run(); focusGrid(); });
