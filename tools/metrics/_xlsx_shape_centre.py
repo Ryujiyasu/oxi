@@ -41,17 +41,28 @@ SPACING = 5             # rows a case
 WORD = "A"              # sits on the baseline, so its ink foot is baseline - 1
 FACES = [("Yu Gothic UI", 12.0), ("メイリオ", 12.0), ("ＭＳ Ｐゴシック", 12.0)]
 HEIGHTS = list(range(40, 56))
+# A second sweep, on a question the first cannot ask. `glossary_05` sets its
+# flowchart at 80% and centres it, and the height Excel CENTRES may not be the
+# height it spaces lines by. For one line the two stories separate cleanly:
+# centring the scaled pitch moves the baseline by a quarter of the face's own
+# line per unit of percentage, centring the face's own line moves it by three
+# quarters. Six percentages at one box height.
+PCTS = [70000, 80000, 90000, 100000, 115000, 150000]
+PCT_HEIGHT = 74         # the height `glossary_05`'s own centred box works out to
 
 
 def cases():
-    return [(face, size, tall) for face, size in FACES for tall in HEIGHTS]
+    plain = [(face, size, tall, None) for face, size in FACES for tall in HEIGHTS]
+    scaled = [(face, size, PCT_HEIGHT, pct) for face, size in FACES for pct in PCTS]
+    return plain + scaled
 
 
 def anchors_xml():
     held = []
-    for index, (face, points, tall) in enumerate(cases()):
+    for index, (face, points, tall, pct) in enumerate(cases()):
+        spec = "" if pct is None else f'<a:lnSpc><a:spcPct val="{pct}"/></a:lnSpc>'
         one = (
-            f'<a:p><a:pPr algn="l"/>'
+            f'<a:p><a:pPr algn="l">{spec}</a:pPr>'
             f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}">'
             f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
             f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
@@ -185,10 +196,10 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    print(f"{'face':<14}{'box':>5}{'area':>12}{'block':>9}{'slack':>8}"
+    print(f"{'face':<14}{'box':>5}{'pct':>7}{'area':>12}{'block':>9}{'slack':>8}"
           f"{'Excel':>7}{'ours':>6}{'round':>7}{'floor':>7}{'ceil':>6}")
     seen = {}
-    for index, (face, points, tall) in enumerate(cases()):
+    for index, (face, points, tall, pct) in enumerate(cases()):
         top = edges.get(index * SPACING)
         bottom = edges.get(index * SPACING + SPACING - 1)
         if top is None or bottom is None or index >= len(told):
@@ -211,7 +222,8 @@ def main():
         got = [name for name, value in base.items() if value == _at]
         seen.setdefault(face, []).append(
             (tall, theirs - mine_foot, {name: int(value - _at) for name, value in base.items()}))
-        print(f"{face:<14}{tall:>5}{f'{area_top:.0f}..{area_foot:.0f}':>12}{block:>9.3f}"
+        print(f"{face:<14}{tall:>5}{(pct or 0) // 1000:>7}"
+              f"{f'{area_top:.0f}..{area_foot:.0f}':>12}{block:>9.3f}"
               f"{slack:>8.3f}{theirs:>7}{mine_foot:>6}"
               f"{int(base['round'] - _at):>7}{int(base['floor'] - _at):>7}"
               f"{int(base['ceil'] - _at):>6}"
