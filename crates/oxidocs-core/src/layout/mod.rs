@@ -10360,6 +10360,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 cursor.set(start_y);
                 current_page_idx += 1;
             }
+            // S1256 (2026-08-29, default ON, opt-out OXI_S1256_DISABLE): the
+            // LAST body paragraph's after-spacing, which the block loop never
+            // adds because nothing follows it. The endnote block does follow it.
+            // WORD TRUTH `educational__001217ec`: its `References` heading is
+            // Heading1 = `spacing before=520 after=440 line=440 atLeast`, i.e.
+            // 22pt after. Word puts the heading line at 105.91 (h 25.3, the
+            // Arial natural beating the 22pt atLeast) and the first endnote at
+            // 166.45; Oxi ended the heading at 130.30 and started the notes at
+            // 144.30 = 130.30 + the 14pt separator gap alone. Adding the 22
+            // gives 166.30 -- 0.15pt from Word.
+            if std::env::var("OXI_S1256_DISABLE").is_err() {
+                if let Some(Block::Paragraph(last)) = page.blocks.last() {
+                    let sa = last.style.space_after.unwrap_or(0.0);
+                    if sa > 0.0 {
+                        cursor.advance(sa);
+                    }
+                }
+            }
             elements.push(LayoutElement::new(
                 start_x,
                 cursor.cursor_y + sep_gap * 0.5,
@@ -10474,7 +10492,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         if std::env::var("OXI_S1255_DISABLE").is_err() {
                             let sa = para_to_render.style.space_after.unwrap_or(0.0);
                             if sa > 0.0 {
-                                cursor.cursor_y += sa;
+                                // ★`advance`, not `cursor_y += `: the Cursor
+                                // carries a pagination track AND a drawing
+                                // track, and touching only the first made the
+                                // page BREAKS see the spacing while the ink did
+                                // not — the page count moved to Word's 19 while
+                                // every note still sat at the 13.50 pitch.
+                                cursor.advance(sa);
                             }
                         }
                     }
