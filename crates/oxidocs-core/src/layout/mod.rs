@@ -10294,7 +10294,32 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 }
                             }
                             if ink_bot > ink_top {
-                                (ink_bot - ink_top + lead).max(math_font_size * floor)
+                                {
+                                    // S1260 (2026-08-29, default ON, opt-out
+                                    // OXI_S1260_DISABLE): the floor on a
+                                    // single-line equation is the FACE's own
+                                    // natural line height, not the calibrated
+                                    // 1.14. Cambria Math measures 1.172363em
+                                    // (S1258 read it off the file), so at 10.5pt
+                                    // the floor is 12.31 where the constant gave
+                                    // 11.97. Word's own figure, recovered from
+                                    // the `_pb_eqgrid` sweep by inverting the
+                                    // S1259 snap, lies in (12, 18]: the `plain`
+                                    // arm takes 1 cell on an 18pt grid, 1 on a
+                                    // 24pt grid but **2** on a 12pt grid, which
+                                    // is only consistent with a natural just
+                                    // OVER 12 -- and 11.97 sits 0.03 under, the
+                                    // single miss of that sweep. Only equations
+                                    // whose ink is smaller than the floor move.
+                                    let f = if std::env::var("OXI_S1260_DISABLE").is_err() {
+                                        self.registry
+                                            .get("Cambria Math")
+                                            .natural_line_height_hhea(math_font_size)
+                                    } else {
+                                        math_font_size * floor
+                                    };
+                                    (ink_bot - ink_top + lead).max(f)
+                                }
                             } else {
                                 bbox.height().max(math_font_size * 1.2) + math_font_size * 0.3
                             }
