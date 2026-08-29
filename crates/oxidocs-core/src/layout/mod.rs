@@ -29232,6 +29232,56 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             para_style.line_spacing,
         ) {
             (Some("exact"), Some(_)) | (Some("atLeast"), Some(_)) => {
+                // S1261 (2026-08-30, OPT-IN `OXI_S1261=1` pending gates): under
+                // `lineRule="exact"` Word puts the BASELINE at 0.8 x the line
+                // height below the line top -- a constant, independent of the
+                // face and of the point size.
+                // WORD TRUTH (`tools/metrics/_pb_exactbase_{gen,read}.py`, 54
+                // arms = 3 faces x 3 sizes x 6 line values, baseline read from
+                // the PDF span ORIGIN so it is exact):
+                //     line   6.00  8.00 10.00 12.00 16.00 20.00
+                //     base   4.82  6.38  8.06  9.62 12.88 16.00
+                // identical for MS Mincho / MS Gothic / Times New Roman and for
+                // 8 / 10.5 / 14pt, and 0.8 x line fits every one to <= 0.08pt
+                // (the 600-dpi quantum is 0.12). The renderer's baseline is
+                // `top + text_y_off + win_ascent x fs` (the S1047 convention),
+                // hence the form below.
+                // WITNESS probexexactclip_exactclip, the golden corpus's SSIM
+                // FLOOR (0.4638): its pitch already matches Word at 8.00, and
+                // its ink sits a flat 2.40pt low on all 3 pages (row-ink
+                // cross-correlation of Word's PDF against Oxi's render, so no
+                // box-vs-ink convention is in the number). The existing
+                // S495/S504 rule bottom-aligns to `line - font_cell` floored at
+                // 0.5, which for a box SMALLER than the text saturates at the
+                // floor and loses the dependence on `line` entirely.
+                if std::env::var("OXI_S1261").ok().as_deref() == Some("1")
+                    && !in_shape_context
+                    && para_style.line_spacing_rule.as_deref() == Some("exact")
+                {
+                    if let Some(lh) = para_style.line_spacing {
+                        let mut fs_a: Option<(f32, f32)> = None;
+                        let mut consider = |fs: f32, m: &crate::font::FontMetrics| {
+                            if fs_a.map_or(true, |(b, _)| fs > b) {
+                                fs_a = Some((fs, m.win_ascent));
+                            }
+                        };
+                        if line.fragments.is_empty() {
+                            let rpr = para_style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                            let fs = rpr.font_size.unwrap_or(para_font_size);
+                            let m = self.metrics_for_para_mark_g(&rpr, para_style, true);
+                            consider(fs, m);
+                        } else {
+                            for f in &line.fragments {
+                                let fs = f.style.font_size.unwrap_or(para_font_size);
+                                let m = self.metrics_for_text(&f.text, &f.style, para_style);
+                                consider(fs, m);
+                            }
+                        }
+                        if let Some((fs, win_ascent)) = fs_a {
+                            return 0.8 * lh - win_ascent * fs;
+                        }
+                    }
+                }
                 // Session 76 Mech A fix: body/cell top-align, shape bottom-align.
                 // Session 78 Mech A v2 refinement (2026-05-17): Word's actual
                 // glyph offset for body exact = 0.5pt (NOT 0.0pt), per Session 70
