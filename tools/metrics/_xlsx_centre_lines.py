@@ -47,18 +47,28 @@ FACES = [("Yu Gothic UI", 12.0, 27.666), ("メイリオ", 12.0, 31.200)]
 # loses is read through a one-pixel window, so the window on the SHARE is
 # 4 / |own - tall| wide: at 150% that is 0.29 and settles nothing, at 500% it
 # is 0.036. This is what pins the sixth that SX124 could only bracket.
-PCTS = [200000, 300000, 400000, 500000]
+PCTS = [80000, 200000, 300000, 400000, 500000]
 # Lines that come from WRAPPING one paragraph, against the same number of
 # lines written as separate paragraphs. `glossary_05`'s seven-line panel wraps
 # and is the one box that refuses the share the sweeps measure, so whether a
 # wrapped line counts the same as a written one is the open question.
 COUNTS = [1]
-WRAPPED = [False, True]
+WRAPPED = [False]
+# Whether the body zeroes its insets. Every arm so far has (to make the slack
+# exactly what was asked for); `glossary_05`'s panel keeps Excel's defaults,
+# and it is the last structural difference between the arms that show a
+# correction and the box that refuses one.
+INSETS = [True]
 LONG = "A" * 46         # wide enough to wrap in a 200px box
 # Whether the body says `vertOverflow="clip"`. Every box the corpus says is
 # ALREADY right says it, and no arm of the earlier sweeps did — which is the
 # one thing the probe and `glossary_05` did not share.
-CLIPS = [False]
+# Three ways a body can speak about overflow, not two. The arms that implied a
+# correction said NOTHING; `glossary_05`'s panel, which takes none, says
+# `overflow` out loud. Absent and stated-as-overflow mean the same thing to a
+# reader of the schema — so whether they mean the same thing to Excel is the
+# question.
+CLIPS = ["absent", "overflow", "clip"]
 # The room left over, which IS the slack here: these arms write every inset
 # zero, the way `glossary_05`'s little "Yes" and "No" boxes do. The line-count
 # sweep gave every arm about 34 pixels of it and found a correction; the boxes
@@ -71,7 +81,7 @@ def cases():
     return [(face, size, own, pct, lines, spare, clip, wrap)
             for face, size, own in FACES for pct in PCTS
             for lines in COUNTS for spare in SPARES for clip in CLIPS
-            for wrap in WRAPPED]
+            for wrap in INSETS]
 
 
 def bands():
@@ -89,13 +99,15 @@ def anchors_xml():
     held = []
     for index, ((face, points, _own, pct, lines, _spare, clip, wrap), (row, _rows, box)) in enumerate(
             zip(cases(), bands())):
-        clipped = ' vertOverflow="clip" horzOverflow="clip"' if clip else ""
+        clipped = {"absent": "",
+                   "overflow": ' vertOverflow="overflow" horzOverflow="overflow"',
+                   "clip": ' vertOverflow="clip" horzOverflow="clip"'}[clip]
         one = (
             f'<a:p><a:pPr algn="l">'
             f'<a:lnSpc><a:spcPct val="{pct}"/></a:lnSpc></a:pPr>'
             f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}">'
             f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
-            f"</a:rPr><a:t>{LONG if wrap else WORD}</a:t></a:r></a:p>"
+            f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
         )
         held.append(
             f"<xdr:oneCellAnchor>"
@@ -231,7 +243,7 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    print(f"{'face':<14}{'pct':>6}{'n':>3}{'spare':>7}{'clip':>6}{'own-tall':>10}"
+    print(f"{'face':<14}{'pct':>6}{'n':>3}{'spare':>7}{'insets':>9}{'own-tall':>10}"
           f"{'Excel':>7}{'ours':>6}{'implied c':>11}{'0.25(o-t)':>11}")
     for index, ((face, _points, own, pct, lines, spare, clip, wrap), (row, rows, _box)) in enumerate(
             zip(cases(), bands())):
@@ -248,7 +260,7 @@ def main():
         tall = own * pct / 100000.0
         # A correction c makes the block taller and so lifts a centred block
         # by c / 2. Read the other way: c = 2 x (ours - Excel).
-        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{("wrap" if wrap else "one"):>6}"
+        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{("zero" if wrap else "default"):>9}"
               f"{own - tall:>10.3f}{theirs:>7}{ours:>6}"
               f"{2 * (ours - theirs):>11}{0.25 * (own - tall):>11.3f}")
 
