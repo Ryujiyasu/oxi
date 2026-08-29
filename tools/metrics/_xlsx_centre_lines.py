@@ -43,31 +43,42 @@ WORD = "A"              # sits on the baseline
 # the device line height scaled to the em and multiplied by 1.3 for a Japanese
 # face — the pitch a paragraph gets when it asks for nothing.
 FACES = [("Yu Gothic UI", 12.0, 27.666), ("メイリオ", 12.0, 31.200)]
-PCTS = [70000, 80000, 150000]
-COUNTS = [1, 2]
+# Far from 100%, where `own - tall` is large. The share of it that a block
+# loses is read through a one-pixel window, so the window on the SHARE is
+# 4 / |own - tall| wide: at 150% that is 0.29 and settles nothing, at 500% it
+# is 0.036. This is what pins the sixth that SX124 could only bracket.
+PCTS = [200000, 300000, 400000, 500000]
+# Lines that come from WRAPPING one paragraph, against the same number of
+# lines written as separate paragraphs. `glossary_05`'s seven-line panel wraps
+# and is the one box that refuses the share the sweeps measure, so whether a
+# wrapped line counts the same as a written one is the open question.
+COUNTS = [1]
+WRAPPED = [False, True]
+LONG = "A" * 46         # wide enough to wrap in a 200px box
 # Whether the body says `vertOverflow="clip"`. Every box the corpus says is
 # ALREADY right says it, and no arm of the earlier sweeps did — which is the
 # one thing the probe and `glossary_05` did not share.
-CLIPS = [False, True]
+CLIPS = [False]
 # The room left over, which IS the slack here: these arms write every inset
 # zero, the way `glossary_05`'s little "Yes" and "No" boxes do. The line-count
 # sweep gave every arm about 34 pixels of it and found a correction; the boxes
 # the corpus says are already right have 1.87 and 8.07. So the slack is the
 # axis now.
-SPARES = [1, 4, 12]
+SPARES = [12]
 
 
 def cases():
-    return [(face, size, own, pct, lines, spare, clip)
+    return [(face, size, own, pct, lines, spare, clip, wrap)
             for face, size, own in FACES for pct in PCTS
-            for lines in COUNTS for spare in SPARES for clip in CLIPS]
+            for lines in COUNTS for spare in SPARES for clip in CLIPS
+            for wrap in WRAPPED]
 
 
 def bands():
     held, at = [], 0
-    for _face, _size, own, pct, lines, spare, _clip in cases():
+    for _face, _size, own, pct, lines, spare, _clip, wrap in cases():
         tall = own * pct / 100000.0
-        box = int(lines * tall + spare)
+        box = int((3 if wrap else lines) * tall + spare)
         rows = box // ROW + 3
         held.append((at, rows, box))
         at += rows
@@ -76,7 +87,7 @@ def bands():
 
 def anchors_xml():
     held = []
-    for index, ((face, points, _own, pct, lines, _spare, clip), (row, _rows, box)) in enumerate(
+    for index, ((face, points, _own, pct, lines, _spare, clip, wrap), (row, _rows, box)) in enumerate(
             zip(cases(), bands())):
         clipped = ' vertOverflow="clip" horzOverflow="clip"' if clip else ""
         one = (
@@ -84,7 +95,7 @@ def anchors_xml():
             f'<a:lnSpc><a:spcPct val="{pct}"/></a:lnSpc></a:pPr>'
             f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}">'
             f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
-            f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
+            f"</a:rPr><a:t>{LONG if wrap else WORD}</a:t></a:r></a:p>"
         )
         held.append(
             f"<xdr:oneCellAnchor>"
@@ -222,7 +233,7 @@ def main():
 
     print(f"{'face':<14}{'pct':>6}{'n':>3}{'spare':>7}{'clip':>6}{'own-tall':>10}"
           f"{'Excel':>7}{'ours':>6}{'implied c':>11}{'0.25(o-t)':>11}")
-    for index, ((face, _points, own, pct, lines, spare, clip), (row, rows, _box)) in enumerate(
+    for index, ((face, _points, own, pct, lines, spare, clip, wrap), (row, rows, _box)) in enumerate(
             zip(cases(), bands())):
         top = edges.get(row)
         bottom = edges.get(row + rows - 1)
@@ -237,7 +248,7 @@ def main():
         tall = own * pct / 100000.0
         # A correction c makes the block taller and so lifts a centred block
         # by c / 2. Read the other way: c = 2 x (ours - Excel).
-        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{str(clip):>6}"
+        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{("wrap" if wrap else "one"):>6}"
               f"{own - tall:>10.3f}{theirs:>7}{ours:>6}"
               f"{2 * (ours - theirs):>11}{0.25 * (own - tall):>11.3f}")
 
