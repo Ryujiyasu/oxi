@@ -10300,6 +10300,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         };
                         elements.extend(math_elems);
+                        // S1259 (2026-08-29, default ON, opt-out
+                        // OXI_S1259_DISABLE): inside a TYPED docGrid a DISPLAY
+                        // equation occupies a WHOLE NUMBER of grid cells.
+                        // WORD TRUTH (`tools/metrics/_pb_eqgrid_{gen,read}.py`,
+                        // 18 arms = 6 equation heights x 3 line pitches, advance
+                        // read body-line to body-line out of Word's PDF): every
+                        // single arm is integral --
+                        //   pitch 360 (18pt)  plain 2  frac 3  nary 3  deep 4
+                        //   pitch 240 (12pt)  plain 4  frac 4  nary 5  deep 6
+                        //   pitch 480 (24pt)  plain 2  frac 2  nary 3  deep 3
+                        // and the count TRACKS the height, so it is a snap and
+                        // not a constant. `ceil(oxi_natural / cell)` reproduces
+                        // Word in 17 of the 18 (the miss is `240/plain`, whose
+                        // natural lands 0.03pt under an exact 3-cell boundary --
+                        // an accuracy residual in the natural, not in this rule).
+                        // WITNESS probeomml_equations: Word gives all 7 of its
+                        // equations exactly 3.000 cells (54.00 on an 18.00 grid)
+                        // where Oxi spent the raw 2.865 (51.57), so the body
+                        // after each one crept up 2.44pt and the page ended up
+                        // holding 51 lines against Word's 48.
+                        let advance = match grid_pitch {
+                            Some(cell)
+                                if cell > 0.0
+                                    && std::env::var("OXI_S1259_DISABLE").is_err() =>
+                            {
+                                (advance / cell).ceil() * cell
+                            }
+                            _ => advance,
+                        };
                         cursor.advance(advance);
                     }
                 }
