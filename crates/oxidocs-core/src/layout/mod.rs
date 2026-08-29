@@ -2162,6 +2162,8 @@ pub struct LayoutEngine {
     /// S833: settings.xml footnotePr declares custom special footnotes ->
     /// the declared-separator reservation model (see footnote_sep_alloc).
     fn_special_declared: bool,
+    /// S1257: the endnote separator note declares a real `<w:separator/>`.
+    endnote_sep_line: bool,
     /// w:characterSpacingControl: enable yakumono (CJK punctuation) compression
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana".
     /// False (default) when "doNotCompress" or absent.
@@ -2538,6 +2540,7 @@ impl LayoutEngine {
             hyphenation_zone: 18.0,
             settings_part_exists: true,
             fn_special_declared: false,
+            endnote_sep_line: false,
             compress_punctuation: false,
             wp_justification: false,
             cellpair_neg_charspace: false,
@@ -2686,6 +2689,7 @@ impl LayoutEngine {
             hyphenation_zone: doc.hyphenation_zone.unwrap_or(18.0),
             settings_part_exists: doc.settings_part_exists,
             fn_special_declared: doc.fn_special_declared,
+            endnote_sep_line: doc.endnote_sep_line,
             compress_punctuation: doc.compress_punctuation,
             wp_justification: doc.wp_justification,
             cellpair_neg_charspace: doc.pages.iter().any(|pg| {
@@ -10360,6 +10364,79 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 cursor.set(start_y);
                 current_page_idx += 1;
             }
+            // S1257 (2026-08-29, default ON, opt-out OXI_S1257_DISABLE): the
+            // CONTINUATION separator paragraph, which Word lays out at the top
+            // of every continuation page of the note area.
+            // WORD TRUTH `educational__001217ec`: its body pages start at
+            // 87.37 and its endnote CONTINUATION pages at 99.13 -- 11.76pt
+            // lower, one empty Normal (Cambria 10) line. The paragraph is
+            // `<w:endnote w:type="continuationSeparator" w:id="0">`, which the
+            // parser used to discard outright. Reserving it moves the page
+            // boundaries onto Word's (Oxi fitted one note too many per page).
+            let en_contsep_h: f32 = if std::env::var("OXI_S1257_DISABLE").is_err() {
+                page.endnotes
+                    .iter()
+                    .find(|n| n.number == u32::MAX - 2)
+                    .and_then(|note| {
+                        note.blocks.iter().find_map(|b| match b {
+                            Block::Paragraph(p) => Some(p),
+                            _ => None,
+                        })
+                    })
+                    .map(|p| {
+                        // The S833 `special_h` convention: a TEXT-EMPTY special
+                        // paragraph sizes through the DEFAULT PARAGRAPH STYLE's
+                        // run props, and the estimate drops style-level spacing.
+                        let mut h = self.estimate_para_height(
+                            p,
+                            content_width,
+                            None,
+                            None,
+                            false,
+                            None,
+                            None,
+                        );
+                        if p.runs.iter().all(|r| r.text.trim().is_empty()) {
+                            if let Some(drs) = p.style.default_run_style.as_ref() {
+                                if let Some(fs) = drs.font_size {
+                                    let m = self.metrics_for(drs, &p.style);
+                                    let line = m.natural_line_height_hhea(fs);
+                                    if line > 0.0 {
+                                        h = line;
+                                    }
+                                }
+                            }
+                        }
+                        if h <= 0.0 {
+                            // ★A BARE `<w:p/>` has no runs and no pPr, so the
+                            // estimate yields nothing and S833's
+                            // default_run_style fallback has nothing to read.
+                            // It is still a LINE: size it through the paragraph
+                            // mark the way any empty paragraph is sized.
+                            let rs = RunStyle::default();
+                            let fs = self.resolve_font_size(&rs, &p.style);
+                            let line = self
+                                .metrics_for(&rs, &p.style)
+                                .natural_line_height_hhea(fs);
+                            if line > 0.0 {
+                                h = line;
+                            }
+                        }
+                        if !p.style.has_direct_spacing {
+                            h += p.style.space_before.unwrap_or(0.0)
+                                + p.style.space_after.unwrap_or(0.0);
+                        }
+                        h
+                    })
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            if std::env::var("OXI_DBG_CONTSEP").is_ok() {
+                eprintln!("[CONTSEP] h={:.2} n_endnotes={} numbers={:?}",
+                    en_contsep_h, page.endnotes.len(),
+                    page.endnotes.iter().map(|n| n.number).rev().take(3).collect::<Vec<_>>());
+            }
             // S1256 (2026-08-29, default ON, opt-out OXI_S1256_DISABLE): the
             // LAST body paragraph's after-spacing, which the block loop never
             // adds because nothing follows it. The endnote block does follow it.
@@ -10378,21 +10455,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                 }
             }
-            elements.push(LayoutElement::new(
-                start_x,
-                cursor.cursor_y + sep_gap * 0.5,
-                144.0_f32.min(content_width),
-                1.0,
-                LayoutContent::BoxRect {
-                    fill: Some("#000000".to_string()),
-                    stroke_color: None,
-                    stroke_width: 0.0,
-                    corner_radius: 0.0,
-                },
-            ));
+            // S1257: draw the rule only when the document DECLARES one. The
+            // separator note of `educational__001217ec` is a bare empty
+            // paragraph, and Word draws nothing (p16 `get_drawings()` = 0);
+            // `probexendnote_endnotes` declares `<w:separator/>` and keeps its
+            // rule. The GAP is spent either way -- the paragraph is laid out in
+            // both documents.
+            if self.endnote_sep_line || std::env::var("OXI_S1257_DISABLE").is_ok() {
+                elements.push(LayoutElement::new(
+                    start_x,
+                    cursor.cursor_y + sep_gap * 0.5,
+                    144.0_f32.min(content_width),
+                    1.0,
+                    LayoutContent::BoxRect {
+                        fill: Some("#000000".to_string()),
+                        stroke_color: None,
+                        stroke_width: 0.0,
+                        corner_radius: 0.0,
+                    },
+                ));
+            }
             cursor.advance(sep_gap);
             let empty_fn_h_en = std::collections::HashMap::new();
-            for (en_seq, note) in page.endnotes.iter().enumerate() {
+            // S1257: the sentinel-numbered special paragraphs are carriage,
+            // not notes -- they must not be rendered or take a marker seq.
+            for (en_seq, note) in page
+                .endnotes
+                .iter()
+                .filter(|n| n.number < u32::MAX - 2)
+                .enumerate()
+            {
                 let mut first_para = true;
                 for block in &note.blocks {
                     if let Block::Paragraph(para) = block {
@@ -10439,8 +10531,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             start_x,
                             &mut cursor,
                             content_width,
-                            content_height,
-                            start_y,
+                            // S1257: a continuation page of the note area starts
+                            // BELOW the continuation separator, and ends at the
+                            // same bottom margin -- so the top moves down and the
+                            // height shrinks by the same amount.
+                            content_height - en_contsep_h,
+                            start_y + en_contsep_h,
                             page,
                             &mut pages,
                             &mut elements,

@@ -60,6 +60,14 @@ pub struct Document {
     /// _pb_fnres probe family on uklocalspending (P1-P4 decomposition).
     #[serde(default)]
     pub fn_special_declared: bool,
+    /// S1257: `word/endnotes.xml`'s separator note contains `<w:separator/>`.
+    /// When it does NOT (the note is a bare empty paragraph) Word draws no
+    /// rule above the endnotes at all — `educational__001217ec` p16 has ZERO
+    /// drawings — while still laying the paragraph out. S743 hard-coded a
+    /// 144pt rule because the one probe it was derived from
+    /// (`probexendnote_endnotes`) DOES declare `<w:separator/>`.
+    #[serde(default)]
+    pub endnote_sep_line: bool,
     /// w:characterSpacingControl from settings.xml.
     /// True when value is "compressPunctuation" or "compressPunctuationAndJapaneseKana"
     /// (enables CJK yakumono compression). False (default) for "doNotCompress" or absent.

@@ -84,6 +84,7 @@ impl OoxmlParser {
         let (compat_mode, compat_mode_explicit) = self.parse_compat_mode();
         let settings_part_exists = self.read_part("word/settings.xml").is_ok();
         let fn_special_declared = self.parse_fn_special_declared();
+        let endnote_sep_line = self.parse_endnote_sep_line();
         let compress_punctuation = self.parse_compress_punctuation();
         let wp_justification = self.parse_compat_bool_flag("wpJustification");
         // `<w:autoHyphenation/>` and `<w:hyphenationZone>` live directly under
@@ -309,6 +310,17 @@ impl OoxmlParser {
                 if let Some(blocks) = ctx.footnotes.get("__notice__") {
                     footnotes_list.push(Footnote {
                         number: u32::MAX - 1,
+                        blocks: blocks.clone(),
+                    });
+                }
+            }
+            // S1257: the same sentinel carriage for the ENDNOTE continuation
+            // separator. The layout filters `number >= u32::MAX - 2` out of the
+            // render loop and uses this one only to measure the reservation.
+            if !endnotes_list.is_empty() {
+                if let Some(blocks) = ctx.endnotes.get("__contsep__") {
+                    endnotes_list.push(Footnote {
+                        number: u32::MAX - 2,
                         blocks: blocks.clone(),
                     });
                 }
@@ -647,6 +659,7 @@ impl OoxmlParser {
             compat_mode_explicit,
             settings_part_exists,
             fn_special_declared,
+            endnote_sep_line,
             compress_punctuation,
             wp_justification,
             auto_hyphenation,
@@ -664,6 +677,17 @@ impl OoxmlParser {
     /// S833: settings.xml `<w:footnotePr>` with at least one `<w:footnote>`
     /// declaration — Word switches to the CUSTOM special-footnote model
     /// (separator/continuation paragraphs at their full styled heights).
+    /// S1257: does the endnote separator note declare an actual `<w:separator/>`?
+    /// `educational__001217ec` writes `<w:endnote w:type="separator" w:id="-1">`
+    /// around a BARE empty paragraph, and Word draws no rule (p16 drawings = 0);
+    /// `probexendnote_endnotes` writes `<w:separator/>` and Word draws one.
+    fn parse_endnote_sep_line(&mut self) -> bool {
+        match self.read_part("word/endnotes.xml") {
+            Ok(x) => x.contains("<w:separator/>"),
+            Err(_) => false,
+        }
+    }
+
     fn parse_fn_special_declared(&mut self) -> bool {
         let xml = match self.read_part("word/settings.xml") {
             Ok(x) => x,
@@ -5586,6 +5610,32 @@ fn parse_notes_xml(
                     _ => {}
                 }
             }
+            // S1257: a BARE `<w:p w:rsidR="..."/>` is a self-closing element, so
+            // it arrives as Empty and the Start arm above never sees it. Word
+            // still lays that paragraph out -- `educational__001217ec` writes its
+            // separator / continuationSeparator notes exactly this way, and the
+            // note came through with ZERO blocks. Census over 769 documents:
+            // golden 9 / corp_en 11 / corp_ja 5 have one in a note part, almost
+            // always the two special notes.
+            Event::Empty(e) => {
+                // Gated with the rest of S1257 so the A/B isolates the whole
+                // ship unit -- an ungated parser change sits in BOTH arms and
+                // hides itself from the byte-compare.
+                if in_note
+                    && depth == 0
+                    && local_name(e.name().as_ref()) == "p"
+                    && std::env::var("OXI_S1257_DISABLE").is_err()
+                {
+                    current_blocks.push(Block::Paragraph(Paragraph {
+                        runs: Vec::new(),
+                        style: ParagraphStyle::default(),
+                        alignment: Alignment::default(),
+                        shapes: Vec::new(),
+                        ppr_change: None,
+                        paragraph_mark_revision: None,
+                    }));
+                }
+            }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
@@ -5609,7 +5659,14 @@ fn parse_notes_xml(
                                     );
                                 }
                                 Some("continuationSeparator") => {
-                                    current_blocks.clear();
+                                    // S1257: keep it. Word lays this paragraph
+                                    // out at the TOP of every CONTINUATION page
+                                    // of the note area; discarding it made Oxi
+                                    // start those pages a full line too high.
+                                    notes.insert(
+                                        "__contsep__".to_string(),
+                                        std::mem::take(&mut current_blocks),
+                                    );
                                 }
                                 _ => {
                                     // Skip separator notes (id 0 and -1)
