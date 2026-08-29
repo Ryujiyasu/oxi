@@ -2209,6 +2209,17 @@ fn parse_paragraph(
                     // sibling Block::Math after the paragraph closes.
                     "oMath" if depth == 0 => {
                         let mb = crate::parser::omml::parse_omath_inline(reader)?;
+                        // S1253 (2026-08-29, default ON, opt-out
+                        // OXI_S1253_DISABLE): the size the maths declared for
+                        // ITSELF. Without it S880's flattened run inherited the
+                        // paragraph's resolved size — 12.0pt in
+                        // educational__002a301d where every declared size,
+                        // the oMath's own rPr included, is 10pt.
+                        let math_sz = if std::env::var("OXI_S1253_DISABLE").is_err() {
+                            crate::parser::omml::take_math_sz()
+                        } else {
+                            None
+                        };
                         // S880 (2026-07-16, default ON, opt-out OXI_S880_DISABLE):
                         // an INLINE <m:oMath> consisting ONLY of plain text
                         // leaves flows as an inline TEXT run — the sibling
@@ -2255,6 +2266,7 @@ fn parse_paragraph(
                                 text,
                                 style: RunStyle {
                                     font_family: Some("Cambria Math".to_string()),
+                                    font_size: math_sz,
                                     ..RunStyle::default()
                                 },
                                 url: None,
@@ -2319,10 +2331,10 @@ fn parse_paragraph(
                             // whose line is ~5.6em, so every maths line came
                             // out 59-64pt tall (the maths itself was placed
                             // correctly; only the line box was wrong).
-                            let fs = runs
-                                .iter()
-                                .rev()
-                                .find_map(|r| r.style.font_size)
+                            let fs = math_sz
+                                .or_else(|| {
+                                    runs.iter().rev().find_map(|r| r.style.font_size)
+                                })
                                 .or_else(|| {
                                     style
                                         .default_run_style

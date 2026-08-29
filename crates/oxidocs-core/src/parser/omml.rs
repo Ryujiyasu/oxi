@@ -29,11 +29,36 @@ fn local(name: &[u8]) -> String {
     }
 }
 
+thread_local! {
+    /// S1253: the first `w:sz` (half-points) seen inside the oMath currently
+    /// being parsed. See `take_math_sz`.
+    static MATH_SZ: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// S1253 (2026-08-29): the font size the maths declared for ITSELF, in points,
+/// consumed by the caller right after `parse_omath_inline`.
+///
+/// The recursive descent throws `w:rPr` away wholesale, so S880's flattened
+/// Cambria Math run was built with `font_size: None` and inherited whatever the
+/// paragraph resolved to. WITNESS `educational__002a301d` para 314
+/// (`... a distance of 2\u{3c0}/3 to create it on the polar graph.`): every declared
+/// size in that paragraph is `sz=20` = 10pt, the oMath's own rPr included, and
+/// Word draws the maths at 10pt -- Oxi laid it at 12.0pt, which under the
+/// paragraph's `line=339 auto` (x1.4125) makes the line 19.87 instead of 16.24.
+///
+/// Recorded on the way past rather than threaded through twenty parser
+/// signatures. Reading it clears it, and the entry point clears it on the way
+/// in, so a value never survives into the next expression.
+pub fn take_math_sz() -> Option<f32> {
+    MATH_SZ.with(|c| c.take())
+}
+
 /// Parse `<m:oMath>` (inline) content. Reader should have just consumed
 /// the opening tag; reads until matching `</m:oMath>`.
 pub fn parse_omath_inline(
     reader: &mut Reader<&[u8]>,
 ) -> Result<MathBlock, ParseError> {
+    MATH_SZ.with(|c| c.set(None));
     let exprs = parse_expr_sequence(reader, "oMath")?;
     Ok(MathBlock::Inline(exprs))
 }
@@ -999,6 +1024,31 @@ fn parse_phantom(reader: &mut Reader<&[u8]>) -> Result<MathExpr, ParseError> {
 
 /// Advance the reader past the closing tag matching `end_tag`, balancing
 /// nested opens/closes of the same name.
+/// S1253: note a `<w:sz w:val="N"/>` (half-points) passed on the way through a
+/// properties element. First one wins -- an oMath's runs carry the same size in
+/// every corpus specimen, and the ctrlPr that precedes them carries it too.
+fn record_math_sz(e: &quick_xml::events::BytesStart) {
+    if local(e.name().as_ref()) != "sz" {
+        return;
+    }
+    for attr in e.attributes().flatten() {
+        if local(attr.key.as_ref()) == "val" {
+            if let Ok(v) = std::str::from_utf8(&attr.value) {
+                if let Ok(hp) = v.trim().parse::<f32>() {
+                    if hp > 0.0 {
+                        MATH_SZ.with(|c| {
+                            if c.get().is_none() {
+                                c.set(Some(hp / 2.0));
+                            }
+                        });
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn skip_until_end(
     reader: &mut Reader<&[u8]>,
     end_tag: &str,
@@ -1007,9 +1057,15 @@ fn skip_until_end(
     while depth > 0 {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
+                record_math_sz(&e);
                 if local(e.name().as_ref()) == end_tag {
                     depth += 1;
                 }
+            }
+            Ok(Event::Empty(e)) => {
+                // S1253: `<w:sz w:val="20"/>` is an EMPTY element, so it never
+                // arrives as Start -- the arm above would miss every one.
+                record_math_sz(&e);
             }
             Ok(Event::End(e)) => {
                 if local(e.name().as_ref()) == end_tag {
