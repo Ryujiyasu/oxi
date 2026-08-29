@@ -4123,19 +4123,29 @@ mod windows_draw {
             } else {
                 room as f32
             };
-            let pitch = super::line_box(&named, size, false, false)
-                .map(|(tall, _)| tall * scale)
-                .unwrap_or(size * scale * 96.0 / 72.0 * 1.3);
+            // A chart sets its label lines three tenths of an em apart,
+            // whatever the face's own line box comes to, and keeps the
+            // fraction: `_xlsx_chart_line_pitch.py` stacks one character to a
+            // line under the first category and sweeps the size from 6 to 13
+            // point, solving for the one stride a single origin can round to
+            // all six lines. The intervals close on 1.2981 to 1.3077 of the em
+            // — 13 point alone gives that pair — and every other size agrees.
+            // The face's line box reads 16 pixels at 10 point where Excel is
+            // 17.33, which is the two, four and five pixels the `zuhyo`
+            // family's stacked 昭和51 loses down its three lines.
+            let pitch = size * scale * 96.0 / 72.0 * 1.3;
             for (index, said) in chart.categories.iter().enumerate() {
-                let mut at = foot + gap;
-                for line in super::wrapped_lines(&named, size, false, false, said, Some(step / scale))
+                let head = (foot + gap) as f32;
+                for (step, line) in super::wrapped_lines(&named, size, false, false, said, Some(step / scale))
+                    .into_iter()
+                    .enumerate()
                 {
                     let letters = wide(&line);
                     let letters = &letters[..letters.len() - 1];
                     if !letters.is_empty() {
+                        let at = (head + step as f32 * pitch).round() as i32;
                         let _ = TextOutW(dc, label_at(index), at, letters);
                     }
-                    at += pitch.round() as i32;
                 }
             }
             SelectObject(dc, held);
