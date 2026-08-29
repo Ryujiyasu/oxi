@@ -2156,6 +2156,11 @@ fn parse_paragraph(
     let mut found_shapes: Vec<Shape> = Vec::new();
     let mut found_text_boxes: Vec<TextBox> = Vec::new();
     let mut math_blocks: Vec<crate::ir::MathBlock> = Vec::new();
+    // S1252: math_blocks slots taken by expressions that were ALSO routed
+    // in-run. Keeping the slot preserves document order against a sibling
+    // oMathPara; the slots are removed below once the paragraph is known
+    // to carry visible text (and the route therefore stands).
+    let mut s1252_slots: Vec<usize> = Vec::new();
     let mut style = ParagraphStyle::default();
     let mut alignment = Alignment::default();
     // S540 (2026-06-11): explicit `<w:jc w:val="left"/>` parses to Left ==
@@ -2250,6 +2255,104 @@ fn parse_paragraph(
                                 text,
                                 style: RunStyle {
                                     font_family: Some("Cambria Math".to_string()),
+                                    ..RunStyle::default()
+                                },
+                                url: None,
+                                footnote_ref: None,
+                                endnote_ref: None,
+                                comment_range_start: Vec::new(),
+                                comment_range_end: Vec::new(),
+                                comment_references: Vec::new(),
+                                rpr_change: None,
+                                tracked_change: None,
+                                ruby: None,
+                                bookmark_name: None,
+                                is_math: true,
+                                field_type: None,
+                                has_last_rendered_page_break: false,
+                            });
+                        } else if (allow_inline_flow
+                            || (in_cell && std::env::var("OXI_S982_DISABLE").is_err()))
+                            && std::env::var("OXI_S1252_DISABLE").is_err()
+                        {
+                            // S1252 (2026-08-29, default ON, opt-out
+                            // OXI_S1252_DISABLE): a STRUCTURED inline oMath
+                            // flows in its host line too. S880's note called
+                            // this "a future feature" and left the sibling
+                            // Block::Math path, which spends a WHOLE LINE on
+                            // maths Word sets beside the text.
+                            // WORD TRUTH (`tools/metrics/_pb_inlmath_{gen,read}.py`,
+                            // 7 arms, ink boxes read from Word's PDF): every
+                            // structural kind rides the lead run's line —
+                            //   delim  lead x 56.64..70.43  math x 70.58..143.95
+                            //   frac / sup / rad likewise, and the `wrap` arm
+                            //   puts the maths at x=372 after 380pt of text.
+                            // The paragraph advance is ONE line (11.66) except
+                            // for the taller fraction (14.42 = the maths box
+                            // composed with the text's ascent/descent).
+                            // Oxi measured 23.47 / 29.41 on the same arms —
+                            // exactly one extra line, and exactly the +11.7 /
+                            // +14.7 steps that `educational__002a301d` (the
+                            // last pcd!=0 EN document) accumulates on p8/p9.
+                            // The run is the S839/S851 inline-object shape: an
+                            // extent-bearing empty run whose FFFC fragment the
+                            // emit draws as maths. `position` carries the box's
+                            // DESCENT so S1095's composition rule gives
+                            //   line = max(text_asc, math_asc)
+                            //        + max(text_desc, math_desc) + extra.
+                            // SCOPE (census over 769 docs: golden 0 / corp_ja 0
+                            // / corp_en 2) — golden and JP byte-identical by
+                            // construction. BODY or a TABLE CELL: those are
+                            // the two emit paths taught to draw it (the body
+                            // U+FFFC branch and the cell U+F8FD registry). A
+                            // TEXTBOX / header / footnote paragraph keeps the
+                            // block path, because a fragment those paths do not
+                            // know reserves width and PAINTS NOTHING — the
+                            // probe's `cellmath` arm dropped from 12 text
+                            // elements to 3 before the cell registry existed,
+                            // and `educational__002a301d` keeps all six of its
+                            // equations in cells.
+                            // ★The run must NOT name a font. Its U+FFFC
+                            // fragment is measured through the normal text
+                            // metrics, and `Cambria Math` has no glyph for
+                            // U+FFFC — the fallback chain answered with a face
+                            // whose line is ~5.6em, so every maths line came
+                            // out 59-64pt tall (the maths itself was placed
+                            // correctly; only the line box was wrong).
+                            let fs = runs
+                                .iter()
+                                .rev()
+                                .find_map(|r| r.style.font_size)
+                                .or_else(|| {
+                                    style
+                                        .default_run_style
+                                        .as_ref()
+                                        .and_then(|s| s.font_size)
+                                })
+                                .or_else(|| {
+                                    styles
+                                        .doc_default_run_style
+                                        .as_ref()
+                                        .and_then(|s| s.font_size)
+                                })
+                                .unwrap_or(10.5);
+                            let (adv, m_asc, m_desc) =
+                                crate::layout::math::inline_math_ink(&mb, fs);
+                            s1252_slots.push(math_blocks.len());
+                            math_blocks.push(mb.clone());
+                            runs.push(Run {
+                                text: String::new(),
+                                style: RunStyle {
+                                    font_size: Some(fs),
+                                    inline_object_extent: Some((adv, m_asc + m_desc)),
+                                    inline_math: Some(Box::new(mb)),
+                                    // ★NOT `position`: carrying the descent
+                                    // there ALSO trips the generic
+                                    // raised/lowered-run line growth, which
+                                    // counted the maths descent twice (the
+                                    // `frac` arm measured 19.77 against Word's
+                                    // 16.70). The S1095 fold reads the descent
+                                    // back off `inline_math` instead.
                                     ..RunStyle::default()
                                 },
                                 url: None,
@@ -3480,6 +3583,30 @@ fn parse_paragraph(
         }
     }
 
+    // S1252: the in-run maths route is for a paragraph that also carries
+    // VISIBLE TEXT — that is the shape Word was measured on (a lead run plus
+    // the expression) and the whole corpus population (census: 7 paragraphs in
+    // 2 EN documents). A paragraph whose ONLY content is an oMath keeps the
+    // sibling Block::Math path it has always had, which also keeps Word's
+    // CENTRING of a bare inline oMath (`alone` arm: x=260.93, not the left
+    // margin) out of scope. The routed runs were pushed in document order, so
+    // unwinding here restores the exact pre-S1252 IR.
+    if !s1252_slots.is_empty() {
+        let has_text = runs
+            .iter()
+            .any(|r| r.style.inline_math.is_none() && !r.text.trim().is_empty());
+        if has_text {
+            // The route stands: give up the reserved block slots.
+            for slot in s1252_slots.iter().rev() {
+                math_blocks.remove(*slot);
+            }
+        } else {
+            // No visible text: keep the block slots (they are in document
+            // order) and drop the routed runs.
+            runs.retain(|r| r.style.inline_math.is_none());
+        }
+    }
+
     // Store style ID for contextual spacing comparison
     style.style_id = style_id;
 
@@ -3691,6 +3818,7 @@ fn parse_paragraph(
         && runs.iter().enumerate().any(|(i, r)| {
             r.style.inline_object_extent.is_some()
                 && r.style.hr_rule.is_none()
+                && r.style.inline_math.is_none()
                 && !inline_img_runs.iter().any(|(ri, _)| *ri == i)
         });
     // S1232 (2026-08-26, opt-out OXI_S1232_DISABLE): a CELL paragraph hosting

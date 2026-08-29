@@ -15688,7 +15688,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .fragments
                     .iter()
                     .filter_map(|f| {
-                        if f.style.inline_object_image.is_some() || f.style.hr_rule.is_some() {
+                        if f.style.inline_object_image.is_some()
+                            || f.style.hr_rule.is_some()
+                            || f.style.inline_math.is_some()
+                        {
                             f.style.inline_object_extent.map(|(_, oh)| oh)
                         } else {
                             None
@@ -15810,10 +15813,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .filter(|f| {
                                 f.style.inline_object_image.is_some()
                                     || f.style.hr_rule.is_some()
+                                    || f.style.inline_math.is_some()
                             })
                             .filter_map(|f| f.style.position)
                             .fold(0.0f32, f32::min);
-                        let lower = lower.max(0.0);
+                        // S1252: an inline maths box's own DESCENT is the
+                        // `lower` of this composition — Word's `2π/3` arm grows
+                        // the line +2.28 above and +2.76 below the plain box,
+                        // i.e. the two sides compose independently.
+                        let math_lower = line
+                            .fragments
+                            .iter()
+                            .filter_map(|f| {
+                                f.style.inline_math.as_ref().map(|mb| {
+                                    let mfs = f.style.font_size.unwrap_or(para_font_size);
+                                    crate::layout::math::inline_math_ink(mb, mfs).2
+                                })
+                            })
+                            .fold(0.0f32, f32::max);
+                        let lower = lower.max(0.0).max(math_lower);
                         let text_asc = if descent > 0.0 {
                             (line_heights[li] - descent).max(0.0)
                         } else {
@@ -19849,6 +19867,49 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         x += adjusted_width + frag_spacing_after[frag_idx];
                         continue;
                     }
+                    // S1252: a structured inline oMath draws its expression
+                    // tree at the fragment position, its own baseline sitting
+                    // on the LINE's text baseline (the same anchor S851 uses
+                    // for an object box's bottom). `emit_math_block` places the
+                    // baseline at `cursor_y + max(ascent, 0.8*fs)`, so hand it
+                    // the baseline minus that.
+                    if let Some(mb) = frag.style.inline_math.as_ref() {
+                        let fs = frag.style.font_size.unwrap_or(para_font_size);
+                        let bbox = crate::layout::math::layout_math_block(mb, fs);
+                        let baseline = if let Some(tf) = line
+                            .fragments
+                            .iter()
+                            .find(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        {
+                            let tfs = tf.style.font_size.unwrap_or(para_font_size);
+                            let m = self.metrics_for_text(&tf.text, &tf.style, &para.style);
+                            emit_y + text_y_off - 1.0 + m.win_ascent * tfs
+                        } else {
+                            // The maths WRAPPED alone onto this line, so there is
+                            // no text fragment to read the baseline off. It is
+                            // still a text baseline, not the line bottom: Word
+                            // draws reference__0042471c's `∑Dewan Pengawas…`
+                            // with its baseline at 513.05 against the line's own
+                            // trailing-space span at 513.41. Falling back to
+                            // `emit_y + line_height` dropped it ~2.6pt.
+                            let m = self.metrics_for_text(" ", &frag.style, &para.style);
+                            emit_y + text_y_off - 1.0 + m.win_ascent * fs
+                        };
+                        let (mut math_elems, _) = crate::layout::math::emit_math_block(
+                            mb,
+                            el_x,
+                            baseline - bbox.ascent.max(fs * 0.8),
+                            fs,
+                        );
+                        if let Some(pi) = body_para_index {
+                            for e in math_elems.iter_mut() {
+                                e.paragraph_index = Some(pi);
+                            }
+                        }
+                        elements.append(&mut math_elems);
+                        x += adjusted_width + frag_spacing_after[frag_idx];
+                        continue;
+                    }
                     // S851: an inline w:object form-field image draws its bitmap
                     // at the fragment position (box BOTTOM on the text baseline,
                     // like the S839 vector groups) instead of a vector group.
@@ -22815,8 +22876,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     // tab fragment, which is exactly the exclusion the note above
                     // documents (hmrc's strips ride CENTER tabs and are re-placed
                     // by the post-pass, so a raw-width test would wrap them wrongly).
+                    // S1252: inline MATHS wraps the same way. Word truth
+                    // (_pb_inlmath `nofit` arm): with the lead text filling the
+                    // column, `f(x)=4cos(3x)` moves whole to line 2
+                    // (`line right up to 𝑓(𝑥) = 4 cos(3𝑥)`, adv 23.30 = two
+                    // lines) — it is an atom in the normal wrap, not an
+                    // overflow.
                     if std::env::var("OXI_S1040_DISABLE").is_err()
-                        && style.inline_object_image.is_some()
+                        && (style.inline_object_image.is_some()
+                            || style.inline_math.is_some())
                         && !current_line.fragments.is_empty()
                         && current_line
                             .fragments
@@ -33473,6 +33541,14 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     // tuple). Default (s982_cell=false) never pushes — byte-identical.
                                     let s982_cell = std::env::var("OXI_S982_DISABLE").is_err();
                                     let mut cell_inline_objects: Vec<&Image> = Vec::new();
+                                    // S1252: the same carrier for a STRUCTURED inline oMath, with
+                                    // its own U+F8FD sentinel. `educational__002a301d` puts all six
+                                    // of its `n.  f(x)=…` paragraphs in TABLE CELLS, and a cell
+                                    // fragment the emit does not know DRAWS NOTHING — the probe's
+                                    // `cellmath` arm went from 12 text elements to 3 when the
+                                    // parser routed the maths without this.
+                                    let mut cell_inline_math: Vec<&crate::ir::MathBlock> =
+                                        Vec::new();
                                     let mut line_x: f32 = 0.0;
                                     // Session 118 jc=both refactor — gated by OXI_JCBOTH_REFACTOR env var.
                                     // When enabled, calls compute_compression from jc_both_compress module
@@ -33661,6 +33737,46 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // (step 5). Do NOT `continue` — a same-run trailing text
                                         // (target object 1) must still be processed. Gated on
                                         // s982_cell → 0 hits in default (byte-identical).
+                                        // S1252: a structured inline oMath run -> a U+F8FD{index}
+                                        // atomic fragment of the maths ADVANCE, drawn at step 5.
+                                        if s982_cell {
+                                            if let (Some((ow, _)), Some(mb)) = (
+                                                run.style.inline_object_extent,
+                                                run.style.inline_math.as_deref(),
+                                            ) {
+                                                let ew = if is_first_line {
+                                                    first_line_wrap_w
+                                                } else {
+                                                    wrap_w
+                                                };
+                                                if line_x + ow > ew && !current_line.is_empty() {
+                                                    lines.push(std::mem::take(&mut current_line));
+                                                    line_x = 0.0;
+                                                    current_line_chars.clear();
+                                                    is_first_line = false;
+                                                }
+                                                let index = cell_inline_math.len();
+                                                cell_inline_math.push(mb);
+                                                current_line.push((
+                                                    format!("\u{F8FD}{index}"),
+                                                    font_size,
+                                                    ow,
+                                                    bold,
+                                                    run.style.italic,
+                                                    false,
+                                                    None,
+                                                    false,
+                                                    font_family.clone(),
+                                                    None,
+                                                    None,
+                                                    0.0,
+                                                    100.0,
+                                                    std::mem::take(&mut s993_lrpb_pending),
+                                                ));
+                                                line_x += ow;
+                                                continue;
+                                            }
+                                        }
                                         if s982_cell {
                                             if let (Some((ow, _)), Some(img)) = (
                                                 run.style.inline_object_extent,
@@ -36060,7 +36176,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 continue; // already has space fragments
                                             }
                                             if !line.iter().any(|t| {
-                                                !t.0.starts_with('\u{F8FE}')
+                                                !t.0.starts_with('\u{F8FD}')
+                                                    && !t.0.starts_with('\u{F8FE}')
                                                     && !t.0.starts_with('\u{F8FF}')
                                                     && t.0.trim().contains(' ')
                                             }) {
@@ -36070,7 +36187,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             for frag in line.drain(..) {
                                                 let (text, fs, tw) =
                                                     (frag.0.clone(), frag.1, frag.2);
-                                                if text.starts_with('\u{F8FE}')
+                                                if text.starts_with('\u{F8FD}')
+                                                    || text.starts_with('\u{F8FE}')
                                                     || text.starts_with('\u{F8FF}')
                                                     || !text.trim().contains(' ')
                                                 {
@@ -36353,6 +36471,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // s982_cell → a default line has no F8FE fragment so obj_h=0
                                         // and this is inert (byte-identical).
                                         if s982_cell {
+                                            // S1252: a maths box grows the cell line the same way
+                                            // an object does - max(line, box), the S1066b model.
+                                            let math_h: f32 = line
+                                                .iter()
+                                                .filter_map(|(text, fs, ..)| {
+                                                    text.strip_prefix('\u{F8FD}')
+                                                        .and_then(|t| t.parse::<usize>().ok())
+                                                        .map(|i| (i, *fs))
+                                                })
+                                                .filter_map(|(i, fs)| {
+                                                    cell_inline_math.get(i).map(|mb| {
+                                                        let (_, a, d) =
+                                                            crate::layout::math::inline_math_ink(
+                                                                mb, fs,
+                                                            );
+                                                        a + d
+                                                    })
+                                                })
+                                                .fold(0.0_f32, f32::max);
                                             let obj_h: f32 = line
                                                 .iter()
                                                 .filter_map(|(text, ..)| {
@@ -36362,7 +36499,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 .filter_map(|i| {
                                                     cell_inline_objects.get(i).map(|im| im.height)
                                                 })
-                                                .fold(0.0_f32, f32::max);
+                                                .fold(0.0_f32, f32::max)
+                                                .max(math_h);
                                             if obj_h > 0.0 {
                                                 // S875 auto-rule extra leading (multiple > 1 only).
                                                 let factor = if matches!(
@@ -37117,6 +37255,54 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     index, img.width, oh, obj_bottom - oh);
                                                         }
                                                         cell_elements.push(e);
+                                                        rx += adj_w;
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                            // S1252: a U+F8FD{index} cell fragment draws the
+                                            // registered maths at the fragment position, its
+                                            // baseline on the cell line's text baseline.
+                                            if s982_cell {
+                                                if let Some(index) = text
+                                                    .strip_prefix('\u{F8FD}')
+                                                    .and_then(|t| t.parse::<usize>().ok())
+                                                {
+                                                    if let Some(mb) =
+                                                        cell_inline_math.get(index).copied()
+                                                    {
+                                                        let base_x = cell_x
+                                                            + pad_l
+                                                            + line_indent
+                                                            + align_offset
+                                                            + rx;
+                                                        let bbox =
+                                                            crate::layout::math::layout_math_block(
+                                                                mb, *fs,
+                                                            );
+                                                        let asc = self
+                                                            .registry
+                                                            .default_metrics()
+                                                            .win_ascent
+                                                            * *fs;
+                                                        let baseline =
+                                                            content_h + cell_text_y_off + asc;
+                                                        let (mut me, _) =
+                                                            crate::layout::math::emit_math_block(
+                                                                mb,
+                                                                base_x,
+                                                                baseline
+                                                                    - bbox.ascent.max(*fs * 0.8),
+                                                                *fs,
+                                                            );
+                                                        for e in me.iter_mut() {
+                                                            e.paragraph_index = block_idx;
+                                                            e.cell_paragraph_index =
+                                                                Some(cell_para_counter);
+                                                            e.cell_row_index = Some(row_idx);
+                                                            e.cell_col_index = Some(cell_idx);
+                                                        }
+                                                        cell_elements.append(&mut me);
                                                         rx += adj_w;
                                                         continue;
                                                     }
@@ -42762,7 +42948,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     .runs
                     .iter()
                     .filter_map(|r| {
-                        if r.style.inline_object_image.is_some() {
+                        // S1252: an inline maths box grows the cell line too.
+                        if r.style.inline_object_image.is_some()
+                            || r.style.inline_math.is_some()
+                        {
                             r.style.inline_object_extent.map(|(_, oh)| oh)
                         } else {
                             None

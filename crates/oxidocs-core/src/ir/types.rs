@@ -541,6 +541,16 @@ pub struct RunStyle {
     /// by corpus scan; JP has 0 → byte-identical).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hr_rule: Option<(f32, String)>,
+    /// S1252: a STRUCTURED inline `<m:oMath>` that flows in its host line.
+    /// Carried on the same run whose `inline_object_extent` reserves the
+    /// maths box (advance × ascent+descent); the emit draws the expression
+    /// tree at the fragment position with its baseline on the line's text
+    /// baseline. S880 already flattens a PLAIN-leaf inline oMath into a
+    /// Cambria Math text run, so this covers only the structured kinds
+    /// (m:d / m:func / m:f / m:sSup / m:rad / …). Display `<m:oMathPara>`
+    /// keeps the sibling `Block::Math` path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_math: Option<Box<super::math::MathBlock>>,
     /// S1174: this run is the FIRST cached-result run of a STYLEREF field —
     /// the value is the referenced style's ID. Word re-evaluates STYLEREF in
     /// headers/footers per page (first occurrence ON the page, else the last
@@ -610,6 +620,7 @@ impl Default for RunStyle {
             inline_object_extent: None,
             inline_object_image: None,
             hr_rule: None,
+            inline_math: None,
             styleref: None,
             styleref_cont: false,
             char_style_id: None,

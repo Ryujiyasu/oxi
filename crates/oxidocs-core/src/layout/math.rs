@@ -449,10 +449,22 @@ pub fn layout_expr(expr: &MathExpr, ctx: &MathLayoutContext) -> MathBBox {
             // size, so the ∫ rendered ~8.6pt too short (and S652 then honestly
             // reserved that short drawing). Keep ∑/∏ at fs×1.6 (sum reserve was
             // already −0.96, the stacked limits drive its height).
+            // S1252: an INLINE (text-style) n-ary operator is drawn at the RUN
+            // size. Word truth (_pb_inlmath `nary` / `nary2` arms, PDF spans):
+            // `∑Board Committee` comes back as ONE CambriaMath span at size 9.96
+            // — the same size as the surrounding text — and the line advance stays
+            // the plain 11.66; with visible limits the operator is still 9.96 and
+            // the limits 6.96, growing the line by only 0.24. reference__0042471c
+            // (the ONLY corpus doc with an inline n-ary: golden 0 / corp_ja 0 /
+            // corp_en 1) agrees — Word's whole `∑Dewan Pengawas Syariah (…)` span
+            // is size 9.96, while Oxi drew the sigma at fs×1.2 and spent ~4pt of
+            // extra line. Display keeps its enlarged operator.
             let op_size = if op_is_integral && ctx.style.is_display() {
                 fs * 2.34
             } else if ctx.style.is_display() {
                 fs * 1.6
+            } else if std::env::var("OXI_S1252_DISABLE").is_err() {
+                fs
             } else {
                 fs * 1.2
             };
@@ -1265,10 +1277,14 @@ fn emit_nary(
     // Operator glyph: render larger if grow or display. S653 (coverage): a
     // DISPLAY integral is drawn extra-tall (Word ∫ ink ≈ fs×2.34); see the
     // layout_expr Nary counterpart.
+    // S1252: inline (text-style) n-ary is drawn at the RUN size — see the
+    // layout_expr counterpart for the Word measurement.
     let op_size = if op_is_integral && ctx.style.is_display() {
         fs * 2.34
     } else if ctx.style.is_display() {
         fs * 1.6
+    } else if std::env::var("OXI_S1252_DISABLE").is_err() {
+        fs
     } else {
         fs * 1.2
     };
@@ -1935,5 +1951,52 @@ mod tests {
         assert_eq!(u.ascent, 7.0);   // max
         assert_eq!(u.descent, 3.0);  // max
         assert_eq!(u.italic_correction, 0.0); // rhs's
+    }
+}
+
+/// S1252 (2026-08-29): the INLINE box of a maths expression — `(advance,
+/// ascent, descent)` in points, both vertical parts measured from the EMITTED
+/// glyph geometry rather than from `MathBBox`.
+///
+/// `MathBBox` is a loose over-estimate — the S652 note at the display-maths arm
+/// records why (`emit_nary`'s descent double-counts, leaf glyph boxes are a
+/// slack 0.8em/0.4em). For a 10.5pt `2π/3` it returns 62pt against a real ink
+/// extent of 16.4pt, which as an inline object height would swallow the page.
+/// The convention here is `s1244_math_advance`'s: a text element's baseline is
+/// `y + 2/3·h`, its ink runs `[baseline − 0.60·fs, baseline + 0.05·fs]`, and a
+/// non-text primitive (fraction bar, radical rule) is already tight.
+///
+/// WORD TRUTH (`_pb_inlmath`, PDF text origins — exact baselines):
+/// against the plain 11.64/11.66 pitch the maths grows the line
+/// `f(x)=4cos(3x)` by +0.00, `x²` by +0.00, `√x` by +1.68 (ascent side) and
+/// `2π/3` by +5.04 (+2.28 ascent, +2.76 descent) — i.e. the two sides compose
+/// independently, which is what S1095 does with this ascent/descent pair.
+pub fn inline_math_ink(block: &MathBlock, font_size: f32) -> (f32, f32, f32) {
+    let (elems, bbox) = emit_math_block(block, 0.0, 0.0, font_size);
+    let baseline = bbox.ascent.max(font_size * 0.8);
+    let (asc_r, desc_r) = (0.60_f32, 0.05_f32);
+    let mut ink_top = f32::INFINITY;
+    let mut ink_bot = f32::NEG_INFINITY;
+    for e in &elems {
+        let (lo, hi) = match &e.content {
+            LayoutContent::Text { text, .. } => {
+                let fs = e.height / 1.2;
+                let b = e.y + e.height * (2.0 / 3.0);
+                let is_integral = text.chars().any(|c| ('\u{222B}'..='\u{2233}').contains(&c));
+                if is_integral {
+                    (e.y, e.y + e.height)
+                } else {
+                    (b - asc_r * fs, b + desc_r * fs)
+                }
+            }
+            _ => (e.y, e.y + e.height),
+        };
+        ink_top = ink_top.min(lo);
+        ink_bot = ink_bot.max(hi);
+    }
+    if ink_bot > ink_top {
+        (bbox.advance, (baseline - ink_top).max(0.0), (ink_bot - baseline).max(0.0))
+    } else {
+        (bbox.advance, bbox.ascent, bbox.descent)
     }
 }
