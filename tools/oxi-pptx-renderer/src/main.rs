@@ -12936,47 +12936,116 @@ fn read_face_advances(dc: windows::Win32::Graphics::Gdi::HDC) -> Option<FaceAdva
     Some(FaceAdvances { upem, by_cp })
 }
 
-/// Extra stroke weight, in EM, added to a run GDI has to fake bold for.
+/// The pen PowerPoint strokes a SYNTHESISED bold with, as a fraction of the em.
 ///
-/// S-FAUXBOLD (2026-08-26). Where a face carries no real bold, PowerPoint's
-/// synthesised weight is HEAVIER than GDI's. Measured on d32 slide 6 -- "Brand
-/// Messaging", embedded Bebas Neue, 159.8pt, `b="1"`, centred -- by counting
-/// ink runs along one scanline. Both renders produce the SAME 13 runs, so the
-/// glyphs and their positions agree; only the strokes differ:
+/// S-FAUXPEN. When the face a bold run asks for carries no bold, PowerPoint
+/// draws the REGULAR outline in PDF text rendering mode 2 -- fill, then stroke
+/// -- and states the pen width in the content stream. So the thickening does
+/// not have to be inferred from ink at all; it is written down:
 ///
-///     run        3      4      5      6      7      8      9     10
-///     PPT    19.68  21.12  20.16  36.00  22.08  22.08  19.68  17.76
-///     Oxi    17.76  19.20  18.24  33.60  20.16  20.64  18.24  15.84
-///     ink on that line: PowerPoint 353.76pt, Oxi 333.12pt
+///     deck                 size        pen     pen/size
+///     blind 35 Bebas Neue  114.98    3.2853    0.028571
+///     blind 35 Bebas Neue  210.05    6.0014    0.028571
+///     blind 04 Inria Sans    9.00    0.2571    0.028571
+///     dev d32 Bebas Neue   159.84    4.5669    0.028571
 ///
-/// About 1.9pt at 159.8pt = 1.2% of the em. Fatter glyphs start their ink
-/// earlier and close the gaps between letters, which is why the line first
-/// looked like an ADVANCE error -- and why replacing the advance source with
-/// the font's own `hmtx` made it worse (6.200 -> 8.227), not better.
+/// **713 stroked text ops across 13 decks of both corpora carry that one ratio
+/// and no other**, from 9pt to 210pt (`tools/metrics/pptx_fauxbold_stroke.py`),
+/// and the `gen_pptx_boldslot.py` minimal repro strokes at it too. 1/35.
 ///
-/// At body sizes this is sub-pixel (0.14pt at 12pt) and rounds away, so the
-/// correction reaches display text and leaves ordinary runs alone.
-///
-/// ★PARKED. On the slide it was derived from this works -- d32 s6 goes
-/// 0.874086 -> 0.875534, its 1527px block 27.21 -> 23.04, and the scanline ink
-/// 304.32pt -> 327.36pt against PowerPoint's 323.04pt. The corpus says the
-/// constant does not generalise:
-///
-///     arm A 0.966620   arm B 0.966631   net +0.000010
-///     improved 3 (d31 +0.00084, d18 +0.00006, d09 +0.00000)
-///     regressed 3 (d32 -0.00036, d15 -0.00007, d24 -0.00004)
-///     unchanged 34
-///
-/// d32 REGRESSES overall while the slide the number came from improves, so one
-/// global em fraction is the wrong shape for this: the amount PowerPoint adds
-/// evidently varies with the face and the size. A per-face measurement -- the
-/// stroke-width delta at a known size, the way the d32 scanline was read --
-/// would be the way to derive it properly.
-const FAUX_BOLD_EM: f32 = 0.012;
+/// This replaces S-FAUXBOLD's 0.012 em, which was read off ONE scanline of d32
+/// s6 as the difference between PowerPoint's ink and GDI's, and washed on the
+/// corpus (net +0.00001, 3 decks improved and 3 regressed, d32 itself among the
+/// regressions). That number was never PowerPoint's weight -- it was
+/// PowerPoint's weight MINUS whatever GDI's own emboldening happened to add at
+/// that size, and GDI's part does not scale with the em. Drawing the regular
+/// face and adding the whole 1/35 ourselves takes GDI's share out of the
+/// equation entirely, which is why the constant can be a constant.
+const FAUX_BOLD_PEN_EM: f32 = 1.0 / 35.0;
 
-/// Faked bold is drawn at PowerPoint's weight rather than GDI's only when set.
-fn fauxbold_on() -> bool {
-    std::env::var("OXI_FAUXBOLD_ENABLE").is_ok()
+/// PowerPoint's synthesised-bold pen is applied unless this is set.
+fn fauxpen_off() -> bool {
+    std::env::var("OXI_FAUXPEN_DISABLE").is_ok()
+}
+
+/// Offsets whose union of copies is the glyph dilated by a round pen of
+/// radius `r` device pixels -- i.e. filling the outline and stroking it with a
+/// pen of width `2r`, which is what PowerPoint's mode-2 text does.
+///
+/// A filled shape swept over a disc IS its dilation (a Minkowski sum), so the
+/// pen is applied by drawing the run once per offset. `ExtTextOutW` takes an
+/// INTEGER origin, though, and at body sizes the pen radius is only a pixel or
+/// two, so which integer points are used decides how much ink actually lands.
+///
+/// The quantity to match is the **mean reach** -- the average, over directions,
+/// of how far the offset set extends. Added ink is the boundary integral of the
+/// reach along the outline's normal, so a set whose mean reach equals `r` lays
+/// down the same extra ink as a true pen of width `2r`, whatever its shape.
+/// Taking the naive disc `|v| <= r` instead costs 22% of the pen at 12pt: it
+/// reaches 1 along the axes and only 0.71 diagonally, against a wanted 1.07
+/// (`read_pptx_fauxpen.py`, which measures exactly this against a PLAIN control
+/// arm so the rasterisers' own bias cancels).
+///
+/// So below three pixels the integer disc is CHOSEN: every distinct shell
+/// cutoff is tried and the one whose mean reach is closest to `r` wins. Above
+/// that the disc is sampled as two rings and its centre -- the rim carries the
+/// shape, the half-radius ring closes any stroke thinner than the pen, and
+/// rounding each rim point is unbiased at that scale (measured +2.0% at 48pt
+/// and +1.6% at 96pt). The ring count is capped because a 210pt title would
+/// otherwise ask for a hundred passes to move its edge by a third of a pixel.
+fn dilation_offsets(r: f32) -> Vec<(i32, i32)> {
+    if r < 0.5 {
+        return vec![(0, 0)];
+    }
+    let mut v = vec![(0, 0)];
+    if r <= 3.0 {
+        let cut = best_shell(r);
+        for dy in -4..=4 {
+            for dx in -4..=4 {
+                if dx * dx + dy * dy <= cut {
+                    v.push((dx, dy));
+                }
+            }
+        }
+    } else {
+        for &ring in &[r, r * 0.5] {
+            let n = ((2.0 * std::f32::consts::PI * ring).ceil() as usize).clamp(8, 24);
+            for k in 0..n {
+                let a = 2.0 * std::f32::consts::PI * (k as f32) / (n as f32);
+                v.push(((ring * a.cos()).round() as i32, (ring * a.sin()).round() as i32));
+            }
+        }
+    }
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The squared-radius cutoff whose integer disc has mean reach closest to `r`.
+fn best_shell(r: f32) -> i32 {
+    let mut best = (f32::MAX, 0);
+    for cut in [0, 1, 2, 4, 5, 8, 9, 10, 13, 16] {
+        let pts: Vec<(i32, i32)> = (-4..=4)
+            .flat_map(|dy| (-4..=4).map(move |dx| (dx, dy)))
+            .filter(|(dx, dy)| dx * dx + dy * dy <= cut)
+            .collect();
+        // Mean over directions of how far the set reaches along that direction.
+        let mut sum = 0.0f32;
+        const DIRS: usize = 32;
+        for k in 0..DIRS {
+            let a = 2.0 * std::f32::consts::PI * (k as f32) / (DIRS as f32);
+            let (c, s) = (a.cos(), a.sin());
+            sum += pts
+                .iter()
+                .map(|&(dx, dy)| dx as f32 * c + dy as f32 * s)
+                .fold(0.0f32, f32::max);
+        }
+        let err = (sum / DIRS as f32 - r).abs();
+        if err < best.0 {
+            best = (err, cut);
+        }
+    }
+    best.1
 }
 
 /// The `OS/2` weight class of the face GDI resolves, or None.
@@ -13020,9 +13089,24 @@ fn face_weight_class(family: &str, bold: bool, italic: bool) -> Option<u16> {
 
 /// Whether drawing `family` bold means GDI faking it, because the face it
 /// resolves is not itself bold.
+///
+/// Memoised because the answer costs a `CreateFontW` plus an `OS/2` table read
+/// and never changes within a render, and both callers ask constantly: the
+/// advance paths ask once per GLYPH, and since S-FAUXPEN the draw path asks
+/// once per run.
 #[cfg(windows)]
 fn needs_faux_bold(family: &str, italic: bool) -> bool {
-    face_weight_class(family, true, italic).is_some_and(|w| w < 600)
+    thread_local! {
+        static SEEN: std::cell::RefCell<std::collections::HashMap<(String, bool), bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = (family.to_string(), italic);
+    if let Some(hit) = SEEN.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let got = face_weight_class(family, true, italic).is_some_and(|w| w < 600);
+    SEEN.with(|c| c.borrow_mut().insert(key, got));
+    got
 }
 
 /// A glyph's DESIGN advance in EM units, read out of the font GDI actually
@@ -15818,7 +15902,19 @@ fn draw_text_baseline_wiu(
             );
         }
     }
-    let font = create_font_for_wiu(family, font_size, weight, italic, underline, scale);
+    // S-FAUXPEN: a bold run whose face has no bold is drawn in the REGULAR face
+    // and thickened by the pen PowerPoint states, `FAUX_BOLD_PEN_EM` of the em.
+    // Asking GDI for 700 as well would stack GDI's own emboldening on top of
+    // it. The ADVANCES are untouched -- they still come from `weight`, which
+    // S-BOLDADV settled -- because the dx array positions the glyphs and
+    // PowerPoint's own export puts regular outlines on synthesised advances.
+    let faux_pen_r = if !fauxpen_off() && weight >= 700 && needs_faux_bold(family, italic) {
+        FAUX_BOLD_PEN_EM * font_size * scale as f32 / 2.0
+    } else {
+        0.0
+    };
+    let draw_weight = if faux_pen_r > 0.0 { 400 } else { weight };
+    let font = create_font_for_wiu(family, font_size, draw_weight, italic, underline, scale);
     if let Some(want) = draw_debug() {
         if text.contains(want.as_str()) {
             unsafe {
@@ -15928,27 +16024,25 @@ fn draw_text_baseline_wiu(
             );
         }
     }
-    // A faked bold is drawn twice, a fraction of an em apart, because GDI's own
-    // emboldening is lighter than PowerPoint's (see `FAUX_BOLD_EM`). The second
-    // pass thickens the strokes without moving a single pen position, which is
-    // what the measurement says PowerPoint does.
-    let faux = if fauxbold_on() && weight >= 700 && needs_faux_bold(family, italic) {
-        ((FAUX_BOLD_EM * font_size * scale as f32).round() as i32).max(0)
+    // A synthesised bold is the REGULAR face swept over a disc: the font above
+    // was created at weight 400 so GDI adds nothing of its own, and these
+    // offsets add PowerPoint's whole `size/35` pen (`FAUX_BOLD_PEN_EM`). The
+    // sweep is centred on the outline, as a stroke is -- widening to one side
+    // only thickens the strokes correctly but moves every glyph's ink half a
+    // step, which measured WORSE on d32 s6 (6.200 -> 6.675) even when the
+    // scanline ink matched.
+    let offsets = if faux_pen_r > 0.0 {
+        dilation_offsets(faux_pen_r)
     } else {
-        0
+        vec![(0, 0)]
     };
     if let Some(dx) = dx {
         unsafe {
-            // Centred: half the widening to each side, because a fattened
-            // outline grows both ways. Offsetting only to the right thickens
-            // the strokes correctly but moves every glyph's ink half a step,
-            // which measured WORSE on d32 s6 (6.200 -> 6.675) even though the
-            // scanline ink matched.
-            for pass in 0..=faux.min(1) {
+            for (ox, oy) in &offsets {
                 let _ = ExtTextOutW(
                     dc,
-                    x - faux / 2 + pass * faux,
-                    y,
+                    x + ox,
+                    y + oy,
                     ETO_OPTIONS(0),
                     None,
                     PCWSTR(wtext.as_ptr()),
@@ -15959,7 +16053,9 @@ fn draw_text_baseline_wiu(
         }
     } else {
         unsafe {
-            let _ = TextOutW(dc, x, y, &wtext);
+            for (ox, oy) in &offsets {
+                let _ = TextOutW(dc, x + ox, y + oy, &wtext);
+            }
         }
     }
     unsafe {

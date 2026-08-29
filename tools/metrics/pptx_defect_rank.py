@@ -22,6 +22,7 @@ Resumable: an existing json is reused for slides whose PNG has not changed.
 
 Usage:
     python tools/metrics/pptx_defect_rank.py [--limit N] [--doc 33]
+    python tools/metrics/pptx_defect_rank.py --corpus dev --tag h0829c
 """
 from __future__ import annotations
 
@@ -40,9 +41,32 @@ if hasattr(sys.stdout, "reconfigure"):
 
 REPO = Path(__file__).resolve().parents[2]
 SS = REPO / "pipeline_data" / "pptx_benchmark" / "ssim_pptx"
+DEV = REPO / "pipeline_data" / "pptx_benchmark" / "dev"
 CACHE = SS / "_defect_rank.json"
 EXE = REPO / "tools" / "oxi-pptx-renderer" / "target" / "release" / "oxi-pptx-renderer.exe"
 BLUR = 1.0
+
+
+def dev_pairs(tag: str) -> list[tuple[str, Path, Path]]:
+    """(deck, reference pdf, render dir) for every dev deck rendered under `tag`.
+
+    The blind-50 harness keeps one PNG dir per deck and one PDF named by index;
+    the dev harness keeps a dir per RENDER ARM (`oxi_png/<tag>/<deck>__.../`)
+    and names the PDF after the deck. Ranking the dev corpus is the point --
+    it is the only one the renderer is allowed to be fixed against
+    (`dev/FROZEN_SELECTION_RULE.md`) -- so the ranker has to read that shape.
+    """
+    out = []
+    root = DEV / "oxi_png" / tag
+    if not root.is_dir():
+        sys.exit(f"no dev render arm '{tag}' under {root.parent}")
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        pdfs = sorted(DEV.joinpath("pdf").glob(f"{d.name}.pdf"))
+        if pdfs:
+            out.append((d.name.split("__")[0], pdfs[0], d))
+    return out
 
 
 def ssim(a: np.ndarray, b: np.ndarray) -> float:
@@ -99,7 +123,16 @@ def main() -> None:
     ap.add_argument("--verify", type=int, default=0, metavar="N",
                     help="re-render N sampled decks; if they match the stored PNGs, "
                          "record that this binary draws them and stop warning")
+    ap.add_argument("--corpus", choices=("blind", "dev"), default="blind",
+                    help="blind = the frozen HF-50 (re-measure only); "
+                         "dev = the 40 decks fixes may target")
+    ap.add_argument("--tag", default="head",
+                    help="dev only: which render arm under dev/oxi_png/ to rank")
     args = ap.parse_args()
+
+    global CACHE
+    if args.corpus == "dev":
+        CACHE = DEV / "ssim_floor" / f"_defect_rank_{args.tag}.json"
 
     # A PNG older than the binary was drawn by a renderer that no longer
     # exists. Ranking those silently is how 2026-08-27's first run put d44 s23
@@ -116,17 +149,22 @@ def main() -> None:
     # ignored, which is worse than not having one. `--verify` re-renders a sample
     # and, when it matches, records that THIS binary draws the stored PNGs.
     verified = cache.get("_verified_exe_mtime") == exe_mtime
-    docs = sorted(p.name for p in (SS / "oxi_png").iterdir() if p.is_dir()
-                  and not p.name.startswith("_"))
-    if args.doc:
-        docs = [d for d in docs if d == args.doc]
+    if args.corpus == "dev":
+        targets = [(deck, pdf, d) for deck, pdf, d in dev_pairs(args.tag)
+                   if not args.doc or deck == args.doc]
+    else:
+        targets = []
+        for name in sorted(p.name for p in (SS / "oxi_png").iterdir()
+                           if p.is_dir() and not p.name.startswith("_")):
+            if args.doc and name != args.doc:
+                continue
+            targets.append((name, SS / "ppt_pdf" / f"{name}.pdf", SS / "oxi_png" / name))
     rows = []
-    for doc in docs:
-        pdf_path = SS / "ppt_pdf" / f"{doc}.pdf"
+    for doc, pdf_path, png_dir in targets:
         if not pdf_path.exists():
             continue
         pdf = pymupdf.open(pdf_path)
-        for png in sorted((SS / "oxi_png" / doc).glob("slide_s*.png"),
+        for png in sorted(png_dir.glob("slide_s*.png"),
                           key=lambda p: int(p.stem.split("_s")[1])):
             idx = int(png.stem.split("_s")[1])
             if idx > len(pdf):
@@ -177,7 +215,9 @@ def main() -> None:
         print(f"!! {len(stale)} of {len(rows)} slides were rendered BEFORE the "
               f"current binary and are marked * -- re-render before trusting them.")
         print(f"   decks affected: {','.join(docs)}")
-        print("   fix: python tools/metrics/pptx_remeasure.py --force")
+        print("   fix: python tools/metrics/pptx_remeasure.py --force"
+              if args.corpus == "blind" else
+              f"   fix: pptx_ssim_floor.py --tag {args.tag} --rerender --jobs 1")
     n = args.limit or 30
     print(f"\nworst {n} slides by BLURRED residual (blur r={BLUR}px)")
     print(f"{'slide':<10}{'defect':>9}{'ssim':>9}{'blurred':>9}"

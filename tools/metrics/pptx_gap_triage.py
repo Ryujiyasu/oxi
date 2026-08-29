@@ -37,6 +37,7 @@ Worked examples (2026-08-26):
 Usage:
     python tools/metrics/pptx_gap_triage.py d09:3 d24:1 d32:6
     python tools/metrics/pptx_gap_triage.py d09          # worst slide of a deck
+    python tools/metrics/pptx_gap_triage.py --tag h0829c d09:3   # a named render arm
 """
 from __future__ import annotations
 
@@ -112,6 +113,10 @@ def triage(deck: str, slide: int, tag: str) -> None:
 def main() -> None:
     args = sys.argv[1:]
     tag = "s0826a"
+    if "--tag" in args:
+        i = args.index("--tag")
+        tag = args[i + 1]
+        del args[i:i + 2]
     if not args:
         sys.exit("usage: pptx_gap_triage.py d09:3 [d24:1 ...]")
     for a in args:
