@@ -33,6 +33,26 @@ one_line = re.sub(r"<a:t>[^<]*</a:t>", "<a:t>AAAA</a:t>", first)
 
 def arms():
     yield "control", panel
+    # The spacing swept across 100% inside the real panel, one paragraph so the
+    # block stays inside the box. Below 100% the paragraph asks for LESS room
+    # than the face's own line box and above it asks for more; if the shortfall
+    # is one-sided, it shows up on one side of this sweep and not the other.
+    for pct in (70000, 80000, 90000, 100000, 110000, 150000, 200000, 300000):
+        body = re.sub(r"<a:p>.*</a:p>", one_line, panel, flags=re.S)
+        body = re.sub(r'<a:spcPct val="\d+"/>', f'<a:spcPct val="{pct}"/>', body)
+        yield f"pct-{pct // 1000}", body
+    # And one at 80% in a SHORT box, since every synthetic arm that implied a
+    # shortfall below 100% had a box under 62 pixels where this panel has 173.
+    short = re.sub(r"<a:p>.*</a:p>", one_line, panel, flags=re.S)
+    short = re.sub(r"<xdr:rowOff>2286000</xdr:rowOff>",
+                   "<xdr:rowOff>1000000</xdr:rowOff>", short)
+    yield "pct-80-short", short
+    # The panel's own seven lines at percentages below 100, where the one-line
+    # arms could not tell a shortfall from none because the shift never crossed
+    # a rounding boundary. At seven lines it does.
+    for pct in (70000, 90000):
+        body = re.sub(r'<a:spcPct val="\d+"/>', f'<a:spcPct val="{pct}"/>', panel)
+        yield f"seven-{pct // 1000}", body
     # One short paragraph, everything else as written.
     yield "one-para", re.sub(r"<a:p>.*</a:p>", one_line, panel, flags=re.S)
     # The body says nothing but how to wrap and where to anchor.
