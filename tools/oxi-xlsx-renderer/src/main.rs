@@ -3771,6 +3771,8 @@ mod windows_draw {
         dc: HDC,
         chart: &oxicells_core::ir::Chart,
         box_: RECT,
+        // The box before its edges were put on whole pixels.
+        exact: Exact,
         scale: f32,
         normal: Option<&(String, f32)>,
     ) {
@@ -3786,14 +3788,35 @@ mod windows_draw {
             FillRect(dc, &box_, brush);
             let _ = DeleteObject(brush);
         }
+        // The plot is a fraction of the chart's box, and the box has a
+        // fraction of its own: `a08feeb4a00b_zuhyo`'s runs from 16.98 to
+        // 1038.14 pixels, so rounding it first loses an eighth of a pixel of
+        // plot and, over forty-eight categories, a whole pixel of stride.
+        // Taken exactly, the plot spans 86.778 to 988.111 and every one of the
+        // thirty-one ticks Excel draws lands on `floor` of it — 31 of 31,
+        // where the rounded box read 28.
+        //
         // The fractions are cut, not rounded: measured against Excel's own
         // picture, all four edges of `311e2f9c271e_zuhyo`'s plot land a pixel
         // out when rounded and exactly when truncated.
+        let (left_edge, right_edge) = exact
+            .sides
+            .map(|(left, right)| (left as f64, right as f64))
+            .unwrap_or((box_.left as f64, box_.right as f64));
+        let (top_edge, foot_edge) = exact
+            .down
+            .map(|(top, foot)| (top as f64, foot as f64))
+            .unwrap_or((box_.top as f64, box_.bottom as f64));
+        let (span, height) = (right_edge - left_edge, foot_edge - top_edge);
+        let (plot_left, plot_right) =
+            (left_edge + frame.x * span, left_edge + (frame.x + frame.w) * span);
+        let (plot_top, plot_foot) =
+            (top_edge + frame.y * height, top_edge + (frame.y + frame.h) * height);
         let plot = RECT {
-            left: box_.left + (frame.x * across as f64) as i32,
-            top: box_.top + (frame.y * down as f64) as i32,
-            right: box_.left + ((frame.x + frame.w) * across as f64) as i32,
-            bottom: box_.top + ((frame.y + frame.h) * down as f64) as i32,
+            left: plot_left.floor() as i32,
+            top: plot_top.floor() as i32,
+            right: plot_right.floor() as i32,
+            bottom: plot_foot.floor() as i32,
         };
         if plot.right <= plot.left || plot.bottom <= plot.top {
             return;
@@ -3830,7 +3853,7 @@ mod windows_draw {
             .max()
             .unwrap_or(0)
             .max(chart.categories.len());
-        let room = (plot.right - plot.left) as f64;
+        let room = plot_right - plot_left;
         // `crossBetween` is stated on the value axis — it says where that
         // axis crosses the other one — but what it decides is where the
         // categories stand: `midCat` puts the first on the axis itself.
@@ -3839,7 +3862,7 @@ mod windows_draw {
             .as_deref()
             .or(along_axis.cross_between.as_deref())
             == Some("midCat");
-        let across_at = |index: usize| -> i32 {
+        let stands_at = |index: usize| -> f64 {
             let step = if mid_cat {
                 if count > 1 {
                     room * index as f64 / (count - 1) as f64
@@ -3849,8 +3872,20 @@ mod windows_draw {
             } else {
                 room * (index as f64 + 0.5) / count.max(1) as f64
             };
-            plot.left + step.round() as i32
+            plot_left + step
         };
+        // A category falls between two pixels, and its tick is drawn in the
+        // one it falls in while its label is centred on the next. Read off
+        // `a08feeb4a00b_zuhyo`, whose stride is 169/9 of a pixel so that every
+        // ninth category lands on a whole one: the tick matches `floor` at all
+        // 31 Excel draws, and the label — measured as the shift that aligns
+        // Excel's ink with ours, which cancels the glyph's own bearing —
+        // matches `ceil` at 27 of 29, the two misses being single digits five
+        // pixels wide whose alignment is a pixel ambiguous either way. Where a
+        // category lands on a whole pixel the two agree, and Excel draws them
+        // agreeing.
+        let across_at = |index: usize| -> i32 { stands_at(index).floor() as i32 };
+        let label_at = |index: usize| -> i32 { stands_at(index).ceil() as i32 };
         let up_at = |value: f64| -> i32 {
             plot.bottom - (up.at(value) * (plot.bottom - plot.top) as f64).round() as i32
         };
@@ -3968,35 +4003,13 @@ mod windows_draw {
         let tick = (4.0 * scale).round().max(1.0) as i32;
         let foot = up_at(up.low.max(0.0).min(up.high));
 
-        let (pen, _) = axis_pen(&along_axis.line);
-        let mut held = SelectObject(dc, pen);
-        if !along_axis.deleted {
-            let _ = MoveToEx(dc, plot.left, foot, None);
-            let _ = LineTo(dc, plot.right, foot);
-            if along_axis.major_tick != "none" && !along_axis.major_tick.is_empty() {
-                for index in 0..count {
-                    // A tick stands between two categories when the points
-                    // do, and under the point itself when they do not.
-                    let at = if mid_cat {
-                        across_at(index)
-                    } else {
-                        plot.left + (room * index as f64 / count as f64).round() as i32
-                    };
-                    let (from, to) = match along_axis.major_tick.as_str() {
-                        "in" => (foot - tick, foot),
-                        "out" => (foot, foot + tick),
-                        _ => (foot - tick, foot + tick),
-                    };
-                    let _ = MoveToEx(dc, at, from, None);
-                    let _ = LineTo(dc, at, to);
-                }
-            }
-        }
-        SelectObject(dc, held);
-        let _ = DeleteObject(pen);
-
+        // The two axes are drawn value first, category over it: where they
+        // meet, `a08feeb4a00b_zuhyo` shows Excel's black category tick
+        // standing on the grey value-axis line and its black axis line
+        // covering the grey value tick, which is the order the other way
+        // round from ours.
         let (pen, _) = axis_pen(&up_axis.line);
-        held = SelectObject(dc, pen);
+        let mut held = SelectObject(dc, pen);
         if !up_axis.deleted {
             let _ = MoveToEx(dc, plot.left, plot.top, None);
             let _ = LineTo(dc, plot.left, plot.bottom);
@@ -4015,6 +4028,34 @@ mod windows_draw {
         }
         SelectObject(dc, held);
         let _ = DeleteObject(pen);
+
+        let (pen, _) = axis_pen(&along_axis.line);
+        held = SelectObject(dc, pen);
+        if !along_axis.deleted {
+            let _ = MoveToEx(dc, plot.left, foot, None);
+            let _ = LineTo(dc, plot.right, foot);
+            if along_axis.major_tick != "none" && !along_axis.major_tick.is_empty() {
+                for index in 0..count {
+                    // A tick stands between two categories when the points
+                    // do, and under the point itself when they do not.
+                    let at = if mid_cat {
+                        across_at(index)
+                    } else {
+                        (plot_left + room * index as f64 / count as f64).floor() as i32
+                    };
+                    let (from, to) = match along_axis.major_tick.as_str() {
+                        "in" => (foot - tick, foot),
+                        "out" => (foot, foot + tick),
+                        _ => (foot - tick, foot + tick),
+                    };
+                    let _ = MoveToEx(dc, at, from, None);
+                    let _ = LineTo(dc, at, to);
+                }
+            }
+        }
+        SelectObject(dc, held);
+        let _ = DeleteObject(pen);
+
 
         // What the axes are labelled with. A value's label is set against the
         // axis itself — the room between them is the glyph's own bearing —
@@ -4092,7 +4133,7 @@ mod windows_draw {
                     let letters = wide(&line);
                     let letters = &letters[..letters.len() - 1];
                     if !letters.is_empty() {
-                        let _ = TextOutW(dc, across_at(index), at, letters);
+                        let _ = TextOutW(dc, label_at(index), at, letters);
                     }
                     at += pitch.round() as i32;
                 }
@@ -6894,9 +6935,18 @@ mod windows_draw {
                             sheet.normal_font.as_ref(),
                         )
                     }
-                    DrawingKind::Chart(held) => {
-                        graph(dc, held, box_, scale, sheet.normal_font.as_ref())
-                    }
+                    DrawingKind::Chart(held) => graph(
+                        dc,
+                        held,
+                        box_,
+                        Exact {
+                            room: super::drawing_room(drawn, layout, scale),
+                            sides: super::drawing_edges(drawn, layout, scale),
+                            down: super::drawing_down(drawn, layout, scale),
+                        },
+                        scale,
+                        sheet.normal_font.as_ref(),
+                    ),
                     _ => {}
                 }
             }
