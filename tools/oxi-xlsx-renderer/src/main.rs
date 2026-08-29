@@ -3504,6 +3504,91 @@ mod windows_draw {
                     let _ = AbortPath(dc);
                 }
             }
+            // A bevelled box: one face in the middle and four sloped ones
+            // around it, each the fill under a fixed lightening or darkening.
+            // Read off `bunya_taikeizu_point`'s own headings, whose fill is
+            // C0504D: the left face is 217,150,148 — two fifths of the way to
+            // white — the foot 154,64,62, four fifths of the fill, and the
+            // right 115,48,46, three fifths. Those three land on the unit. The
+            // top reads 204,114,112 where a fifth of the way to white gives
+            // 205,115,113, one out on every channel and no fill that rounds to
+            // C0504D explains all four; a unit of colour is nothing to the
+            // picture, so it is left at the fifth its siblings are stated in.
+            //
+            // The slope is an eighth of the shorter side — the adjustment
+            // OOXML leaves at its default — and the rule runs round the outer
+            // box and the inner one both.
+            "bevel" => {
+                let (wide, high) = (box_.right - box_.left, box_.bottom - box_.top);
+                let slope = ((wide.min(high) as f32) * 0.125).round().max(1.0) as i32;
+                let toward = |shade: u32, target: u32, share: f32| -> u32 {
+                    let part = |at: u32| {
+                        let (from, to) = (((shade >> at) & 0xFF) as f32, ((target >> at) & 0xFF) as f32);
+                        ((from + (to - from) * share).round() as u32).min(255) << at
+                    };
+                    part(0) | part(8) | part(16)
+                };
+                if let Some(fill) = shape.fill.as_deref() {
+                    let shade = colour(Some(fill), 0x00FF_FFFF).0;
+                    let (left, top) = (box_.left, box_.top);
+                    let (right, foot) = (box_.right + 1, box_.bottom + 1);
+                    let (inner_left, inner_top) = (left + slope, top + slope);
+                    let (inner_right, inner_foot) = (right - slope, foot - slope);
+                    let faces: [(u32, [POINT; 4]); 5] = [
+                        (toward(shade, 0x00FF_FFFF, 0.2), [
+                            POINT { x: left, y: top },
+                            POINT { x: right, y: top },
+                            POINT { x: inner_right, y: inner_top },
+                            POINT { x: inner_left, y: inner_top },
+                        ]),
+                        (toward(shade, 0x00FF_FFFF, 0.4), [
+                            POINT { x: left, y: top },
+                            POINT { x: inner_left, y: inner_top },
+                            POINT { x: inner_left, y: inner_foot },
+                            POINT { x: left, y: foot },
+                        ]),
+                        (toward(shade, 0, 0.2), [
+                            POINT { x: left, y: foot },
+                            POINT { x: inner_left, y: inner_foot },
+                            POINT { x: inner_right, y: inner_foot },
+                            POINT { x: right, y: foot },
+                        ]),
+                        (toward(shade, 0, 0.4), [
+                            POINT { x: right, y: top },
+                            POINT { x: inner_right, y: inner_top },
+                            POINT { x: inner_right, y: inner_foot },
+                            POINT { x: right, y: foot },
+                        ]),
+                        (shade, [
+                            POINT { x: inner_left, y: inner_top },
+                            POINT { x: inner_right, y: inner_top },
+                            POINT { x: inner_right, y: inner_foot },
+                            POINT { x: inner_left, y: inner_foot },
+                        ]),
+                    ];
+                    let hollow = SelectObject(dc, GetStockObject(NULL_PEN));
+                    for (paint, corners) in faces {
+                        let brush = CreateSolidBrush(COLORREF(paint));
+                        let held = SelectObject(dc, brush);
+                        let _ = Polygon(dc, &corners);
+                        SelectObject(dc, held);
+                        let _ = DeleteObject(brush);
+                    }
+                    SelectObject(dc, hollow);
+                }
+                if rule.is_some() {
+                    let empty = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    let _ = Rectangle(dc, box_.left, box_.top, box_.right + 1, box_.bottom + 1);
+                    let _ = Rectangle(
+                        dc,
+                        box_.left + slope,
+                        box_.top + slope,
+                        box_.right + 1 - slope,
+                        box_.bottom + 1 - slope,
+                    );
+                    SelectObject(dc, empty);
+                }
+            }
             "rect" | "roundRect" => {
                 // A rounded rectangle's corner has a radius of a sixth of its
                 // shorter side, which is the adjustment OOXML leaves at its
