@@ -2516,10 +2516,19 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
 
     // How far past the range anything hangs. Only what is asked for is
     // measured: a sheet is a million rows wide of nothing much.
+    //
+    // A NOTE hangs past it as readily as a drawing does, and counting only
+    // the drawings left `002`'s open notes without a far edge to stand on:
+    // their anchor names column 92 of a sheet drawn to 87, `anchored_box`
+    // could not place it, and the note fell back to the width the file states
+    // for it — 454 pixels where the anchor gives 486. Thirty pixels is a
+    // character and a half of メイリオ 14pt, and it is what put 「資」 on the
+    // second line where Excel keeps it on the first.
     let (reach_column, reach_row) = sheet
         .drawings
         .iter()
         .filter_map(|drawn| drawn.to.as_ref())
+        .chain(sheet.comments.iter().filter_map(|note| note.to.as_ref()))
         .fold((0, 0), |(column, row), anchor| {
             (column.max(anchor.col), row.max(anchor.row + 1))
         });
@@ -7243,14 +7252,25 @@ mod windows_draw {
                 // A note shows what fits in its box and no more.
                 let clip = CreateRectRgn(box_.left, box_.top, box_.right, box_.bottom);
                 SelectClipRgn(dc, clip);
+                // The insets keep their fractions here as they do in a
+                // shape: 2.5mm either side is 9.449 pixels, not 9. `002`'s
+                // note is 487 pixels of box, and 469 of room lets 「資」 on to
+                // the first line where Excel ends it there and starts the
+                // second on 「産」; 468.1 does not.
                 says(
-            dc,
-            &note.text,
-            Frame { box_, exact: None, pull: 0.0, edges: None, down: None },
-            scale,
-            sheet.normal_font.as_ref(),
-            true,
-        );
+                    dc,
+                    &note.text,
+                    Frame {
+                        box_,
+                        exact: Some((box_.right - box_.left) as f32),
+                        pull: 0.0,
+                        edges: None,
+                        down: None,
+                    },
+                    scale,
+                    sheet.normal_font.as_ref(),
+                    true,
+                );
                 SelectClipRgn(dc, None);
                 let _ = DeleteObject(clip);
             }
