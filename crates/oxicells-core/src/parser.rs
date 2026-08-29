@@ -523,6 +523,10 @@ pub(crate) struct Theme {
     /// own `<name>` counts for nothing.
     major_face: Option<String>,
     minor_face: Option<String>,
+    /// The widths the theme's own line styles are drawn at, in EMU. A shape
+    /// that names one through `lnRef` and states no width of its own is ruled
+    /// at the width the theme gives that slot.
+    rules: Vec<i64>,
 }
 
 impl Theme {
@@ -566,6 +570,7 @@ fn parse_theme_xml(xml: &str) -> Theme {
     // held for each is: the entry for this script beats the East Asian
     // fallback, which beats the Latin one.
     let mut in_font_scheme: Option<bool> = None;
+    let mut in_rules = false;
     let mut face_rank = [0u8; 2];
     let mut buf = Vec::new();
     loop {
@@ -574,12 +579,19 @@ fn parse_theme_xml(xml: &str) -> Theme {
                 "clrScheme" => in_scheme = true,
                 "majorFont" => in_font_scheme = Some(true),
                 "minorFont" => in_font_scheme = Some(false),
+                "lnStyleLst" => in_rules = true,
+                "ln" if in_rules => {
+                    theme
+                        .rules
+                        .push(get_attr(&e, "w").and_then(|w| w.parse().ok()).unwrap_or(9525));
+                }
                 _ => {}
             },
             Ok(Event::End(e)) => match local_name(e.name().as_ref()).as_str() {
                 // The colour scheme comes first; reading on gathers the
                 // fonts that follow it.
                 "clrScheme" => in_scheme = false,
+                "lnStyleLst" => in_rules = false,
                 "majorFont" | "minorFont" => in_font_scheme = None,
                 "theme" | "themeElements" => break,
                 _ => {}
@@ -1379,6 +1391,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
     };
     let mut shape = blank_shape.clone();
     let mut line_width: i64 = 9525;
+    let mut width_stated = false;
     let mut line_cap: Option<String> = None;
     let mut dash: Option<String> = None;
     let (mut head_end, mut tail_end): (Option<String>, Option<String>) = (None, None);
@@ -1445,6 +1458,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                     depth_in_shape = 0;
                     shape = blank_shape.clone();
                     line_width = 9525;
+                    width_stated = false;
                     dash = None;
                     head_end = None;
                     tail_end = None;
@@ -1541,7 +1555,10 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "extLst" => in_ext_lst += 1,
                 "ln" if in_sp_pr && in_ext_lst == 0 => {
                     in_ln = true;
-                    line_width = get_attr(e, "w").and_then(|w| w.parse().ok()).unwrap_or(9525);
+                    if let Some(stated) = get_attr(e, "w").and_then(|w| w.parse().ok()) {
+                        line_width = stated;
+                        width_stated = true;
+                    }
                     line_cap = get_attr(e, "cap");
                 }
                 "xfrm" if in_sp_pr => {
@@ -1641,6 +1658,20 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                 "lnRef" if in_style && !line_stated => {
                     paints = (get_attr(e, "idx").as_deref() != Some("0"))
                         .then_some(Paints::Line);
+                    // And the width the theme draws that slot at, where the
+                    // shape has not stated one. `bunya_taikeizu_point`'s
+                    // headings name slot 2 of a theme whose styles are 0.75,
+                    // 2 and 3 point, and Excel rules them three pixels wide
+                    // where the 0.75pt default rules one.
+                    if !width_stated {
+                        if let Some(slot) = get_attr(e, "idx")
+                            .and_then(|idx| idx.parse::<usize>().ok())
+                            .filter(|idx| *idx > 0)
+                            .and_then(|idx| theme.rules.get(idx - 1))
+                        {
+                            line_width = *slot;
+                        }
+                    }
                 }
                 "solidFill" if in_run_props => paints = Some(Paints::Text),
                 "srgbClr" | "schemeClr" | "sysClr" if paints.is_some() => {
