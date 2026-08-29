@@ -2154,17 +2154,23 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     let mut loaded = 0;
     // Which families the MACHINE already has, asked before anything private is
     // added (see `family_installed`).
-    let installed: std::collections::HashSet<&str> = if skipembed_on() {
+    let installed: std::collections::HashSet<(&str, bool, bool)> = if skipembed_on() {
         pres.embedded_fonts
             .iter()
-            .map(|f| f.typeface.as_str())
-            .filter(|f| family_installed(f))
+            .map(|f| (f.typeface.as_str(), f.bold, f.italic))
+            .filter(|(f, b, i)| {
+                if styleskip_on() {
+                    style_installed(f, *b, *i)
+                } else {
+                    family_installed(f)
+                }
+            })
             .collect()
     } else {
         Default::default()
     };
     for font in &pres.embedded_fonts {
-        if installed.contains(font.typeface.as_str()) {
+        if installed.contains(&(font.typeface.as_str(), font.bold, font.italic)) {
             if sf_debug() {
                 eprintln!(
                     "INSTALL typeface={:?} bold={} italic={} SKIPPED -- family is installed",
@@ -12661,6 +12667,74 @@ fn family_installed(family: &str) -> bool {
         );
     }
     found
+}
+
+/// Is the STYLE `family` + (bold, italic) available on this machine?
+///
+/// S-STYLESKIP (2026-08-29). `family_installed` answers for the family, and a
+/// family can be half there: the Office cloud cache fills one face at a time.
+/// dev d08 is the specimen -- the cache holds **Merriweather Regular and
+/// nothing else**, the deck embeds Regular and a real Bold (EOT weight 700),
+/// and PowerPoint's own PDF sets the 45pt bold title at 404.59pt, which is the
+/// embedded Bold's design width (405.13) and not the faked bold GDI makes from
+/// the Regular (380-400). So PowerPoint took the cache for the style it had and
+/// the PART for the style it did not, exactly as `pptx_cloudfont_staleness`
+/// recorded for blind 18's Montserrat Bold.
+///
+/// Skipping by family instead threw the deck's only real bold away and left
+/// every bold run 2% narrow.
+#[cfg(windows)]
+fn style_installed(family: &str, bold: bool, italic: bool) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    struct Want {
+        bold: bool,
+        italic: bool,
+        found: bool,
+    }
+    unsafe extern "system" fn cb(
+        lf: *const LOGFONTW,
+        _tm: *const TEXTMETRICW,
+        _kind: u32,
+        want: windows::Win32::Foundation::LPARAM,
+    ) -> i32 {
+        let want = &mut *(want.0 as *mut Want);
+        let is_bold = (*lf).lfWeight >= 600;
+        let is_italic = (*lf).lfItalic != 0;
+        if is_bold == want.bold && is_italic == want.italic {
+            want.found = true;
+            return 0;
+        }
+        1
+    }
+    let dc = probe_dc();
+    let mut lf = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    let wide: Vec<u16> = family.encode_utf16().take(31).collect();
+    lf.lfFaceName[..wide.len()].copy_from_slice(&wide);
+    let mut want = Want {
+        bold,
+        italic,
+        found: false,
+    };
+    unsafe {
+        EnumFontFamiliesExW(
+            dc,
+            &mut lf,
+            Some(cb),
+            windows::Win32::Foundation::LPARAM(&mut want as *mut Want as isize),
+            0,
+        );
+    }
+    want.found
+}
+
+/// The skip is decided per STYLE unless this is set, which restores the
+/// per-family test (see `style_installed`).
+fn styleskip_on() -> bool {
+    std::env::var("OXI_STYLESKIP_DISABLE").is_err()
 }
 
 /// A deck's embedded parts are skipped for a family the machine already has,
