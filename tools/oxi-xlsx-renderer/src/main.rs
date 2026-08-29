@@ -520,15 +520,29 @@ fn row_pixels(
 /// Characters that may not start a line: the closing half of a pair, the
 /// small kana, the sound mark, and the punctuation that ends a phrase.
 const NEVER_STARTS: &str = "、。，．・：；？！゛゜ゝゞヽヾー々〆\u{3005}\
-    ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ）］｝〉》」』】〕〙〗”’";
+    ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ）］｝〉》」』】〕〙〗”’\
+    ℃°′″";
 /// Characters that may not end one: the opening half of a pair.
 const NEVER_ENDS: &str = "（［｛〈《「『【〔〘〖“‘￥＄";
 
 /// Text written on the body of the em, which breaks between any two
 /// characters the kinsoku rules allow.
+///
+/// The symbols a Japanese sheet is full of — ● ○ ▲ △ ■ □ ◆ ◇ ★ ☆ ※ → ← ↑ ↓
+/// ① ② Ⅰ ± × ÷ ≦ ≧ ∞ ‰ § — are written on the em as well, and Excel breaks
+/// between two of them: `_xlsx_break_symbols.py` sets `ああCCああ` in a column
+/// three ideographs wide and reads how many characters the first line holds,
+/// and all twenty-six of them fill it where a control of （ holds two. Leaving
+/// them out drags a pair down whole — `tb_r8_jizensoudan` sets 「の▲▲審議会」
+/// in a seven-character column, and every line under it was a character out.
+/// The same sweep found ℃ ° ′ ″ may not START a line, which is why they stand
+/// in `NEVER_STARTS`: Excel gives characters back until 「あ」 is alone on the
+/// line rather than open one on a unit mark.
 fn ideographic(letter: char) -> bool {
     matches!(letter as u32,
-        0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+        0x00A7 | 0x00B0..=0x00B1 | 0x00D7 | 0x00F7
+        | 0x1100..=0x115F | 0x2010..=0x2027 | 0x2030..=0x205E
+        | 0x2100..=0x2BFF | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
         | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
         | 0xFE30..=0xFE6F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6
         | 0x20000..=0x2FA1F)
