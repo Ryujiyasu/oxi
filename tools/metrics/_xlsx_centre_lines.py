@@ -47,7 +47,7 @@ FACES = [("Yu Gothic UI", 12.0, 27.666), ("メイリオ", 12.0, 31.200)]
 # loses is read through a one-pixel window, so the window on the SHARE is
 # 4 / |own - tall| wide: at 150% that is 0.29 and settles nothing, at 500% it
 # is 0.036. This is what pins the sixth that SX124 could only bracket.
-PCTS = [80000, 200000, 300000, 400000, 500000]
+PCTS = [80000, 300000]
 # Lines that come from WRAPPING one paragraph, against the same number of
 # lines written as separate paragraphs. `glossary_05`'s seven-line panel wraps
 # and is the one box that refuses the share the sweeps measure, so whether a
@@ -59,6 +59,12 @@ WRAPPED = [False]
 # and it is the last structural difference between the arms that show a
 # correction and the box that refuses one.
 INSETS = [True]
+# Whether the run is bold. `glossary_05`'s panel is (`b="1"` on every run) and
+# no arm has been — the last attribute separating the two. It does not change
+# the face's own line box (measured: Yu Gothic UI and メイリオ give the same
+# tmHeight at 400 and 700), so if it changes the correction it does so on its
+# own account.
+BOLDS = [False, True]
 LONG = "A" * 46         # wide enough to wrap in a 200px box
 # Whether the body says `vertOverflow="clip"`. Every box the corpus says is
 # ALREADY right says it, and no arm of the earlier sweeps did — which is the
@@ -68,7 +74,7 @@ LONG = "A" * 46         # wide enough to wrap in a 200px box
 # `overflow` out loud. Absent and stated-as-overflow mean the same thing to a
 # reader of the schema — so whether they mean the same thing to Excel is the
 # question.
-CLIPS = ["absent", "overflow", "clip"]
+CLIPS = ["overflow"]
 # The room left over, which IS the slack here: these arms write every inset
 # zero, the way `glossary_05`'s little "Yes" and "No" boxes do. The line-count
 # sweep gave every arm about 34 pixels of it and found a correction; the boxes
@@ -81,7 +87,7 @@ def cases():
     return [(face, size, own, pct, lines, spare, clip, wrap)
             for face, size, own in FACES for pct in PCTS
             for lines in COUNTS for spare in SPARES for clip in CLIPS
-            for wrap in INSETS]
+            for wrap in BOLDS]
 
 
 def bands():
@@ -99,13 +105,14 @@ def anchors_xml():
     held = []
     for index, ((face, points, _own, pct, lines, _spare, clip, wrap), (row, _rows, box)) in enumerate(
             zip(cases(), bands())):
+        weight = ' b="1"' if wrap else ""
         clipped = {"absent": "",
                    "overflow": ' vertOverflow="overflow" horzOverflow="overflow"',
                    "clip": ' vertOverflow="clip" horzOverflow="clip"'}[clip]
         one = (
             f'<a:p><a:pPr algn="l">'
             f'<a:lnSpc><a:spcPct val="{pct}"/></a:lnSpc></a:pPr>'
-            f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}">'
+            f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}"{weight}>'
             f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
             f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
         )
@@ -243,7 +250,7 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    print(f"{'face':<14}{'pct':>6}{'n':>3}{'spare':>7}{'insets':>9}{'own-tall':>10}"
+    print(f"{'face':<14}{'pct':>6}{'n':>3}{'spare':>7}{'weight':>9}{'own-tall':>10}"
           f"{'Excel':>7}{'ours':>6}{'implied c':>11}{'0.25(o-t)':>11}")
     for index, ((face, _points, own, pct, lines, spare, clip, wrap), (row, rows, _box)) in enumerate(
             zip(cases(), bands())):
@@ -260,7 +267,7 @@ def main():
         tall = own * pct / 100000.0
         # A correction c makes the block taller and so lifts a centred block
         # by c / 2. Read the other way: c = 2 x (ours - Excel).
-        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{("zero" if wrap else "default"):>9}"
+        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{("bold" if wrap else "plain"):>9}"
               f"{own - tall:>10.3f}{theirs:>7}{ours:>6}"
               f"{2 * (ours - theirs):>11}{0.25 * (own - tall):>11.3f}")
 
