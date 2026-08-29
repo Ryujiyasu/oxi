@@ -40,8 +40,27 @@ RENDERER = os.environ.get("OXI_GDI_EXE") or os.path.join(
 OUT_DIR = os.path.join(REPO_ROOT, "pipeline_data", "pagination_oxi")
 
 
+WORD_DIR = os.path.join(REPO_ROOT, "pipeline_data", "pagination_word")
+
+
 def doc_id_from_filename(fname: str) -> str:
+    """The id `pagination_diff` joins on -- i.e. the one the WORD side used.
+
+    The historical rule is `base.split("_")[0]`, right for the corpus docs whose
+    stem is `<hash>_<title>`. It COLLIDES for the handful named `<word>_<word>`:
+    `gen2_079_Technical_Specification` -> `gen2`, `gen_tables` -> `gen`,
+    `test_widow` -> `test`. Those three are stored on the Word side under their
+    FULL basename, so the truncated file never matched and they dropped out of
+    the gate silently -- the denominator read 93/93 instead of 96/96, while
+    `pass_rate` stayed 100% either way (the n_total trap). Worse, every doc
+    sharing a truncated prefix overwrote the same output file.
+
+    Prefer the full basename whenever Word truth exists under it; otherwise keep
+    the historical truncation, so every already-matching doc is untouched.
+    """
     base = os.path.splitext(fname)[0]
+    if os.path.exists(os.path.join(WORD_DIR, base + ".json")):
+        return base
     return base.split("_")[0]
 
 
