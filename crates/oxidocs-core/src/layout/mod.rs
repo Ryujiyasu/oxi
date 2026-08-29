@@ -10385,7 +10385,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // which is offset by the separator/continuation
                             // entries (probexendnote ids start at 2 -> the
                             // number-based marker rendered xxviii for 注27).
-                            let prefix = to_lower_roman(en_seq as u32 + 1);
+                            // S1254 (2026-08-29, default ON, opt-out
+                            // OXI_S1254_DISABLE): the SECTION's declared endnote
+                            // format wins. ECMA-376 defaults endnotes to
+                            // lowerRoman, which is what S743 hard-coded when no
+                            // corpus document referenced endnotes;
+                            // `educational__001217ec` declares
+                            // `<w:endnotePr><w:numFmt w:val="decimal"/>` on its
+                            // sectPr and Word stamps `17 / 35 / 51` where Oxi
+                            // stamped `xvii / xxxv / li`.
+                            let n = en_seq as u32 + 1;
+                            let prefix = match page.endnote_number_format.as_deref() {
+                                Some(f)
+                                    if std::env::var("OXI_S1254_DISABLE").is_err()
+                                        && !f.eq_ignore_ascii_case("lowerRoman") =>
+                                {
+                                    crate::parser::numbering::format_number(n, f)
+                                }
+                                _ => to_lower_roman(n),
+                            };
                             if let Some(first_run) = p.runs.first_mut() {
                                 if first_run.text.is_empty() {
                                     first_run.text = prefix.clone();
@@ -10440,6 +10458,25 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S916
                         );
                         elements.extend(en_elements);
+                        // S1255 (2026-08-29, default ON, opt-out
+                        // OXI_S1255_DISABLE): an endnote paragraph's OWN
+                        // before/after spacing. S743 called `layout_paragraph`
+                        // and advanced the cursor by the line heights alone, so
+                        // every endnote sat directly under the one above.
+                        // WORD TRUTH `educational__001217ec` (61 endnotes, style
+                        // FootnoteText = `spacing after=120 line=270 atLeast`):
+                        // the pitch WITHIN a note is 13.56 and Oxi already
+                        // matches it at 13.50 (the atLeast line resolves), but
+                        // the pitch BETWEEN notes is Word 19.44 against Oxi
+                        // 13.50 -- the missing 5.94 is the style's 120tw = 6pt.
+                        // Over 61 notes that is ~362pt = the page Word has and
+                        // Oxi does not (Word 19 pages, Oxi 18).
+                        if std::env::var("OXI_S1255_DISABLE").is_err() {
+                            let sa = para_to_render.style.space_after.unwrap_or(0.0);
+                            if sa > 0.0 {
+                                cursor.cursor_y += sa;
+                            }
+                        }
                     }
                 }
             }

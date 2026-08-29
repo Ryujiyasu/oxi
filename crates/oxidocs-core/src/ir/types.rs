@@ -167,6 +167,13 @@ pub struct Page {
     /// Endnotes referenced in this page
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub endnotes: Vec<Footnote>,
+    /// S1254: `<w:sectPr><w:endnotePr><w:numFmt w:val="..."/>` — the format the
+    /// section stamps on its endnote reference marks. ECMA-376 defaults endnotes
+    /// to `lowerRoman`, which is what S743 hard-coded; `educational__001217ec`
+    /// declares `decimal` and Word renders `17 / 35 / 51` where Oxi rendered
+    /// `xvii / xxxv / li`. None = the lowerRoman default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endnote_number_format: Option<String>,
     /// Floating images (anchored, not inline)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub floating_images: Vec<Image>,

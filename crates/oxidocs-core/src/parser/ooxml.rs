@@ -492,6 +492,10 @@ impl OoxmlParser {
                     even_odd_hf,
                     footnotes: footnotes_list,
                     endnotes: endnotes_list,
+                    endnote_number_format: section
+                        .properties
+                        .endnote_number_format
+                        .clone(),
                     floating_images: section.floating_images,
                     text_boxes: section.text_boxes,
                     shapes: section.shapes,
@@ -2051,6 +2055,7 @@ fn parse_body(
         title_pg: false,
         section_type: None,
         page_number_format: None,
+        endnote_number_format: None,
         page_number_start: None,
         page_borders: None,
         header_distance: None,
@@ -10505,6 +10510,10 @@ struct SectionProperties {
     section_type: Option<String>,
     /// Page number format (e.g. "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter")
     page_number_format: Option<String>,
+    /// S1254: endnote reference-mark format, from the section's
+    /// `<w:endnotePr><w:numFmt w:val="..."/>`. Distinct from `page_number_format`
+    /// (`<w:pgNumType w:fmt=...>`), which is an ATTRIBUTE on a different element.
+    endnote_number_format: Option<String>,
     /// Starting page number for this section
     page_number_start: Option<u32>,
     /// Page borders
@@ -10537,6 +10546,10 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     let mut title_pg = false;
     let mut section_type: Option<String> = None;
     let mut page_number_format: Option<String> = None;
+    let mut endnote_number_format: Option<String> = None;
+    // S1254: `<w:numFmt>` is a CHILD of `<w:endnotePr>` (and of
+    // `<w:footnotePr>`), so the element alone does not say which it is.
+    let mut in_endnote_pr = false;
     let mut page_number_start: Option<u32> = None;
     let mut page_borders: Option<PageBorders> = None;
     let mut header_distance: Option<f32> = None;
@@ -10694,6 +10707,12 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         });
                     }
                 } else {
+                    // S1254: `<w:endnotePr>` with a `<w:numFmt>` child arrives as
+                    // START, so the Empty arm below never sees it. Note the scope
+                    // here and let the generic depth bookkeeping continue.
+                    if local == "endnotePr" {
+                        in_endnote_pr = true;
+                    }
                     depth += 1;
                 }
             }
@@ -10954,6 +10973,19 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                     "titlePg" => {
                         title_pg = true;
                     }
+                    // S1254: the section's endnote reference-mark format.
+                    "endnotePr" => {
+                        in_endnote_pr = true;
+                    }
+                    "numFmt" if in_endnote_pr => {
+                        for attr in e.attributes().flatten() {
+                            if local_name(attr.key.as_ref()) == "val" {
+                                endnote_number_format = Some(
+                                    String::from_utf8_lossy(&attr.value).to_string(),
+                                );
+                            }
+                        }
+                    }
                     "textDirection" => {
                         // Section-level text direction (e.g. "tbRl" = vertical
                         // top-to-bottom, right-to-left = tategaki/縦書き).
@@ -11037,6 +11069,9 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
             }
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "endnotePr" {
+                    in_endnote_pr = false;
+                }
                 if local == "sectPr" && depth == 0 {
                     break;
                 }
@@ -11063,6 +11098,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
         title_pg,
         section_type,
         page_number_format,
+        endnote_number_format,
         page_number_start,
         page_borders,
         header_distance,
