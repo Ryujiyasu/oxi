@@ -2740,6 +2740,46 @@ pub(crate) fn turned_in_a_stack(letter: char) -> bool {
     )
 }
 
+/// How much of a distributed line's spare room stands before its Nth piece.
+///
+/// Every gap takes `spare / gaps` whole pixels and the remainder is given out
+/// one pixel a gap, in an order Excel keeps to: **the gap before the last,
+/// then every other one back towards the start, and then the ones passed
+/// over, from the start**. The last gap never takes one.
+///
+///     gaps  remainder 1   2         3           4             5
+///     4     (3)           (1,3)     (1,2,3)
+///     5     (4)           (2,4)     (1,2,4)     (1,2,3,4)
+///     6     (5)           (3,5)     (1,3,5)     (1,2,3,5)     (1,2,3,4,5)
+///
+/// `_xlsx_distributed_counts.py` sets three to ten identical glyphs in a
+/// column swept a pixel at a time — every remainder against every gap count
+/// from one to eight — and all 75 arms read that order, merged cells and
+/// plain alike. The old rule rounded the running total UP, which is the same
+/// answer everywhere but a remainder of one, and two other places besides:
+/// `fies_t2`'s 「女性用洋服」 is five pieces with a remainder of one, and its
+/// middle two glyphs stood a pixel right of Excel's.
+#[cfg(windows)]
+pub(crate) fn spread_before(spare: i32, gaps: i32, piece: i32) -> i32 {
+    if gaps <= 0 {
+        return 0;
+    }
+    let over = spare.rem_euclid(gaps);
+    let inner = gaps - 1;
+    let ahead = (inner + 1) / 2;
+    let rank = |gap: i32| -> i32 {
+        if gap > inner {
+            return i32::MAX;
+        }
+        if (inner - gap) % 2 == 0 {
+            (inner - gap) / 2
+        } else {
+            ahead + (gap - if inner % 2 == 0 { 1 } else { 2 }) / 2
+        }
+    };
+    spare.div_euclid(gaps) * piece + (1..=piece).filter(|gap| rank(*gap) < over).count() as i32
+}
+
 /// Half of a centred line's leftover, rounded Excel's way.
 ///
 /// The odd pixel goes to the LEFT of the text — and to the RIGHT when the cell
@@ -6644,7 +6684,8 @@ mod windows_draw {
                                         // it looks like the opposite: each
                                         // glyph's own side bearing is in the
                                         // gap you measure that way.)
-                                        let want = (spare * piece as i32 + gaps - 1) / gaps;
+                                        let want =
+                                            super::spread_before(spare, gaps, piece as i32);
                                         extra[n] = want - given;
                                         given = want;
                                         left_in_piece = pieces[piece];
@@ -6988,7 +7029,8 @@ mod windows_draw {
                                         // it looks like the opposite: each
                                         // glyph's own side bearing is in the
                                         // gap you measure that way.)
-                                        let want = (spare * piece as i32 + gaps - 1) / gaps;
+                                        let want =
+                                            super::spread_before(spare, gaps, piece as i32);
                                         gap = want - given;
                                         given = want;
                                         left_in_piece = pieces[piece];
@@ -7416,6 +7458,36 @@ mod tests {
         // A line wider than its room hangs the same way round.
         assert_eq!(super::halfway(-5, false), -2);
         assert_eq!(super::halfway(-5, true), -3);
+    }
+
+    /// Which gaps of a distributed line take the spare's odd pixels.
+    ///
+    /// The order is the one `_xlsx_distributed_counts.py` read off Excel over
+    /// gap counts of one to eight and every remainder: the gap before the
+    /// last, then every other one back to the start, then the ones passed
+    /// over from the start, and never the last gap.
+    #[test]
+    fn a_distributed_line_gives_its_odd_pixels_out_from_the_far_end() {
+        let taken = |gaps: i32, over: i32| -> Vec<i32> {
+            // A spare of `gaps * 10 + over` leaves ten a gap and `over` over.
+            let spare = gaps * 10 + over;
+            (1..=gaps)
+                .filter(|piece| {
+                    super::spread_before(spare, gaps, *piece)
+                        - super::spread_before(spare, gaps, piece - 1)
+                        > 10
+                })
+                .collect()
+        };
+        assert_eq!(taken(4, 1), vec![3]);
+        assert_eq!(taken(4, 2), vec![1, 3]);
+        assert_eq!(taken(4, 3), vec![1, 2, 3]);
+        assert_eq!(taken(5, 2), vec![2, 4]);
+        assert_eq!(taken(6, 4), vec![1, 2, 3, 5]);
+        assert_eq!(taken(7, 4), vec![1, 2, 4, 6]);
+        assert_eq!(taken(9, 6), vec![1, 2, 3, 4, 6, 8]);
+        // Nothing over, nothing given out.
+        assert_eq!(taken(5, 0), Vec::<i32>::new());
     }
 
     /// A stacked cell is the same thing as text with a break after every
