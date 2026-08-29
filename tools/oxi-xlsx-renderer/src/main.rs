@@ -4069,9 +4069,10 @@ mod windows_draw {
                 .unwrap_or_else(|| "ＭＳ Ｐゴシック".to_string())
         };
         if !up_axis.deleted && up_axis.tick_labels != "none" {
-            let font = chart_font(&face(&up_axis.face), label_size, scale);
+            let named = face(&up_axis.face);
+            let font = chart_font(&named, label_size, scale);
             let held = SelectObject(dc, font);
-            SetTextAlign(dc, TA_TOP | TA_RIGHT);
+            SetTextAlign(dc, TA_TOP | TA_LEFT);
             for step in 0..=steps(&up) {
                 let value = up.low + step as f64 * up.unit;
                 let said = oxicells_core::format_number(
@@ -4098,13 +4099,58 @@ mod windows_draw {
                 // The size is in points and `scale` is the device's own, so
                 // the em in pixels carries the 96-over-72 as well.
                 let em = label_size * scale * 96.0 / 72.0;
-                let stand_off = (em * 4.0 / 3.0).round() as i32 - 2;
-                let _ = TextOutW(
-                    dc,
-                    plot.left - stand_off.max(0),
-                    up_at(value) - measured.cy / 2,
-                    letters,
-                );
+                // The label's far edge stands an em and a quarter from the
+                // plot's EXACT left, and the string is then set from
+                // `floor(edge - its own exact width)` with every glyph on
+                // `round(origin + the exact running total)`. That is three
+                // things at once, and each of them is a pixel:
+                //
+                // * the edge is measured from the fractional plot left, so
+                //   two charts of the same size and different anchors set
+                //   their labels differently — `a08feeb4a00b_zuhyo` (86.805)
+                //   and `311e2f9c271e_zuhyo` (69.529) part company by one;
+                // * the width is the design's, not the device's. Three digits
+                //   of ＭＳ 明朝 at 10 point design 20.0 and hint to 21, and
+                //   Excel's three stand 13 apart where ours stood 14;
+                // * so the run steps 7, 6 rather than 7, 7.
+                //
+                // Read off every value label of the four `zuhyo` charts —
+                // three different fractional lefts, one to three digits — and
+                // off `_xlsx_chart_label_gap.py`'s own pictures at 8, 9, 10,
+                // 11, 12, 14, 16 and 18 point. Every one of them lands.
+                // The old reading, four thirds of an em less two pixels, was
+                // this measured through the device's own rounding.
+                let edge = plot_left - 1.25 * em as f64;
+                let widths = super::shape_widths(&named, label_size * scale, false, false, said.trim());
+                let mut steps: Vec<i32> = Vec::new();
+                let mut origin = plot.left - measured.cx;
+                if let Some(widths) = &widths {
+                    origin = (edge - widths.iter().sum::<f32>() as f64).floor() as i32;
+                    let (mut walked, mut was) = (0.0f32, 0);
+                    for (letter, width) in said.trim().chars().zip(widths) {
+                        walked += width;
+                        let next = walked.round() as i32;
+                        for unit in 0..letter.len_utf16() {
+                            steps.push(if unit == 0 { next - was } else { 0 });
+                        }
+                        was = next;
+                    }
+                }
+                let down = up_at(value) - measured.cy / 2;
+                if steps.len() == letters.len() {
+                    let _ = ExtTextOutW(
+                        dc,
+                        origin,
+                        down,
+                        ETO_OPTIONS(0),
+                        None,
+                        PCWSTR(letters.as_ptr()),
+                        letters.len() as u32,
+                        Some(steps.as_ptr()),
+                    );
+                } else {
+                    let _ = TextOutW(dc, origin, down, letters);
+                }
             }
             SelectObject(dc, held);
             let _ = DeleteObject(font);
