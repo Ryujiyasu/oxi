@@ -4514,11 +4514,13 @@ mod windows_draw {
         };
         if std::env::var("OXI_XLSX_DUMP_TEXTBOX").is_ok() {
             eprintln!(
-                "textbox box {},{} to {},{}  insets {:?}  inset_px {}  pull {pull}  says {:?}",
+                "textbox box {},{} to {},{}  exact {:?}  insets {:?}  inset_px {}  pull {pull}  says {:?}",
                 box_.left,
                 box_.top,
                 box_.right,
                 box_.bottom,
+                down.map(|(top, foot)| ((top * 100.0).round() / 100.0,
+                                        (foot * 100.0).round() / 100.0)),
                 said.insets,
                 inset(said.insets.1),
                 said.paragraphs
