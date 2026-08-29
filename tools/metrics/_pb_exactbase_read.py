@@ -72,7 +72,7 @@ def oxi_rows(docx):
 mode = sys.argv[1] if len(sys.argv) > 1 else "word"
 print("%s   first-line position relative to the top margin (%.2fpt)\n" % (mode.upper(), TOP))
 print("  arm               line_pt  first_ink-TOP   pitch")
-for tag, face, sz, line in ARMS:
+for tag, face, sz, line, *_ in ARMS:
     docx = os.path.join(OUT, tag + ".docx")
     if not os.path.exists(docx):
         print("  %-18s MISSING" % tag)

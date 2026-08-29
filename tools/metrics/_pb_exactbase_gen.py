@@ -63,11 +63,18 @@ FACES = [
 SIZES = [16, 21, 28]          # half-points: 8pt, 10.5pt, 14pt
 LINES = [120, 160, 200, 240, 320, 400]   # twentieths: 6, 8, 10, 12, 16, 20pt
 
-ARMS = [("%s_sz%d_l%d" % (f[0], sz, ln), f, sz, ln)
-        for f in FACES for sz in SIZES for ln in LINES]
+# ★S1261 was measured on grid-LESS pages and then regressed real documents that
+# all carry a typed docGrid (34140b: `<w:docGrid w:type="lines" linePitch="360">`,
+# three exact values 280/300/340). Sweep the grid as a third axis: if Word's
+# baseline stops being 0.8 x line once a grid is present, that is the scope
+# condition the first sweep could not see.
+GRIDS = {"nogrid": None, "grid360": 360}
+
+ARMS = [("%s_%s_sz%d_l%d" % (g, f[0], sz, ln), f, sz, ln, GRIDS[g])
+        for g in GRIDS for f in FACES for sz in SIZES for ln in LINES]
 
 
-def build(tag, face, sz, line):
+def build(tag, face, sz, line, grid=None):
     ea, lat, text = face[1], face[2], face[3]
     body = ""
     for i in range(6):
@@ -79,7 +86,8 @@ def build(tag, face, sz, line):
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
            '<w:pgMar w:top="1418" w:right="1418" w:bottom="1418" w:left="1418"'
            ' w:header="851" w:footer="992" w:gutter="0"/>'
-           "</w:sectPr></w:body></w:document>")
+           + ('<w:docGrid w:type="lines" w:linePitch="%d"/>' % grid if grid else '')
+           + "</w:sectPr></w:body></w:document>")
     path = os.path.join(OUT, tag + ".docx")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CT)
