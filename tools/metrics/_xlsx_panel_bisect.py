@@ -33,6 +33,18 @@ one_line = re.sub(r"<a:t>[^<]*</a:t>", "<a:t>AAAA</a:t>", first)
 
 def arms():
     yield "control", panel
+    # Which EDGE of this box is wrong. A block anchored `t` hangs from the head
+    # and one anchored `b` hangs from the foot, so each arm reads one edge on
+    # its own — where the centred control mixes the two and can only say that
+    # the box wants to be a pixel taller.
+    for where in ("t", "b"):
+        body = re.sub(r'anchor="ctr"', f'anchor="{where}"', panel)
+        yield f"anchor-{where}", body
+    # The same, one line, so nothing overflows either end.
+    for where in ("t", "b"):
+        body = re.sub(r"<a:p>.*</a:p>", one_line, panel, flags=re.S)
+        body = re.sub(r'anchor="ctr"', f'anchor="{where}"', body)
+        yield f"one-{where}", body
     # The spacing swept across 100% inside the real panel, one paragraph so the
     # block stays inside the box. Below 100% the paragraph asks for LESS room
     # than the face's own line box and above it asks for more; if the shortfall
