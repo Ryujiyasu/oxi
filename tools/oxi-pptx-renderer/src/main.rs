@@ -21,6 +21,7 @@
 //! first-line baseline from the measured models (multi: +0.75 x advance /
 //! single: +A_font x fs), space_before / space_after added per paragraph.
 
+mod d2demoji;
 mod emoji;
 mod font_adv;
 
@@ -3309,6 +3310,85 @@ unsafe fn alpha_blit(
     let _ = DeleteDC(src_dc);
     let _ = DeleteObject(hbm);
     ok
+}
+
+/// Colour emoji are rasterised by DirectWrite unless this is set, which
+/// restores the flat COLR v0 layer painting.
+fn d2demoji_on() -> bool {
+    std::env::var("OXI_D2DEMOJI_DISABLE").is_err()
+}
+
+/// Blend one DirectWrite-rasterised emoji onto `dc`, its pen origin at `pen`
+/// and its baseline at `baseline_px`.
+///
+/// Returns false when the glyph cannot be rasterised, and the caller then
+/// paints the COLR v0 layers as before.
+#[cfg(windows)]
+fn blit_color_emoji(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    pen: i32,
+    baseline_px: i32,
+    ch: char,
+    size_px: f32,
+) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let r = match d2demoji::raster(ch, size_px) {
+        Some(r) => r,
+        None => return false,
+    };
+    unsafe {
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: r.w,
+                biHeight: -r.h, // top-down, as the raster is
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0, // BI_RGB
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let hbm = match CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(b) if !bits.is_null() => b,
+            _ => return false,
+        };
+        // WIC handed back PBGRA already -- the format AlphaBlend wants.
+        let n = (r.w as usize) * (r.h as usize) * 4;
+        std::slice::from_raw_parts_mut(bits as *mut u8, n).copy_from_slice(&r.bgra[..n]);
+        let src_dc = CreateCompatibleDC(dc);
+        if src_dc.0.is_null() {
+            let _ = DeleteObject(hbm);
+            return false;
+        }
+        let old = SelectObject(src_dc, hbm);
+        let bf = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let ok = AlphaBlend(
+            dc,
+            pen - r.pen_x,
+            baseline_px - r.baseline,
+            r.w,
+            r.h,
+            src_dc,
+            0,
+            0,
+            r.w,
+            r.h,
+            bf,
+        )
+        .as_bool();
+        SelectObject(src_dc, old);
+        let _ = DeleteDC(src_dc);
+        let _ = DeleteObject(hbm);
+        ok
+    }
 }
 
 /// `<a:alpha>` on a shape fill is composited unless this is set.
@@ -15538,7 +15618,16 @@ fn draw_color_run(
     for (ci, ch) in text.chars().enumerate() {
         match plan[ci] {
             CharPlan::Color(gid, _) => {
-                let layers = cf.layers(gid).unwrap_or_default();
+                // DirectWrite draws the COLR **v1** tree, which is where Segoe
+                // UI Emoji keeps its shading; the layer list below is the v0
+                // fallback the same file carries, and it is flat.
+                let drew = d2demoji_on()
+                    && blit_color_emoji(dc, pen, baseline_px, ch, (font_size as f64 * scale) as f32);
+                let layers = if drew {
+                    Vec::new()
+                } else {
+                    cf.layers(gid).unwrap_or_default()
+                };
                 unsafe {
                     let old = SelectObject(dc, efont);
                     for (lg, pi) in layers {
