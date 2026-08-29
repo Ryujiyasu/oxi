@@ -2041,14 +2041,36 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
             return (name, if bold { 700 } else { 400 }, false);
         }
     }
+    // Nothing embedded answers for this request, so it goes to whatever GDI has
+    // under the plain name -- and a PRIVATE face outranks an installed one there.
+    // d15 is the case: its `"Barlow Light"` upright parts are skipped because the
+    // family is installed (S-STYLESKIP), but the deck ALSO embeds a plain
+    // `"Barlow"` family, and a weight-400 request for `"Barlow Light"` lands on
+    // that private Barlow Regular instead of the cloud's genuine Light.
+    //
+    //     default                      tmWeight 400   extent 183.36pt
+    //     OXI_EMBEDFONT_DISABLE=1      tmWeight 300   extent 181.76pt
+    //     PowerPoint's own Barlow Light design sum          181.91pt
+    //
+    // Asking for the weight the INSTALLED face actually carries settles the
+    // contest: an exact match on both family and weight beats a private face
+    // that only matches the family.
+    let asked = if bold { 700 } else { 400 };
+    let weight = if instweight_on() {
+        installed_style_weight(family, bold, italic).unwrap_or(asked)
+    } else {
+        asked
+    };
     if sf_debug() {
-        eprintln!("SF fallthrough family={family:?} bold={bold} italic={italic}");
+        eprintln!("SF fallthrough family={family:?} bold={bold} italic={italic} w={weight}");
     }
-    (
-        family.to_string(),
-        if bold { 700 } else { 400 },
-        italic,
-    )
+    (family.to_string(), weight, italic)
+}
+
+/// The installed face for this family and style is asked for at ITS OWN weight
+/// unless this is set.
+fn instweight_on() -> bool {
+    std::env::var("OXI_INSTWEIGHT_DISABLE").is_err()
 }
 
 /// Load one embedded part under `name`, returning whether GDI took it.
@@ -12526,7 +12548,17 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         && bold_slot_declared(family)
         && needs_faux_bold(family, italic)
     {
-        400
+        // "The regular weight" is whatever the face that will be DRAWN carries,
+        // not the literal 400 -- the draw side reaches it through
+        // `styled_face(family, false, ..)`, and on d15 that is the installed
+        // Barlow LIGHT at 300. Asking 400 here measured the private Barlow
+        // Regular instead and left the run 1.6pt wide while the ink was right,
+        // which is the two-path split S-LNSPCROUND and S-BOLDADV both had.
+        if instweight_on() {
+            installed_style_weight(family, false, italic).unwrap_or(400)
+        } else {
+            400
+        }
     } else {
         weight
     };
@@ -12682,6 +12714,86 @@ fn family_installed(family: &str) -> bool {
 /// recorded for blind 18's Montserrat Bold.
 ///
 /// Skipping by family instead threw the deck's only real bold away and left
+
+/// The `lfWeight` of the installed face that answers this family and style, or
+/// None when the family carries no such style locally.
+///
+/// The same enumeration `style_installed` runs; only the answer differs. It is
+/// what lets a request name the installed face precisely enough to outrank a
+/// private part of a NEIGHBOURING family -- see `styled_face`'s fallthrough.
+///
+/// ★It returns the weight CLOSEST to the one asked for, not the first one
+/// enumerated. A family commonly installs several upright weights -- Open Sans
+/// ships Light, Regular and SemiBold, all `lfWeight < 600` -- and taking
+/// whichever GDI happened to list first would answer 300 for an ordinary body
+/// request that a 400 face serves exactly. Closest-match leaves every family
+/// that HAS the asked weight untouched, and only moves the ones that do not:
+/// `"Barlow Light"`, whose only upright face is 300.
+#[cfg(windows)]
+fn installed_style_weight(family: &str, bold: bool, italic: bool) -> Option<i32> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    struct Want {
+        bold: bool,
+        italic: bool,
+        asked: i32,
+        weight: Option<i32>,
+    }
+    unsafe extern "system" fn cb(
+        lf: *const LOGFONTW,
+        _tm: *const TEXTMETRICW,
+        _kind: u32,
+        want: windows::Win32::Foundation::LPARAM,
+    ) -> i32 {
+        let want = &mut *(want.0 as *mut Want);
+        let w = (*lf).lfWeight;
+        let is_bold = w >= 600;
+        let is_italic = (*lf).lfItalic != 0;
+        if is_bold == want.bold && is_italic == want.italic {
+            let better = match want.weight {
+                None => true,
+                Some(cur) => (w - want.asked).abs() < (cur - want.asked).abs(),
+            };
+            if better {
+                want.weight = Some(w);
+            }
+        }
+        1
+    }
+    thread_local! {
+        static SEEN: std::cell::RefCell<std::collections::HashMap<(String, bool, bool), Option<i32>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = (family.to_string(), bold, italic);
+    if let Some(hit) = SEEN.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let dc = probe_dc();
+    let mut lf = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    let wide: Vec<u16> = family.encode_utf16().take(31).collect();
+    lf.lfFaceName[..wide.len()].copy_from_slice(&wide);
+    let mut want = Want {
+        bold,
+        italic,
+        asked: if bold { 700 } else { 400 },
+        weight: None,
+    };
+    unsafe {
+        EnumFontFamiliesExW(
+            dc,
+            &mut lf,
+            Some(cb),
+            windows::Win32::Foundation::LPARAM(&mut want as *mut Want as isize),
+            0,
+        );
+    }
+    SEEN.with(|c| c.borrow_mut().insert(key, want.weight));
+    want.weight
+}
+
 /// every bold run 2% narrow.
 #[cfg(windows)]
 fn style_installed(family: &str, bold: bool, italic: bool) -> bool {
