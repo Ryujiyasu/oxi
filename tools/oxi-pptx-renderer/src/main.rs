@@ -2144,6 +2144,11 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         if !font.italic {
             *upright_parts.entry(font.typeface.as_str()).or_default() += 1;
         }
+        // Which typefaces the FILE declares a bold for. S-BOLDADV keys off this
+        // and not off the part's own weight -- see `runtime_advance_em`.
+        if font.bold && !font.italic {
+            BOLD_SLOT.with(|b| b.borrow_mut().insert(font.typeface.clone()));
+        }
     }
     let mut loaded = 0;
     // Which families the MACHINE already has, asked before anything private is
@@ -12411,23 +12416,30 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     // pulled `will` up and every following line differed. With this on, the
     // break matches and 04 s2 gains +0.0164.
     //
-    // ★PARKED, because blind 29 refutes the rule as stated. Its Sniglet has no
-    // bold slot at all, and PowerPoint's bold runs there measure ~1% NARROWER
-    // than the same face's design advances -- between the two candidates, and
-    // matching neither (pen advances, bearing-free, from the truth PDF):
+    // ★The condition is the SLOT, not the face's weight. Keying it off
+    // `needs_faux_bold` alone cost blind 29 -0.000253: its Sniglet declares no
+    // bold at all, and there PowerPoint DOES synthesise, landing on the widened
+    // advances Oxi already had (pen advances, bearing-free, from the truth PDF):
     //
-    //     'Design Element' 24.96pt   PDF 168.60   design 171.08   GDI 700 167.91
-    //     'BODY COPY'      15.00pt   PDF  75.48   design  76.31   GDI 700  74.89
-    //     'Font'           24.96pt   PDF  50.97   design  51.37   GDI 700  50.42
+    //     29  'Design Element' 24.96pt  PDF 168.60  design 171.08  GDI 700 167.91
+    //     35  'WORK EXPERIENC' 150.0pt  PDF 769.75  design 783.10  GDI 700 768.85
+    //     35  'Company Nam'    35.04pt  PDF 234.84  design 239.10  GDI 700 234.61
     //
-    // and its NON-bold runs in the same face match design to 0.998, so the
-    // narrowing is bold-specific and real, not a size or tracking artefact.
-    // d29 loses -0.000253 with this on, which the gate rejects. A rule that
-    // needs one deck carved out is the wrong rule (loop rule 10): the next
-    // derivation has to explain both, and the input space it must cover is
-    // "family with a dishonest bold slot" (04) against "family with no bold
-    // slot at all" (29).
-    let weight = if weight >= 700 && boldadv_on() && needs_faux_bold(family, italic) {
+    // Both of those decks' families have NO `<p:bold>`; 04's has one, holding a
+    // face that is not bold. So the file's DECLARATION is what stops the
+    // synthesis, and the minimal repro (`gen_pptx_boldslot.py`) shows it with
+    // two decks differing by that one element and nothing else:
+    //
+    //     arm      PDF pen   design   GDI 700   the bold part
+    //     slot      314.52   316.22    310.42       319.87
+    //     noslot    311.16   316.22    310.42       319.87
+    //
+    // 3.36pt apart on the same string, each arm landing on the other side.
+    let weight = if weight >= 700
+        && boldadv_on()
+        && bold_slot_declared(family)
+        && needs_faux_bold(family, italic)
+    {
         400
     } else {
         weight
@@ -12966,7 +12978,11 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     // See `runtime_advance_em` for the seven-string derivation. Both halves are
     // needed -- the dx array positions the glyphs, but THIS is what decides
     // where the line breaks, and 04 s2 kept `will` on the line until it changed.
-    let weight = if weight >= 700 && boldadv_on() && needs_faux_bold(family, italic) {
+    let weight = if weight >= 700
+        && boldadv_on()
+        && bold_slot_declared(family)
+        && needs_faux_bold(family, italic)
+    {
         400
     } else {
         weight
@@ -13848,10 +13864,23 @@ fn runtime_width_px(
 }
 
 /// A bold run served by a non-bold face is measured at that face's own
-/// advances only when this is set. **PARKED** -- see `runtime_advance_em` for
-/// the derivation and for blind 29, which refutes it.
+/// advances unless this is set (see `runtime_advance_em`).
 fn boldadv_on() -> bool {
-    std::env::var("OXI_BOLDADV_ENABLE").is_ok()
+    std::env::var("OXI_BOLDADV_DISABLE").is_err()
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// Typefaces the deck declares a `<p:bold>` for, whatever the part behind
+    /// it actually holds. This is the discriminator, not the part's weight.
+    static BOLD_SLOT: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Whether the deck declares a bold slot for `family`.
+#[cfg(windows)]
+fn bold_slot_declared(family: &str) -> bool {
+    BOLD_SLOT.with(|b| b.borrow().contains(family))
 }
 
 /// Glyph positions are rounded cumulatively unless this is set, which restores
