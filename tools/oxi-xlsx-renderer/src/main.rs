@@ -4581,6 +4581,9 @@ mod windows_draw {
         // is written in.
         let mut lines: Vec<(usize, String, usize)> = Vec::new();
         let mut pitch: Vec<f32> = Vec::new();
+        // What each line's box would be at the face's own spacing, kept beside
+        // the pitch it is actually set at (see `block` below).
+        let mut unscaled: Vec<f32> = Vec::new();
         // How far below each line's top its BASELINE sits, unrounded.
         let mut leading: Vec<f32> = Vec::new();
         for (index, paragraph) in said.paragraphs.iter().enumerate() {
@@ -4720,6 +4723,7 @@ mod windows_draw {
                 }
                 lines.push((index, line, start));
                 pitch.push(tall * scale);
+                unscaled.push(own * scale);
                 leading.push(match pinned {
                     Some((ascent, device, _)) => {
                         let em = paragraph.size * 96.0 / 72.0;
@@ -4815,6 +4819,7 @@ mod windows_draw {
             let fits = fits.clamp(1, lines.len());
             lines.truncate(fits);
             pitch.truncate(fits);
+            unscaled.truncate(fits);
             leading.truncate(fits);
         }
 
@@ -4826,7 +4831,35 @@ mod windows_draw {
         // high on `001`'s five-line note and a pixel low on `zuhyo`'s
         // three-line one, which no single rounding of a whole-pixel block
         // can satisfy at once.
-        let block: f32 = pitch.iter().sum();
+        // How tall the block is for the purpose of ANCHORING it, which is not
+        // the sum of its pitches unless the body says `clip`. A body that lets
+        // its text overflow keeps three quarters of the difference between the
+        // face's own box and the one the paragraph asked for on the last line
+        // — the same three quarters that puts the baseline inside a line — so
+        // the block it centres is that much shorter (or taller, above 100%).
+        //
+        // `_xlsx_centre_lines.py` separates the two on the `clip` flag alone:
+        // over two faces, three percentages, one and two lines and three
+        // slacks, the clipped arms imply a correction of ZERO in every one of
+        // eighteen, and the unclipped arms imply a share of (own - tall) in
+        // every one. It is not the line count and not the slack — both were
+        // swept and both came back flat.
+        //
+        // The SHARE is a sixth, and it is bounded rather than derived: a
+        // pixel of reading resolution puts each implied correction inside a
+        // window two wide, which pins the share only to (0.145, 0.434) from
+        // the 150% arms. `glossary_05`'s seven-line panel closes it from the
+        // other side — its block must come out under 156.0 against a pitch
+        // sum of 154.931, so the share is at most 0.193 — and a sixth is what
+        // both admit. A finer probe (a percentage further from 100, where the
+        // difference is larger) would settle it properly. `glossary_05` is the proof in a real book:
+        // its little `clip` boxes were already exact and its two `overflow`
+        // panels were the ones a pixel out.
+        let block: f32 = pitch.iter().sum::<f32>()
+            + match (said.clip, unscaled.last(), pitch.last()) {
+                (false, Some(own), Some(tall)) => (own - tall) / 6.0,
+                _ => 0.0,
+            };
         let slack = (area.bottom - area.top) as f32 - block;
         let mut at = (area.top as f32
             + match said.anchor.as_deref() {

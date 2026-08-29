@@ -43,21 +43,31 @@ WORD = "A"              # sits on the baseline
 # the device line height scaled to the em and multiplied by 1.3 for a Japanese
 # face — the pitch a paragraph gets when it asks for nothing.
 FACES = [("Yu Gothic UI", 12.0, 27.666), ("メイリオ", 12.0, 31.200)]
-PCTS = [70000, 80000, 115000, 150000]
-COUNTS = [1, 2, 3, 7]
-SPARE = 44              # how much room to leave over, so there is slack to halve
+PCTS = [70000, 80000, 150000]
+COUNTS = [1, 2]
+# Whether the body says `vertOverflow="clip"`. Every box the corpus says is
+# ALREADY right says it, and no arm of the earlier sweeps did — which is the
+# one thing the probe and `glossary_05` did not share.
+CLIPS = [False, True]
+# The room left over, which IS the slack here: these arms write every inset
+# zero, the way `glossary_05`'s little "Yes" and "No" boxes do. The line-count
+# sweep gave every arm about 34 pixels of it and found a correction; the boxes
+# the corpus says are already right have 1.87 and 8.07. So the slack is the
+# axis now.
+SPARES = [1, 4, 12]
 
 
 def cases():
-    return [(face, size, own, pct, lines)
-            for face, size, own in FACES for pct in PCTS for lines in COUNTS]
+    return [(face, size, own, pct, lines, spare, clip)
+            for face, size, own in FACES for pct in PCTS
+            for lines in COUNTS for spare in SPARES for clip in CLIPS]
 
 
 def bands():
     held, at = [], 0
-    for _face, _size, own, pct, lines in cases():
+    for _face, _size, own, pct, lines, spare, _clip in cases():
         tall = own * pct / 100000.0
-        box = int(lines * tall + SPARE)
+        box = int(lines * tall + spare)
         rows = box // ROW + 3
         held.append((at, rows, box))
         at += rows
@@ -66,8 +76,9 @@ def bands():
 
 def anchors_xml():
     held = []
-    for index, ((face, points, _own, pct, lines), (row, _rows, box)) in enumerate(
+    for index, ((face, points, _own, pct, lines, _spare, clip), (row, _rows, box)) in enumerate(
             zip(cases(), bands())):
+        clipped = ' vertOverflow="clip" horzOverflow="clip"' if clip else ""
         one = (
             f'<a:p><a:pPr algn="l">'
             f'<a:lnSpc><a:spcPct val="{pct}"/></a:lnSpc></a:pPr>'
@@ -85,7 +96,8 @@ def anchors_xml():
             f"<xdr:cNvSpPr/></xdr:nvSpPr>"
             f'<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
             f"<a:noFill/><a:ln><a:noFill/></a:ln></xdr:spPr>"
-            f'<xdr:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/>'
+            f'<xdr:txBody><a:bodyPr{clipped} wrap="square" anchor="ctr"'
+            f' lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>'
             f"{one * lines}</xdr:txBody></xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
         )
     return "".join(held)
@@ -208,9 +220,9 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    print(f"{'face':<14}{'pct':>6}{'n':>3}{'own':>8}{'tall':>8}{'own-tall':>10}"
+    print(f"{'face':<14}{'pct':>6}{'n':>3}{'spare':>7}{'clip':>6}{'own-tall':>10}"
           f"{'Excel':>7}{'ours':>6}{'implied c':>11}{'0.25(o-t)':>11}")
-    for index, ((face, _points, own, pct, lines), (row, rows, _box)) in enumerate(
+    for index, ((face, _points, own, pct, lines, spare, clip), (row, rows, _box)) in enumerate(
             zip(cases(), bands())):
         top = edges.get(row)
         bottom = edges.get(row + rows - 1)
@@ -225,7 +237,7 @@ def main():
         tall = own * pct / 100000.0
         # A correction c makes the block taller and so lifts a centred block
         # by c / 2. Read the other way: c = 2 x (ours - Excel).
-        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{own:>8.3f}{tall:>8.3f}"
+        print(f"{face:<14}{pct // 1000:>6}{lines:>3}{spare:>7}{str(clip):>6}"
               f"{own - tall:>10.3f}{theirs:>7}{ours:>6}"
               f"{2 * (ours - theirs):>11}{0.25 * (own - tall):>11.3f}")
 
