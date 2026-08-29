@@ -3136,6 +3136,116 @@ mod windows_draw {
         }
     }
 
+    /// One step of a shape's outline, before it is put on whole pixels.
+    #[derive(Clone, Copy)]
+    enum Step {
+        Move(f32, f32),
+        Line(f32, f32),
+        Curve(f32, f32, f32, f32, f32, f32),
+        Close,
+    }
+
+    /// A rule ONE pixel wide stays hard, whatever it is drawn on: Excel keeps
+    /// a cosmetic pen for those, which is the same rule the solid-line
+    /// measurements found (a one-pixel end is not lengthened either).
+    /// `000831019`'s four braces are 0.75pt — one pixel — and Excel rules
+    /// their stems as a single black column where a soft pen centred on the
+    /// same place would spread them over two.
+    #[cfg(windows)]
+    fn softly(width: f32) -> bool {
+        width > 1.0
+    }
+
+    /// Draw a path the way Excel draws one: softly, and on its exact place.
+    ///
+    /// GDI rules a path hard, on whole pixels. Excel does not, and the proof
+    /// is `9fd461bf494a_zuhyo`: its graph is a metafile of nothing but lines,
+    /// and replaying it through GDI+ with the edges smoothed and a pixel's
+    /// centre in its middle reads back Excel's picture without a pixel
+    /// between them (SX136). `dc4fcff7f5f8_001`'s brace says the same of a
+    /// shape: its stem stands on 858.5, and Excel paints 127, 0, 127 across
+    /// three columns where a hard two-pixel pen paints 0, 0 across two.
+    ///
+    /// Only the paths go this way. A plain rectangle or a straight rule IS
+    /// hard in Excel — `_xlsx_shape_softness.py` swept an eighth of a pixel
+    /// at a time over five widths and read one solid row every time — so
+    /// those keep their GDI pens.
+    #[cfg(windows)]
+    unsafe fn soft_path(
+        dc: HDC,
+        steps: &[Step],
+        fill: Option<u32>,
+        rule: Option<(u32, f32)>,
+    ) -> bool {
+        use windows::Win32::Graphics::GdiPlus::*;
+        if fill.is_none() && rule.is_none() {
+            return true;
+        }
+        if !started() {
+            return false;
+        }
+        let mut graphics: *mut GpGraphics = std::ptr::null_mut();
+        if GdipCreateFromHDC(dc, &mut graphics) != Status(0) || graphics.is_null() {
+            return false;
+        }
+        let mut path: *mut GpPath = std::ptr::null_mut();
+        let mut drew = false;
+        if GdipCreatePath(FillMode(0), &mut path) == Status(0) && !path.is_null() {
+            let _ = GdipSetSmoothingMode(graphics, SmoothingMode(4));
+            let _ = GdipSetPixelOffsetMode(graphics, PixelOffsetMode(4));
+            let (mut at, mut open) = ((0.0f32, 0.0f32), false);
+            for step in steps {
+                match *step {
+                    Step::Move(x, y) => {
+                        if open {
+                            let _ = GdipStartPathFigure(path);
+                        }
+                        at = (x, y);
+                        open = true;
+                    }
+                    Step::Line(x, y) => {
+                        let _ = GdipAddPathLine(path, at.0, at.1, x, y);
+                        at = (x, y);
+                    }
+                    Step::Curve(ax, ay, bx, by, cx, cy) => {
+                        let _ = GdipAddPathBezier(path, at.0, at.1, ax, ay, bx, by, cx, cy);
+                        at = (cx, cy);
+                    }
+                    Step::Close => {
+                        let _ = GdipClosePathFigure(path);
+                        open = false;
+                    }
+                }
+            }
+            // GDI names a colour 0x00BBGGRR and GDI+ 0xAARRGGBB.
+            let argb = |shade: u32| {
+                0xFF00_0000
+                    | ((shade & 0xFF) << 16)
+                    | (shade & 0xFF00)
+                    | ((shade >> 16) & 0xFF)
+            };
+            if let Some(shade) = fill {
+                let mut brush: *mut GpSolidFill = std::ptr::null_mut();
+                if GdipCreateSolidFill(argb(shade), &mut brush) == Status(0) && !brush.is_null() {
+                    drew |= GdipFillPath(graphics, brush.cast(), path) == Status(0);
+                    let _ = GdipDeleteBrush(brush.cast());
+                }
+            }
+            if let Some((shade, wide)) = rule {
+                let mut pen: *mut GpPen = std::ptr::null_mut();
+                if GdipCreatePen1(argb(shade), wide, Unit(2), &mut pen) == Status(0)
+                    && !pen.is_null()
+                {
+                    drew |= GdipDrawPath(graphics, pen, path) == Status(0);
+                    let _ = GdipDeletePen(pen);
+                }
+            }
+            let _ = GdipDeletePath(path);
+        }
+        let _ = GdipDeleteGraphics(graphics);
+        drew
+    }
+
     /// Draw a preset shape into the box its anchors give it.
     ///
     /// The corpus's 2245 shapes are 1641 lines, 453 rectangles and 82 rounded
@@ -3244,6 +3354,49 @@ mod windows_draw {
         if let Some(drawn) = &shape.path {
             let across = box_.right - box_.left;
             let down = box_.bottom - box_.top;
+            // Kept in fractions: a freeform's own grid is thousands of units
+            // wide, and rounding each point to a pixel before it is drawn
+            // throws away the place Excel draws it at. See `soft_path`.
+            let exact = |x: i64, y: i64| -> (f32, f32) {
+                (
+                    box_.left as f32 + (x as f64 / drawn.across as f64 * across as f64) as f32,
+                    box_.top as f32 + (y as f64 / drawn.down as f64 * down as f64) as f32,
+                )
+            };
+            let mut steps: Vec<Step> = Vec::new();
+            for step in &drawn.steps {
+                match *step {
+                    oxicells_core::ir::PathStep::MoveTo(x, y) => {
+                        let (x, y) = exact(x, y);
+                        steps.push(Step::Move(x, y));
+                    }
+                    oxicells_core::ir::PathStep::LineTo(x, y) => {
+                        let (x, y) = exact(x, y);
+                        steps.push(Step::Line(x, y));
+                    }
+                    oxicells_core::ir::PathStep::CurveTo(ax, ay, bx, by, cx, cy) => {
+                        let (ax, ay) = exact(ax, ay);
+                        let (bx, by) = exact(bx, by);
+                        let (cx, cy) = exact(cx, cy);
+                        steps.push(Step::Curve(ax, ay, bx, by, cx, cy));
+                    }
+                    oxicells_core::ir::PathStep::Close => steps.push(Step::Close),
+                }
+            }
+            let painted = shape
+                .fill
+                .as_deref()
+                .map(|fill| colour(Some(fill), 0x00FF_FFFF).0);
+            let ruled = rule.map(|(_, wide)| {
+                let shade = shape
+                    .line
+                    .as_ref()
+                    .map_or(0x0000_0000, |line| colour(Some(&line.color), 0x0000_0000).0);
+                (shade, wide as f32)
+            });
+            if ruled.is_some_and(|(_, wide)| softly(wide)) && soft_path(dc, &steps, painted, ruled) {
+                return;
+            }
             let at = |x: i64, y: i64| POINT {
                 x: box_.left + (x as f64 / drawn.across as f64 * across as f64).round() as i32,
                 y: box_.top + (y as f64 / drawn.down as f64 * down as f64).round() as i32,
@@ -3467,46 +3620,75 @@ mod windows_draw {
                 const PULL: f32 = 0.552_284_8;
                 let left = box_.left as f32;
                 let top = box_.top as f32;
-                let at = |x: f32, y: f32| POINT { x: (left + x).round() as i32, y: (top + y).round() as i32 };
-                let _ = BeginPath(dc);
-                let start = at(0.0, 0.0);
-                let _ = MoveToEx(dc, start.x, start.y, None);
+                // Kept in fractions and drawn softly: the stem of `001`'s
+                // brace stands on 858.5, which Excel paints across three
+                // columns and a whole-pixel pen paints across two.
+                let mut steps: Vec<Step> = Vec::new();
                 let curve = |one: (f32, f32), two: (f32, f32), end: (f32, f32)| {
-                    let held = [at(one.0, one.1), at(two.0, two.1), at(end.0, end.1)];
-                    let _ = PolyBezierTo(dc, &held);
+                    Step::Curve(
+                        left + one.0, top + one.1,
+                        left + two.0, top + two.1,
+                        left + end.0, top + end.1,
+                    )
                 };
+                steps.push(Step::Move(left, top));
                 // Down from the top-left arm to the body.
-                curve(
+                steps.push(curve(
                     (half * PULL, 0.0),
                     (half, corner * (1.0 - PULL)),
                     (half, corner),
-                );
-                let body = at(half, point - corner);
-                let _ = LineTo(dc, body.x, body.y);
+                ));
+                steps.push(Step::Line(left + half, top + point - corner));
                 // Out to the point and back again.
-                curve(
+                steps.push(curve(
                     (half, point - corner + corner * PULL),
                     (across - half * PULL, point),
                     (across, point),
-                );
-                curve(
+                ));
+                steps.push(curve(
                     (across - half * PULL, point),
                     (half, point + corner * (1.0 - PULL)),
                     (half, point + corner),
-                );
-                let foot = at(half, down - corner);
-                let _ = LineTo(dc, foot.x, foot.y);
+                ));
+                steps.push(Step::Line(left + half, top + down - corner));
                 // And down to the bottom-left arm.
-                curve(
+                steps.push(curve(
                     (half, down - corner + corner * PULL),
                     (half * PULL, down),
                     (0.0, down),
-                );
-                let _ = EndPath(dc);
-                if rule.is_some() {
-                    let _ = StrokePath(dc);
-                } else {
-                    let _ = AbortPath(dc);
+                ));
+                if let Some((_, wide)) = rule {
+                    let shade = shape
+                        .line
+                        .as_ref()
+                        .map_or(0x0000_0000, |line| colour(Some(&line.color), 0x0000_0000).0);
+                    if !softly(wide as f32)
+                        || !soft_path(dc, &steps, None, Some((shade, wide as f32)))
+                    {
+                        let at = |x: f32, y: f32| POINT { x: x.round() as i32, y: y.round() as i32 };
+                        let _ = BeginPath(dc);
+                        for step in &steps {
+                            match *step {
+                                Step::Move(x, y) => {
+                                    let point = at(x, y);
+                                    let _ = MoveToEx(dc, point.x, point.y, None);
+                                }
+                                Step::Line(x, y) => {
+                                    let point = at(x, y);
+                                    let _ = LineTo(dc, point.x, point.y);
+                                }
+                                Step::Curve(ax, ay, bx, by, cx, cy) => {
+                                    let held = [at(ax, ay), at(bx, by), at(cx, cy)];
+                                    let _ = PolyBezierTo(dc, &held);
+                                }
+                                Step::Close => {
+                                    let _ = CloseFigure(dc);
+                                }
+                            }
+                        }
+                        let _ = EndPath(dc);
+                        let _ = StrokePath(dc);
+                    }
                 }
             }
             // A pair of square brackets: two strokes, each a straight side
