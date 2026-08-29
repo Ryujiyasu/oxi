@@ -12387,6 +12387,51 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     // its own GDI family, and asking the base name for weight 700 would
     // measure a synthesised face instead.
     let (face, weight, italic) = styled_face(family, bold, italic);
+    // S-BOLDADV: when the face serving a bold request is NOT itself bold, ask
+    // it at its own weight. **PowerPoint sets such a run at the REGULAR face's
+    // advances** and only thickens the strokes; GDI's synthesised bold answers
+    // a different, narrower set, so measuring it puts every glyph of the run in
+    // the wrong place and can move a line break.
+    //
+    // blind 04 s2 (2026-08-29), which is the same slide in 04/09/21/44/47. The
+    // body is Inria Sans Light -- the MASTER's body placeholder shape names it,
+    // over an Arial theme -- and its bold slot holds Inria Sans REGULAR, which
+    // `install_embedded_fonts` rightly refuses, so GDI fakes the bold. Seven
+    // bold strings from the truth PDF, against each candidate:
+    //
+    //     face                    mean |err| over the 7
+    //     Inria Sans Light (400)        1.09pt   <- what PowerPoint used
+    //     Inria Sans Light Italic       2.01
+    //     the bold SLOT's part          2.39
+    //     GDI's faked bold (700)        3.4  (always narrow: 180.59 vs 183.97
+    //                                   on '"Download as PowerPoint template"')
+    //
+    // The 3.4pt is enough to flip a break: that line plus `will` measures
+    // 276.52 in PowerPoint against a 273.47pt box, and 273.14 here -- so Oxi
+    // pulled `will` up and every following line differed. With this on, the
+    // break matches and 04 s2 gains +0.0164.
+    //
+    // ★PARKED, because blind 29 refutes the rule as stated. Its Sniglet has no
+    // bold slot at all, and PowerPoint's bold runs there measure ~1% NARROWER
+    // than the same face's design advances -- between the two candidates, and
+    // matching neither (pen advances, bearing-free, from the truth PDF):
+    //
+    //     'Design Element' 24.96pt   PDF 168.60   design 171.08   GDI 700 167.91
+    //     'BODY COPY'      15.00pt   PDF  75.48   design  76.31   GDI 700  74.89
+    //     'Font'           24.96pt   PDF  50.97   design  51.37   GDI 700  50.42
+    //
+    // and its NON-bold runs in the same face match design to 0.998, so the
+    // narrowing is bold-specific and real, not a size or tracking artefact.
+    // d29 loses -0.000253 with this on, which the gate rejects. A rule that
+    // needs one deck carved out is the wrong rule (loop rule 10): the next
+    // derivation has to explain both, and the input space it must cover is
+    // "family with a dishonest bold slot" (04) against "family with no bold
+    // slot at all" (29).
+    let weight = if weight >= 700 && boldadv_on() && needs_faux_bold(family, italic) {
+        400
+    } else {
+        weight
+    };
     ADVANCE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let per_font = cache.entry(key).or_default();
@@ -12916,6 +12961,16 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     let weight = if bold { 700 } else { 400 };
     let key = (family.to_string(), weight, italic);
     let (face, weight, italic) = styled_face(family, bold, italic);
+    // S-BOLDADV, the break-test half: a bold run served by a non-bold face is
+    // measured at that face's own advances, because PowerPoint sets it there.
+    // See `runtime_advance_em` for the seven-string derivation. Both halves are
+    // needed -- the dx array positions the glyphs, but THIS is what decides
+    // where the line breaks, and 04 s2 kept `will` on the line until it changed.
+    let weight = if weight >= 700 && boldadv_on() && needs_faux_bold(family, italic) {
+        400
+    } else {
+        weight
+    };
     PRECISE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let per_font = cache.entry(key).or_default();
@@ -13790,6 +13845,13 @@ fn runtime_width_px(
     spc: f32,
 ) -> Option<i32> {
     runtime_dx_px(dc, text, fs, family, bold, italic, scale, spc).map(|dx| dx.iter().sum())
+}
+
+/// A bold run served by a non-bold face is measured at that face's own
+/// advances only when this is set. **PARKED** -- see `runtime_advance_em` for
+/// the derivation and for blind 29, which refutes it.
+fn boldadv_on() -> bool {
+    std::env::var("OXI_BOLDADV_ENABLE").is_ok()
 }
 
 /// Glyph positions are rounded cumulatively unless this is set, which restores
