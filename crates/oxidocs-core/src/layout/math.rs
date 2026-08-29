@@ -105,6 +105,17 @@ impl MathLayoutContext {
 /// Cambria Math advance table exists yet) keeps operators/wide letters wide and
 /// narrow letters narrow, so operator expressions/identifiers don't pack too tight.
 pub fn glyph_advance_em(c: char) -> f32 {
+    // S1258 (2026-08-29, default ON, opt-out OXI_S1258_DISABLE): ask the real
+    // face. ★The lookup takes the SUBSTITUTED character — `a` is drawn as the
+    // math italic U+1D44E and that is the glyph whose width Word advances by;
+    // measuring the ASCII `a` (which Cambria Math also carries, at a different
+    // width) is a second, quieter version of the same bug.
+    if std::env::var("OXI_S1258_DISABLE").is_err() {
+        let t = crate::font::math_glyphs::MathAdvances::cambria_math();
+        if let Some(em) = t.advance_em(math_substitute(c)).or_else(|| t.advance_em(c)) {
+            return em;
+        }
+    }
     match c {
         'i' | 'j' | 'l' | 'ı' | '.' | ',' | ';' | ':' | '\'' | '!' | '|' | 'f' | 't' | 'r' => 0.33,
         'm' | 'w' | 'M' | 'W' => 0.86,
@@ -742,8 +753,16 @@ fn emit_text_at(
     // Approximation: top = baseline - ascent, where ascent ≈ 0.8 × font_size.
     let ascent_approx = font_size * 0.8;
     let top = baseline_y - ascent_approx;
-    let char_count = text.chars().count() as f32;
-    let approx_width = char_count * font_size * 0.55;
+    // S1258: the element's own width, from the REAL advances. It was
+    // `chars * font_size * 0.55` -- a flat guess that put
+    // `reference__0042471c`'s 47-character maths run at 258.5pt against
+    // Word's 239.9. The table (see `MathAdvances`) sums the SUBSTITUTED
+    // glyphs, which is what is drawn, and predicts 238.5.
+    let approx_width: f32 = if std::env::var("OXI_S1258_DISABLE").is_err() {
+        text.chars().map(|c| font_size * glyph_advance_em(c)).sum()
+    } else {
+        text.chars().count() as f32 * font_size * 0.55
+    };
     LayoutElement::new(
         x,
         top,
