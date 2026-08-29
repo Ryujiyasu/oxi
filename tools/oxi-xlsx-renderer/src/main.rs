@@ -793,6 +793,21 @@ pub(crate) fn shape_run(
             .then(|| counter.advances_of(face, points, bold, italic, &letters))
             .flatten()
             .unwrap_or_default();
+        // A SPACE is set on its exact place, not on the device's rounding of
+        // it. `_xlsx_shape_latin_step.py` writes 「あ」, N spaces and 「あ」 in
+        // one shape and reads how far the second ideograph stands from the
+        // first, over N from 0 to 12: Yu Gothic UI 12pt, ＭＳ Ｐゴシック and
+        // ＭＳ Ｐ明朝 11pt, メイリオ, Meiryo UI and 游ゴシック 12pt — six faces
+        // whose space designs 4.38, 4.47, 4.47, 5.44, 5.44 and 4.56 pixels
+        // against device advances of 4, 5, 5, 5, 5 and 5 — all read the
+        // design's running total at every count. A run of ｉ or of １ beside
+        // them reads the device, so it is the space and not Latin at large.
+        // `glossary_05`'s flowchart is seven of them before 「対応可能な規模」:
+        // Excel stands it 31 pixels along, `round(7 x 4.3828)`, where seven
+        // device advances make 28. (One arm of the fifty lands on an exact
+        // half — Yu Gothic UI's ninth space, at 52.5 — and Excel takes 52
+        // where rounding away from zero gives 53. One tie is not a rule, so
+        // it is left rounding as everything else here does.)
         let mut exact = 0.0f32;
         let mut drawn = 0i32;
         let mut held = Vec::with_capacity(shares.len());
@@ -800,14 +815,18 @@ pub(crate) fn shape_run(
         for (at, share) in shares.iter().enumerate() {
             let advance = share * em;
             exact += advance;
-            drawn += match devices.get(at) {
-                Some(device) if *device > 0 => *device,
-                _ => advance.round() as i32,
-            };
-            if drawn as f32 - exact > ahead {
-                drawn -= 1;
-            } else if drawn as f32 - exact < -behind {
-                drawn += 1;
+            if letters.get(at) == Some(&' ') {
+                drawn = exact.round() as i32;
+            } else {
+                drawn += match devices.get(at) {
+                    Some(device) if *device > 0 => *device,
+                    _ => advance.round() as i32,
+                };
+                if drawn as f32 - exact > ahead {
+                    drawn -= 1;
+                } else if drawn as f32 - exact < -behind {
+                    drawn += 1;
+                }
             }
             held.push(drawn - was);
             was = drawn;
@@ -856,14 +875,19 @@ pub(crate) fn shape_run_worn(
             for (at, (letter, share)) in letters.iter().zip(shares).enumerate() {
                 let advance = share * em;
                 exact += advance;
-                drawn += match devices.get(at) {
-                    Some(device) if *device > 0 => *device,
-                    _ => advance.round() as i32,
-                };
-                if drawn as f32 - exact > ahead {
-                    drawn -= 1;
-                } else if drawn as f32 - exact < -behind {
-                    drawn += 1;
+                // A space stands on its exact place; see `shape_run`.
+                if *letter == ' ' {
+                    drawn = exact.round() as i32;
+                } else {
+                    drawn += match devices.get(at) {
+                        Some(device) if *device > 0 => *device,
+                        _ => advance.round() as i32,
+                    };
+                    if drawn as f32 - exact > ahead {
+                        drawn -= 1;
+                    } else if drawn as f32 - exact < -behind {
+                        drawn += 1;
+                    }
                 }
                 // One `dx` a UTF-16 unit, as `ExtTextOutW` wants them.
                 for unit in 0..letter.len_utf16() {
