@@ -2116,6 +2116,28 @@ fn application_default_font_size_override(default_paragraph_size: Option<f32>) -
     }
 }
 
+/// S1251: may this run host a flowed inline picture?
+///
+/// Visible text always could (S1034/S1066). What S1251 adds is a run of pure
+/// WHITESPACE — Word puts the picture at the pen, and a space costs no line
+/// (`tools/metrics/_pb_imgspace_{gen,read}.py`, 15 space arms: BODY x 56.70 /
+/// 59.48 / 70.59 / 112.27 / 181.72 for 0/1/5/20/45 spaces = 2.78pt each,
+/// y = 68.2 and AFTER unmoved in every one).
+///
+/// ★A TAB is EXCLUDED, and not as a carve-out: the same probe's 8 tab arms say
+/// the picture lands on a tab STOP, not at a proportional pen (Word BODY 56.7 /
+/// 98.7 / 140.7 / 182.7 = +42.0 per tab), and Oxi's own tab machinery does not
+/// yet put it there — it advances 36.0 per tab in the body and **5.0** in a
+/// cell. Flowing a tab-led picture would therefore move it from one wrong place
+/// to another; `legal__001410a8`'s two figure paragraphs (`[TAB][TAB][picture]`
+/// and `[TAB][picture]`, no `<w:t>` at all) are exactly that shape, and are the
+/// real population behind the older `trim()` exclusion. Fix the tab stops
+/// first, then widen this.
+fn s1251_host(run: &Run, ws_host: bool) -> bool {
+    !run.text.trim().is_empty()
+        || (ws_host && !run.text.is_empty() && !run.text.contains('\t'))
+}
+
 fn parse_paragraph(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -3544,6 +3566,34 @@ fn parse_paragraph(
     // arms measure 32.855 where Word says 26.812), and routing THAT inline makes
     // it worse (13.428) because the run's text is consumed by the break — so the
     // same-run shapes are left exactly as they were and recorded as a residual.
+    // S1251 (2026-08-28, default ON, opt-out OXI_S1251_DISABLE): a host whose
+    // runs are WHITESPACE still hosts the picture.
+    //
+    // S1034 and S1066 both required VISIBLE text, on the reading that "a
+    // paragraph whose only runs are WHITESPACE is effectively image-only", and
+    // that reading was settled by an SSIM delta on one document rather than by
+    // Word. Word says otherwise, and says it flatly
+    // (`tools/metrics/_pb_imgspace_{gen,read}.py`, 15 arms, picture bbox read
+    // from Word's PDF; a 120x80pt inline picture behind N spaces):
+    //
+    //     spaces      0      1      5     20     45
+    //     BODY x   56.70  59.48  70.59 112.27 181.72     y = 68.2 in EVERY arm
+    //     CELL x   62.10  64.88  75.99 117.67 187.12     AFTER never moves
+    //
+    // 2.78pt per space, exactly a space's advance: the picture is placed at the
+    // pen, and whitespace costs no line. Oxi already reproduces this when the
+    // host also has visible text (the CELLTXT arm matches Word's x to 0.01 at
+    // every count) -- so the flow machinery was right and only the gate was
+    // wrong. Without it Oxi pinned x to the left edge and spent an extra
+    // 11.5pt line.
+    //
+    // WITNESS educational__002a301d7c46ba6e (blindC50, the last pcd!=0 document
+    // of the EN sets): four `[N spaces][picture]` cell paragraphs. Oxi's own
+    // space run measures x=113.4 w=125.02 and Word draws the picture at 238.4 =
+    // 113.4 + 125.02, while Oxi dropped it to the next line at the cell edge.
+    // The accumulated error stops a 109pt picture fitting on p9, pushes it to
+    // p10 and ends in a trailing header-and-footer-only page = the +1.
+    let s1251_ws_host = std::env::var("OXI_S1251_DISABLE").is_err();
     let s1114_break_host = std::env::var("OXI_S1114_DISABLE").is_err()
         && runs.iter().any(|run| run.text.contains('\n'))
         && inline_img_runs
@@ -3556,7 +3606,7 @@ fn parse_paragraph(
         // WHITESPACE is effectively image-only and keeps the calibrated block
         // path (legal__001410a8's 2 figure paragraphs carry a space run — with
         // `!text.is_empty()` they flowed inline and cost it 0.9655 → 0.9616).
-        && (runs.iter().any(|run| !run.text.trim().is_empty()) || s1114_break_host)
+        && (runs.iter().any(|run| s1251_host(run, s1251_ws_host)) || s1114_break_host)
         && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty());
     // S1066 (2026-08-05, default ON, opt-out OXI_S1066_DISABLE): the S854/S984
     // horizontal inline-image flow, extended to a TABLE CELL whose paragraph
@@ -3581,7 +3631,7 @@ fn parse_paragraph(
         && std::env::var("OXI_S982_DISABLE").is_err()
         && in_cell
         // ★VISIBLE text (S1034's gate: whitespace-only is image-only)
-        && runs.iter().any(|run| !run.text.trim().is_empty())
+        && runs.iter().any(|run| s1251_host(run, s1251_ws_host))
         && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty())
         && cell_inline_flow_width.map_or(false, |w| s984_inline_w <= w + 0.01);
     // S1066b (2026-08-05, default ON, opt-out OXI_S1066_DISABLE): the S1066
