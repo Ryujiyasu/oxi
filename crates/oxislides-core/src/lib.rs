@@ -4,6 +4,7 @@
 
 pub mod editor;
 pub mod ir;
+pub mod layout;
 pub mod parser;
 
 pub use editor::PptxEditor;

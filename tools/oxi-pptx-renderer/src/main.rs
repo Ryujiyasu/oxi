@@ -13417,6 +13417,33 @@ fn masterunit_on() -> bool {
 /// font-link fallback with the base font's metrics (the d19 s39 icon-row
 /// non-determinism lesson -- see runtime_dx_px).
 #[cfg(windows)]
+/// The break test's advances, answered with GDI.
+///
+/// This is the renderer's half of `oxislides_core::layout::FaceMetrics`: the
+/// arithmetic that turns advances into a break decision now lives in the core
+/// crate, where a browser build can run it too, and only the ANSWERS are
+/// platform-bound. The chain is unchanged -- the cloud copy's advances first
+/// (S-CLOUDADV), then the measured `hmtx` tables, then the part's own table,
+/// then the 16384-em GDI probe.
+#[cfg(windows)]
+struct GdiFaceMetrics;
+
+#[cfg(windows)]
+impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
+    fn advance_em(&self, family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+        cloudadv_on()
+            .then(|| cloud_advance_em(family, bold, italic, ch))
+            .flatten()
+            .or_else(|| font_adv::hmtx_advance_em(family, ch))
+            .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
+            .or_else(|| precise_advance_em(family, bold, italic, ch))
+    }
+
+    fn has_all_glyphs(&self, family: &str, bold: bool, italic: bool, text: &str) -> bool {
+        font_has_all_glyphs(family, bold, italic, text)
+    }
+}
+
 fn master_units(
     text: &str,
     fs: f32,
@@ -13425,23 +13452,7 @@ fn master_units(
     italic: bool,
     spc: f32,
 ) -> Option<i64> {
-    if text.chars().any(|c| c as u32 > 0xFFFF) {
-        return None;
-    }
-    if !font_has_all_glyphs(family, bold, italic, text) {
-        return None;
-    }
-    let mut sum: i64 = 0;
-    for ch in text.chars() {
-        let em = cloudadv_on()
-            .then(|| cloud_advance_em(family, bold, italic, ch))
-            .flatten()
-            .or_else(|| font_adv::hmtx_advance_em(family, ch))
-            .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
-            .or_else(|| precise_advance_em(family, bold, italic, ch))?;
-        sum += f64::from((em * fs + spc) * 8.0).round() as i64;
-    }
-    Some(sum)
+    oxislides_core::layout::master_units(&GdiFaceMetrics, text, fs, family, bold, italic, spc)
 }
 
 /// The styles a paragraph's runs impose on a candidate line, so the break test
@@ -13543,12 +13554,12 @@ fn fits_line(
             None => master_units(text, fs, family, bold, italic, spc),
         };
         if let Some(mu) = mu {
-            let fits = mu as f64 / 8.0 <= f64::from(width_pt) + 1e-6;
+            let fits = oxislides_core::layout::fits(mu, width_pt);
             if let Ok(want) = std::env::var("OXI_FIT_DEBUG") {
                 if text.contains(&want) {
                     eprintln!(
                         "FIT {:>8.2}pt vs box {width_pt:.2}pt  fits={fits}  {text:?}",
-                        mu as f64 / 8.0
+                        oxislides_core::layout::master_units_pt(mu)
                     );
                 }
             }
