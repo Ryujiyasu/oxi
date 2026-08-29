@@ -52,7 +52,7 @@ DRELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 SETTINGS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:compat><w:compatSetting w:name="compatibilityMode"
- w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>"""
+ w:uri="http://schemas.microsoft.com/office/word" w:val="%d"/></w:compat></w:settings>"""
 STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:docDefaults><w:rPrDefault><w:rPr>
@@ -75,11 +75,18 @@ PUNCT = {
 NS = [74, 75, 76]
 JC = {"left": "", "both": '<w:jc w:val="both"/>'}
 
-ARMS = [("%s_%s_n%d" % (j, p, n), JC[j], PUNCT[p], n)
-        for j in JC for p in PUNCT for n in NS]
+# ★Oxi already has a hang rule (S809) but gates it on `compat_mode < 15` and
+# applies it with NO alignment condition. The first sweep ran at cm15 only, so it
+# could not see either half. Add the compatibility mode as an axis: it separates
+# "the hang is a compat-mode behaviour" from "the hang is a justification
+# behaviour".
+COMPAT = [14, 15]
+
+ARMS = [("cm%d_%s_%s_n%d" % (c, j, p, n), JC[j], PUNCT[p], n, c)
+        for c in COMPAT for j in JC for p in PUNCT for n in NS]
 
 
-def build(tag, jc, mark, n):
+def build(tag, jc, mark, n, compat=15):
     text = "x" * n + mark
     body = ('<w:p><w:pPr>%s</w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>'
             % (jc, text))
@@ -97,7 +104,7 @@ def build(tag, jc, mark, n):
         z.writestr("_rels/.rels", RELS)
         z.writestr("word/_rels/document.xml.rels", DRELS)
         z.writestr("word/styles.xml", STYLES)
-        z.writestr("word/settings.xml", SETTINGS)
+        z.writestr("word/settings.xml", SETTINGS % compat)
         z.writestr("word/document.xml", doc)
     return path
 

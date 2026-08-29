@@ -9,7 +9,7 @@ length that exactly fills the column, and its glyph ends past the right edge
 import os, sys, json, subprocess
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _pb_hangpunct_gen import ARMS, OUT, PUNCT, NS, JC
+from _pb_hangpunct_gen import ARMS, OUT, PUNCT, NS, JC, COMPAT
 
 RIGHT = 72.0 + 451.32
 REND = os.path.abspath("tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
@@ -62,12 +62,13 @@ def oxi_rows(docx):
 mode = sys.argv[1] if len(sys.argv) > 1 else "word"
 reader = word_rows if mode == "word" else oxi_rows
 print("%s   filler + one mark, column right edge = %.2fpt\n" % (mode.upper(), RIGHT))
-print("  %-8s %-8s %s" % ("jc", "mark", "  ".join("n=%d lines/right" % n for n in NS)))
-for j in JC:
+print("  %-5s %-6s %-8s %s" % ("cm", "jc", "mark", "  ".join("n=%d lines/right" % n for n in NS)))
+for c in COMPAT:
+  for j in JC:
     for p in PUNCT:
         cells = []
         for n in NS:
-            docx = os.path.join(OUT, "%s_%s_n%d.docx" % (j, p, n))
+            docx = os.path.join(OUT, "cm%d_%s_%s_n%d.docx" % (c, j, p, n))
             if not os.path.exists(docx):
                 cells.append("   --      ")
                 continue
@@ -77,5 +78,5 @@ for j in JC:
                 continue
             over = "*" if r[0][1] > RIGHT + 0.3 else " "
             cells.append("%d/%7.2f%s" % (len(r), r[0][1], over))
-        print("  %-8s %-8s %s" % (j, p, "  ".join(cells)))
+        print("  %-5d %-6s %-8s %s" % (c, j, p, "  ".join(cells)))
 print("\n  * = the line's last glyph reaches past the column's right edge")

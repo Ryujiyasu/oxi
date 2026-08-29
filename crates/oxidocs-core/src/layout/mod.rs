@@ -21908,10 +21908,44 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             .and_then(|b| b.right.as_ref())
             .map_or(false, |d| d.style != "none")
             && std::env::var("OXI_S929_DISABLE").is_err();
+        // S1262 (2026-08-30, default ON, opt-out OXI_S1262_DISABLE): the hang
+        // also applies at compatibilityMode 15 when the paragraph is JUSTIFIED,
+        // and the mark set includes the closing quotes.
+        // WORD TRUTH (`tools/metrics/_pb_hangpunct_{gen,read}.py`, 156 arms =
+        // 13 marks x 3 filler lengths x {left, both} x {cm14, cm15}, Courier New
+        // so every glyph is 6.00pt and the column boundary is exact):
+        //     compat  jc      period comma rquote apos    everything else
+        //       14    left    hangs                       wraps
+        //       14    both    hangs                       wraps
+        //       15    left    WRAPS                       wraps
+        //       15    both    hangs                       wraps
+        // i.e. the legacy modes hang regardless of alignment (what S809 already
+        // did) and cm15 keeps the hang only for justified text. semicolon,
+        // colon, bang, query, rparen, rbracket, hyphen, a letter control and a
+        // no-mark control all behave as expected in every arm, so the
+        // discriminator is real.
+        // ★`compat_mode` READS 15 when the document declares nothing, so the
+        // old `< 15` test silently excluded every compat-less document. The
+        // documented idiom for "legacy" is `compat_mode <= 14 ||
+        // !compat_mode_explicit` (ir/types.rs) -- `creative__009790431a821d2f`
+        // declares no compatibilityMode at all, and Word hangs its periods.
+        // WITNESS `creative__009790431a821d2f` (EN Phase-1 FAIL 0.9680, with no
+        // tables / images / footnotes / columns to confound): Word fits
+        // `... Bankers Ghana.` by hanging the period at 523.38..526.17 past the
+        // 523.32 column edge; Oxi counted it, broke a word early, spent an extra
+        // line and pushed 4 paragraphs onto the next page.
+        let s1262 = std::env::var("OXI_S1262_DISABLE").is_err();
+        let s809_legacy = self.compat_mode < 15
+            || (s1262 && !self.compat_mode_explicit);
         let s809_hang = !self.doc_body_has_real_cjk
-            && self.compat_mode < 15
+            && (s809_legacy || (s1262 && is_justified))
             && !s929_right_fence
             && std::env::var("OXI_S809_DISABLE").is_err();
+        if std::env::var("OXI_DBG_HANG").is_ok() {
+            eprintln!("[HANG] s809={} legacy={} just={} cm={} expl={} cjk={} fence={}",
+                s809_hang, s809_legacy, is_justified, self.compat_mode,
+                self.compat_mode_explicit, self.doc_body_has_real_cjk, s929_right_fence);
+        }
         let mut word_trail_hang_w: f32 = 0.0;
         // S245 (2026-05-24): removed dead variable `word_grid_extra`
         // (assigned/incremented at 3 sites but never read after S243
@@ -24814,7 +24848,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     } // S1059
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
-                        word_trail_hang_w = if matches!(ch, '.' | ',') {
+                        // S1262: the closing quotes hang too.
+                        word_trail_hang_w = if matches!(ch, '.' | ',')
+                            || (s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
+                        {
                             char_width
                         } else {
                             0.0
@@ -26071,7 +26108,10 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     }
                     word_natural_width += char_width + yakumono_saved;
                     if s809_hang {
-                        word_trail_hang_w = if matches!(ch, '.' | ',') {
+                        // S1262: the closing quotes hang too.
+                        word_trail_hang_w = if matches!(ch, '.' | ',')
+                            || (s1262 && matches!(ch, '\u{201D}' | '\u{2019}'))
+                        {
                             char_width
                         } else {
                             0.0
