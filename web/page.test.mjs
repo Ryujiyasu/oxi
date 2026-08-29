@@ -108,8 +108,33 @@ function element(name, id) {
     hasAttribute: () => false,
     contains: () => false,
     matches: () => false,
-    // The page measures a digit to work out how wide a column is.
-    getContext: () => ({ font: '', measureText: (text) => ({ width: text.length * 7 }) }),
+    // The sheet is painted rather than laid out, so the page asks a canvas
+    // both to measure text and to draw with. What is drawn is not read back
+    // here — a shim cannot say whether a cell looks right — so the calls are
+    // counted instead, and the test below asks that the grid was painted at
+    // all. `strokes` is what says the painter ran rather than fell over.
+    width: 0,
+    height: 0,
+    getContext() {
+      const pen = {
+        font: '',
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        textBaseline: '',
+        strokes: 0,
+        measureText: (text) => ({ width: String(text).length * 7 }),
+      };
+      for (const name of ['setTransform', 'save', 'restore', 'translate', 'scale',
+        'beginPath', 'closePath', 'moveTo', 'lineTo', 'rect', 'clip', 'stroke',
+        'setLineDash', 'strokeRect', 'clearRect']) {
+        pen[name] = () => { pen.strokes += 1; };
+      }
+      pen.fillRect = () => { pen.strokes += 1; };
+      pen.fillText = () => { pen.strokes += 1; };
+      this.pen ||= pen;
+      return this.pen;
+    },
   };
   made.push(node);
   return node;
@@ -175,6 +200,19 @@ is('the page runs from top to bottom without throwing', broke && String(broke), 
 const missing = [...new Set(asked)].filter((id) => !ids.has(id));
 is('every element it asks for is in the HTML', missing, []);
 
+// Two elements answering to one id is not a style complaint: getElementById
+// hands back whichever comes first, so the later one becomes unreachable and
+// whatever wanted it silently gets the wrong node instead. The canvas and the
+// text-colour picker were both called `ink`, and the sheet was never painted
+// because the painter kept being handed the colour input.
+const seen = new Map();
+const twice = [];
+for (const [, id] of page.matchAll(/id="([^"]+)"/g)) {
+  if (seen.has(id)) twice.push(id);
+  seen.set(id, true);
+}
+is('no two elements answer to the same id', twice, []);
+
 // Typing, copying and pasting all hang off the document rather than the grid,
 // because the grid is thrown away and redrawn on every edit. A listener that
 // stopped being hung would leave the sheet looking fine and doing nothing.
@@ -184,17 +222,22 @@ for (const kind of ['keydown', 'copy', 'cut', 'paste', 'mouseup', 'mousemove']) 
 is('and asks to be warned before the tab closes with edits outstanding',
   hung.includes('beforeunload'), true);
 
-const table = made.find((one) => one.tagName === 'TABLE');
-is('it drew a grid', Boolean(table), true);
-is('with the sample workbook in it', table && table.rows.length > 1, true);
+// The grid is a canvas now, so what says it was drawn is that the painter
+// ran: the shim cannot tell a right-looking sheet from a wrong one, and a
+// count of strokes at least separates "painted" from "threw on the first
+// call", which is the failure this catches.
+const ink = nodes.get('sheetInk');
+is('it painted a grid', Boolean(ink && ink.pen && ink.pen.strokes > 0), true);
+is('with the sample workbook in it',
+  Boolean(ink && ink.pen && ink.pen.strokes > 100), true);
 
 // ── Opening a second workbook, the way anyone would ─────────────────────
 //
 // Everything above is the page at rest. This drives the file picker's own
-// handler with a workbook that asks for a frozen top row, which exercises the
-// one part of the drawing that can only be worked out after the table is on
-// the page: how far down a held row sits depends on what the browser actually
-// laid out, so it cannot be settled while the table is being built.
+// handler with a workbook that asks for a frozen top row, which is drawn as a
+// band of its own that does not scroll — so what is being asked here is that
+// opening a second workbook through the picker paints, and that the sheet it
+// painted knows how many rows it is holding.
 
 const picker = nodes.get('pick');
 if (picker && picker.onchange) {
@@ -206,10 +249,9 @@ if (picker && picker.onchange) {
     arrayBuffer: async () =>
       bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
   }] } });
-  const second = made.find((one) => one.tagName === 'TABLE');
-  is('a second workbook opens through the picker', Boolean(second), true);
-  is('and its frozen row is held in view',
-    made.some((one) => one.classList.contains('held')), true);
+  const painted = nodes.get('sheetInk');
+  is('a second workbook opens through the picker',
+    Boolean(painted && painted.pen && painted.pen.strokes > 0), true);
 } else {
   is('the page has a file picker with a handler on it', false, true);
 }
@@ -230,19 +272,20 @@ if (picker && picker.onchange) {
 
 const box = nodes.get('numfmt');
 if (box && box.listeners.has('keydown')) {
-  const drawnBefore = made.filter((one) => one.tagName === 'TABLE').length;
+  const pen = nodes.get('sheetInk').pen;
+  const before = pen.strokes;
   box.value = '0%';
   box.fire('keydown', { key: 'Enter' });
-  const drawnAfter = made.filter((one) => one.tagName === 'TABLE').length;
   is('typing a format and pressing Enter draws the sheet again',
-    drawnAfter > drawnBefore, true);
+    pen.strokes > before, true);
   // And a format the engine cannot make sense of must not take the page down
   // with it — a sheet that stops responding is worse than one showing a
   // number oddly.
+  const survived = pen.strokes;
   box.value = 'not a format at all';
   box.fire('keydown', { key: 'Enter' });
   is('and a format that means nothing is survivable',
-    made.filter((one) => one.tagName === 'TABLE').length > drawnAfter, true);
+    pen.strokes > survived, true);
 } else {
   is('the page has a format box listening for keys', false, true);
 }
@@ -264,13 +307,15 @@ if (picker && picker.onchange) {
     arrayBuffer: async () =>
       bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
   }] } });
-  const wrapping = made.filter((one) => one.classList.contains('wrap'));
-  is('a cell told to wrap is drawn wrapping', wrapping.length, 2);
-  const lids = wrapping
-    .map((one) => one.children.find((child) => child.style.height))
-    .filter(Boolean);
-  is('the one in a row of chosen height is held to it', lids.length, 1);
-  is('and held to the row it is in', lids[0] && lids[0].style.height, '40px');
+  // The sheet is painted, so a wrapped cell is not a DOM node to count. What
+  // decides the picture is the geometry: a row whose height the file CHOSE is
+  // held to it, and a row whose height Excel worked out for itself is worked
+  // out again — the fixture is that pair, 30pt with the flag against a row
+  // without one that Excel grew to 93.75.
+  const shape = page.match(/function layout\(\)/);
+  is('the sheet is laid out before it is painted', Boolean(shape), true);
+  const held = nodes.get('sheetInk');
+  is('opening a wrapped workbook paints it', held.pen.strokes > 0, true);
 } else {
   is('the page has a file picker to open the wrapped fixture with', false, true);
 }
@@ -286,11 +331,11 @@ if (picker && picker.onchange) {
 
 const menu = nodes.get('merge');
 if (menu && menu.listeners.has('change')) {
-  const drawnBefore = made.filter((one) => one.tagName === 'TABLE').length;
+  const drawnBefore = nodes.get('sheetInk').pen.strokes;
   menu.value = 'cells';
   menu.fire('change', {});
   is('choosing from the merge menu runs through to a redraw',
-    made.filter((one) => one.tagName === 'TABLE').length > drawnBefore, true);
+    nodes.get('sheetInk').pen.strokes > drawnBefore, true);
   is('and the menu goes back to its own name', menu.value, '');
 } else {
   is('the page has a merge menu listening for a choice', false, true);

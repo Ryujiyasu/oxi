@@ -65,62 +65,23 @@ main { flex: 1; display: flex; min-height: 0; }
   background: #fff;
   position: relative;
 }
-table { border-collapse: collapse; table-layout: fixed; }
-th, td {
-  border: 1px solid var(--rule);
-  font-size: 13px;
-  padding: 0 3px;
-  overflow: hidden;
-  white-space: nowrap;
-  height: 20px;
-}
-/* A cell told to wrap wraps, and breaks mid-word where it has to: Japanese
-   has no spaces to break at, and a heading in a narrow column would otherwise
-   run out of it. */
-td.wrap { white-space: pre-wrap; word-break: break-word; }
-/* A row whose height was chosen holds its text to it — a table row grows to
-   its content otherwise, and Excel cuts the text off there instead. */
-td.wrap > div { overflow: hidden; }
-th {
-  background: var(--head);
-  color: var(--dim);
-  font-weight: 400;
-  font-size: 11px;
-  text-align: center;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-}
-th.row { position: sticky; left: 0; z-index: 1; width: 40px; }
-td.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The box Excel draws round the cell you are on, and the little square at its
-   corner. Both are what tells you at a glance where typing will land. */
-td.here {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  position: relative;
-}
-td.here::after {
-  content: '';
+/* The sheet is drawn, not laid out: `#paper` is a spacer as big as the whole
+   grid so the scrollbars are the browser's own, and the canvas covers only
+   what is on screen and is repainted as it scrolls. A grid of ten thousand
+   rows costs one canvas either way. */
+#paper { position: absolute; top: 0; left: 0; }
+#sheetInk { position: sticky; top: 0; left: 0; display: block; }
+#entry {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 5px;
-  height: 5px;
-  background: var(--accent);
-  border: 1px solid #FFF;
-}
-td input.inline {
+  display: none;
   font: inherit;
-  border: none;
+  border: 2px solid var(--accent);
   outline: none;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  background: #FFF;
-  color: inherit;
-  text-align: inherit;
+  padding: 0 2px;
+  background: #fff;
+  z-index: 3;
 }
+
 .bar {
   display: flex;
   align-items: center;
@@ -148,9 +109,6 @@ td input.inline {
   border-radius: 3px;
 }
 .bar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-td.right { text-align: right; }
-td.centre { text-align: center; }
-td.bold { font-weight: 700; }
 
 aside {
   width: 340px;
@@ -238,59 +196,6 @@ header #left { margin-left: 6px; }
 header #back { margin-left: 6px; }
 header #on { margin-right: 4px; }
 
-/* A selected block is washed, and the block's outer edge is ruled, so the eye
-   reads one rectangle rather than a scatter of tinted cells. The active cell
-   inside it keeps its own outline and is left unwashed, the way Excel leaves
-   the cell you are about to type into. */
-td.pick { background: rgba(33, 115, 70, .10); }
-th.lit { background: var(--accent); color: #fff; }
-/* Rows and columns the sheet asks to be kept in view. They are ordinary cells
-   pinned where they are, so they need a background of their own — without one
-   the rows sliding underneath show through. */
-td.held, th.held { position: sticky; z-index: 3; background: #fff; }
-th.held { background: var(--head); }
-/* A cell held in both directions passes over the ones held in only one. */
-td.held.both, th.held.both { z-index: 4; }
-/* The last held row and column are ruled, so it is clear what is pinned and
-   what is sliding under it. */
-td.held.edge-hold-b, th.held.edge-hold-b { box-shadow: inset 0 -2px 0 0 var(--rule-firm); }
-td.held.edge-hold-r, th.held.edge-hold-r { box-shadow: inset -2px 0 0 0 var(--rule-firm); }
-td.held.edge-hold-b.edge-hold-r, th.held.edge-hold-b.edge-hold-r {
-  box-shadow: inset 0 -2px 0 0 var(--rule-firm), inset -2px 0 0 0 var(--rule-firm);
-}
-
-/* Cells a cut has marked. They are still there — this says where they will
-   move from, and Escape takes it back. */
-td.cut { outline: 2px dashed var(--accent); outline-offset: -2px; }
-th[data-head-col], th[data-head-row], th[data-all] { cursor: cell; }
-td.pick.here { background: transparent; }
-td.edge-t { box-shadow: inset 0 1px 0 0 var(--accent); }
-td.edge-b { box-shadow: inset 0 -1px 0 0 var(--accent); }
-td.edge-l { box-shadow: inset 1px 0 0 0 var(--accent); }
-td.edge-r { box-shadow: inset -1px 0 0 0 var(--accent); }
-td.edge-t.edge-l { box-shadow: inset 0 1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
-td.edge-t.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
-td.edge-b.edge-l { box-shadow: inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
-td.edge-b.edge-r { box-shadow: inset 0 -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
-/* The fill handle: the corner of the selection, and the only part of it the
-   pointer treats differently. */
-td.edge-b.edge-r::after, td.here:not(.pick)::after {
-  content: '';
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 6px;
-  height: 6px;
-  background: var(--accent);
-  border: 1px solid #fff;
-  cursor: crosshair;
-}
-td { position: relative; }
-td.edge-t.edge-b.edge-l { box-shadow: inset 0 1px 0 0 var(--accent), inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent); }
-td.edge-t.edge-b.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset 0 -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
-td.edge-t.edge-l.edge-r { box-shadow: inset 0 1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
-td.edge-b.edge-l.edge-r { box-shadow: inset 0 -1px 0 0 var(--accent), inset 1px 0 0 0 var(--accent), inset -1px 0 0 0 var(--accent); }
-
 /* What the selection comes to, where Excel puts it: the far end of the strip
    the sheet tabs sit in. */
 #tally {
@@ -301,16 +206,13 @@ td.edge-b.edge-l.edge-r { box-shadow: inset 0 -1px 0 0 var(--accent), inset 1px 
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-/* Dragging a range means passing the pointer over cell after cell; without
-   this the browser starts selecting their text instead. */
-table { user-select: none; }
 </style>
 </head>
 <body>
 
 <header>
   <span class="name">Oxi</span>
-  <span class="what">Spreadsheet rendering, in the browser, with no server</span>
+  <span class="what">Spreadsheets drawn and edited in the browser, with no server</span>
   <span class="spacer"></span>
   <button id="freeze" title="Hold everything above and left of the cursor in view">Freeze</button>
   <button id="bold" class="dress" title="Bold (Ctrl+B)"><b>B</b></button>
@@ -393,6 +295,9 @@ table { user-select: none; }
 
 <main>
   <div id="sheet">
+    <canvas id="sheetInk"></canvas>
+    <div id="paper"></div>
+    <input id="entry" spellcheck="false" autocomplete="off">
     <div id="state">Loading the engine…</div>
     <div id="drop">Drop a .xlsx here</div>
   </div>
@@ -414,6 +319,9 @@ table { user-select: none; }
 import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                edit_xlsx_from_workbook, recalculate_spreadsheet,
                translate_formula, shift_band } from './oxidocs_wasm.js';
+// The row model is the renderer's own, written out once in JS: what the grid
+// draws and what the row heights are measured with cannot drift apart.
+import { explainRow, mayBreak } from './row-model.js';
 
 const SAMPLE = './samples/quarterly-sales.xlsx';
 /// A stored column width already carries the gutter either side of a cell's
@@ -673,294 +581,958 @@ function markFrozen() {
  * why the offsets are added up from the sizes the browser actually gave them
  * rather than from the sizes the file asked for.
  */
-function holdPanes(table, sheet) {
-  const rows = Math.max(0, sheet.frozen_rows || 0);
-  const cols = Math.max(0, sheet.frozen_cols || 0);
-  if (rows === 0 && cols === 0) return;
+/**
+ * Where the sheet is held.
+ *
+ * A workbook says `<pane ySplit="1" state="frozen"/>` to mean "hold the top
+ * row", counting in cells. The canvas paints the held rows and columns as
+ * bands of their own rather than scrolling them, so all this has to answer is
+ * how many there are — which is what everything else asks it.
+ */
+function holdPanes(sheet) {
+  return {
+    rows: Math.max(0, (sheet && sheet.frozen_rows) || 0),
+    cols: Math.max(0, (sheet && sheet.frozen_cols) || 0),
+  };
+}
 
-  // Down the page: the header strip first, then each held row under it.
-  const head = table.rows[0];
-  let down = head ? head.getBoundingClientRect().height : 0;
-  const tops = [];
-  for (let at = 1; at <= rows && at < table.rows.length; at++) {
-    tops.push(down);
-    down += table.rows[at].getBoundingClientRect().height;
-  }
-  // Across: the row-number column first, then each held column beside it.
-  const corner = head && head.children[0];
-  let across = corner ? corner.getBoundingClientRect().width : 0;
-  const lefts = [];
-  for (let at = 0; at < cols; at++) {
-    lefts.push(across);
-    const cell = head && head.children[at + 1];
-    across += cell ? cell.getBoundingClientRect().width : 0;
-  }
+// ─── The sheet as it is drawn ──────────────────────────────────────────────
+//
+// The grid is painted, not laid out. A table of DOM cells could only ever show
+// an approximation of the sheet — the browser decides where the words sit, how
+// a line breaks, where two rules meet — and the point of this page is the
+// other thing: the sheet as the renderer draws it, by the laws measured off
+// Excel. So the same laws draw it here, on a canvas, and the editing sits on
+// top of the drawing rather than the drawing standing in for it.
+//
+// `#paper` is a spacer as big as the whole grid, so the scrollbars are the
+// browser's own; the canvas covers only what is on screen and is repainted as
+// it scrolls. A sheet of ten thousand rows costs one canvas either way.
 
-  for (let at = 1; at < table.rows.length; at++) {
-    const row = table.rows[at];
-    const held = at <= rows;
-    for (const cell of row.children) {
-      // A merged cell spans several columns, so its own column is the one it
-      // starts in — the header's position tells us nothing about it.
-      const col = cell.dataset.col === undefined ? -1 : Number(cell.dataset.col);
-      const isRowLabel = cell.dataset.headRow !== undefined;
-      const acrossHeld = isRowLabel || (col >= 0 && col < cols);
-      if (!held && !acrossHeld) continue;
-      cell.classList.add('held');
-      if (held) cell.style.top = `${tops[at - 1]}px`;
-      if (acrossHeld) cell.style.left = `${isRowLabel ? 0 : lefts[col]}px`;
-      if (held && acrossHeld) cell.classList.add('both');
-      if (held && at === rows) cell.classList.add('edge-hold-b');
-      if (acrossHeld && !isRowLabel && col === cols - 1) {
-        cell.classList.add('edge-hold-r');
+const HEAD_HIGH = 21;           // the strip of column letters
+const HANDLE = 5;               // the square at the corner of a selection
+
+/** One context to ask about text with, kept rather than made each time. */
+function measurer() {
+  return measurer.pen ||= document.createElement('canvas').getContext('2d');
+}
+
+/** The face a cell wears, written the way a canvas wants it. */
+function fontOf(style, size) {
+  const points = size ?? style?.font_size ?? book?.default_style?.font_size ?? 11;
+  const face = style?.font_name || book?.default_style?.font_name || 'Calibri';
+  return `${style?.italic ? 'italic ' : ''}${style?.bold ? '700 ' : ''}` +
+    `${Math.round(points * 96 / 72)}px "${face}", "Yu Gothic", sans-serif`;
+}
+
+const advances = new Map();
+/**
+ * One character's advance.
+ *
+ * Excel measures each character on its own rather than the run as a whole, so
+ * a line here is the sum of single characters too. Held because a sheet asks
+ * the same question thousands of times a repaint.
+ */
+function advance(font, letter) {
+  const key = `${font}|${letter}`;
+  let held = advances.get(key);
+  if (held === undefined) {
+    const pen = measurer();
+    pen.font = font;
+    held = Math.round(pen.measureText(letter).width);
+    advances.set(key, held);
+  }
+  return held;
+}
+
+function inkWidth(font, text) {
+  let total = 0;
+  for (const letter of String(text)) total += advance(font, letter);
+  return total;
+}
+
+/**
+ * The room Excel keeps either side of a cell's text.
+ *
+ * Not a constant: it is the cell font's own digit, in bands — a digit of 6 to
+ * 8 pixels keeps 3 and 2, 9 to 12 keeps 4 and 3, and so on. Measured on Excel
+ * and carried by the renderer as `gutters()`.
+ */
+function gutters(font) {
+  const pen = measurer();
+  pen.font = font;
+  const digit = Math.round(pen.measureText('0').width) || 7;
+  if (digit <= 8) return [3, 2];
+  if (digit <= 12) return [4, 3];
+  if (digit <= 16) return [5, 4];
+  return [6, 5];
+}
+
+/** One level of indent: three spaces of the workbook's FIRST font. */
+function indentStep() {
+  const sheet = sheetNow();
+  const named = (sheet && (sheet.first_font || sheet.normal_font)) || ['Calibri', 11];
+  const pen = measurer();
+  pen.font = `${Math.round((named[1] || 11) * 96 / 72)}px "${named[0]}", sans-serif`;
+  return 3 * Math.round(pen.measureText(' ').width || 4);
+}
+
+/**
+ * Where a line breaks in the room it is given, one advance at a time, held
+ * back from any mark that may not start a line.
+ */
+function breakLines(font, text, room) {
+  const held = [];
+  for (const paragraph of String(text).split('\n')) {
+    const letters = [...paragraph];
+    if (!room || !letters.length) { held.push(paragraph); continue; }
+    let at = 0;
+    while (at < letters.length) {
+      let take = 0;
+      let run = 0;
+      while (at + take < letters.length) {
+        const next = run + advance(font, letters[at + take]);
+        if (take > 0 && next > room) break;
+        run = next;
+        take += 1;
       }
-      if (acrossHeld && isRowLabel && cols === 0) cell.classList.add('edge-hold-r');
+      while (take > 1 && at + take < letters.length
+             && !mayBreak(letters[at + take - 1], letters[at + take])) take -= 1;
+      held.push(letters.slice(at, at + take).join(''));
+      at += take;
     }
   }
-  // The header strip has to hold its held columns too, or they slide out from
-  // under the cells they are heading.
-  if (head) {
-    for (let at = 0; at < cols && at + 1 < head.children.length; at++) {
-      const cell = head.children[at + 1];
-      cell.classList.add('held', 'both');
-      cell.style.left = `${lefts[at]}px`;
-      if (at === cols - 1) cell.classList.add('edge-hold-r');
+  return held;
+}
+
+/** A stored colour, which may or may not carry an alpha byte in front. */
+function tint(hex, fallback) {
+  if (!hex) return fallback;
+  const held = String(hex).replace('#', '');
+  return `#${held.length === 8 ? held.slice(2) : held}`;
+}
+
+/** How wide a rule of this kind is drawn, and whether it is broken. */
+function ruleOf(border) {
+  if (!border) return null;
+  const kind = border.style || 'thin';
+  if (kind === 'none') return null;
+  const width = kind === 'thick' ? 3 : kind === 'medium' || kind === 'mediumDashed' ? 2 : 1;
+  const dash = kind.includes('dot') || kind === 'hair' ? [1, 1]
+    : kind.toLowerCase().includes('dash') ? [3, 1] : [];
+  return { width, dash, colour: tint(border.color, '#000000'), double: kind === 'double' };
+}
+
+/** Which cells a merge covers, and which of them is the one that is written. */
+function mergeMap(sheet) {
+  const covered = new Map();
+  for (const held of sheet.merge_cells || []) {
+    for (let row = held.start_row; row <= held.end_row; row += 1) {
+      for (let col = held.start_col; col <= held.end_col; col += 1) {
+        covered.set(`${row},${col}`, {
+          anchor: row === held.start_row && col === held.start_col,
+          span: held,
+        });
+      }
     }
-    if (corner) {
-      corner.classList.add('held', 'both');
-      corner.style.left = '0px';
+  }
+  return covered;
+}
+
+/**
+ * Where every column and row of the sheet on screen stands.
+ *
+ * Held between repaints because everything else — the hit test, the editor's
+ * box, the scroll extent — asks it the same questions, and because a row's
+ * height is worked out from its contents and is not cheap.
+ */
+let geom = null;
+
+function layout() {
+  const sheet = sheetNow();
+  if (!sheet) { geom = null; return null; }
+  digitWidth = measureDigit(book.default_style?.font_name, book.default_style?.font_size)
+    || digitWidth;
+
+  let lastRow = 0;
+  let lastCol = 0;
+  for (const row of sheet.rows) {
+    for (const cell of row.cells) {
+      if (shownText(cell) === '') continue;
+      lastRow = Math.max(lastRow, row.index);
+      lastCol = Math.max(lastCol, cell.col);
+    }
+  }
+  // A merge is part of the sheet whether anything is written in it or not, so
+  // the grid has to reach far enough to draw one.
+  for (const merge of sheet.merge_cells || []) {
+    lastRow = Math.max(lastRow, merge.end_row);
+    lastCol = Math.max(lastCol, merge.end_col);
+  }
+  // A drawing anchored past the written cells is part of the sheet too, so the
+  // grid has to reach far enough to scroll to it. One that carries its own
+  // extent instead of an end anchor says nothing about cells, so it cannot ask
+  // for more of them.
+  for (const drawn of sheet.drawings || []) {
+    if (!drawn.to) continue;
+    lastRow = Math.max(lastRow, drawn.to.row + 1);
+    lastCol = Math.max(lastCol, drawn.to.col);
+  }
+  // And far enough that there is somewhere to type in an empty sheet.
+  lastCol = Math.max(lastCol, 9);
+  lastRow = Math.max(lastRow, 24);
+
+  const hiddenCols = new Set(sheet.hidden_cols || []);
+  const cols = [0];
+  for (let col = 0; col <= lastCol; col += 1) {
+    cols.push(cols[col] + (hiddenCols.has(col) ? 0 : columnPixels(widthOf(sheet, col))));
+  }
+
+  const held = new Map(sheet.rows.map((row) => [row.index, row]));
+  const tops = [0, 0];        // tops[r] is the top of row r; row 1 starts at 0
+  const step = (face, points, bold, italic, letter) =>
+    advance(`${italic ? 'italic ' : ''}${bold ? '700 ' : ''}`
+      + `${Math.round(points * 96 / 72)}px "${face}", sans-serif`, letter);
+  for (let index = 1; index <= lastRow; index += 1) {
+    const row = held.get(index);
+    let px;
+    if (row && row.hidden) px = 0;
+    else if (row && row.custom_height && row.height) px = Math.trunc(row.height * 96 / 72);
+    else {
+      // A height Excel worked out for itself is a cache of what the row
+      // needed, and Excel works it out again — so this does too, by the rules
+      // the renderer measures rows with.
+      try {
+        px = explainRow({
+          sheet, index, row, columns: cols, heightOf: () => undefined, advance: step,
+        }).px;
+      } catch {
+        px = Math.trunc(((row && row.height) || sheet.default_row_height || 15) * 96 / 72);
+      }
+    }
+    tops.push(tops[index] + px);
+  }
+
+  // Excel's grid does not stop where the writing stops: it fills the window,
+  // and a sheet with one cell in it still shows columns and rows out to the
+  // edge. So the grid is grown at the default width and height until it
+  // covers what is on screen — which also keeps a scrollbar from appearing on
+  // a sheet that fits.
+  // How far the grid is DRAWN and how far it SCROLLS are two questions. The
+  // scroll runs to the last written cell, so a sheet that fits the window has
+  // no scrollbar; the drawing runs to the edge of the window whatever the
+  // sheet holds, and a screenful further, so that the grid never runs out from
+  // under a box that turns out to be bigger than it measured.
+  const paper = { across: cols[lastCol + 1], down: tops[lastRow + 1] };
+  const room = 400;
+  const view = {
+    w: (sheetBox ? sheetBox.clientWidth : 0) + room,
+    h: (sheetBox ? sheetBox.clientHeight : 0) + room,
+  };
+  const spare = columnPixels(widthOf(sheet, lastCol + 1));
+  while (cols[cols.length - 1] < view.w && lastCol < 16383) {
+    lastCol += 1;
+    cols.push(cols[cols.length - 1] + spare);
+  }
+  const line = Math.trunc((sheet.default_row_height || 15) * 96 / 72);
+  while (tops[tops.length - 1] < view.h && lastRow < 1048575) {
+    lastRow += 1;
+    tops.push(tops[tops.length - 1] + line);
+  }
+
+  // The row-number strip is as wide as the widest number it has to show.
+  const pen = measurer();
+  pen.font = '12px "Segoe UI", sans-serif';
+  const headWide = Math.max(30, Math.ceil(pen.measureText(String(lastRow)).width) + 14);
+
+  geom = {
+    cols,
+    tops,
+    lastRow,
+    lastCol,
+    headWide,
+    headHigh: HEAD_HIGH,
+    across: cols[lastCol + 1],
+    down: tops[lastRow + 1],
+    paperAcross: paper.across,
+    paperDown: paper.down,
+    frozenRows: Math.max(0, sheet.frozen_rows || 0),
+    frozenCols: Math.max(0, sheet.frozen_cols || 0),
+    covered: mergeMap(sheet),
+  };
+  geom.heldWide = geom.cols[Math.min(geom.frozenCols, lastCol + 1)];
+  geom.heldHigh = geom.tops[Math.min(geom.frozenRows + 1, lastRow + 1)];
+  return geom;
+}
+
+/** The box a cell covers in the sheet's own coordinates, merges included. */
+function boxOf(row, col) {
+  if (!geom) return null;
+  const held = geom.covered.get(`${row},${col}`);
+  const span = held && held.span;
+  const lastRow = span ? span.end_row : row;
+  const lastCol = span ? span.end_col : col;
+  return {
+    left: geom.cols[Math.min(col, geom.cols.length - 1)] ?? 0,
+    right: geom.cols[Math.min(lastCol + 1, geom.cols.length - 1)] ?? 0,
+    top: geom.tops[Math.min(row, geom.tops.length - 1)] ?? 0,
+    bottom: geom.tops[Math.min(lastRow + 1, geom.tops.length - 1)] ?? 0,
+  };
+}
+
+/** Where a point of the sheet lands on the screen, frozen bands and all. */
+function onScreen(x, y) {
+  return {
+    x: geom.headWide + (x < geom.heldWide ? x : x - sheetBox.scrollLeft),
+    y: geom.headHigh + (y < geom.heldHigh ? y : y - sheetBox.scrollTop),
+  };
+}
+
+// The frozen corner splits the sheet into four bands, and the split IS the
+// freeze: a band left of the held width never takes the horizontal scroll, one
+// above the held height never takes the vertical, and the corner band takes
+// neither — which is why a cell held both ways stays put in both directions
+// while its neighbours held one way only slide past it.
+/** The four bands the sheet is painted in, each with the scroll it carries. */
+function bandsOf(scrollX, scrollY) {
+  const held = [
+    [0, geom.heldWide, 0],
+    [geom.heldWide, geom.across, scrollX],
+  ];
+  const down = [
+    [0, geom.heldHigh, 0],
+    [geom.heldHigh, geom.down, scrollY],
+  ];
+  const out = [];
+  for (const [y0, y1, dy] of down) {
+    for (const [x0, x1, dx] of held) out.push({ x0, x1, y0, y1, dx, dy });
+  }
+  return out.filter((band) => band.x1 > band.x0 && band.y1 > band.y0);
+}
+
+/** The box a cell covers on the screen. */
+function rectOf(row, col) {
+  if (!geom) return null;
+  const box = boxOf(row, col);
+  if (!box) return null;
+  const corner = onScreen(box.left, box.top);
+  const far = onScreen(box.right, box.bottom);
+  return { x: corner.x, y: corner.y, w: far.x - corner.x, h: far.y - corner.y };
+}
+
+/** Which column a screen x falls in. */
+function columnAtX(x) {
+  if (!geom) return 0;
+  const inside = x - geom.headWide;
+  const sheetX = inside < geom.heldWide ? inside : inside + sheetBox.scrollLeft;
+  for (let col = 0; col <= geom.lastCol; col += 1) {
+    if (sheetX < geom.cols[col + 1]) return col;
+  }
+  return geom.lastCol;
+}
+
+/** Which row a screen y falls in. */
+function rowAtY(y) {
+  if (!geom) return 1;
+  const inside = y - geom.headHigh;
+  const sheetY = inside < geom.heldHigh ? inside : inside + sheetBox.scrollTop;
+  for (let row = 1; row <= geom.lastRow; row += 1) {
+    if (sheetY < geom.tops[row + 1]) return row;
+  }
+  return geom.lastRow;
+}
+
+/**
+ * What is under the pointer: a cell, a header, the corner, or an edge to drag.
+ *
+ * One answer rather than four questions, because each is the same arithmetic
+ * on the same two numbers, and reading them apart is where a grid starts
+ * picking the cell next to the one that was clicked.
+ */
+function whatIsAt(event) {
+  if (!geom) return null;
+  const box = sheetBox.getBoundingClientRect();
+  const x = event.clientX - box.left;
+  const y = event.clientY - box.top;
+  const inHead = y < geom.headHigh;
+  const inSide = x < geom.headWide;
+  if (inHead && inSide) return { all: true };
+  if (inHead) {
+    const col = columnAtX(x);
+    // Within a few pixels of a column's right edge is the handle that sizes
+    // it, not the header itself.
+    if (Math.abs(x - onScreen(geom.cols[col + 1], 0).x) <= EDGE) return { edgeCol: col };
+    if (col > 0 && Math.abs(x - onScreen(geom.cols[col], 0).x) <= EDGE) {
+      return { edgeCol: col - 1 };
+    }
+    return { headCol: col };
+  }
+  if (inSide) {
+    const row = rowAtY(y);
+    if (Math.abs(y - onScreen(0, geom.tops[row + 1]).y) <= EDGE) return { edgeRow: row };
+    if (row > 1 && Math.abs(y - onScreen(0, geom.tops[row]).y) <= EDGE) {
+      return { edgeRow: row - 1 };
+    }
+    return { headRow: row };
+  }
+  const spot = { row: rowAtY(y), col: columnAtX(x) };
+  // The fill handle sits on the far corner of the selection.
+  const held = region();
+  const corner = rectOf(held.bottom, held.right);
+  if (corner && x >= corner.x + corner.w - HANDLE - 1 && x <= corner.x + corner.w + HANDLE
+      && y >= corner.y + corner.h - HANDLE - 1 && y <= corner.y + corner.h + HANDLE) {
+    return { handle: true, row: spot.row, col: spot.col };
+  }
+  return spot;
+}
+
+/** Bring a cell into view, the way a grid does when the cursor leaves it. */
+function reveal(row, col) {
+  if (!geom) return;
+  const box = boxOf(row, col);
+  if (!box) return;
+  const view = { w: sheetBox.clientWidth, h: sheetBox.clientHeight };
+  if (box.left >= geom.heldWide) {
+    const seen = box.left - sheetBox.scrollLeft + geom.headWide;
+    if (seen < geom.headWide + geom.heldWide) {
+      sheetBox.scrollLeft = box.left - geom.heldWide;
+    } else if (seen + (box.right - box.left) > view.w) {
+      sheetBox.scrollLeft += seen + (box.right - box.left) - view.w;
+    }
+  }
+  if (box.top >= geom.heldHigh) {
+    const seen = box.top - sheetBox.scrollTop + geom.headHigh;
+    if (seen < geom.headHigh + geom.heldHigh) {
+      sheetBox.scrollTop = box.top - geom.heldHigh;
+    } else if (seen + (box.bottom - box.top) > view.h) {
+      sheetBox.scrollTop += seen + (box.bottom - box.top) - view.h;
     }
   }
 }
 
-function draw() {
-  const sheet = book.sheets[shown];
-  const merged = new Map();
-  for (const merge of sheet.merge_cells || []) {
-    for (let row = merge.start_row; row <= merge.end_row; row++) {
-      for (let col = merge.start_col; col <= merge.end_col; col++) {
-        const anchor = row === merge.start_row && col === merge.start_col;
-        merged.set(`${row},${col}`, anchor ? merge : null);
-      }
+/**
+ * Paint what is on screen.
+ *
+ * The grid is drawn in four bands — the held corner, the held rows, the held
+ * columns, and everything else — because a frozen band does not scroll and the
+ * rest does. Each is the same painting under a different clip and offset.
+ */
+function paintSheet() {
+  const sheet = sheetNow();
+  const canvas = document.getElementById('sheetInk');
+  if (!sheet || !geom || !canvas || !canvas.getContext) return;
+  const view = { w: sheetBox.clientWidth, h: sheetBox.clientHeight };
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(view.w * ratio));
+  canvas.height = Math.max(1, Math.round(view.h * ratio));
+  canvas.style.width = `${view.w}px`;
+  canvas.style.height = `${view.h}px`;
+  const ink = canvas.getContext('2d');
+  ink.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ink.textBaseline = 'alphabetic';
+  ink.fillStyle = '#FFFFFF';
+  ink.fillRect(0, 0, view.w, view.h);
+
+  for (const band of bandsOf(sheetBox.scrollLeft, sheetBox.scrollTop)) {
+    ink.save();
+    ink.beginPath();
+    ink.rect(band.dx ? geom.headWide + geom.heldWide : geom.headWide,
+      band.dy ? geom.headHigh + geom.heldHigh : geom.headHigh,
+      view.w, view.h);
+    ink.clip();
+    ink.translate(geom.headWide - band.dx, geom.headHigh - band.dy);
+    paintCells(ink, sheet, band, view);
+    paintShapes(ink, sheet, band);
+    ink.restore();
+  }
+  paintHeaders(ink, view);
+  paintSelection(ink, view);
+}
+
+// ─── The things that float over the cells ──────────────────────────────────
+//
+// A drawing is anchored to a cell, not placed on the page: it starts at an
+// offset inside one cell and either ends inside another or carries its own
+// extent. So it moves when the columns above it are widened, and it scrolls
+// with the band its anchor sits in — which is what makes a shape in a frozen
+// row stay put with the row rather than sliding out from under it.
+
+const EMU = 9525;               // English metric units to the pixel at 96dpi
+
+/** Where an anchor lands in the sheet's own coordinates. */
+function anchorAt(anchor) {
+  if (!anchor) return null;
+  const col = Math.min(anchor.col ?? 0, geom.cols.length - 1);
+  const row = Math.min((anchor.row ?? 0) + 1, geom.tops.length - 1);
+  return [
+    (geom.cols[col] ?? 0) + (anchor.col_off || 0) / EMU,
+    (geom.tops[row] ?? 0) + (anchor.row_off || 0) / EMU,
+  ];
+}
+
+/** The box a drawing covers, from whichever of its two ways of saying so. */
+function drawnBox(drawn) {
+  const corner = anchorAt(drawn.from);
+  if (!corner) return null;
+  const [left, top] = corner;
+  if (drawn.to) {
+    const [right, bottom] = anchorAt(drawn.to);
+    return { left, top, right, bottom };
+  }
+  if (!drawn.extent) return null;
+  return {
+    left, top,
+    right: left + drawn.extent[0] / EMU,
+    bottom: top + drawn.extent[1] / EMU,
+  };
+}
+
+/** Every drawing whose anchor falls in this band. */
+function paintShapes(ink, sheet, band) {
+  for (const drawn of sheet.drawings || []) {
+    const box = drawnBox(drawn);
+    if (!box) continue;
+    // One band draws it: the one its top-left corner belongs to. A shape that
+    // straddles the freeze is drawn by the band it is anchored in, the way
+    // Excel keeps it with the row it was put on.
+    if (box.left < band.x0 || box.left >= band.x1) continue;
+    if (box.top < band.y0 || box.top >= band.y1) continue;
+    const shape = drawn.kind && drawn.kind.Shape;
+    if (!shape) {
+      // A picture's bytes are left out of the IR the page is handed, and a
+      // chart is drawn from a part of its own: both are shown as the room
+      // they take, rather than as nothing at all.
+      ink.save();
+      ink.strokeStyle = '#C9D1D9';
+      ink.setLineDash([4, 3]);
+      ink.strokeRect(box.left + .5, box.top + .5,
+        box.right - box.left, box.bottom - box.top);
+      ink.setLineDash([]);
+      ink.fillStyle = '#8C959F';
+      ink.font = '11px "Segoe UI", sans-serif';
+      ink.fillText(drawn.kind && drawn.kind.Chart ? 'chart'
+        : drawn.kind === 'Other' ? 'group' : 'picture', box.left + 6, box.top + 16);
+      ink.restore();
+      continue;
+    }
+    const geometry = (shape.geometry || '').toLowerCase();
+    const line = /^(line|straightconnector|bentconnector)/.test(geometry);
+    const oval = /ellipse|oval|flowchartconnector/.test(geometry);
+    ink.save();
+    ink.beginPath();
+    if (line) {
+      ink.moveTo(box.left, box.top);
+      ink.lineTo(box.right, box.bottom);
+    } else if (oval) {
+      ink.ellipse((box.left + box.right) / 2, (box.top + box.bottom) / 2,
+        Math.abs(box.right - box.left) / 2, Math.abs(box.bottom - box.top) / 2,
+        0, 0, Math.PI * 2);
+    } else if (geometry.includes('round')) {
+      const radius = Math.min(16, Math.abs(box.right - box.left) / 4,
+        Math.abs(box.bottom - box.top) / 4);
+      ink.roundRect(box.left, box.top, box.right - box.left,
+        box.bottom - box.top, radius);
+    } else {
+      ink.rect(box.left, box.top, box.right - box.left, box.bottom - box.top);
+    }
+    if (shape.fill && !line) {
+      ink.fillStyle = tint(shape.fill, '#FFFFFF');
+      ink.fill();
+    }
+    if (shape.line) {
+      ink.strokeStyle = tint(shape.line.color, '#000000');
+      ink.lineWidth = Math.max(1, Math.round((shape.line.width || EMU) / EMU));
+      ink.setLineDash(shape.line.dash ? [4, 3] : []);
+      ink.stroke();
+    }
+    ink.restore();
+    if (shape.text) saysShape(ink, shape.text, box);
+  }
+}
+
+/** What a shape says, inside the box it says it in. */
+function saysShape(ink, said, box) {
+  const inset = (held, fallback) => (held ?? fallback) / EMU;
+  const area = {
+    left: box.left + inset(said.insets && said.insets[0], 91440),
+    top: box.top + inset(said.insets && said.insets[1], 45720),
+    right: box.right - inset(said.insets && said.insets[2], 91440),
+    bottom: box.bottom - inset(said.insets && said.insets[3], 45720),
+  };
+  const room = area.right - area.left;
+  if (room <= 0) return;
+
+  const lines = [];
+  for (const paragraph of said.paragraphs || []) {
+    const points = paragraph.size || 18;
+    const font = `${paragraph.italic ? 'italic ' : ''}${paragraph.bold ? '700 ' : ''}`
+      + `${Math.round(points * 96 / 72)}px "${paragraph.face || 'ＭＳ Ｐゴシック'}", sans-serif`;
+    const pitch = (paragraph.line_pitch ? paragraph.line_pitch * 96 / 72
+      : Math.round(points * 96 / 72) * 1.3) * (paragraph.line_scale || 1);
+    for (const held of breakLines(font, paragraph.text || '',
+      said.wrap === false ? 0 : room)) {
+      lines.push({ text: held, font, pitch, paragraph });
     }
   }
+  if (!lines.length) return;
 
-  let lastRow = 0;
-  let lastColumn = 0;
+  const block = lines.reduce((sum, held) => sum + held.pitch, 0);
+  const slack = (area.bottom - area.top) - block;
+  const anchor = said.anchor || 't';
+  let at = area.top + (anchor === 'ctr' ? Math.floor(slack / 2) : anchor === 'b' ? slack : 0);
+
+  ink.save();
+  ink.beginPath();
+  ink.rect(box.left, box.top, box.right - box.left, box.bottom - box.top);
+  ink.clip();
+  for (const held of lines) {
+    ink.font = held.font;
+    ink.fillStyle = tint(held.paragraph.color, '#000000');
+    const wide = inkWidth(held.font, held.text);
+    const align = held.paragraph.align;
+    const left = align === 'ctr' ? area.left + (room - wide) / 2
+      : align === 'r' ? area.right - wide : area.left;
+    ink.fillText(held.text, left, at + held.pitch * .78);
+    at += held.pitch;
+  }
+  ink.restore();
+}
+
+/** Every cell of one band: grounds first, then rules, then the words. */
+function paintCells(ink, sheet, band, view) {
+  const seen = {
+    left: band.x0 + band.dx - 1,
+    right: band.x0 + band.dx + view.w + 1,
+    top: band.y0 + band.dy - 1,
+    bottom: band.y0 + band.dy + view.h + 1,
+  };
+  const inside = (box) => box.right >= seen.left && box.left <= seen.right
+    && box.bottom >= seen.top && box.top <= seen.bottom
+    && box.left < band.x1 && box.right > band.x0 - 1
+    && box.top < band.y1 && box.bottom > band.y0 - 1;
+
+  const drawn = [];
   for (const row of sheet.rows) {
+    if (row.hidden || row.index > geom.lastRow) continue;
     for (const cell of row.cells) {
-      const text = shownText(cell);
-      if (text === '') continue;
-      lastRow = Math.max(lastRow, row.index);
-      lastColumn = Math.max(lastColumn, cell.col);
+      if (cell.col > geom.lastCol) continue;
+      const box = boxOf(row.index, cell.col);
+      if (!inside(box)) continue;
+      drawn.push({ row: row.index, cell, box });
     }
   }
-  // A merge is part of the sheet whether anything is written in it or not, so
-  // the grid has to reach far enough to draw one: a block merged across empty
-  // columns would otherwise span past the last one there is.
-  for (const merge of sheet.merge_cells || []) {
-    lastRow = Math.max(lastRow, merge.end_row);
-    lastColumn = Math.max(lastColumn, merge.end_col);
-  }
-  lastColumn = Math.max(lastColumn, 3);
-  lastRow = Math.max(lastRow, 8);
 
-  const held = new Map();
-  for (const row of sheet.rows) held.set(row.index, row);
-
-  const table = document.createElement('table');
-  const head = table.insertRow();
-  const corner = document.createElement('th');
-  corner.className = 'row';
-  corner.dataset.all = '1';
-  head.appendChild(corner);
-  for (let col = 0; col <= lastColumn; col++) {
-    const cell = document.createElement('th');
-    cell.textContent = columnName(col);
-    cell.dataset.headCol = col;
-    cell.style.width = `${columnPixels(widthOf(sheet, col))}px`;
-    head.appendChild(cell);
+  for (const held of drawn) {
+    const shade = held.cell.style && held.cell.style.bg_color;
+    if (!shade) continue;
+    ink.fillStyle = tint(shade, '#FFFFFF');
+    ink.fillRect(held.box.left, held.box.top,
+      held.box.right - held.box.left, held.box.bottom - held.box.top);
   }
 
-  for (let index = 1; index <= lastRow; index++) {
-    const row = table.insertRow();
-    const label = document.createElement('th');
-    label.className = 'row';
-    label.textContent = index;
-    label.dataset.headRow = index;
-    row.appendChild(label);
+  // The grid Excel shows behind a sheet, which is not part of the sheet.
+  ink.strokeStyle = '#D9D9D9';
+  ink.lineWidth = 1;
+  ink.beginPath();
+  for (let col = 0; col <= geom.lastCol + 1; col += 1) {
+    const edge = geom.cols[col];
+    if (edge < band.x0 - 1 || edge > band.x1 + 1) continue;
+    ink.moveTo(edge + .5, band.y0);
+    ink.lineTo(edge + .5, Math.min(band.y1, seen.bottom));
+  }
+  for (let row = 1; row <= geom.lastRow + 1; row += 1) {
+    const edge = geom.tops[row];
+    if (edge < band.y0 - 1 || edge > band.y1 + 1) continue;
+    ink.moveTo(band.x0, edge + .5);
+    ink.lineTo(Math.min(band.x1, seen.right), edge + .5);
+  }
+  ink.stroke();
 
-    const source = held.get(index);
-    const height = source && source.height ? source.height : sheet.default_row_height;
-    // A height in points becomes whole pixels by truncation, the way Excel
-    // draws it.
-    if (height) row.style.height = `${Math.trunc(height * 96 / 72)}px`;
-    // A CHOSEN height is what a wrapped cell is held to; a height Excel
-    // worked out for itself is a cache of what the row needed, and Excel
-    // works it out again. Measured: the same wrapped text in a row of 30pt
-    // with the flag stays at 30 and is cut off, and in a row without it
-    // comes back 93.75 — `tests/fixtures/wrapped.xlsx` is that pair.
-    const chosen = source && source.custom_height && source.height
-      ? Math.trunc(source.height * 96 / 72)
-      : null;
-
-    for (let col = 0; col <= lastColumn; col++) {
-      const box = merged.get(`${index},${col}`);
-      if (box === null) continue;   // covered by a merge that is drawn already
-      const cell = row.insertCell();
-      if (box) {
-        cell.colSpan = box.end_col - box.start_col + 1;
-        cell.rowSpan = box.end_row - box.start_row + 1;
+  for (const held of drawn) {
+    const style = held.cell.style || {};
+    const box = held.box;
+    const edges = [
+      ['border_top', box.left, box.top, box.right, box.top],
+      ['border_bottom', box.left, box.bottom, box.right, box.bottom],
+      ['border_left', box.left, box.top, box.left, box.bottom],
+      ['border_right', box.right, box.top, box.right, box.bottom],
+    ];
+    for (const edge of edges) {
+      const rule = ruleOf(style[edge[0]]);
+      if (!rule) continue;
+      const up = edge[1] === edge[3];
+      const nudge = rule.width % 2 ? .5 : 0;
+      ink.strokeStyle = rule.colour;
+      ink.lineWidth = rule.width;
+      ink.setLineDash(rule.dash);
+      ink.beginPath();
+      ink.moveTo(edge[1] + (up ? nudge : 0), edge[2] + (up ? 0 : nudge));
+      ink.lineTo(edge[3] + (up ? nudge : 0), edge[4] + (up ? 0 : nudge));
+      ink.stroke();
+      if (rule.double) {
+        ink.beginPath();
+        ink.moveTo(edge[1] + (up ? nudge + 2 : 0), edge[2] + (up ? 0 : nudge + 2));
+        ink.lineTo(edge[3] + (up ? nudge + 2 : 0), edge[4] + (up ? 0 : nudge + 2));
+        ink.stroke();
       }
-      // Every cell answers to the keyboard, whether it holds anything or
-      // not: in Excel the empty ones are where you type next, and a grid you
-      // can only click the written cells of is a table, not a sheet.
-      cell.dataset.row = index;
-      cell.dataset.col = col;
-      cell.tabIndex = -1;
-      const held = source && source.cells.find((one) => one.col === col);
-      if (!held) continue;
-      if (held.style.wrap_text) {
-        cell.classList.add('wrap');
-        // A merged block is as tall as the rows it spans, not as its first
-        // one, so it is left to the block rather than cut to one row of it.
-        const box = document.createElement('div');
-        if (chosen && !merged.get(`${index},${col}`)) {
-          box.style.height = `${chosen}px`;
-        }
-        box.textContent = shownText(held);
-        cell.appendChild(box);
-      } else {
-        cell.textContent = shownText(held);
-      }
-      const align = held.style.horizontal_align;
-      if (align === 'center') cell.classList.add('centre');
-      else if (align === 'right') cell.classList.add('right');
-      else if (!align && isNumber(held)) cell.classList.add('right');
-      if (held.style.bold) cell.classList.add('bold');
-      if (held.style.underline) cell.style.textDecoration = 'underline';
-      if (held.style.italic) cell.style.fontStyle = 'italic';
-      if (held.style.font_size) {
-        cell.style.fontSize = `${held.style.font_size * 96 / 72}px`;
-      }
-      if (held.style.font_name) cell.style.fontFamily = `"${held.style.font_name}", sans-serif`;
-      if (held.style.font_color) cell.style.color = `#${held.style.font_color}`;
-      if (held.style.bg_color) cell.style.background = `#${held.style.bg_color}`;
-      rule(cell, 'Top', held.style.border_top);
-      rule(cell, 'Bottom', held.style.border_bottom);
-      rule(cell, 'Left', held.style.border_left);
-      rule(cell, 'Right', held.style.border_right);
+      ink.setLineDash([]);
+    }
+    const across = ruleOf(style.border_diagonal);
+    if (across && (style.diagonal_down || style.diagonal_up)) {
+      ink.strokeStyle = across.colour;
+      ink.lineWidth = across.width;
+      ink.beginPath();
+      if (style.diagonal_down) { ink.moveTo(box.left, box.top); ink.lineTo(box.right, box.bottom); }
+      if (style.diagonal_up) { ink.moveTo(box.left, box.bottom); ink.lineTo(box.right, box.top); }
+      ink.stroke();
     }
   }
-  // The whole grid is written in the workbook's own font at its own size,
-  // rather than at whatever the stylesheet happens to say. A cell that names
-  // neither is drawn in this, which is what Excel does with it.
-  const standard = (book && book.default_style) || {};
-  table.style.fontSize = `${(standard.font_size || 11) * 96 / 72}px`;
-  if (standard.font_name) {
-    table.style.fontFamily = `"${standard.font_name}", Calibri, sans-serif`;
-  }
-  table.tabIndex = 0;
-  table.addEventListener('mousedown', (event) => {
-    const head = event.target.closest('th');
-    if (head) {
-      const under = onRowEdge(head, event);
-      if (under !== null) {
-        sizing = {
-          row: under,
-          from: event.clientY,
-          was: head.getBoundingClientRect().height,
-        };
-        event.preventDefault();
-        return;
-      }
-      const edge = onEdge(head, event);
-      if (edge !== null) {
-        sizing = {
-          col: edge,
-          from: event.clientX,
-          was: head.getBoundingClientRect().width,
-        };
-        event.preventDefault();
-        return;
-      }
-      if (head.dataset.all) takeAll();
-      else if (head.dataset.headCol !== undefined) {
-        takeColumn(Number(head.dataset.headCol), event.shiftKey);
-        headDrag = 'col';
-      } else if (head.dataset.headRow !== undefined) {
-        takeRow(Number(head.dataset.headRow), event.shiftKey);
-        headDrag = 'row';
-      }
-      table.focus();
-      event.preventDefault();
-      return;
-    }
-    const cell = event.target.closest('td');
-    if (!cell || !cell.dataset.row) return;
-    if (onHandle(cell, event)) {
-      filling = { row: at.row, col: at.col };
-      table.focus();
-      event.preventDefault();
-      return;
-    }
-    // Shift extends from wherever the selection already starts; a plain click
-    // starts a new one and arms the drag.
-    goTo(Number(cell.dataset.row), Number(cell.dataset.col), false, event.shiftKey);
-    if (!event.shiftKey) dragging = true;
-    table.focus();
-    event.preventDefault();
-  });
-  table.addEventListener('mousemove', (event) => {
-    const head = event.target.closest('th');
-    if (!head) return;
-    head.style.cursor = onEdge(head, event) !== null
-      ? 'col-resize'
-      : (onRowEdge(head, event) !== null ? 'row-resize' : '');
-  });
-  table.addEventListener('mouseover', (event) => {
-    if (filling) {
-      const cell = event.target.closest('td');
-      if (cell && cell.dataset.row) {
-        filling.to = { row: Number(cell.dataset.row), col: Number(cell.dataset.col) };
-      }
-      return;
-    }
-    if (headDrag) {
-      const head = event.target.closest('th');
-      if (!head) return;
-      if (headDrag === 'col' && head.dataset.headCol !== undefined) {
-        takeColumn(Number(head.dataset.headCol), true);
-      } else if (headDrag === 'row' && head.dataset.headRow !== undefined) {
-        takeRow(Number(head.dataset.headRow), true);
-      }
-      return;
-    }
-    if (!dragging) return;
-    const cell = event.target.closest('td');
-    if (!cell || !cell.dataset.row) return;
-    goTo(Number(cell.dataset.row), Number(cell.dataset.col), false, true);
-  });
-  table.addEventListener('dblclick', (event) => {
-    const head = event.target.closest('th');
-    if (head) {
-      // On the edge it fits the column; anywhere else on a header it does not
-      // mean anything, and opening a cell for editing certainly is not it.
-      const edge = onEdge(head, event);
-      if (edge !== null) fitColumn(edge);
-      return;
-    }
-    const cell = event.target.closest('td');
-    if (cell && cell.dataset.row) edit(null);
-  });
 
-  stateBox.style.display = 'none';
-  const previous = sheetBox.querySelector('table');
-  if (previous) previous.remove();
-  sheetBox.appendChild(table);
-  // Only once it is on the page: how far down a frozen row sits, and how far
-  // across a frozen column, can only be read from what was actually laid out.
-  holdPanes(table, sheet);
+  const indent = indentStep();
+  for (const held of drawn) {
+    const covered = geom.covered.get(`${held.row},${held.cell.col}`);
+    if (covered && !covered.anchor) continue;
+    const text = shownText(held.cell);
+    if (text === '') continue;
+    const cell = held.cell;
+    const box = held.box;
+    const style = cell.style || {};
+    const font = fontOf(style);
+    const room = gutters(font);
+    const pushed = indent * (style.indent || 0);
+    const numeric = isNumber(cell);
+    const placed = style.horizontal_align
+      || (numeric ? 'right' : style.stacked_text ? 'center' : 'left');
+    const left = box.left + room[0] + (placed === 'left' ? pushed : 0);
+    const right = box.right - room[1] - (placed === 'right' ? pushed : 0);
+    const wide = right - left;
+    const lines = style.wrap_text
+      ? breakLines(font, text, wide)
+      : [text.split('\n').join('')];
+
+    ink.font = font;
+    ink.fillStyle = tint(style.font_color, '#000000');
+    const size = Math.round((style.font_size ?? book?.default_style?.font_size ?? 11) * 96 / 72);
+    const line = Math.round(size * 1.28);
+    const slack = (box.bottom - box.top) - line * lines.length;
+    const place = style.vertical_align || 'bottom';
+    const down = box.top + (place === 'top' ? 0
+      : place === 'center' || place === 'centre' ? Math.floor(slack / 2) : slack);
+
+    ink.save();
+    // A cell's text is clipped to what it may cover: a wrapped or merged one
+    // keeps to itself, a plain one runs on over an empty neighbour.
+    const runsOn = !style.wrap_text && !covered && !numeric;
+    ink.beginPath();
+    ink.rect(runsOn ? band.x0 : box.left, box.top,
+      runsOn ? band.x1 - band.x0 : box.right - box.left, box.bottom - box.top);
+    ink.clip();
+    if (style.stacked_text) {
+      let at = down + size;
+      for (const letter of text) {
+        ink.fillText(letter, box.left + (box.right - box.left - inkWidth(font, letter)) / 2, at);
+        at += line;
+      }
+    } else {
+      lines.forEach((one, step) => {
+        const ran = inkWidth(font, one);
+        const spot = placed === 'right' ? right - ran
+          : placed === 'center' || placed === 'centre' || placed === 'centerContinuous'
+            ? left + (wide - ran) / 2
+            : left;
+        const base = down + line * step + Math.round(size * .92);
+        ink.fillText(one, spot, base);
+        if (style.underline) ink.fillRect(spot, base + 2, ran, 1);
+      });
+    }
+    ink.restore();
+  }
+}
+
+/** The strip of column letters and the column of row numbers. */
+function paintHeaders(ink, view) {
+  const box = region();
+  ink.save();
+  ink.font = '12px "Segoe UI", -apple-system, sans-serif';
+  ink.textBaseline = 'middle';
+  ink.fillStyle = '#F3F5F7';
+  ink.fillRect(0, 0, view.w, geom.headHigh);
+  ink.fillRect(0, 0, geom.headWide, view.h);
+  ink.lineWidth = 1;
+
+  for (let col = 0; col <= geom.lastCol; col += 1) {
+    const spot = onScreen(geom.cols[col], 0);
+    const wide = geom.cols[col + 1] - geom.cols[col];
+    if (spot.x + wide < geom.headWide || spot.x > view.w) continue;
+    // A scrolled column must not be drawn under a held one.
+    if (geom.cols[col] >= geom.heldWide && spot.x < geom.headWide + geom.heldWide) {
+      ink.save();
+      ink.beginPath();
+      ink.rect(geom.headWide + geom.heldWide, 0, view.w, geom.headHigh);
+      ink.clip();
+      paintColumnHead(ink, col, spot.x, wide, box);
+      ink.restore();
+      continue;
+    }
+    paintColumnHead(ink, col, spot.x, wide, box);
+  }
+  for (let row = 1; row <= geom.lastRow; row += 1) {
+    const spot = onScreen(0, geom.tops[row]);
+    const high = geom.tops[row + 1] - geom.tops[row];
+    if (spot.y + high < geom.headHigh || spot.y > view.h) continue;
+    if (geom.tops[row] >= geom.heldHigh && spot.y < geom.headHigh + geom.heldHigh) {
+      ink.save();
+      ink.beginPath();
+      ink.rect(0, geom.headHigh + geom.heldHigh, geom.headWide, view.h);
+      ink.clip();
+      paintRowHead(ink, row, spot.y, high, box);
+      ink.restore();
+      continue;
+    }
+    paintRowHead(ink, row, spot.y, high, box);
+  }
+
+  ink.fillStyle = '#F3F5F7';
+  ink.fillRect(0, 0, geom.headWide, geom.headHigh);
+  ink.strokeStyle = '#C6CBD1';
+  ink.beginPath();
+  ink.moveTo(geom.headWide - .5, 0);
+  ink.lineTo(geom.headWide - .5, view.h);
+  ink.moveTo(0, geom.headHigh - .5);
+  ink.lineTo(view.w, geom.headHigh - .5);
+  ink.stroke();
+
+  // Where the sheet is held, a darker line says so.
+  if (geom.frozenRows || geom.frozenCols) {
+    ink.strokeStyle = '#8A9199';
+    ink.beginPath();
+    if (geom.frozenCols) {
+      ink.moveTo(geom.headWide + geom.heldWide - .5, 0);
+      ink.lineTo(geom.headWide + geom.heldWide - .5, view.h);
+    }
+    if (geom.frozenRows) {
+      ink.moveTo(0, geom.headHigh + geom.heldHigh - .5);
+      ink.lineTo(view.w, geom.headHigh + geom.heldHigh - .5);
+    }
+    ink.stroke();
+  }
+  ink.restore();
+}
+
+function paintColumnHead(ink, col, x, wide, box) {
+  const picked = col >= box.left && col <= box.right;
+  ink.fillStyle = picked ? '#D3E4DC' : '#F3F5F7';
+  ink.fillRect(x, 0, wide, geom.headHigh);
+  ink.strokeStyle = '#C6CBD1';
+  ink.beginPath();
+  ink.moveTo(x + wide - .5, 0);
+  ink.lineTo(x + wide - .5, geom.headHigh);
+  ink.stroke();
+  if (wide <= 6) return;
+  ink.fillStyle = picked ? '#0F5132' : '#3A4149';
+  const name = columnName(col);
+  ink.fillText(name, x + (wide - ink.measureText(name).width) / 2, geom.headHigh / 2);
+}
+
+function paintRowHead(ink, row, y, high, box) {
+  const picked = row >= box.top && row <= box.bottom;
+  ink.fillStyle = picked ? '#D3E4DC' : '#F3F5F7';
+  ink.fillRect(0, y, geom.headWide, high);
+  ink.strokeStyle = '#C6CBD1';
+  ink.beginPath();
+  ink.moveTo(0, y + high - .5);
+  ink.lineTo(geom.headWide, y + high - .5);
+  ink.stroke();
+  if (high <= 6) return;
+  ink.fillStyle = picked ? '#0F5132' : '#3A4149';
+  const name = String(row);
+  ink.fillText(name, geom.headWide - 6 - ink.measureText(name).width, y + high / 2);
+}
+
+/** The block that is picked, the cell that takes what is typed, and the handle. */
+function paintSelection(ink, view) {
+  const box = region();
+  const corner = rectOf(box.top, box.left);
+  const far = rectOf(box.bottom, box.right);
+  if (!corner || !far) return;
+  ink.save();
+  ink.beginPath();
+  ink.rect(geom.headWide, geom.headHigh, view.w, view.h);
+  ink.clip();
+  const x = corner.x;
+  const y = corner.y;
+  const w = far.x + far.w - corner.x;
+  const h = far.y + far.h - corner.y;
+  if (spread()) {
+    ink.fillStyle = 'rgba(33, 115, 70, .10)';
+    ink.fillRect(x, y, w, h);
+    // The cell that takes what is typed stays white inside the block.
+    const here = rectOf(at.row, at.col);
+    if (here) {
+      ink.fillStyle = '#FFFFFF';
+      ink.fillRect(here.x + 1, here.y + 1, here.w - 1, here.h - 1);
+      paintOne(ink, at.row, at.col, here);
+    }
+  }
+  ink.strokeStyle = '#217346';
+  ink.lineWidth = 2;
+  ink.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+  if (!filling) {
+    ink.fillStyle = '#217346';
+    ink.fillRect(x + w - HANDLE, y + h - HANDLE, HANDLE, HANDLE);
+  }
+  if (cutFrom) {
+    const from = rectOf(cutFrom.top, cutFrom.left);
+    const to = rectOf(cutFrom.bottom, cutFrom.right);
+    if (from && to) {
+      ink.setLineDash([4, 3]);
+      ink.lineWidth = 1;
+      ink.strokeStyle = '#217346';
+      ink.strokeRect(from.x + .5, from.y + .5,
+        to.x + to.w - from.x - 1, to.y + to.h - from.y - 1);
+      ink.setLineDash([]);
+    }
+  }
+  ink.restore();
+}
+
+/** One cell repainted over the white of the active box inside a selection. */
+function paintOne(ink, row, col, rect) {
+  const cell = heldAt(row, col);
+  if (!cell) return;
+  const text = shownText(cell);
+  if (text === '') return;
+  const style = cell.style || {};
+  const font = fontOf(style);
+  const room = gutters(font);
+  const placed = style.horizontal_align || (isNumber(cell) ? 'right' : 'left');
+  const size = Math.round((style.font_size ?? book?.default_style?.font_size ?? 11) * 96 / 72);
+  ink.save();
+  ink.beginPath();
+  ink.rect(rect.x, rect.y, rect.w, rect.h);
+  ink.clip();
+  ink.font = font;
+  ink.fillStyle = tint(style.font_color, '#000000');
+  const ran = inkWidth(font, text);
+  const wide = rect.w - room[0] - room[1];
+  const spot = placed === 'right' ? rect.x + rect.w - room[1] - ran
+    : placed === 'center' || placed === 'centre' ? rect.x + room[0] + (wide - ran) / 2
+      : rect.x + room[0];
+  ink.fillText(text, spot, rect.y + rect.h - Math.round(size * .28));
+  ink.restore();
+}
+
+/** Lay the sheet out afresh and paint it. */
+function draw() {
+  if (!layout()) return;
+  const paper = document.getElementById('paper');
+  if (paper) {
+    paper.style.width = `${geom.headWide + geom.paperAcross}px`;
+    paper.style.height = `${geom.headHigh + geom.paperDown}px`;
+  }
+  if (stateBox) stateBox.style.display = 'none';
+  paintSheet();
+  markFrozen();
 }
 
 function describe() {
@@ -1809,8 +2381,7 @@ if (onButton) onButton.addEventListener('click', () => { redo(); focusGrid(); })
 // After pressing a control, the keyboard belongs to the sheet again — nobody
 // wants their next arrow key to move between buttons.
 function focusGrid() {
-  const table = tableNow();
-  if (table) table.focus();
+  if (sheetBox) sheetBox.focus();
 }
 
 // ── Selecting more than one cell ────────────────────────────────────────────
@@ -1920,20 +2491,19 @@ let sizing = null;
 // How close to the edge counts as being on it.
 const EDGE = 4;
 
-/** The column whose right edge this press is on, or null. */
-function onEdge(head, event) {
-  if (head.dataset.headCol === undefined) return null;
-  const box = head.getBoundingClientRect();
-  if (event.clientX < box.right - EDGE) return null;
-  return Number(head.dataset.headCol);
-}
 
 /** Show a column at `pixels` wide without writing anything down yet. */
 function showWidth(col, pixels) {
-  const table = tableNow();
-  if (!table) return;
-  const head = table.querySelector(`th[data-head-col="${col}"]`);
-  if (head) head.style.width = `${Math.max(1, Math.round(pixels))}px`;
+  if (!geom || col > geom.lastCol) return;
+  // The sheet is not written to until the drag ends; the width is put into
+  // the geometry alone, so the repaint shows it and undo has nothing to say.
+  const was = geom.cols[col + 1] - geom.cols[col];
+  const now = Math.max(0, Math.round(pixels));
+  for (let after = col + 1; after < geom.cols.length; after += 1) {
+    geom.cols[after] += now - was;
+  }
+  geom.across = geom.cols[geom.lastCol + 1];
+  paintSheet();
 }
 
 /** Write the dragged width into the sheet. */
@@ -1953,22 +2523,17 @@ function setWidth(col, pixels) {
   paint();
 }
 
-/** The row whose bottom edge this press is on, or null. */
-function onRowEdge(head, event) {
-  if (head.dataset.headRow === undefined) return null;
-  const box = head.getBoundingClientRect();
-  if (event.clientY < box.bottom - EDGE) return null;
-  return Number(head.dataset.headRow);
-}
 
 /** Show a row at `pixels` tall without writing anything down yet. */
 function showHeight(row, pixels) {
-  const table = tableNow();
-  if (!table) return;
-  const head = table.querySelector(`th[data-head-row="${row}"]`);
-  if (head && head.parentElement) {
-    head.parentElement.style.height = `${Math.max(1, Math.round(pixels))}px`;
+  if (!geom || row > geom.lastRow) return;
+  const was = geom.tops[row + 1] - geom.tops[row];
+  const now = Math.max(0, Math.round(pixels));
+  for (let after = row + 1; after < geom.tops.length; after += 1) {
+    geom.tops[after] += now - was;
   }
+  geom.down = geom.tops[geom.lastRow + 1];
+  paintSheet();
 }
 
 /** Write the dragged height into the sheet. */
@@ -2000,15 +2565,6 @@ function setHeight(row, pixels) {
   paint();
 }
 
-/** Was this press on the fill handle rather than on the cell itself? */
-function onHandle(cell, event) {
-  const box = region();
-  if (Number(cell.dataset.row) !== box.bottom || Number(cell.dataset.col) !== box.right) {
-    return false;
-  }
-  const edge = cell.getBoundingClientRect();
-  return event.clientX >= edge.right - 6 && event.clientY >= edge.bottom - 6;
-}
 
 function paint() {
   // Whether whole rows or whole columns are selected decides whether Insert
@@ -2025,49 +2581,13 @@ function paint() {
     const sheet = sheetNow();
     mergeBox.disabled = !sheet || (!spread() && mergesMet(sheet).length === 0);
   }
-  const table = tableNow();
-  if (!table) return;
-  const lit = 'td.here, td.pick, td.edge-t, td.edge-b, td.edge-l, td.edge-r';
-  for (const cell of table.querySelectorAll(lit)) {
-    cell.classList.remove('here', 'pick', 'edge-t', 'edge-b', 'edge-l', 'edge-r');
-  }
+  // The block is painted rather than dressed in classes, so moving the cursor
+  // repaints what is on screen: at a few thousand visible cells that is one
+  // frame, and it keeps one description of the sheet rather than two.
+  reveal(reach.row, reach.col);
+  paintSheet();
   const box = region();
-  if (spread()) {
-    eachInRegion((row, col) => {
-      const cell = cellAt(row, col);
-      if (!cell) return;
-      cell.classList.add('pick');
-      if (row === box.top) cell.classList.add('edge-t');
-      if (row === box.bottom) cell.classList.add('edge-b');
-      if (col === box.left) cell.classList.add('edge-l');
-      if (col === box.right) cell.classList.add('edge-r');
-    });
-  }
-  for (const head of table.querySelectorAll('th.lit')) head.classList.remove('lit');
-  for (const head of table.querySelectorAll('th[data-head-col]')) {
-    const col = Number(head.dataset.headCol);
-    if (col >= box.left && col <= box.right) head.classList.add('lit');
-  }
-  for (const head of table.querySelectorAll('th[data-head-row]')) {
-    const row = Number(head.dataset.headRow);
-    if (row >= box.top && row <= box.bottom) head.classList.add('lit');
-  }
-  for (const was of table.querySelectorAll('td.cut')) was.classList.remove('cut');
-  if (cutFrom && cutFrom.sheet === shown) {
-    for (let row = cutFrom.top; row <= cutFrom.bottom; row++) {
-      for (let col = cutFrom.left; col <= cutFrom.right; col++) {
-        const marked = cellAt(row, col);
-        if (marked) marked.classList.add('cut');
-      }
-    }
-  }
-  const cell = cellAt(at.row, at.col);
-  if (cell) cell.classList.add('here');
-  // Follow the corner being dragged, not the active cell: that is the edge
-  // moving off the screen. With nothing selected they are the same cell.
-  const edge = cellAt(reach.row, reach.col) || cell;
-  if (edge) edge.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  whereBox.textContent = dragging && spread()
+  whereBox.textContent = dragging || headDrag
     ? `${box.bottom - box.top + 1}R x ${box.right - box.left + 1}C`
     : columnName(at.col) + at.row;
   tally();
@@ -2762,13 +3282,9 @@ let editor = null;
 const whereBox = document.getElementById('where');
 const formulaBox = document.getElementById('formula');
 
+/** Whether there is a grid on screen to talk about. */
 function tableNow() {
-  return sheetBox.querySelector('table');
-}
-
-function cellAt(row, col) {
-  const table = tableNow();
-  return table && table.querySelector('td[data-row="' + row + '"][data-col="' + col + '"]');
+  return geom;
 }
 
 function sheetNow() {
@@ -2795,10 +3311,8 @@ function contentOf(cell) {
 }
 
 function extent() {
-  const table = tableNow();
-  if (!table) return { rows: 1, cols: 0 };
-  const last = table.rows[table.rows.length - 1];
-  return { rows: table.rows.length - 1, cols: last ? last.cells.length - 2 : 0 };
+  if (!geom) return { rows: 1, cols: 0 };
+  return { rows: geom.lastRow, cols: geom.lastCol };
 }
 
 // `extend` keeps the anchor where it is and drags the far corner of the
@@ -2815,7 +3329,7 @@ function goTo(row, col, keepTabHome, extend) {
     anchor = { row: spot.row, col: spot.col };
   }
   if (!keepTabHome) tabHome = null;
-  if (!tableNow()) return;
+  if (!geom) return;
   paint();
   // The panel and the formula bar always describe the ACTIVE cell, not the
   // range: with a block selected it is still one cell you are about to type
@@ -2853,15 +3367,26 @@ function runTo(dRow, dCol, extend) {
 
 // Typing over a cell replaces it; F2 opens it with what is already there.
 function edit(seed) {
-  const cell = cellAt(at.row, at.col);
-  if (!cell || editor) return;
+  if (editor || !geom) return;
+  reveal(at.row, at.col);
+  paintSheet();
+  const rect = rectOf(at.row, at.col);
+  const input = document.getElementById('entry');
+  if (!rect || !input) return;
   const held = heldAt(at.row, at.col);
-  const input = document.createElement('input');
-  input.className = 'inline';
+  const style = (held && held.style) || {};
+  input.style.display = 'block';
+  // The box sits exactly where the cell is, in the cell's own face, so what
+  // is typed is where it will land rather than somewhere near it.
+  input.style.left = `${sheetBox.scrollLeft + rect.x}px`;
+  input.style.top = `${sheetBox.scrollTop + rect.y}px`;
+  input.style.width = `${Math.max(40, rect.w)}px`;
+  input.style.height = `${Math.max(16, rect.h)}px`;
+  input.style.font = fontOf(style);
+  input.style.textAlign = style.horizontal_align === 'right' ? 'right'
+    : style.horizontal_align === 'center' ? 'center' : 'left';
   input.value = seed === null ? contentOf(held) : seed;
-  editor = { cell, input, was: cell.textContent };
-  cell.textContent = '';
-  cell.appendChild(input);
+  editor = { input, row: at.row, col: at.col };
   input.focus();
   if (seed === null) input.select();
   else input.setSelectionRange(input.value.length, input.value.length);
@@ -3007,19 +3532,22 @@ function stepInside(down, across) {
 function commit(then) {
   if (!editor) return;
   const text = editor.input.value;
+  const spot = { row: editor.row, col: editor.col };
+  editor.input.style.display = 'none';
   editor = null;
-  change(() => put(at.row, at.col, text));
+  change(() => put(spot.row, spot.col, text));
   draw();
   goTo(at.row, at.col, true);
+  focusGrid();
   if (then) then();
 }
 
 function cancel() {
   if (!editor) return;
-  const held = editor;
+  editor.input.style.display = 'none';
   editor = null;
-  held.cell.textContent = held.was;
   goTo(at.row, at.col, true);
+  focusGrid();
 }
 
 function onKey(event) {
@@ -3187,6 +3715,116 @@ function onKey(event) {
   }
 }
 
+// ─── The pointer on the drawing ────────────────────────────────────────────
+//
+// A canvas has no cells to hang listeners on, so every gesture is the same
+// two numbers put through `whatIsAt`. That is the whole of the difference:
+// what the pointer means is worked out once, in one place, rather than being
+// spread across a mousedown on a `th`, another on a `td`, and a `closest()`
+// call that quietly picks the wrong one when a merge is in the way.
+
+sheetBox.tabIndex = 0;
+
+sheetBox.addEventListener('mousedown', (event) => {
+  if (event.button !== 0) return;
+  const spot = whatIsAt(event);
+  if (!spot) return;
+  if (spot.edgeCol !== undefined) {
+    sizing = {
+      col: spot.edgeCol,
+      from: event.clientX,
+      was: geom.cols[spot.edgeCol + 1] - geom.cols[spot.edgeCol],
+    };
+    event.preventDefault();
+    return;
+  }
+  if (spot.edgeRow !== undefined) {
+    sizing = {
+      row: spot.edgeRow,
+      from: event.clientY,
+      was: geom.tops[spot.edgeRow + 1] - geom.tops[spot.edgeRow],
+    };
+    event.preventDefault();
+    return;
+  }
+  if (editor) commit();
+  if (spot.all) { takeAll(); focusGrid(); event.preventDefault(); return; }
+  if (spot.headCol !== undefined) {
+    takeColumn(spot.headCol, event.shiftKey);
+    headDrag = 'col';
+    focusGrid();
+    event.preventDefault();
+    return;
+  }
+  if (spot.headRow !== undefined) {
+    takeRow(spot.headRow, event.shiftKey);
+    headDrag = 'row';
+    focusGrid();
+    event.preventDefault();
+    return;
+  }
+  if (spot.handle) {
+    filling = { row: at.row, col: at.col };
+    focusGrid();
+    event.preventDefault();
+    return;
+  }
+  // Shift extends from wherever the selection already starts; a plain click
+  // starts a new one and arms the drag.
+  goTo(spot.row, spot.col, false, event.shiftKey);
+  if (!event.shiftKey) dragging = true;
+  focusGrid();
+  event.preventDefault();
+});
+
+sheetBox.addEventListener('mousemove', (event) => {
+  if (sizing) return;
+  const spot = whatIsAt(event);
+  if (!spot) return;
+  sheetBox.style.cursor = spot.edgeCol !== undefined ? 'col-resize'
+    : spot.edgeRow !== undefined ? 'row-resize'
+      : spot.handle ? 'crosshair'
+        : (spot.headCol !== undefined || spot.headRow !== undefined || spot.all)
+          ? 'default' : 'cell';
+  if (filling) {
+    if (spot.row !== undefined) filling.to = { row: spot.row, col: spot.col };
+    return;
+  }
+  if (headDrag) {
+    if (headDrag === 'col' && spot.headCol !== undefined) takeColumn(spot.headCol, true);
+    else if (headDrag === 'row' && spot.headRow !== undefined) takeRow(spot.headRow, true);
+    return;
+  }
+  if (!dragging || spot.row === undefined) return;
+  goTo(spot.row, spot.col, false, true);
+});
+
+sheetBox.addEventListener('dblclick', (event) => {
+  const spot = whatIsAt(event);
+  if (!spot) return;
+  // On a column's edge it fits the column; anywhere else on a header it does
+  // not mean anything, and opening a cell for editing certainly is not it.
+  if (spot.edgeCol !== undefined) { fitColumn(spot.edgeCol); return; }
+  if (spot.edgeRow !== undefined || spot.headCol !== undefined
+      || spot.headRow !== undefined || spot.all) return;
+  edit(null);
+});
+
+// Scrolling moves the drawing, not the page: the canvas covers the viewport
+// and is repainted where it now stands.
+sheetBox.addEventListener('scroll', () => {
+  if (editor) {
+    const rect = rectOf(editor.row, editor.col);
+    if (rect) {
+      editor.input.style.left = `${sheetBox.scrollLeft + rect.x}px`;
+      editor.input.style.top = `${sheetBox.scrollTop + rect.y}px`;
+    }
+  }
+  paintSheet();
+}, { passive: true });
+
+window.addEventListener('resize', () => { if (geom) paintSheet(); });
+
 // Resizing has to hear the pointer wherever it goes: a drag that leaves the
 // table is still a drag.
 document.addEventListener('mousemove', (event) => {
@@ -3230,13 +3868,11 @@ document.addEventListener('keydown', (event) => {
       change(() => put(at.row, at.col, formulaBox.value));
       draw();
       goTo(at.row + 1, at.col);
-      const table = tableNow();
-      if (table) table.focus();
+      focusGrid();
     } else if (event.key === 'Escape') {
       event.preventDefault();
       formulaBox.value = contentOf(heldAt(at.row, at.col));
-      const table = tableNow();
-      if (table) table.focus();
+      focusGrid();
     }
     return;
   }
@@ -3258,8 +3894,7 @@ async function open(data, name) {
   } catch (error) {
     stateBox.style.display = 'block';
     stateBox.textContent = `Oxi could not read ${name}: ${error}`;
-    const table = sheetBox.querySelector('table');
-    if (table) table.remove();
+    geom = null;
     return;
   }
   shown = 0;

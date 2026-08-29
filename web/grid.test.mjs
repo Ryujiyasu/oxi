@@ -72,7 +72,7 @@ const lifted = ['region', 'spread', 'eachInRegion', 'trim', 'tally', 'stepInside
   'wearFace', 'wearSize', 'wearInk', 'agreedOn',
   'calcCost',
   'restyle', 'allWear', 'toggle', 'alignTo', 'setHeight',
-  'holdPanes', 'freezeHere',
+  'holdPanes', 'freezeHere', 'bandsOf', 'onScreen',
   'monthSeries', 'monthAt'].map(lift).join('\n');
 
 // Everything the lifted code reaches for that lives in the page's DOM. The
@@ -86,6 +86,11 @@ let anchor = { row: 1, col: 0 };
 let reach = { row: 1, col: 0 };
 let tabHome = null;
 let dragging = false;
+// What layout() would have worked out. The pane tests stand one up by hand, so
+// the arithmetic stays readable; nothing else here reads it.
+let geom = null;
+const sheetBox = { scrollLeft: 0, scrollTop: 0, clientWidth: 800, clientHeight: 600 };
+const scrolledTo = (x, y) => { sheetBox.scrollLeft = x; sheetBox.scrollTop = y; };
 const sheet = { rows: [], col_widths: [], merge_cells: [] };
 let book = { default_style: { font_size: 11 } };
 // A workbook of a given size, for asking what the page thinks it would cost to
@@ -211,42 +216,27 @@ const markFrozen = () => {};
 // A table of known geometry: the header strip 20 tall, the row-label column 40
 // wide, every row 25 tall and every column 100 wide. Standing one up by hand
 // is what makes the arithmetic readable in the answers below.
-function aTable(rows, cols) {
-  const cell = (extra) => ({
-    dataset: {},
-    style: {},
-    classList: {
-      names: new Set(),
-      add(...names) { names.forEach((one) => this.names.add(one)); },
-      remove(...names) { names.forEach((one) => this.names.delete(one)); },
-      contains(one) { return this.names.has(one); },
-    },
-    getBoundingClientRect: () => extra,
-    ...{},
-  });
-  const table = { rows: [] };
-  const head = { children: [], getBoundingClientRect: () => ({ height: 20, width: 0 }) };
-  head.children.push(cell({ height: 20, width: 40 }));
-  for (let col = 0; col < cols; col++) {
-    const one = cell({ height: 20, width: 100 });
-    one.dataset.headCol = String(col);
-    head.children.push(one);
-  }
-  table.rows.push(head);
-  for (let row = 1; row <= rows; row++) {
-    const line = { children: [], getBoundingClientRect: () => ({ height: 25, width: 0 }) };
-    const label = cell({ height: 25, width: 40 });
-    label.dataset.headRow = String(row);
-    line.children.push(label);
-    for (let col = 0; col < cols; col++) {
-      const one = cell({ height: 25, width: 100 });
-      one.dataset.row = String(row);
-      one.dataset.col = String(col);
-      line.children.push(one);
-    }
-    table.rows.push(line);
-  }
-  return table;
+function aGeom(rows, cols) {
+  const across = [0];
+  for (let col = 0; col <= cols; col++) across.push(across[col] + 100);
+  const down = [0, 0];
+  for (let row = 1; row <= rows; row++) down.push(down[row] + 25);
+  geom = {
+    cols: across, tops: down, lastRow: rows, lastCol: cols - 1,
+    headWide: 40, headHigh: 20, across: across[cols], down: down[rows + 1],
+    frozenRows: 0, frozenCols: 0, covered: new Map(),
+    heldWide: 0, heldHigh: 0,
+  };
+  return geom;
+}
+/** Freeze the geometry the way layout() does, from what the sheet asked for. */
+function holdAt(shape, rows, cols) {
+  const asked = holdPanes({ frozen_rows: rows, frozen_cols: cols });
+  shape.frozenRows = asked.rows;
+  shape.frozenCols = asked.cols;
+  shape.heldWide = shape.cols[Math.min(asked.cols, shape.lastCol + 1)];
+  shape.heldHigh = shape.tops[Math.min(asked.rows + 1, shape.lastRow + 1)];
+  return shape;
 }
 const lineAt = (row) => sheet.rows.find((one) => one.index === row);
 const heightAt = (row) => { const one = lineAt(row); return one ? one.height : undefined; };
@@ -296,7 +286,8 @@ export { select, seat, box, cells, seed, put, tally, countBox, stepInside,
          beyond, depth, dropCut, mark, marked,
          padFor, fitWidth, fitColumn, ink, sheetOf,
          toggle, alignTo, allWear, valueAt, setHeight, heightAt, chosenAt,
-         lineAt, holdPanes, aTable, freezeHere, frozenAt,
+         lineAt, holdPanes, aGeom, holdAt, bandsOf, onScreen, scrolledTo,
+         freezeHere, frozenAt,
          monthSeries, monthAt, asDate, asSerial,
          pasteGrid, clearSelection, selectionText, asGrid, fieldOf, region,
          change, undo, redo, unsaved, forget, rule, wearRules, findNext,
@@ -1395,75 +1386,77 @@ is('dragging a computed height to the same number makes it chosen',
 // ── Holding the frozen rows and columns in view ─────────────
 //
 // A workbook says `<pane ySplit="1" state="frozen"/>` to mean "keep the top
-// row while the rest scrolls", counting in cells. The header strip is already
-// pinned, so a held row sits below it and each held row below the one before.
-// The offsets are added up from what the browser actually laid out, because
-// the sizes a file asks for and the sizes it gets are not the same thing.
+// row while the rest scrolls", counting in cells. The sheet is painted, so
+// holding a row is not a position put on a DOM node any more: it is a band of
+// the picture that does not take the scroll. The four bands ARE the freeze,
+// and `onScreen` is the same law read the other way round — where a point of
+// the sheet lands once the bands have had their say.
 //
-// The table below is stood up by hand: header 20 tall, row labels 40 wide,
-// rows 25 tall, columns 100 wide.
+// The geometry below is stood up by hand: header strip 20 tall, row labels 40
+// wide, rows 25 tall, columns 100 wide. That is what makes the arithmetic
+// readable in the answers.
 
-const pinned = (table, row, col) => {
-  const line = table.rows[row];
-  const cell = line.children[col + 1];
-  return {
-    top: cell.style.top,
-    left: cell.style.left,
-    pinned: cell.classList.contains('held'),
-    both: cell.classList.contains('both'),
-  };
-};
+let shape = grid.holdAt(grid.aGeom(6, 4), 1, 0);
+is('a sheet frozen at one row holds the height of that row', shape.heldHigh, 25);
+is('and nothing across', shape.heldWide, 0);
+grid.scrolledTo(0, 60);
+is('the held row does not take the vertical scroll',
+  grid.onScreen(0, 0).y, 20);
+is('and the row under it does', grid.onScreen(0, 25).y, 20 + 25 - 60);
 
-let table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 1, frozen_cols: 0 });
-is('one held row sits just under the header strip',
-  pinned(table, 1, 0).top, '20px');
-is('and is pinned', pinned(table, 1, 0).pinned, true);
-is('the row under it is not', pinned(table, 2, 0).pinned, false);
+shape = grid.holdAt(grid.aGeom(6, 4), 3, 0);
+is('three held rows stack up', shape.heldHigh, 75);
+is('all three stay put', [0, 25, 50].map((y) => grid.onScreen(0, y).y), [20, 45, 70]);
+is('and the fourth is loose', grid.onScreen(0, 75).y, 20 + 75 - 60);
 
-table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 3, frozen_cols: 0 });
-is('three held rows stack up under the header',
-  [1, 2, 3].map((row) => pinned(table, row, 0).top), ['20px', '45px', '70px']);
-is('and the fourth is loose', pinned(table, 4, 0).pinned, false);
+shape = grid.holdAt(grid.aGeom(6, 4), 0, 1);
+grid.scrolledTo(120, 0);
+is('one held column sits beside the row labels', grid.onScreen(0, 0).x, 40);
+is('and the column beside it is loose', grid.onScreen(100, 0).x, 40 + 100 - 120);
 
-table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 0, frozen_cols: 1 });
-is('one held column sits beside the row labels',
-  pinned(table, 1, 0).left, '40px');
-is('the column beside it is loose', pinned(table, 1, 1).pinned, false);
-is('and every row of the held column is pinned, not just the first',
-  [1, 2, 5].every((row) => pinned(table, row, 0).pinned), true);
+shape = grid.holdAt(grid.aGeom(6, 4), 0, 2);
+is('two held columns stack up', shape.heldWide, 200);
+is('and both stay put', [0, 100].map((x) => grid.onScreen(x, 0).x), [40, 140]);
 
-table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 0, frozen_cols: 2 });
-is('two held columns stack up beside the labels',
-  [0, 1].map((col) => pinned(table, 1, col).left), ['40px', '140px']);
+// The corner: a point held both ways has to stay put in both directions, and
+// the band it is painted in takes neither scroll.
+shape = grid.holdAt(grid.aGeom(6, 4), 3, 2);
+grid.scrolledTo(120, 60);
+const corner = grid.onScreen(100, 50);
+is('a point in a held row AND a held column is held both ways',
+  [corner.x, corner.y], [140, 70]);
+const bands = grid.bandsOf(120, 60);
+is('the sheet is painted in four bands', bands.length, 4);
+is('the corner band takes neither scroll',
+  [bands[0].dx, bands[0].dy], [0, 0]);
+is('the band beside it takes the sideways scroll only',
+  [bands[1].dx, bands[1].dy], [120, 0]);
+is('the band under it takes the downward scroll only',
+  [bands[2].dx, bands[2].dy], [0, 60]);
+is('and the loose band takes both', [bands[3].dx, bands[3].dy], [120, 60]);
+is('the corner band covers exactly what is held',
+  [bands[0].x1, bands[0].y1], [200, 75]);
 
-// The corner: a cell held both ways has to stay put in both directions, and
-// has to pass over the cells held in only one.
-table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 3, frozen_cols: 2 });
-const corner = pinned(table, 2, 1);
-is('a cell in a held row AND a held column is held both ways',
-  [corner.top, corner.left], ['45px', '140px']);
-is('and outranks the ones held one way only', corner.both, true);
-is('a cell in a held row alone is not', pinned(table, 2, 3).both, false);
-is('nor is one in a held column alone', pinned(table, 5, 0).both, false);
+// A sheet that asks for nothing is one band, and nothing is held back.
+shape = grid.holdAt(grid.aGeom(6, 4), 0, 0);
+is('a sheet with no frozen panes holds nothing',
+  [shape.heldWide, shape.heldHigh], [0, 0]);
+is('and is painted in one band', grid.bandsOf(120, 60).length, 1);
+is('where everything takes the scroll',
+  [grid.onScreen(0, 0).x, grid.onScreen(0, 0).y], [40 - 120, 20 - 60]);
+grid.scrolledTo(0, 0);
 
-// A sheet that asks for nothing is left entirely alone.
-table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 0, frozen_cols: 0 });
-is('a sheet with no frozen panes is not touched',
-  [1, 3].every((row) => !pinned(table, row, 0).pinned), true);
-is('and nothing is given a position', pinned(table, 1, 0).top, undefined);
+// A freeze deeper than the sheet is clamped to it rather than running off the
+// end of the geometry, which a file is free to ask for.
+shape = grid.holdAt(grid.aGeom(6, 4), 99, 99);
+is('a freeze past the last row is held to the last row', shape.heldHigh, 150);
+is('and past the last column to the last column', shape.heldWide, 400);
 
-// The row labels are held across as well, or they slide out from under the
-// rows they are numbering.
-table = grid.aTable(6, 4);
-grid.holdPanes(table, { frozen_rows: 1, frozen_cols: 0 });
-is('the row labels are pinned across even with no held columns',
-  table.rows[2].children[0].classList.contains('held'), true);
+// A sheet that asks for a negative split is asking for nothing.
+is('a negative split is read as none',
+  grid.holdPanes({ frozen_rows: -3, frozen_cols: -1 }), { rows: 0, cols: 0 });
+is('and a sheet that says nothing at all is too',
+  grid.holdPanes(null), { rows: 0, cols: 0 });
 
 // ── Setting the freeze ─────────────────────────────────────
 //
