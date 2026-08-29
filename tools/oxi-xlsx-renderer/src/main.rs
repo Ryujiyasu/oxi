@@ -4547,10 +4547,19 @@ mod windows_draw {
         // `tb_r8_jizensoudan`'s panel is what this is worth: its top is 8.6865
         // and its inset 4.8, and 13.4865 rounds to 13 where Excel draws 14 —
         // the sixteenth takes it to 13.5 and up.
+        // The FOOT does not turn over where the head does. SX123 gave it the
+        // head's rule on the assumption that a box is symmetric; asking
+        // instead — `_xlsx_shape_foot_boundary.py` hangs a block from the foot
+        // and sweeps the box's height a hundredth of a pixel at a time, in two
+        // lanes whose bottom insets differ by 0.6 of a pixel — the two lanes
+        // step 0.60 apart (so it is the SUM being put on a pixel, as at the
+        // head) but they step at a fraction of 0.24, not the head's 15/32.
+        // The old rule disagrees with Excel in 46 of 100 sub-pixel positions.
+        let foot_of = |value: f32| (value + 1.0 - 0.235).floor() as i32;
         let (top, foot) = match down.filter(|_| pull == 0.0) {
             Some((top, bottom)) => (
                 sixteenth(top + room_of(said.insets.1)) + pulled,
-                sixteenth(bottom - room_of(said.insets.3)) - pulled,
+                foot_of(bottom - room_of(said.insets.3)) - pulled,
             ),
             None => (
                 box_.top + inset(said.insets.1) + pulled,
