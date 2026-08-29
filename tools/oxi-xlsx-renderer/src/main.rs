@@ -6653,11 +6653,20 @@ mod windows_draw {
                         // gutters and all: measured on data_B01, where the
                         // heading of a merged group lands a pixel further
                         // right than centring inside the gutters puts it.
+                        //
+                        // The room being halved is a whole number of pixels,
+                        // and half an odd one goes to the LEFT. Swept a pixel
+                        // at a time from 21 to 49 wide by
+                        // `_xlsx_stack_parity.py`: in ＭＳ 明朝 11pt and
+                        // ＭＳ ゴシック 9pt the two of us agree on every even
+                        // room and ours stands a pixel right on every odd one,
+                        // 25 of 26 and 26 of 26. `r03_syukei2`'s headings are
+                        // that pixel, in every column it has.
                         let left = match placed {
                             Align::Left | Align::Spread => area.left,
                             Align::Right => area.right - em,
                             Align::Centre => {
-                                box_.left + ((box_.right - box_.left - em) as f32 / 2.0).round() as i32
+                                box_.left + (box_.right - box_.left - em).div_euclid(2)
                             }
                         };
                         if std::env::var("OXI_XLSX_DUMP_STACK").is_ok() {
