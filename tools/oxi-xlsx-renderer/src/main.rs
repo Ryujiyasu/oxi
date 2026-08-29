@@ -5334,6 +5334,15 @@ mod windows_draw {
         {
             let _ = GdipSetSmoothingMode(graphics, SmoothingMode(4));
             let _ = GdipSetInterpolationMode(graphics, InterpolationMode(7));
+            // GDI+ puts a pixel's centre on its top-left corner unless it is
+            // told otherwise, which lands every rule of the metafile half a
+            // pixel right and down of Excel's. `9fd461bf494a_zuhyo`'s value
+            // axis reads 127,127 across two columns in Excel's picture — one
+            // pixel of rule centred on a boundary — and a hard 0 in the next
+            // column over here; its category axis reads the other way about, a
+            // hard 0 in Excel and 127,127 here. Half is the mode that puts the
+            // centre in the middle.
+            let _ = GdipSetPixelOffsetMode(graphics, PixelOffsetMode(4));
             let where_ = RectF {
                 X: box_.left as f32,
                 Y: box_.top as f32,
