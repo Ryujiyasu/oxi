@@ -1664,15 +1664,44 @@ impl<'a> WorkbookHost<'a> {
         Value::String(seen.unwrap_or_default())
     }
 
+    /// What a cell would show in the formula bar.
+    ///
+    /// A cell with no formula answers with its VALUE as text — not with the
+    /// empty string, and not with the formatted text either. Asked of Excel:
+    /// 1234.5 under `#,##0.00` answers `1234.5`, 0.15 under `0%` answers
+    /// `0.15`, a date serial answers `45000`, a Boolean answers `TRUE`, and
+    /// 1e20 answers all twenty-one digits where the General format would show
+    /// it in exponent form. So this is the raw value written out, which is a
+    /// different question from `.Text`.
     fn cell_formula(&self, address: CellAddress) -> Value {
-        self.workbook
+        let Some(cell) = self
+            .workbook
             .sheets
             .get(address.sheet)
             .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
             .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
-            .and_then(|cell| cell.formula.as_deref())
-            .map(|formula| Value::String(format!("={formula}")))
-            .unwrap_or_else(|| Value::String(String::new()))
+        else {
+            return Value::String(String::new());
+        };
+        if let Some(formula) = cell.formula.as_deref() {
+            return Value::String(format!("={formula}"));
+        }
+        Value::String(match from_cell_value(&cell.value) {
+            Value::Empty | Value::Missing | Value::Null | Value::Nothing => String::new(),
+            Value::String(held) => held,
+            Value::Boolean(held) => {
+                if held { "TRUE".to_string() } else { "FALSE".to_string() }
+            }
+            Value::Integer(held) => held.to_string(),
+            Value::Double(held) => {
+                if held.fract() == 0.0 && held.abs() < 1e21 {
+                    format!("{held:.0}")
+                } else {
+                    held.to_string()
+                }
+            }
+            held => shown_text(&held, None),
+        })
     }
 
     fn range_formula(&self, range: CellRange) -> Result<Value, String> {
@@ -4044,12 +4073,17 @@ impl Host for WorkbookHost<'_> {
                     });
             }
             if name.eq_ignore_ascii_case("size") {
+                // A cell that states no size wears the workbook's, which is
+                // 11 in Excel's own default workbook — it answered 11 for a
+                // fresh cell and 11 for `Styles("Normal").Font.Size`. It does
+                // not answer Empty.
+                let fallback = self.workbook.default_style.font_size;
                 return self
                     .uniform_style(range, |style| style.font_size)
                     .map(|value| {
                         Some(match value {
                             Some(Some(value)) => Value::Double(f64::from(value)),
-                            Some(None) => Value::Empty,
+                            Some(None) => Value::Double(f64::from(fallback.unwrap_or(11.0))),
                             None => Value::Null,
                         })
                     });
@@ -9034,6 +9068,59 @@ mod tests {
     /// format is formatted, a date serial is a date, an error is its own
     /// legend, a Boolean is shouted, an empty cell is an empty string — and a
     /// range answers Null only where its cells SHOW different things.
+    /// A differential audit of members that were already here, against the
+    /// answers Excel gives in their awkward cases. Every line below was read
+    /// off Excel before it was written down.
+    #[test]
+    fn the_awkward_cases_answer_the_way_excel_does() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = 10
+               Range(\"A2\").Formula = \"=A1*2\"
+               Range(\"A3\").Formula = \"=1\"
+               Range(\"B1\").Value = \"text\"
+               Range(\"D4\").Value = \"island\"
+               Debug.Print \"[\" & Range(\"A1\").Formula & \"] [\" & Range(\"C9\").Formula & \"] [\" & Range(\"B1\").Formula & \"]\"
+               Debug.Print TypeName(Range(\"A1:A2\").HasFormula), Range(\"A2:A3\").HasFormula
+               Debug.Print Range(\"C1\").NumberFormat, TypeName(Range(\"C9\").Value)
+               Debug.Print Range(\"A1:A2\").Count, Range(\"D4\").CurrentRegion.Address
+               Debug.Print Range(\"Z50\").CurrentRegion.Address
+               Debug.Print Range(\"A1\").End(xlUp).Address
+               Debug.Print ActiveSheet.UsedRange.Address
+               Debug.Print Range(\"C1\").Font.Size
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                // A cell with no formula answers with its value as text, and
+                // an empty one with an empty string.
+                "[10] [] [text]".to_string(),
+                // One of the two has a formula, so neither; both, so True.
+                "Null	True".to_string(),
+                // A cell that states no format is General; an empty cell is
+                // Empty rather than a blank string.
+                "General	Empty".to_string(),
+                // A lone cell's region is itself.
+                "2	$D$4".to_string(),
+                "$Z$50".to_string(),
+                // Running up from the top row stays where it is.
+                "$A$1".to_string(),
+                "$A$1:$D$4".to_string(),
+                "11".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn a_range_says_what_a_person_would_see_in_it() {
         let mut workbook = workbook();
