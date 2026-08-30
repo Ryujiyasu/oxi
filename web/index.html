@@ -201,6 +201,18 @@ input[type="file"] { display: none; }
     color: var(--oxi-primary);
     background: var(--oxi-primary-light);
 }
+.side-door {
+    margin-top: 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #666;
+}
+.side-door a {
+    color: var(--oxi-primary);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+}
+.side-door a:hover { border-bottom-color: var(--oxi-primary); }
 #status {
     margin-top: 16px;
     padding: 12px;
@@ -977,6 +989,11 @@ input[type="file"] { display: none; }
 .dark .drop-zone .hint { color: #8a8078; }
 .dark .sample-buttons { color: var(--text-secondary); }
 .dark .sample-buttons button { background: var(--surface); border-color: #555; color: var(--text); }
+.dark .side-door { color: var(--text-secondary); }
+/* 藍色 goes to ground on a dark page, so the link takes the warm white the
+   rest of the text has and leans on the underline to say it is a link. */
+.dark .side-door a { color: var(--text); border-bottom-color: #5a5670; }
+.dark .side-door a:hover { border-bottom-color: var(--text); }
 .dark .page-wrapper { box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
 .dark .edit-page { background: var(--surface); color: var(--text); }
 .dark .ribbon-select { background: var(--surface); color: var(--text); border-color: #555; }
@@ -1033,6 +1050,10 @@ input[type="file"] { display: none; }
         <button onclick="loadSample('sample.xlsx')" disabled>Excel (.xlsx)</button>
         <button onclick="loadSample('sample.pptx')" disabled>PowerPoint (.pptx)</button>
     </div>
+    <p class="side-door">
+        <a href="./xlsx-demo.html" data-i18n="sheetDemo">Or open the spreadsheet
+        on its own — drawn and edited by the renderer's own rules &rarr;</a>
+    </p>
     <input type="file" id="fileInput" accept=".docx,.xlsx,.pptx,.pdf">
     <div class="toolbar" id="toolbar">
         <button id="btnDownload" class="primary" data-i18n="download">Download</button>
@@ -1120,6 +1141,7 @@ const I18N = {
         dropText: 'Drop a .docx, .xlsx, .pptx, or .pdf file here — or click to browse',
         dropHint: 'Parsed, rendered, and edited entirely in your browser via WebAssembly',
         trySample: 'Try a sample:',
+        sheetDemo: "Or open the spreadsheet on its own — drawn and edited by the renderer's own rules →",
         download: 'Download',
         ready: 'Ready',
         searchText: 'Search text...',
@@ -1171,6 +1193,7 @@ const I18N = {
         dropText: '.docx, .xlsx, .pptx, .pdf ファイルをドロップ — またはクリックして選択',
         dropHint: 'WebAssemblyによりブラウザ内で完結。サーバーにファイルは送信されません',
         trySample: 'サンプルを試す:',
+        sheetDemo: '表計算だけを開く — レンダラと同じ実測の規則で描き、そのまま編集できます →',
         download: 'ダウンロード',
         ready: '準備完了',
         searchText: 'テキストを検索...',
