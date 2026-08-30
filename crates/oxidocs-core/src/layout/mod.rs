@@ -16143,10 +16143,33 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // model (Symbol asc + TEXT desc, S820b — differential probe
             // 13.386 = (2059+434)/2048×11), not the win-SUM ratio (1.2251
             // → 13.476, +0.086/bullet = the uklocal p6/p7 residual slope).
+            // S1263 (2026-08-30, default ON, opt-out OXI_S1263_DISABLE): the
+            // Symbol marker's ascent is measured at the MARKER's own declared
+            // size, not the paragraph's. `w:lvl` carries its own `<w:sz>` and
+            // the parser already resolves it into `list_marker_size` (S1037
+            // uses it for the marker's width); only this height rule still read
+            // the body size.
+            // WITNESS `reports__0018715b4769984f` (EN Phase-1 FAIL 0.9560, whose
+            // only feature is footnotes): its recommendation list is `numId=36`
+            // -> a Symbol U+F0B7 bullet declared at `w:sz=20` (10pt) inside
+            // 11pt Calibri body text. Word sets consecutive items 22.44pt apart
+            // -- exactly `11 x 1.2207 x 1.0792 + 8 = 22.49`, i.e. the plain body
+            // line plus the docDefaults 8pt after, with NO marker growth. Oxi
+            // set them 23.07 apart because it measured a 10pt marker as if it
+            // were 11pt:
+            //     11pt: 1.00537 x 11    = 11.06 > body box ascent 10.68 -> +0.38
+            //     10pt: 1.00537 x 10    = 10.05 < 10.68                 -> +0.00
+            // The overflow is the whole point of the rule, so feeding it the
+            // wrong size does not merely scale it -- it invents one.
+            let s1263_marker_fs = if std::env::var("OXI_S1263_DISABLE").is_err() {
+                para.style.list_marker_size.unwrap_or(para_font_size)
+            } else {
+                para_font_size
+            };
             const SYM_ASC_R: f32 = 2059.0 / 2048.0;
             const SYMBOL_RATIO: f32 = 1.2251; // legacy win-sum model (A/B)
             let marker_nat = if s821_entry_attribution {
-                SYM_ASC_R * para_font_size + body_desc
+                SYM_ASC_R * s1263_marker_fs + body_desc
             } else {
                 SYMBOL_RATIO * para_font_size
             };
@@ -16178,7 +16201,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // 12.649 + 0.741 = 13.390 vs the recorded differential 13.386.
                 let s1112 = std::env::var("OXI_S1112_DISABLE").is_err();
                 let marker_overflow =
-                    (SYM_ASC_R * para_font_size - body_box_asc).max(0.0);
+                    (SYM_ASC_R * s1263_marker_fs - body_box_asc).max(0.0);
                 let s689_target = match para.style.line_spacing_rule.as_deref() {
                     Some("exact") if s947 => line_heights[0],
                     Some("atLeast") if s947 => line_heights[0].max(marker_nat),
