@@ -78,7 +78,8 @@
 
 <script type="module">
 import init, {
-  parse_presentation, layout_slide_shape, slide_family_measurable, edit_pptx,
+  parse_presentation, layout_slide_shape, slide_family_measurable,
+  edit_pptx_with_splits,
 } from './oxidocs_wasm.js';
 
 const $ = (id) => document.getElementById(id);
@@ -89,6 +90,7 @@ const state = {
   sel: null,           // {shapeIndex, paraIndex, charIndex}
   edits: new Map(),    // "slide/shape/para/run" -> new text
   undo: [], redo: [],  // each step: what a run said before and after
+  splits: [],          // {slide, shape, para, at} -- where Enter broke a paragraph
   original: new Map(), // "shape/para/run" -> the text the file opened with
 };
 
@@ -360,6 +362,24 @@ document.addEventListener('keydown', (e) => {
       ' run' + (state.edits.size === 1 ? '' : 's') + ' edited');
 });
 
+// Enter breaks the paragraph at the caret. The break is recorded rather than
+// applied to the IR: the engine's layout has no notion of half a paragraph, and
+// re-laying out an imagined split would show a placement the file does not yet
+// have. The panel says a break is pending, and the save performs it.
+document.addEventListener('keydown', (e) => {
+  if (!state.sel || e.key !== 'Enter') return;
+  e.preventDefault();
+  const { entry, line } = state.sel;
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  state.splits.push({
+    slide_index: state.slide, shape_index: entry.shape.sp_index,
+    paragraph_index: line.para_index, at_char: state.sel.charIndex,
+  });
+  $('save').disabled = false;
+  say(`a paragraph break is pending at character ${state.sel.charIndex}` +
+      ` \u2014 save to apply it`);
+});
+
 document.addEventListener('keydown', (e) => {
   if (!state.sel) return;
   const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
@@ -418,13 +438,15 @@ $('save').addEventListener('click', () => {
                  new_text: text });
   }
   try {
-    const out = edit_pptx(new Uint8Array(state.bytes), edits);
+    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, state.splits);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([out], {
       type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
     a.download = 'edited.pptx';
     a.click();
-    say(`saved ${edits.length} edit${edits.length === 1 ? '' : 's'}`);
+    say(`saved ${edits.length} edit${edits.length === 1 ? '' : 's'}` +
+        (state.splits.length ? ` and ${state.splits.length} paragraph break` +
+                               `${state.splits.length === 1 ? '' : 's'}` : ''));
   } catch (err) {
     say('save failed: ' + err.message);
   }
@@ -492,6 +514,7 @@ $('file').addEventListener('change', async (e) => {
   state.edits.clear();
   state.undo.length = 0;
   state.redo.length = 0;
+  state.splits.length = 0;
   state.original.clear();
   $('save').disabled = true;
   try {

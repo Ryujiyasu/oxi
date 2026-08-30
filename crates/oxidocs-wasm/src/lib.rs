@@ -721,6 +721,58 @@ struct JsSlideTextEdit {
     new_text: String,
 }
 
+/// One paragraph break from JavaScript.
+#[cfg(feature = "suite")]
+#[derive(Deserialize)]
+struct JsSlideSplit {
+    slide_index: usize,
+    shape_index: usize,
+    paragraph_index: usize,
+    at_char: usize,
+}
+
+/// Edit a .pptx and break paragraphs in it, returning the modified bytes.
+///
+/// `edits` replaces run text; `splits` cuts a paragraph in two at a character
+/// offset, which is what Enter means. Both are applied to the same save, and
+/// the text edit lands first so a split counts the characters the file will
+/// actually carry.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn edit_pptx_with_splits(
+    data: &[u8],
+    edits: JsValue,
+    splits: JsValue,
+) -> Result<Vec<u8>, JsError> {
+    let js_edits: Vec<JsSlideTextEdit> = if edits.is_undefined() || edits.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(edits).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    let js_splits: Vec<JsSlideSplit> = if splits.is_undefined() || splits.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(splits).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    let mut editor = oxislides_core::PptxEditor::new(data)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let edits: Vec<oxislides_core::editor::SlideTextEdit> = js_edits
+        .into_iter()
+        .map(|e| oxislides_core::editor::SlideTextEdit {
+            slide_index: e.slide_index,
+            shape_index: e.shape_index,
+            paragraph_index: e.paragraph_index,
+            run_index: e.run_index,
+            new_text: e.new_text,
+        })
+        .collect();
+    editor.apply_edits(&edits);
+    for sp in js_splits {
+        editor.split_paragraph(sp.slide_index, sp.shape_index, sp.paragraph_index, sp.at_char);
+    }
+    editor.save().map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Edit a .pptx file and return the modified bytes.
 #[cfg(feature = "suite")]
 #[wasm_bindgen]

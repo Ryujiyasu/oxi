@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
-use quick_xml::events::{BytesText, Event};
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
@@ -37,12 +37,28 @@ pub struct SlideTextEdit {
     pub new_text: String,
 }
 
+/// A paragraph break: what pressing Enter asks for.
+///
+/// The paragraph is cut at `at_char` -- counted in CHARACTERS over the
+/// paragraph's runs, the same way the layout counts them -- and the tail
+/// becomes a new paragraph carrying a copy of the original's `a:pPr`, so the
+/// two halves keep the level, alignment and bullet the whole had.
+#[derive(Debug, Clone)]
+pub struct SlideParagraphSplit {
+    pub slide_index: usize,
+    pub shape_index: usize,
+    pub paragraph_index: usize,
+    pub at_char: usize,
+}
+
 /// Round-trip pptx editor.
 pub struct PptxEditor {
     original_data: Vec<u8>,
     presentation: Presentation,
     /// (slide_idx) -> { (shape, para, run) -> text }
     edits: HashMap<usize, HashMap<(usize, usize, usize), String>>,
+    /// (slide_idx) -> { (shape, para) -> character offset to break at }
+    splits: HashMap<usize, HashMap<(usize, usize), usize>>,
 }
 
 impl PptxEditor {
@@ -52,6 +68,7 @@ impl PptxEditor {
             original_data: data.to_vec(),
             presentation,
             edits: HashMap::new(),
+            splits: HashMap::new(),
         })
     }
 
@@ -84,6 +101,24 @@ impl PptxEditor {
     ///
     /// One entry per slide, holding its shapes, holding their paragraphs,
     /// holding each run's current text.
+    /// Break `paragraph_index` in two at `at_char`.
+    ///
+    /// One break per paragraph per save: a second call replaces the first,
+    /// because the offsets of a paragraph that has already been cut are no
+    /// longer the ones the caller measured.
+    pub fn split_paragraph(
+        &mut self,
+        slide_index: usize,
+        shape_index: usize,
+        paragraph_index: usize,
+        at_char: usize,
+    ) {
+        self.splits
+            .entry(slide_index)
+            .or_default()
+            .insert((shape_index, paragraph_index), at_char);
+    }
+
     pub fn addressable_runs(&self) -> Result<Vec<Vec<Vec<Vec<String>>>>, PptxError> {
         let paths = self.resolve_slide_paths()?;
         let mut archive = OoxmlArchive::new(&self.original_data)?;
@@ -108,11 +143,14 @@ impl PptxEditor {
     }
 
     pub fn has_edits(&self) -> bool {
+        if !self.splits.is_empty() {
+            return true;
+        }
         !self.edits.is_empty()
     }
 
     pub fn save(&self) -> Result<Vec<u8>, PptxError> {
-        if self.edits.is_empty() {
+        if self.edits.is_empty() && self.splits.is_empty() {
             return Ok(self.original_data.clone());
         }
 
@@ -127,6 +165,14 @@ impl PptxEditor {
                 path_edits.insert(path.clone(), edits);
             }
         }
+        let mut path_splits: HashMap<String, &HashMap<(usize, usize), usize>> = HashMap::new();
+        for (si, splits) in &self.splits {
+            if let Some(path) = slide_paths.get(*si) {
+                path_splits.insert(path.clone(), splits);
+            }
+        }
+        let no_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
+        let no_splits: HashMap<(usize, usize), usize> = HashMap::new();
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive =
@@ -147,12 +193,14 @@ impl PptxEditor {
                     .start_file(&name, options)
                     .map_err(|e| PptxError::InvalidData(e.to_string()))?;
 
-                if let Some(slide_edits) = path_edits.get(&name) {
+                if path_edits.contains_key(&name) || path_splits.contains_key(&name) {
+                    let slide_edits = path_edits.get(&name).copied().unwrap_or(&no_edits);
+                    let slide_splits = path_splits.get(&name).copied().unwrap_or(&no_splits);
                     let mut xml = String::new();
                     entry
                         .read_to_string(&mut xml)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
-                    let patched = patch_slide_xml(&xml, slide_edits)?;
+                    let patched = patch_slide_xml(&xml, slide_edits, slide_splits)?;
                     writer
                         .write_all(patched.as_bytes())
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
@@ -295,9 +343,166 @@ fn runs_of_slide(xml: &str) -> Vec<Vec<Vec<String>>> {
     shapes
 }
 
+/// Write out one buffered paragraph as TWO, cut at `at_char`.
+///
+/// The buffer holds every event of the original `<a:p>`, text edits already
+/// applied. The cut is counted in characters over the paragraph's `<a:t>`
+/// contents, so it is the offset the layout and the caret use.
+///
+/// Both halves keep the paragraph's own `a:pPr`: a break in the middle of a
+/// bulleted, indented paragraph must not leave the tail unbulleted and flush
+/// left. The run that straddles the cut keeps its `a:rPr` on both sides for the
+/// same reason -- its size and weight belong to the text, not to the paragraph.
+fn write_split_paragraph<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    buffered: &[Event<'static>],
+    at_char: usize,
+) -> Result<(), PptxError> {
+    let mut seen = 0usize;
+    let mut done = false;
+    let mut p_start: Option<BytesStart<'static>> = None;
+    let mut ppr: Vec<Event<'static>> = Vec::new();
+    let mut in_ppr = false;
+    let mut cur_r: Option<BytesStart<'static>> = None;
+    let mut cur_t: Option<BytesStart<'static>> = None;
+    // The CURRENT run's own properties, kept the same way the paragraph's are:
+    // the half after the break re-opens the run, and a run re-opened without
+    // its `a:rPr` loses the size and weight of the text it carries.
+    let mut rpr: Vec<Event<'static>> = Vec::new();
+    let mut in_rpr = false;
+    let mut in_text = false;
+
+    let put = |w: &mut Writer<W>, ev: Event| -> Result<(), PptxError> {
+        w.write_event(ev)
+            .map_err(|e| PptxError::InvalidData(e.to_string()))
+    };
+
+    for ev in buffered {
+        match ev {
+            Event::Start(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "p" if p_start.is_none() => p_start = Some(e.clone()),
+                    "pPr" => in_ppr = true,
+                    "r" => {
+                        cur_r = Some(e.clone());
+                        rpr.clear();
+                    }
+                    "rPr" => in_rpr = true,
+                    "t" => {
+                        cur_t = Some(e.clone());
+                        in_text = true;
+                    }
+                    _ => {}
+                }
+                if in_ppr {
+                    ppr.push(ev.clone());
+                }
+                if in_rpr {
+                    rpr.push(ev.clone());
+                }
+            }
+            Event::End(e) => {
+                let name = local_name(e.name().as_ref());
+                if in_ppr {
+                    ppr.push(ev.clone());
+                }
+                if in_rpr {
+                    rpr.push(ev.clone());
+                }
+                if name == "pPr" {
+                    in_ppr = false;
+                }
+                if name == "rPr" {
+                    in_rpr = false;
+                }
+                if name == "t" {
+                    in_text = false;
+                }
+            }
+            Event::Empty(e) if local_name(e.name().as_ref()) == "rPr" => {
+                // `<a:rPr .../>` is the common shape and never opens, so it is
+                // caught here rather than by the Start arm.
+                rpr.clear();
+                rpr.push(ev.clone());
+                if in_ppr {
+                    ppr.push(ev.clone());
+                }
+            }
+            _ if in_ppr => ppr.push(ev.clone()),
+            _ => {}
+        }
+        // The paragraph properties are COPIED for the second half and written
+        // for the first, so collecting them must not stop them being written --
+        // gating the writer on `in_ppr` dropped the opening tag and let the
+        // closing one through, which produced `<a:p></a:pPr>`.
+        {
+            match ev {
+                Event::Text(t) if in_text && !done => {
+                    let text = t.unescape().unwrap_or_default().to_string();
+                    let n = text.chars().count();
+                    if seen + n >= at_char {
+                        let cut = at_char.saturating_sub(seen);
+                        let head: String = text.chars().take(cut).collect();
+                        let tail: String = text.chars().skip(cut).collect();
+                        put(writer, Event::Text(BytesText::new(&head)))?;
+                        // Close the run and the paragraph, then open a new one
+                        // with the same properties and carry on.
+                        if let Some(t0) = &cur_t {
+                            put(writer, Event::End(BytesEnd::new(
+                                String::from_utf8_lossy(t0.name().as_ref()).into_owned())))?;
+                        }
+                        if let Some(r0) = &cur_r {
+                            put(writer, Event::End(BytesEnd::new(
+                                String::from_utf8_lossy(r0.name().as_ref()).into_owned())))?;
+                        }
+                        if let Some(p0) = &p_start {
+                            put(writer, Event::End(BytesEnd::new(
+                                String::from_utf8_lossy(p0.name().as_ref()).into_owned())))?;
+                            put(writer, Event::Start(p0.clone()))?;
+                        }
+                        for pe in &ppr {
+                            put(writer, pe.clone())?;
+                        }
+                        if let Some(r0) = &cur_r {
+                            put(writer, Event::Start(r0.clone()))?;
+                            for re in &rpr {
+                                put(writer, re.clone())?;
+                            }
+                        }
+                        if let Some(t0) = &cur_t {
+                            put(writer, Event::Start(t0.clone()))?;
+                        }
+                        put(writer, Event::Text(BytesText::new(&tail)))?;
+                        done = true;
+                    } else {
+                        put(writer, Event::Text(t.clone()))?;
+                    }
+                    seen += n;
+                }
+                other => put(writer, other.clone())?,
+            }
+        }
+    }
+    if !done {
+        // The cut is at or past the end: the tail is an empty paragraph, which
+        // is what Enter at the end of a line asks for.
+        if let Some(p0) = &p_start {
+            put(writer, Event::Start(p0.clone()))?;
+            for pe in &ppr {
+                put(writer, pe.clone())?;
+            }
+            put(writer, Event::End(BytesEnd::new(
+                String::from_utf8_lossy(p0.name().as_ref()).into_owned())))?;
+        }
+    }
+    Ok(())
+}
+
 fn patch_slide_xml(
     xml: &str,
     edits: &HashMap<(usize, usize, usize), String>,
+    splits: &HashMap<(usize, usize), usize>,
 ) -> Result<String, PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -310,6 +515,10 @@ fn patch_slide_xml(
     let mut run_idx: usize = 0;
     let mut in_run = false;
     let mut in_text = false;
+    // While a paragraph is being split its events are collected here instead of
+    // written, because the second half needs the first half's properties and
+    // they arrive before the cut is reached.
+    let mut buffer: Option<(usize, Vec<Event<'static>>)> = None;
 
     loop {
         match reader.read_event().map_err(PptxError::Xml)? {
@@ -328,6 +537,9 @@ fn patch_slide_xml(
                     "p" if in_shape => {
                         in_paragraph = true;
                         run_idx = 0;
+                        if let Some(at) = splits.get(&(shape_idx, para_idx)) {
+                            buffer = Some((*at, Vec::new()));
+                        }
                     }
                     "r" if in_paragraph => {
                         in_run = true;
@@ -337,9 +549,13 @@ fn patch_slide_xml(
                     }
                     _ => {}
                 }
-                writer
-                    .write_event(Event::Start(e.clone()))
-                    .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                if let Some((_, buf)) = buffer.as_mut() {
+                    buf.push(Event::Start(e.clone().into_owned()));
+                } else {
+                    writer
+                        .write_event(Event::Start(e.clone()))
+                        .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                }
             }
             Event::End(ref e) => {
                 let name = local_name(e.name().as_ref());
@@ -364,31 +580,46 @@ fn patch_slide_xml(
                     }
                     _ => {}
                 }
-                writer
-                    .write_event(Event::End(e.clone()))
-                    .map_err(|e| PptxError::InvalidData(e.to_string()))?;
-            }
-            Event::Text(ref e) => {
-                if in_text {
-                    if let Some(new_text) = edits.get(&(shape_idx, para_idx, run_idx)) {
-                        writer
-                            .write_event(Event::Text(BytesText::new(new_text)))
-                            .map_err(|e| PptxError::InvalidData(e.to_string()))?;
-                    } else {
-                        writer
-                            .write_event(Event::Text(e.clone()))
-                            .map_err(|e| PptxError::InvalidData(e.to_string()))?;
-                    }
+                let closing_split = local_name(e.name().as_ref()) == "p" && buffer.is_some();
+                if let Some((_, buf)) = buffer.as_mut() {
+                    buf.push(Event::End(e.clone().into_owned()));
                 } else {
                     writer
-                        .write_event(Event::Text(e.clone()))
+                        .write_event(Event::End(e.clone()))
+                        .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                }
+                if closing_split {
+                    let (at, buf) = buffer.take().expect("just checked");
+                    write_split_paragraph(&mut writer, &buf, at)?;
+                }
+            }
+            Event::Text(ref e) => {
+                // A text edit is applied BEFORE any split, so the split counts
+                // characters of the text the file will actually carry.
+                let out = if in_text {
+                    match edits.get(&(shape_idx, para_idx, run_idx)) {
+                        Some(new_text) => Event::Text(BytesText::new(new_text).into_owned()),
+                        None => Event::Text(e.clone().into_owned()),
+                    }
+                } else {
+                    Event::Text(e.clone().into_owned())
+                };
+                if let Some((_, buf)) = buffer.as_mut() {
+                    buf.push(out);
+                } else {
+                    writer
+                        .write_event(out)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
                 }
             }
             event => {
-                writer
-                    .write_event(event)
-                    .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                if let Some((_, buf)) = buffer.as_mut() {
+                    buf.push(event.into_owned());
+                } else {
+                    writer
+                        .write_event(event)
+                        .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                }
             }
         }
     }
@@ -427,5 +658,124 @@ mod tests {
         } else {
             panic!("Expected TextBox");
         }
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    const SLIDE: &str = concat!(
+        r#"<?xml version="1.0"?><p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>"#,
+        r#"<p:sp><p:txBody>"#,
+        r#"<a:p><a:pPr lvl="1"><a:buChar char="-"/></a:pPr>"#,
+        r#"<a:r><a:rPr sz="1800" b="1"/><a:t>Hello world</a:t></a:r>"#,
+        r#"</a:p>"#,
+        r#"<a:p><a:r><a:t>Second</a:t></a:r></a:p>"#,
+        r#"</p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+    );
+
+    fn split_at(at: usize) -> String {
+        let mut splits = HashMap::new();
+        splits.insert((0usize, 0usize), at);
+        patch_slide_xml(SLIDE, &HashMap::new(), &splits).expect("patch")
+    }
+
+    fn paragraphs(xml: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = xml;
+        while let Some(i) = rest.find("<a:p>") {
+            let after = &rest[i..];
+            let end = after.find("</a:p>").map(|e| e + 6).unwrap_or(after.len());
+            out.push(after[..end].to_string());
+            rest = &after[end..];
+        }
+        out
+    }
+
+    fn texts(p: &str) -> String {
+        let mut out = String::new();
+        let mut rest = p;
+        while let Some(i) = rest.find("<a:t>") {
+            let after = &rest[i + 5..];
+            let end = after.find("</a:t>").unwrap_or(after.len());
+            out.push_str(&after[..end]);
+            rest = &after[end..];
+        }
+        out
+    }
+
+    #[test]
+    fn a_cut_in_the_middle_gives_two_paragraphs_with_the_text_divided() {
+        let out = split_at(5);
+        let ps = paragraphs(&out);
+        assert_eq!(ps.len(), 3, "two halves plus the untouched second paragraph");
+        assert_eq!(texts(&ps[0]), "Hello");
+        assert_eq!(texts(&ps[1]), " world");
+        assert_eq!(texts(&ps[2]), "Second", "the other paragraph is untouched");
+    }
+
+    #[test]
+    fn both_halves_keep_the_paragraphs_own_properties() {
+        let out = split_at(5);
+        let ps = paragraphs(&out);
+        for (i, p) in ps.iter().take(2).enumerate() {
+            assert!(p.contains(r#"lvl="1""#), "half {i} lost its level: {p}");
+            assert!(p.contains("buChar"), "half {i} lost its bullet: {p}");
+        }
+    }
+
+    #[test]
+    fn the_run_that_is_cut_keeps_its_own_properties_on_both_sides() {
+        let out = split_at(5);
+        let ps = paragraphs(&out);
+        for (i, p) in ps.iter().take(2).enumerate() {
+            assert!(p.contains(r#"sz="1800""#), "half {i} lost the run size: {p}");
+            assert!(p.contains(r#"b="1""#), "half {i} lost the run weight: {p}");
+        }
+    }
+
+    #[test]
+    fn a_cut_at_the_end_adds_an_empty_paragraph() {
+        let out = split_at(11);
+        let ps = paragraphs(&out);
+        assert_eq!(texts(&ps[0]), "Hello world");
+        assert_eq!(texts(&ps[1]), "", "the tail is empty");
+        assert!(ps[1].contains(r#"lvl="1""#), "and still carries the properties");
+    }
+
+    #[test]
+    fn a_cut_past_the_end_behaves_like_a_cut_at_the_end() {
+        let out = split_at(999);
+        let ps = paragraphs(&out);
+        assert_eq!(texts(&ps[0]), "Hello world");
+        assert_eq!(texts(&ps[1]), "");
+    }
+
+    #[test]
+    fn a_cut_at_zero_leaves_the_whole_text_on_the_second_half() {
+        let out = split_at(0);
+        let ps = paragraphs(&out);
+        assert_eq!(texts(&ps[0]), "");
+        assert_eq!(texts(&ps[1]), "Hello world");
+    }
+
+    #[test]
+    fn a_text_edit_is_applied_before_the_cut_is_counted() {
+        let mut edits = HashMap::new();
+        edits.insert((0usize, 0usize, 0usize), "Goodbye now".to_string());
+        let mut splits = HashMap::new();
+        splits.insert((0usize, 0usize), 7);
+        let out = patch_slide_xml(SLIDE, &edits, &splits).expect("patch");
+        let ps = paragraphs(&out);
+        assert_eq!(texts(&ps[0]), "Goodbye");
+        assert_eq!(texts(&ps[1]), " now");
+    }
+
+    #[test]
+    fn a_slide_with_no_split_is_left_alone() {
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new()).expect("patch");
+        assert_eq!(paragraphs(&out).len(), 2);
     }
 }

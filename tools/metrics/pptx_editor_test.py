@@ -20,6 +20,8 @@ What it asserts, per deck:
                 line
   undo          Ctrl+Z puts the text back AND drops the edit, so a save after a
                 full undo writes nothing
+  enter         a paragraph break is recorded, and the saved file really holds
+                one more paragraph in that shape than the original did
   save          the download re-opens as a pptx whose text carries the change
   console       no page error was raised along the way
 
@@ -95,6 +97,15 @@ def slide_text(pptx: bytes, slide_no: int) -> str:
     with zipfile.ZipFile(io.BytesIO(pptx)) as z:
         xml = z.read(f"ppt/slides/slide{slide_no}.xml").decode("utf-8", "replace")
     return "".join(re.findall(r"<a:t>([^<]*)</a:t>", xml))
+
+
+def count_paragraphs(pptx: bytes, slide_no: int) -> int:
+    """How many `<a:p>` one slide holds -- the thing a paragraph break moves."""
+    import io as _io
+
+    with zipfile.ZipFile(_io.BytesIO(pptx)) as z:
+        xml = z.read(f"ppt/slides/slide{slide_no}.xml").decode("utf-8", "replace")
+    return len(re.findall(r"<a:p[ >]", xml))
 
 
 def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
@@ -190,6 +201,20 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         save_off = page.eval_on_selector("#save", "e => e.disabled")
         rep.check(deck, "undo clears", save_off is True,
                   "save is disabled again" if save_off else "save still armed")
+
+        # Enter must reach the FILE: the count of <a:p> in the slide has to go
+        # up by one. A break that only moved the caret would look the same on
+        # screen and change nothing.
+        page.keyboard.press("Enter")
+        pending = page.eval_on_selector("#status", "e => e.textContent")
+        rep.check(deck, "enter", "break is pending" in pending, repr(pending))
+        with page.expect_download() as dl:
+            page.click("#save")
+        broke = Path(dl.value.path()).read_bytes()
+        before_n = count_paragraphs(pptx.read_bytes(), 1)
+        after_n = count_paragraphs(broke, 1)
+        rep.check(deck, "enter saved", after_n == before_n + 1,
+                  f"paragraphs {before_n} -> {after_n}")
 
         # Type once more so there is something to save.
         page.keyboard.type("Z")
