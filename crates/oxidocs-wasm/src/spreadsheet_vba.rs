@@ -662,7 +662,8 @@ impl<'a> WorkbookHost<'a> {
         self.range_object(sheet, &[Value::String(reference.to_string())])
     }
 
-    fn used_range_object(&mut self, sheet: usize) -> Result<Value, String> {
+    /// The rectangle a sheet's written cells fill.
+    fn used_range(&self, sheet: usize) -> Result<CellRange, String> {
         let worksheet = self
             .workbook
             .sheets
@@ -683,6 +684,12 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         let (start_row, start_column, end_row, end_column) = bounds.unwrap_or((1, 0, 1, 0));
+        Ok(CellRange { sheet, start_row, start_column, end_row, end_column })
+    }
+
+    fn used_range_object(&mut self, sheet: usize) -> Result<Value, String> {
+        let CellRange { start_row, start_column, end_row, end_column, .. } =
+            self.used_range(sheet)?;
         Ok(self.object(HostObject::Range(CellRange {
             sheet,
             start_row,
@@ -1852,6 +1859,17 @@ impl<'a> WorkbookHost<'a> {
         if args.is_empty() || args.len() > 9 {
             return Err("Range.Find expects between one and nine arguments".to_string());
         }
+        // A range of one cell is not a search of one cell: Excel takes it to
+        // mean the whole sheet. Asked of Excel, `Range("A2").Find("far")`
+        // answers `$C$5`, three columns away — which is why the usual way to
+        // write this, `Cells.Find(...)`, works at all. The written cells are
+        // as far as it can matter, and walking the sheet's full million would
+        // spend the execution budget on empty ground.
+        let range = if range.is_single() {
+            self.used_range(range.sheet)?
+        } else {
+            range
+        };
         Self::range_cell_count(range)?;
         let what = args
             .first()
@@ -9191,6 +9209,52 @@ mod tests {
     /// A string put into a cell is read the way typing it would be. Every
     /// answer here was read off Excel; the ones Excel also gives a number
     /// format to are left alone on purpose and are named in `typed_from_text`.
+    /// `Find`'s awkward cases, read off Excel. `LookAt` is left explicit
+    /// throughout: its default is whatever the session last used, which is a
+    /// fact about the session and not about Excel.
+    #[test]
+    fn find_starts_after_the_first_cell_and_comes_round() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"apple\"
+               Range(\"A2\").Value = \"banana\"
+               Range(\"A3\").Value = \"APPLE\"
+               Range(\"A4\").Value = \"pineapple\"
+               Range(\"C5\").Value = \"far\"
+               Debug.Print Range(\"A1:A4\").Find(\"apple\", , , 1).Address
+               Debug.Print Range(\"A1:A4\").Find(\"apple\", Range(\"A3\"), , 1).Address
+               Debug.Print TypeName(Range(\"A1:A4\").Find(\"plum\", , , 1))
+               Debug.Print Range(\"A2\").Find(\"far\", , , 1).Address
+               Debug.Print TypeName(Range(\"A1:A4\").Find(\"\", , , 1))
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                // The search begins AFTER the first cell of the range, so the
+                // first cell is the last one looked at — A1 also says apple.
+                "$A$3".to_string(),
+                // And it comes round: starting after the last match returns
+                // to the top.
+                "$A$1".to_string(),
+                "Nothing".to_string(),
+                // A range of ONE cell searches the whole sheet, which is how
+                // `Cells.Find` is usually written.
+                "$C$5".to_string(),
+                "Nothing".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn a_string_put_in_a_cell_is_read_as_it_would_be_typed() {
         let mut workbook = workbook();
