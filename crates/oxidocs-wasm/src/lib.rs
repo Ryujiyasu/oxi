@@ -749,6 +749,63 @@ pub fn edit_pptx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Where the engine breaks one paragraph's lines, for a box `width_pt` wide.
+///
+/// The browser has been wrapping slide text with its own text layout, so what
+/// a person edits on screen is not what the renderer -- or PowerPoint --
+/// produces. This is the engine's own break test
+/// (`pptx-master-unit-break-law`: each glyph's advance rounded to 1/8 pt, then
+/// summed), running where there is no font system.
+///
+/// Returns `null` when the metrics tables cannot measure the text, which is
+/// most families: the tables carry the faces that were measured from their
+/// real files, and a guess here would break lines PowerPoint keeps. A caller
+/// that gets null must say the wrap is the browser's, not the engine's.
+///
+/// `runs` is the paragraph's runs, so a line carrying a bold word is measured
+/// per run rather than wholly in one weight.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn break_slide_paragraph(
+    text: &str,
+    font_size: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    width_pt: f32,
+    runs: JsValue,
+) -> Result<JsValue, JsError> {
+    let runs: Vec<oxislides_core::ir::SlideRun> = if runs.is_undefined() || runs.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(runs).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    let lines = oxislides_core::layout::break_paragraph(
+        &oxislides_core::layout::TableMetrics,
+        text,
+        font_size,
+        family,
+        bold,
+        italic,
+        width_pt,
+        &runs,
+    );
+    match lines {
+        Some(lines) => {
+            serde_wasm_bindgen::to_value(&lines).map_err(|e| JsError::new(&e.to_string()))
+        }
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Whether the engine can measure this family at all, so a caller can tell a
+/// person which text on the page is laid out by the engine and which is not.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn slide_family_measurable(family: &str) -> bool {
+    oxislides_core::font_adv::family_supported(family)
+}
+
 #[derive(Serialize)]
 struct LayoutElementJs {
     x: f32,

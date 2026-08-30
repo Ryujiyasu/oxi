@@ -1510,7 +1510,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
 import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
 
 let wasmReady = false;
@@ -4182,6 +4182,40 @@ function renderEditablePptx(presentation) {
     container.appendChild(layout);
 }
 
+// Where the engine breaks this paragraph, if it can measure the family.
+//
+// The wrap is applied as explicit line boxes so the text a person edits sits
+// on the engine's lines. A paragraph the engine cannot measure is left to the
+// browser and given `data-wrap="browser"`, so the difference is visible in the
+// DOM rather than silently blended in.
+function markEngineWrap(p, shape, para, lvl) {
+    const runs = para.runs || [];
+    const text = runs.map(r => r.text).join('');
+    if (!text.trim()) return;
+    const family = (runs[0] && runs[0].font_family) || (lvl && lvl.font_family);
+    if (!family || !slide_family_measurable(family)) {
+        p.dataset.wrap = 'browser';
+        return;
+    }
+    const fs = (runs[0] && runs[0].font_size) || (lvl && lvl.font_size) || 18;
+    const bold = runs.some(r => r.bold);
+    const italic = runs.some(r => r.italic);
+    // The box the text is judged against: the shape less its side insets.
+    const width = shape.width - (shape.l_ins || 0) - (shape.r_ins || 0);
+    let lines = null;
+    try {
+        lines = break_slide_paragraph(text, fs, family, bold, italic, width, runs);
+    } catch (e) {
+        console.warn('engine wrap refused', e);
+    }
+    if (!lines) { p.dataset.wrap = 'browser'; return; }
+    p.dataset.wrap = 'engine';
+    p.dataset.engineLines = lines.length;
+    p.title = lines.length > 1
+        ? `Oxi wraps this into ${lines.length} lines`
+        : 'Oxi keeps this on one line';
+}
+
 // A slide's background is a colour, a gradient ramp or a picture -- the three
 // are mutually exclusive in the IR, because a ramp has no single colour and a
 // picture has neither.
@@ -4342,6 +4376,16 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
                     }
                     p.appendChild(span);
                 });
+                // The engine's own break, when it can measure this family.
+                // Until now the browser wrapped slide text with its own text
+                // layout, so what a person edits was not what the renderer --
+                // or PowerPoint -- produces. `break_slide_paragraph` runs the
+                // master-unit break test (each glyph's advance rounded to
+                // 1/8pt, then summed) and returns null for a family the
+                // measured tables do not carry, which is most of them; the
+                // paragraph then keeps the browser's wrap and is marked as
+                // such rather than being drawn as if the engine had spoken.
+                markEngineWrap(p, shape, para, lvl);
                 div.appendChild(p);
             });
         } else if (content && content.Image && content.Image.data && content.Image.data.length > 0) {

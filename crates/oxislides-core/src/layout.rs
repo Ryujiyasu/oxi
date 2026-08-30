@@ -517,3 +517,120 @@ mod wrap_loop_tests {
         assert_eq!(got, vec![String::new()]);
     }
 }
+
+/// A [`FaceMetrics`] that answers from the measured design-advance tables.
+///
+/// This is the answer a build with no font system can give: the `hmtx` tables
+/// in [`crate::font_adv`], measured from the real files, cover the families
+/// they cover and refuse everything else. Refusing is the point -- a browser
+/// that guessed a width would break lines where PowerPoint does not, and a
+/// caller that gets None can say so instead of drawing a lie.
+///
+/// The renderer keeps its own richer answer (the deck's embedded parts, the
+/// Office cloud cache, then a GDI probe); this is what remains when none of
+/// those exist.
+pub struct TableMetrics;
+
+impl FaceMetrics for TableMetrics {
+    fn advance_em(&self, family: &str, _bold: bool, _italic: bool, ch: char) -> Option<f32> {
+        crate::font_adv::hmtx_advance_em(family, ch)
+    }
+
+    fn has_all_glyphs(&self, family: &str, _bold: bool, _italic: bool, text: &str) -> bool {
+        text.chars().all(|c| crate::font_adv::hmtx_advance_em(family, c).is_some())
+    }
+}
+
+/// Break one paragraph's text into the lines a box `width_pt` wide holds.
+///
+/// The whole point of the port in one call: given a metrics source, this is
+/// the same break the renderer makes, and it runs anywhere. `runs` carries the
+/// paragraph's own runs so a mixed-weight line is measured per run.
+///
+/// Returns None when the metrics source cannot measure the text -- the caller
+/// then has to fall back to whatever its platform offers, and should say that
+/// the answer is not the engine's.
+pub fn break_paragraph(
+    metrics: &dyn FaceMetrics,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    width_pt: f32,
+    runs: &[crate::ir::SlideRun],
+) -> Option<Vec<String>> {
+    // One probe first: if the source cannot measure the paragraph at all,
+    // say so rather than returning a wrap built out of fallbacks.
+    master_units(metrics, text, fs, family, bold, italic, 0.0)?;
+    let opts = WrapOpts {
+        trim_trailing_space: true,
+        char_wrap: true,
+        hyphen_breaks: false,
+    };
+    Some(wrap_lines(
+        text,
+        width_pt,
+        width_pt,
+        1.0,
+        &opts,
+        |candidate, w_pt, _px, emitted| {
+            let styles = RunStyles { runs, line_start: emitted };
+            let mu = if runs.len() > 1 {
+                master_units_runs(metrics, candidate, fs, family, bold, italic, &styles, true)
+            } else {
+                master_units(metrics, candidate, fs, family, bold, italic, para_spc(runs, true))
+            };
+            mu.map(|mu| fits(mu, w_pt)).unwrap_or(true)
+        },
+        |_| 0,
+    ))
+}
+
+#[cfg(test)]
+mod paragraph_tests {
+    use super::*;
+
+    fn run(text: &str) -> crate::ir::SlideRun {
+        crate::ir::SlideRun {
+            text: text.to_string(),
+            font_size: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            color: None,
+            color_alpha: None,
+            highlight: None,
+            font_family: None,
+            spacing: None,
+        }
+    }
+
+    #[test]
+    fn a_paragraph_breaks_on_the_tables_own_advances() {
+        let text = "The quick brown fox jumps over the lazy dog";
+        let runs = [run(text)];
+        // Arial 12pt: the whole string is about 220pt, so a 120pt box breaks it.
+        let got = break_paragraph(&TableMetrics, text, 12.0, "Arial", false, false, 120.0, &runs)
+            .expect("Arial is in the table");
+        assert!(got.len() > 1, "expected a wrap, got {got:?}");
+        assert_eq!(got.concat(), text);
+    }
+
+    #[test]
+    fn a_family_the_tables_do_not_cover_is_refused_not_guessed() {
+        let text = "hello";
+        let runs = [run(text)];
+        assert!(break_paragraph(&TableMetrics, text, 12.0, "Bebas Neue", false, false, 50.0, &runs)
+            .is_none());
+    }
+
+    #[test]
+    fn a_box_wide_enough_keeps_the_paragraph_whole() {
+        let text = "one two";
+        let runs = [run(text)];
+        let got = break_paragraph(&TableMetrics, text, 12.0, "Arial", false, false, 400.0, &runs)
+            .unwrap();
+        assert_eq!(got, vec![text]);
+    }
+}

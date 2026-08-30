@@ -23,7 +23,7 @@
 
 mod d2demoji;
 mod emoji;
-mod font_adv;
+use oxislides_core::font_adv;
 
 use oxislides_core::ir::{
     GeomCmd, LineEnd, MasterStyleLevel, Presentation, Shape, ShapeContent, SlideAlignment,

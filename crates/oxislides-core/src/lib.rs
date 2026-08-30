@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod editor;
+pub mod font_adv;
 pub mod ir;
 pub mod layout;
 pub mod parser;
