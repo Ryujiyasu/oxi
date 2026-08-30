@@ -18075,6 +18075,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 0.025
             };
+            // S1246 probe (opt-in OXI_S1246=1): above a committed footnote area
+            // Word measures a TEXT line by its FULL multiplied box -- it does not
+            // forgive the leading an auto multiple adds, the way it does for a
+            // trailing EMPTY paragraph (S1113). `_pb_fnbox` sweeps one line at
+            // w:line 240/258/300: the three last-stay box bottoms share a limit
+            // only under the full box; under the natural box their intervals do
+            // not intersect at all. Latin, non-typed-grid, fn-boundary scope.
+            let break_threshold = if std::env::var("OXI_S1246").ok().as_deref() == Some("1")
+                && s835_boundary_is_fn
+                && !self.doc_body_has_real_cjk
+                && page.grid_line_pitch.is_none()
+            {
+                // The capacity is S827's hhea line SCALED BY the auto multiple,
+                // not the unmultiplied natural (S1079) and not the multiplied
+                // spacing box: the spacing box is 13.500 where hhea is 13.428
+                // for this face, and that 0.072 is amplified by the multiple
+                // (17.000 vs 16.785 at 1.25), which is what breaks the m300 arm.
+                let factor = match para.style.line_spacing_rule.as_deref() {
+                    None | Some("auto") => para.style.line_spacing.unwrap_or(1.0).max(1.0),
+                    _ => 1.0,
+                };
+                let hhea = s779_win_heights
+                    .get(line_idx)
+                    .copied()
+                    .unwrap_or(break_threshold);
+                (hhea * factor).max(break_threshold)
+            } else {
+                break_threshold
+            };
             let mut natural_needs_page_break = if in_textbox || s832_trailing_empty {
                 false
             } else {
@@ -18401,9 +18430,16 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 false
             };
             let needs_page_break = natural_needs_page_break || s391_lrpb_break;
+            // OXI_DUMP_BREAK_Y lowers the ALL-lines cutoff: a page whose bottom
+            // is eaten by a footnote area breaks well above 700.
+            let dump_break_y: f32 = std::env::var("OXI_DUMP_BREAK_Y")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(700.0);
             if std::env::var("OXI_DUMP_BREAK").is_ok()
                 && (line_idx == 0
-                    || (std::env::var("OXI_DUMP_BREAK_ALL").is_ok() && cursor.cursor_y > 700.0))
+                    || (std::env::var("OXI_DUMP_BREAK_ALL").is_ok()
+                        && cursor.cursor_y > dump_break_y))
             {
                 let pi_str = body_para_index
                     .map(|v| v.to_string())
@@ -18422,6 +18458,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     s779_win_heights.get(line_idx).copied().unwrap_or(-1.0), txt
                 );
                 eprintln!("[BR_DUMP2] branch={} s693_nonlast={}", brk_branch, s693_nonlast);
+                // The reliefs that move the bottom. `eff_bot` already carries
+                // lenient; printing the parts says WHICH one bought the line.
+                eprintln!(
+                    "[BR_DUMP3] li={} lenient={:.3} fn_relief={:.3} s967_tol={:.3} fn_above={:.3} first_extra={:.3} content_bot={:.3}",
+                    line_idx, line_lenient_extra, s835_fn_relief, s967_tol, fn_reserve_above,
+                    first_line_extra_content_h, page_top + content_height
+                );
             }
 
             // Widow/orphan: if this is line 0 (orphan) and there are 2+ lines,
