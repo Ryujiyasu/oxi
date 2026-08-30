@@ -1399,6 +1399,39 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Some(numeric_result(median)));
         }
 
+        if name.eq_ignore_ascii_case("transpose") {
+            let [value] = args else {
+                return Err("WorksheetFunction.Transpose expects one range or array".to_string());
+            };
+            let table = self.lookup_table(value, name)?;
+            // One cell comes back as the value itself, not as an array of one:
+            // asked of Excel, `Transpose(Range("A1"))` answers a Double where
+            // `Transpose(Range("A1:A3"))` answers an array.
+            if table.rows == 1 && table.columns == 1 {
+                return Ok(Some(table.get(0, 0)));
+            }
+            let mut values = Vec::with_capacity(table.rows * table.columns);
+            for column in 0..table.columns {
+                for row in 0..table.rows {
+                    values.push(table.get(row, column));
+                }
+            }
+            // Always based at one, whatever the array that went in was based
+            // at, and always two-dimensional: a one-dimensional array counts
+            // as a ROW, so `Transpose(Array(1, 2, 3))` comes back three rows
+            // by one column — which is what lets a macro write a list down a
+            // column in a single assignment.
+            return Ok(Some(Value::Array(ArrayValue {
+                dimensions: vec![
+                    ArrayDimension { lower_bound: 1, length: table.columns },
+                    ArrayDimension { lower_bound: 1, length: table.rows },
+                ],
+                values,
+                element_default: Box::new(Value::Empty),
+                resizable: true,
+            })));
+        }
+
         if name.eq_ignore_ascii_case("sumproduct") {
             if args.len() < 2 {
                 return Err("WorksheetFunction.SumProduct expects two or more ranges".to_string());
@@ -8738,6 +8771,69 @@ mod tests {
                 "[2023-03-15]\t[25%]".to_string(),
                 // More than one cell has no single text to give.
                 "Null".to_string(),
+            ]
+        );
+    }
+
+    /// The answers here were read off Excel itself, through
+    /// `WorksheetFunction.Index`, because a COM caller cannot see the shape of
+    /// the array Transpose hands back — PowerShell flattens it. Index refuses a
+    /// row or column that is not there, so walking out along each axis until it
+    /// refuses is what says how big the answer is.
+    ///
+    ///     column A1:A3   1 x 3    row C1:D1   2 x 1
+    ///     block F1:G2    2 x 2    one cell    the value itself
+    ///     a blank inside stays Empty; Array(1,2,3) comes back 3 x 1
+    #[test]
+    fn worksheet_function_transpose_swaps_the_two_axes() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = 1: Range(\"A2\").Value = 2: Range(\"A3\").Value = 3
+               Range(\"C1\").Value = \"x\": Range(\"D1\").Value = \"y\"
+               Range(\"F1\").Value = 10: Range(\"G1\").Value = 20
+               Range(\"F2\").Value = 30: Range(\"G2\").Value = 40
+               Range(\"I1\").Value = \"keep\": Range(\"I3\").Value = 7
+               Dim v
+               v = WorksheetFunction.Transpose(Range(\"A1:A3\"))
+               Debug.Print LBound(v, 1) & \":\" & UBound(v, 1) & \" \" & LBound(v, 2) & \":\" & UBound(v, 2)
+               Debug.Print v(1, 1) & \" \" & v(1, 2) & \" \" & v(1, 3)
+               v = WorksheetFunction.Transpose(Range(\"C1:D1\"))
+               Debug.Print UBound(v, 1) & \"x\" & UBound(v, 2) & \" \" & v(1, 1) & v(2, 1)
+               v = WorksheetFunction.Transpose(Range(\"F1:G2\"))
+               Debug.Print v(1, 1) & \" \" & v(1, 2) & \" \" & v(2, 1) & \" \" & v(2, 2)
+               Debug.Print WorksheetFunction.Transpose(Range(\"A1\"))
+               v = WorksheetFunction.Transpose(Range(\"I1:I3\"))
+               Debug.Print v(1, 1) & \" [\" & v(1, 2) & \"] \" & v(1, 3) & \" \" & IsEmpty(v(1, 2))
+               v = WorksheetFunction.Transpose(Array(1, 2, 3))
+               Debug.Print UBound(v, 1) & \"x\" & UBound(v, 2) & \" \" & v(1, 1) & v(2, 1) & v(3, 1)
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                // A column of three becomes one row of three, based at one.
+                "1:1 1:3".to_string(),
+                "1 2 3".to_string(),
+                // And a row of two becomes a column of two.
+                "2x1 xy".to_string(),
+                // A block keeps its corners and swaps the other two.
+                "10 30 20 40".to_string(),
+                // One cell is not made into an array of one.
+                "1".to_string(),
+                // A blank cell stays blank rather than becoming a zero.
+                "keep [] 7 True".to_string(),
+                // A one-dimensional array counts as a row, so it comes back a
+                // column — the idiom for writing a list down a sheet.
+                "3x1 123".to_string(),
             ]
         );
     }
