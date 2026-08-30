@@ -1664,6 +1664,10 @@ async function initialize() {
     try {
         await init();
         wasmReady = true;
+        // A test (or anything else outside the module) has no way to see a
+        // module-scoped flag, and the page drops a file handed to it before
+        // this point. Publishing it makes "ready" observable.
+        window.__oxiWasmReady = true;
         window.__oxiWasmReady = true;
         console.log('Wasm initialized');
         document.querySelectorAll('#sampleButtons button').forEach(b => { b.disabled = false; });

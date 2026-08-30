@@ -88,6 +88,8 @@ const state = {
   laid: [],            // per shape: {shape, shapeIndex, paragraphs, layout}
   sel: null,           // {shapeIndex, paraIndex, charIndex}
   edits: new Map(),    // "slide/shape/para/run" -> new text
+  undo: [], redo: [],  // each step: what a run said before and after
+  original: new Map(), // "shape/para/run" -> the text the file opened with
 };
 
 /* ---------- the engine's layout ---------------------------------------- */
@@ -125,7 +127,13 @@ function layoutSlide() {
     } catch (e) {
       console.warn('layout refused', e);
     }
-    if (layout) state.laid.push({ shape, shapeIndex, paragraphs, layout });
+    if (layout) {
+      state.laid.push({ shape, shapeIndex, paragraphs, layout });
+      paragraphs.forEach((p, pi) => p.runs.forEach((r, ri) => {
+        const k = shapeIndex + '/' + pi + '/' + ri;
+        if (!state.original.has(k)) state.original.set(k, r.text);
+      }));
+    }
   });
 }
 
@@ -237,6 +245,33 @@ cv.addEventListener('mousedown', (e) => {
   paint();
 });
 
+// Put the caret at a character of a paragraph, finding the line that holds it.
+//
+// Every edit and every arrow key ends here, so there is one answer to "which
+// line is character N on" -- and after a re-layout the line objects are new,
+// which is why this looks the shape up again rather than keeping the old one.
+function placeCaret(shapeIndex, paraIndex, charIndex) {
+  const entry = state.laid.find(x => x.shapeIndex === shapeIndex);
+  if (!entry) { state.sel = null; return; }
+  const para = entry.paragraphs[paraIndex];
+  const len = para ? para.runs.reduce((n, r) => n + [...r.text].length, 0) : 0;
+  const want = Math.max(0, Math.min(charIndex, len));
+  let found = null;
+  for (const l of entry.layout.lines) {
+    if (l.para_index !== paraIndex) continue;
+    if (!found) found = l;
+    if (want >= l.char_start && want <= l.char_start + l.text.length) found = l;
+  }
+  if (!found) { state.sel = null; return; }
+  state.sel = { entry, line: found, charIndex: want,
+                inLine: Math.max(0, Math.min(want - found.char_start, found.text.length)) };
+}
+
+// The lines of the selected shape, in the order they are drawn.
+function linesOfSelection() {
+  return state.sel ? state.sel.entry.layout.lines : [];
+}
+
 function describeSelection() {
   if (!state.sel) { $('s-sel').textContent = 'nothing selected'; return; }
   const { entry, line, charIndex } = state.sel;
@@ -250,6 +285,81 @@ function describeSelection() {
 
 // Type into the selected paragraph. The run that owns the character takes the
 // change, so the edit can be expressed the way `edit_pptx` addresses it.
+// Moving the caret: within a line, across lines, and across paragraphs.
+document.addEventListener('keydown', (e) => {
+  if (!state.sel) return;
+  const moves = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+  if (!moves.includes(e.key)) return;
+  e.preventDefault();
+  const { entry, line } = state.sel;
+  const lines = linesOfSelection();
+  const at = lines.indexOf(line);
+  const paraLen = (i) => entry.paragraphs[i].runs
+    .reduce((n, r) => n + [...r.text].length, 0);
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    const step = e.key === 'ArrowLeft' ? -1 : 1;
+    const next = state.sel.charIndex + step;
+    if (next < 0 || next > paraLen(line.para_index)) {
+      // Off the end of a paragraph: step into the neighbour.
+      const to = line.para_index + step;
+      if (to < 0 || to >= entry.paragraphs.length) return;
+      placeCaret(entry.shapeIndex, to, step < 0 ? paraLen(to) : 0);
+    } else {
+      placeCaret(entry.shapeIndex, line.para_index, next);
+    }
+  } else if (e.key === 'Home' || e.key === 'End') {
+    placeCaret(entry.shapeIndex, line.para_index,
+               e.key === 'Home' ? line.char_start
+                                : line.char_start + line.text.trimEnd().length);
+  } else {
+    // Up and down keep the column, measured in characters within the line.
+    const to = lines[at + (e.key === 'ArrowUp' ? -1 : 1)];
+    if (!to) return;
+    const col = Math.min(state.sel.inLine, to.text.length);
+    placeCaret(entry.shapeIndex, to.para_index, to.char_start + col);
+  }
+  describeSelection();
+  paint();
+});
+
+// Undo and redo. A step holds what a run said before and after, so an undo is
+// the same operation as the edit with the two swapped -- and an undo that
+// arrives back at the text the file opened with drops the edit entirely,
+// rather than saving the original value as a change.
+function applyStep(step, direction) {
+  const entry = state.laid.find(x => x.shapeIndex === step.shapeIndex);
+  if (!entry) return;
+  const run = entry.paragraphs[step.paraIndex].runs[step.runIndex];
+  run.text = direction === 'undo' ? step.before : step.after;
+  const key = state.slide + '/' + entry.shape.sp_index + '/' +
+              step.paraIndex + '/' + step.runIndex;
+  if (run.text === step.original) state.edits.delete(key);
+  else state.edits.set(key, run.text);
+  layoutSlide();
+  placeCaret(step.shapeIndex, step.paraIndex,
+             direction === 'undo' ? step.caretBefore : step.caretAfter);
+  $('save').disabled = state.edits.size === 0;
+  describeSelection();
+  paint();
+}
+
+document.addEventListener('keydown', (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  const undo = mod && e.key.toLowerCase() === 'z' && !e.shiftKey;
+  const redo = mod && (e.key.toLowerCase() === 'y' ||
+                       (e.key.toLowerCase() === 'z' && e.shiftKey));
+  if (!undo && !redo) return;
+  e.preventDefault();
+  const from = undo ? state.undo : state.redo;
+  const to = undo ? state.redo : state.undo;
+  const step = from.pop();
+  if (!step) { say(undo ? 'nothing to undo' : 'nothing to redo'); return; }
+  to.push(step);
+  applyStep(step, undo ? 'undo' : 'redo');
+  say((undo ? 'undone' : 'redone') + ' \u2014 ' + state.edits.size +
+      ' run' + (state.edits.size === 1 ? '' : 's') + ' edited');
+});
+
 document.addEventListener('keydown', (e) => {
   if (!state.sel) return;
   const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
@@ -270,9 +380,20 @@ document.addEventListener('keydown', (e) => {
   }
   if (ri < 0) { ri = para.runs.length - 1; within = [...para.runs[ri].text].length; }
   const chars = [...para.runs[ri].text];
+  const before = para.runs[ri].text;
   if (e.key === 'Backspace') chars.splice(within, 1);
   else chars.splice(within, 0, e.key);
   para.runs[ri].text = chars.join('');
+  const caretBefore = state.sel.charIndex;
+  const caretAfter = caretBefore + (e.key === 'Backspace' ? -1 : 1);
+  const okey = entry.shapeIndex + '/' + line.para_index + '/' + ri;
+  state.undo.push({
+    shapeIndex: entry.shapeIndex, paraIndex: line.para_index, runIndex: ri,
+    before, after: para.runs[ri].text,
+    original: state.original.has(okey) ? state.original.get(okey) : before,
+    caretBefore, caretAfter,
+  });
+  state.redo.length = 0;
   // ★The edit is addressed by `sp_index`, NOT by the shape's place in
   // `slide.shapes`. The IR flattens groups and carries shapes the saver never
   // counts, so the two numberings differ -- d15 slide 1 has 33 IR shapes
@@ -281,20 +402,8 @@ document.addEventListener('keydown', (e) => {
   if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
   state.edits.set(`${state.slide}/${entry.shape.sp_index}/${line.para_index}/${ri}`,
                   para.runs[ri].text);
-  state.sel.charIndex += (e.key === 'Backspace' ? 0 : 1);
   layoutSlide();
-  // The caret's line may have moved; re-find it by paragraph and offset.
-  const again = state.laid.find(x => x.shapeIndex === entry.shapeIndex);
-  if (again) {
-    const want = state.sel.charIndex;
-    let found = null;
-    for (const l of again.layout.lines) {
-      if (l.para_index !== line.para_index) continue;
-      if (want >= l.char_start && want <= l.char_start + l.text.length) found = l;
-    }
-    if (found) state.sel = { entry: again, line: found,
-                             charIndex: want, inLine: want - found.char_start };
-  }
+  placeCaret(entry.shapeIndex, line.para_index, caretAfter);
   $('save').disabled = state.edits.size === 0;
   describeSelection();
   paint();
@@ -381,6 +490,9 @@ $('file').addEventListener('change', async (e) => {
   if (!f) return;
   state.bytes = await f.arrayBuffer();
   state.edits.clear();
+  state.undo.length = 0;
+  state.redo.length = 0;
+  state.original.clear();
   $('save').disabled = true;
   try {
     state.pres = parse_presentation(new Uint8Array(state.bytes));

@@ -16,6 +16,10 @@ What it asserts, per deck:
                 character offset
   typing        a keystroke reaches the run under the caret and the page counts
                 the edit
+  caret         the arrow keys move the caret, and Home/End reach the ends of a
+                line
+  undo          Ctrl+Z puts the text back AND drops the edit, so a save after a
+                full undo writes nothing
   save          the download re-opens as a pptx whose text carries the change
   console       no page error was raised along the way
 
@@ -155,6 +159,40 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         rep.check(deck, "typing", "edited" in after and after != before,
                   f"{after!r}, caret {caret}")
 
+        # The caret must MOVE, and a character offset is the thing to watch:
+        # a caret that redraws in place would still look alive on screen.
+        def offset():
+            m = re.search(r"char (\d+)", page.eval_on_selector("#s-sel", "e => e.textContent"))
+            return int(m.group(1)) if m else None
+
+        start = offset()
+        page.keyboard.press("ArrowLeft")
+        left = offset()
+        page.keyboard.press("ArrowRight")
+        back = offset()
+        page.keyboard.press("Home")
+        home = offset()
+        page.keyboard.press("End")
+        end = offset()
+        rep.check(deck, "caret",
+                  None not in (start, left, back, home, end)
+                  and left == start - 1 and back == start
+                  and home <= left and end >= home,
+                  f"{start} -> left {left} -> right {back}, home {home} end {end}")
+
+        # Undo must put the text back AND forget the edit: an undo that leaves
+        # the edit registered would save the ORIGINAL text as a change, which
+        # looks like success and is not.
+        page.keyboard.press("Control+z")
+        after_undo = page.eval_on_selector("#status", "e => e.textContent")
+        rep.check(deck, "undo", "0 runs edited" in after_undo or "undone" in after_undo,
+                  repr(after_undo))
+        save_off = page.eval_on_selector("#save", "e => e.disabled")
+        rep.check(deck, "undo clears", save_off is True,
+                  "save is disabled again" if save_off else "save still armed")
+
+        # Type once more so there is something to save.
+        page.keyboard.type("Z")
         with page.expect_download() as dl:
             page.click("#save")
         out = Path(dl.value.path()).read_bytes()
@@ -175,6 +213,11 @@ def run_index_html(page, port: int, pptx: Path, rep: Report) -> None:
     errors: list[str] = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(f"http://127.0.0.1:{port}/index.html")
+    # ★Wait for wasm BEFORE handing over a file. The page's change handler
+    # returns early while `wasmReady` is false and says so in the status bar,
+    # so an upload that arrives first is silently dropped -- which showed up as
+    # "no editable runs" and looked like the editor was broken.
+    page.wait_for_function("() => window.__oxiWasmReady === true", timeout=60000)
     page.set_input_files("#fileInput", str(pptx))
     page.wait_for_selector(".edit-slide-run", timeout=60000)
 
