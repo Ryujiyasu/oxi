@@ -1157,6 +1157,76 @@ impl<'a> WorkbookHost<'a> {
         conditional_result(name, kind, matches, numbers, total)
     }
 
+    /// The rectangle every one of these ranges covers, or `Nothing` where
+    /// they do not all meet.
+    ///
+    /// Asked of Excel, `_xlsx`-style, through `InvokeMember` — the method
+    /// declares thirty optional arguments and a plain call cannot bind to it:
+    ///
+    /// ```text
+    /// B2:D5 with C3:E7      C3:D5        no overlap at all     Nothing
+    /// one inside another    the inner    edges that only touch Nothing
+    /// C:C with 5:5          C5           C:E with D:G          D:E
+    /// three that all meet   the corner   three, one apart      Nothing
+    /// ONE argument          Nothing      ranges on two sheets  an error
+    /// ```
+    ///
+    /// The single-argument answer is the odd one: Excel does not complain, it
+    /// simply has nothing to hand back.
+    fn intersect_ranges(&mut self, args: &[Value]) -> Result<Value, String> {
+        let mut held: Option<CellRange> = None;
+        let mut seen = 0;
+        for value in args {
+            if matches!(value, Value::Missing) {
+                continue;
+            }
+            let Value::Object(object) = value else {
+                return Err("Application.Intersect takes ranges".to_string());
+            };
+            let Some(range) = self.range(object) else {
+                return Err(format!(
+                    "Application.Intersect cannot take a {} object",
+                    object.kind
+                ));
+            };
+            seen += 1;
+            let Some(so_far) = held else {
+                held = Some(range);
+                continue;
+            };
+            // Excel raises a run-time error rather than answering Nothing when
+            // the ranges are not on one sheet, so the two are not the same
+            // question and must not be answered the same way.
+            if so_far.sheet != range.sheet {
+                return Err(
+                    "Application.Intersect needs ranges on the same worksheet".to_string(),
+                );
+            }
+            let start_row = so_far.start_row.max(range.start_row);
+            let end_row = so_far.end_row.min(range.end_row);
+            let start_column = so_far.start_column.max(range.start_column);
+            let end_column = so_far.end_column.min(range.end_column);
+            if start_row > end_row || start_column > end_column {
+                return Ok(Value::Nothing);
+            }
+            held = Some(CellRange {
+                sheet: so_far.sheet,
+                start_row,
+                end_row,
+                start_column,
+                end_column,
+            });
+        }
+        // One range has nothing to be intersected with.
+        if seen < 2 {
+            return Ok(Value::Nothing);
+        }
+        match held {
+            Some(range) => Ok(self.object(HostObject::Range(range))),
+            None => Ok(Value::Nothing),
+        }
+    }
+
     fn worksheet_index(&mut self, args: &[Value]) -> Result<Value, String> {
         let (array, row, column) = match args {
             [array, row] => (array, row, None),
@@ -3569,6 +3639,9 @@ impl Host for WorkbookHost<'_> {
                     self.selection
                 };
                 return Ok(Some(self.object(HostObject::Range(range))));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("intersect") {
+                return self.intersect_ranges(args).map(Some);
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("rows") {
                 return self
@@ -8784,6 +8857,76 @@ mod tests {
     ///     column A1:A3   1 x 3    row C1:D1   2 x 1
     ///     block F1:G2    2 x 2    one cell    the value itself
     ///     a blank inside stays Empty; Array(1,2,3) comes back 3 x 1
+    /// Read off Excel by `_xlsx`-style COM measurement. Two PowerShell hazards
+    /// had to be got round to ask at all: `Intersect` declares thirty optional
+    /// arguments, so ordinary overload resolution refuses it, and a Range is
+    /// enumerable, so returning one from a function unrolls it into its cells.
+    #[test]
+    fn intersect_answers_the_rectangle_two_ranges_share() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Debug.Print Application.Intersect(Range(\"B2:D5\"), Range(\"C3:E7\")).Address
+               Debug.Print TypeName(Application.Intersect(Range(\"B2:D5\"), Range(\"F1:G2\")))
+               Debug.Print TypeName(Application.Intersect(Range(\"B2:C3\"), Range(\"D3:E4\")))
+               Debug.Print Application.Intersect(Range(\"B2:D5\"), Range(\"B2:D5\")).Address
+               Debug.Print Application.Intersect(Range(\"A1:Z100\"), Range(\"C3:D4\")).Address
+               Debug.Print Application.Intersect(Range(\"A1:D4\"), Range(\"B2:E5\"), Range(\"C3:F6\")).Address
+               Debug.Print TypeName(Application.Intersect(Range(\"A1:D4\"), Range(\"B2:E5\"), Range(\"X1:Y2\")))
+               Debug.Print TypeName(Application.Intersect(Range(\"B2:D5\")))
+               Debug.Print Application.Intersect(Range(\"C3\"), Range(\"C3\")).Address
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "$C$3:$D$5".to_string(),
+                // Ranges that do not meet answer Nothing rather than an empty
+                // range, and edges that only touch do not count as meeting.
+                "Nothing".to_string(),
+                "Nothing".to_string(),
+                "$B$2:$D$5".to_string(),
+                "$C$3:$D$4".to_string(),
+                // Three at once fold pairwise; one that misses spoils it.
+                "$C$3:$D$4".to_string(),
+                "Nothing".to_string(),
+                // One range has nothing to meet, and Excel does not complain.
+                "Nothing".to_string(),
+                "$C$3".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn intersect_refuses_ranges_on_two_worksheets() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Worksheets.Add
+               Debug.Print Application.Intersect(Worksheets(1).Range(\"B2:D5\"), _
+                 Worksheets(2).Range(\"C3:E7\")).Address
+             End Sub
+",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let failed = execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
+        // Excel raises here rather than answering Nothing, so the two cases
+        // stay apart.
+        assert!(
+            failed.to_string().contains("same worksheet"),
+            "unexpected error: {failed}"
+        );
+    }
+
     #[test]
     fn worksheet_function_transpose_swaps_the_two_axes() {
         let mut workbook = workbook();
