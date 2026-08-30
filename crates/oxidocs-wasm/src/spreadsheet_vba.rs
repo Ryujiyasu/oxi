@@ -724,8 +724,31 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_cells_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        // One index counts across the range by rows and does not stop at its
+        // edge: asked of Excel, the fifth cell of the two-wide `B2:C3` is
+        // `B4`, a row below the block, and the noughth cell of `B2:D5` is
+        // `A2` — the cell before the first, which walks back into the column
+        // before. Both fall out of a truncating divide by the range's width.
+        if let [index] = args {
+            let wide = i64::from(range.end_column - range.start_column) + 1;
+            let step = cells_index(index)? - 1;
+            let down = step / wide;
+            let across = step % wide;
+            let row = i64::from(range.start_row) + down;
+            let column = i64::from(range.start_column) + across;
+            if row < 1 || column < 0 {
+                return Err("Range.Cells has no cell there".to_string());
+            }
+            return Ok(
+                self.object(HostObject::Range(CellRange::single(CellAddress {
+                    sheet: range.sheet,
+                    row: row as u32,
+                    column: column as u32,
+                }))),
+            );
+        }
         let [row, column] = args else {
-            return Err("Range.Cells expects row and column".to_string());
+            return Err("Range.Cells expects an index, or a row and a column".to_string());
         };
         let row = positive_index(row, "row")? - 1;
         let column = positive_index(column, "column")? - 1;
@@ -4598,6 +4621,21 @@ fn format_debug_value(value: &Value) -> String {
     }
 }
 
+/// The one-argument form of `Cells` counts from one but is not held there:
+/// Excel answers `Cells(0)` with the cell before the first.
+fn cells_index(value: &Value) -> Result<i64, String> {
+    match value {
+        Value::Integer(number) => Ok(*number),
+        Value::Double(number) if number.is_finite() => Ok(number.trunc() as i64),
+        Value::String(text) => text
+            .trim()
+            .parse::<f64>()
+            .map(|number| number.trunc() as i64)
+            .map_err(|_| "Range.Cells index must be a number".to_string()),
+        _ => Err("Range.Cells index must be a number".to_string()),
+    }
+}
+
 fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
     match value {
         Value::Boolean(value) => Ok(*value),
@@ -5866,6 +5904,23 @@ fn format_range_address(range: CellRange, row_absolute: bool, column_absolute: b
             row
         )
     };
+    // Excel abbreviates a range that covers whole rows or whole columns:
+    // `Range("B2").EntireRow.Address` answers `$2:$2`, not
+    // `$A$2:$XFD$2`, and `Columns(2).Address` answers `$B:$B`.
+    let whole_rows = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
+    let whole_columns = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
+    if whole_rows && !whole_columns {
+        let mark = if row_absolute { "$" } else { "" };
+        return format!("{mark}{}:{mark}{}", range.start_row, range.end_row);
+    }
+    if whole_columns && !whole_rows {
+        let mark = if column_absolute { "$" } else { "" };
+        return format!(
+            "{mark}{}:{mark}{}",
+            oxicells_core::editor::col_to_letter(range.start_column),
+            oxicells_core::editor::col_to_letter(range.end_column)
+        );
+    }
     let start = format_cell(range.start_row, range.start_column);
     if range.is_single() {
         start
@@ -5895,6 +5950,10 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         Value::Integer(value) => Ok(CellValue::Number(value as f64)),
         Value::Double(value) => Ok(CellValue::Number(value)),
         Value::Error(value) => Ok(CellValue::Error(spreadsheet_error_text(value).to_string())),
+        // An empty string does not leave an empty string in the cell: asked of
+        // Excel, `Range("F1").Value = ""` leaves the cell Empty, and TypeName
+        // says so.
+        Value::String(value) if value.is_empty() => Ok(CellValue::Empty),
         Value::String(value) => Ok(CellValue::String(value)),
         Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
@@ -6878,7 +6937,10 @@ mod tests {
             debug_output,
             vec![
                 "True\tFalse\tNull".to_string(),
-                "$A$3:$XFD$3\t$C$1:$C$1048576\t1048576".to_string(),
+                // Excel abbreviates a whole row and a whole column rather than
+                // spelling out its far corner — measured, where this
+                // expectation had been written the long way without asking.
+                "$3:$3	$C:$C	1048576".to_string(),
                 "Sheet1\t1".to_string(),
             ]
         );
@@ -9071,6 +9133,49 @@ mod tests {
     /// A differential audit of members that were already here, against the
     /// answers Excel gives in their awkward cases. Every line below was read
     /// off Excel before it was written down.
+    /// A second differential audit — geometry and assignment this time. Every
+    /// answer below was read off Excel first.
+    #[test]
+    fn the_awkward_geometry_answers_the_way_excel_does() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Debug.Print Range(\"B2\").EntireRow.Address, Columns(2).Address
+               Debug.Print Range(\"B2\").Offset(-1, -1).Address
+               Debug.Print Range(\"B2:D5\").Resize(1, 1).Address
+               Debug.Print Range(\"B2:C3\").Cells(5).Address
+               Debug.Print Range(\"B2:D5\").Cells(0).Address
+               Range(\"F1\").Value = \"\"
+               Debug.Print TypeName(Range(\"F1\").Value), \"[\" & Range(\"F1\").Text & \"]\"
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "$2:$2	$B:$B".to_string(),
+                "$A$1".to_string(),
+                "$B$2".to_string(),
+                // Cells past the end of a range keeps going by rows, in the
+                // same columns: the fifth cell of a two-by-two is the row
+                // below it.
+                "$B$4".to_string(),
+                // And nought is the cell BEFORE the first, which walks back
+                // into the column before.
+                "$A$2".to_string(),
+                // An empty string assigned to a cell empties it.
+                "Empty	[]".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn the_awkward_cases_answer_the_way_excel_does() {
         let mut workbook = workbook();
