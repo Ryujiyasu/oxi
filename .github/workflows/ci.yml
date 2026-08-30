@@ -1,0 +1,95 @@
+name: CI
+
+# The gates the README promises, run on every push and pull request.
+#
+# The pixel-fidelity gates (SSIM against Word, Excel and PowerPoint's own
+# renders) need a Windows machine with Microsoft Office installed and are run
+# locally before a change is committed. What runs here is everything that does
+# not need Office: the unit and integration suite, clippy, and the WebAssembly
+# build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A large workspace on a shared runner: no incremental artefacts to carry
+  # between jobs, and no debug info to write.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+      # The browser VBA host's tests are behind a feature. Without it the
+      # crate compiles with no tests at all and reports a green `0 passed`,
+      # so the whole host suite would go unrun while the job stayed green.
+      - name: The spreadsheet VBA host's own suite
+        run: cargo test -p oxidocs-wasm --features suite --locked
+
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked
+
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jetli/wasm-pack-action@v0.4.0
+      # `suite` is what the in-repo editor needs: without it the spreadsheet,
+      # presentation and hanko bindings are not exported at all, and the
+      # browser suites below would open a workbook with nothing to open it.
+      - run: wasm-pack build --target web --release -- --features suite
+        working-directory: crates/oxidocs-wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxidocs-wasm-pkg
+          path: crates/oxidocs-wasm/pkg/
+          retention-days: 7
+
+  browser:
+    # Four of the six suites open a real workbook through the engine, so they
+    # need the build the `wasm` job makes; the pkg is gitignored and is not in
+    # a fresh checkout.
+    needs: wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: oxidocs-wasm-pkg
+          path: pkg
+      - name: Put the engine where the page expects it
+        run: cp pkg/oxidocs_wasm.js pkg/oxidocs_wasm_bg.wasm pkg/*.d.ts web/
+      # The suites lift their subjects out of the page by name, so they run
+      # under plain node with no bundler.
+      - name: The browser editor's suites
+        working-directory: web
+        run: |
+          for suite in page grid formula bands save row-model; do
+            node "$suite.test.mjs"
+          done

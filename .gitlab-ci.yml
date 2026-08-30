@@ -1,79 +1,23 @@
-# Oxi CI — the gates the README promises, run on every push.
+# Oxi CI on GitLab — the site, and only the site.
 #
-# The pixel-fidelity gates (SSIM against Word/PowerPoint's own renders) need a
-# Windows machine with Microsoft Office installed and are run locally before a
-# change is committed; what runs here is everything that does not need Office:
-# the unit/integration suite, clippy, and the WebAssembly build.
+# GitLab Pages carries the demo, and the URL it serves is the one that has been
+# given out, so the deploy stays here. Everything else — the unit and
+# integration suite, clippy, the WebAssembly build and the browser editor's own
+# suites — moved to GitHub Actions (`.github/workflows/ci.yml`) when GitHub
+# became the place issues and pull requests arrive.
+#
+# The pixel-fidelity gates (SSIM against Word, Excel and PowerPoint's own
+# renders) need a Windows machine with Microsoft Office installed and are run
+# locally before a change is committed. They run in neither.
 
 stages:
-  - test
   - deploy
 
-variables:
-  CARGO_HOME: $CI_PROJECT_DIR/.cargo
-  CARGO_TERM_COLOR: always
-  # The shared runners are small; oxidocs-core is a large crate. Debug info off
-  # and a bounded job count keep rustc inside the runner's memory.
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
-  CARGO_BUILD_JOBS: "2"
-
-default:
-  image: rust:1.93
-  cache:
-    key: cargo
-    paths:
-      - .cargo/registry/index
-      - .cargo/registry/cache
-      - target/
-
-test:
-  stage: test
-  script:
-    - set -o pipefail
-    - mkdir -p ci-logs
-    - (rustc --version; cargo --version; nproc; free -m) 2>&1 | tee ci-logs/env.log
-    - cargo test --workspace --locked 2>&1 | tee ci-logs/test.log
-  artifacts:
-    when: always
-    paths:
-      - ci-logs/
-    expire_in: 1 week
-  timeout: 1h
-
-clippy:
-  stage: test
-  # Clippy's extra passes over the largest crate are the memory peak of the
-  # whole pipeline; one codegen unit at a time keeps the runner from killing it.
-  variables:
-    CARGO_BUILD_JOBS: "1"
-  script:
-    - set -o pipefail
-    - mkdir -p ci-logs
-    - rustup component add clippy
-    - cargo clippy --workspace --all-targets --locked 2>&1 | tee ci-logs/clippy.log
-  artifacts:
-    when: always
-    paths:
-      - ci-logs/
-    expire_in: 1 week
-  timeout: 1h
-
-wasm:
-  stage: test
-  script:
-    - curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
-    - cd crates/oxidocs-wasm && wasm-pack build --target web --release
-  artifacts:
-    paths:
-      - crates/oxidocs-wasm/pkg/
-    expire_in: 1 week
-
-# The site is a copy of docs/ and does not depend on the Rust jobs, so it
-# deploys on its own rather than waiting behind (or being skipped by) them.
+# The site is a copy of `docs/` and needs no toolchain to assemble, so it does
+# not pull the Rust image the build jobs used to want.
 pages:
   stage: deploy
+  image: alpine:3
   needs: []
   script:
     - mkdir -p public
