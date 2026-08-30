@@ -13488,45 +13488,19 @@ fn master_units_runs(
     italic: bool,
     styles: RunStyles<'_>,
 ) -> Option<i64> {
-    if text.chars().any(|c| c as u32 > 0xFFFF) {
-        return None;
-    }
-    // Coverage is asked ONCE for the line, as the single-style path does: the
-    // per-character form issued a GDI font creation per character per candidate
-    // prefix, which is quadratic in the paragraph.
-    if !font_has_all_glyphs(family, bold, italic, text) {
-        return None;
-    }
-    let mut sum: i64 = 0;
-    for (i, ch) in text.chars().enumerate() {
-        // Which run owns this character. Runs are contiguous and in order, so
-        // this is a running total, not a search over the whole paragraph.
-        let at = styles.line_start + i;
-        let mut seen = 0usize;
-        let mut run_fs = fs;
-        let mut run_bold = bold;
-        let mut run_italic = italic;
-        let mut run_track = 0.0f32;
-        for run in styles.runs {
-            let n = run.text.chars().count();
-            if at < seen + n {
-                run_fs = run.font_size.unwrap_or(fs);
-                run_bold = run.bold;
-                run_italic = run.italic;
-                run_track = run_spc(run);
-                break;
-            }
-            seen += n;
-        }
-        let em = cloudadv_on()
-            .then(|| cloud_advance_em(family, run_bold, run_italic, ch))
-            .flatten()
-            .or_else(|| font_adv::hmtx_advance_em(family, ch))
-            .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, run_bold, run_italic, ch)).flatten())
-            .or_else(|| precise_advance_em(family, run_bold, run_italic, ch))?;
-        sum += f64::from((em * run_fs + run_track) * 8.0).round() as i64;
-    }
-    Some(sum)
+    oxislides_core::layout::master_units_runs(
+        &GdiFaceMetrics,
+        text,
+        fs,
+        family,
+        bold,
+        italic,
+        &oxislides_core::layout::RunStyles {
+            runs: styles.runs,
+            line_start: styles.line_start,
+        },
+        letterspc_on(),
+    )
 }
 
 /// One fit test for every break site: master units when derivable, the
@@ -13794,7 +13768,7 @@ fn run_spc(run: &oxislides_core::ir::SlideRun) -> f32 {
 /// The paragraph's tracking, taken from its first run: a paragraph whose runs
 /// disagree takes the per-run path instead (see `styled`).
 fn para_spc(runs: &[oxislides_core::ir::SlideRun]) -> f32 {
-    runs.first().map(run_spc).unwrap_or(0.0)
+    oxislides_core::layout::para_spc(runs, letterspc_on())
 }
 
 /// The hmtx table is declined for bold / italic text unless this is set.
@@ -14396,22 +14370,7 @@ fn hyphbrk_on() -> bool {
 ///
 /// 76 paragraphs across 31 dev decks carry a mid-word hyphen.
 fn break_pieces(text: &str) -> Vec<&str> {
-    if !hyphbrk_on() {
-        return text.split_inclusive(' ').collect();
-    }
-    let mut out = Vec::new();
-    for chunk in text.split_inclusive(' ') {
-        let mut start = 0usize;
-        for (i, ch) in chunk.char_indices() {
-            // A trailing hyphen would otherwise produce an empty tail piece.
-            if ch == '-' && i + 1 < chunk.len() {
-                out.push(&chunk[start..i + 1]);
-                start = i + 1;
-            }
-        }
-        out.push(&chunk[start..]);
-    }
-    out
+    oxislides_core::layout::break_pieces(text, hyphbrk_on())
 }
 
 /// Wrap `text` at word boundaries to fit `effective_width_pt`.

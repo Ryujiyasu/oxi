@@ -164,3 +164,175 @@ mod tests {
         assert!(!fits(4372, 546.4128));
     }
 }
+
+/// The styles a paragraph's runs impose on a candidate line.
+///
+/// A line is a slice of the paragraph, so a character's style is found by
+/// walking the runs from the paragraph's start: `line_start` is how many
+/// characters earlier lines already took. The runs are contiguous and in
+/// order, so this is a running total rather than a search.
+pub struct RunStyles<'a> {
+    pub runs: &'a [crate::ir::SlideRun],
+    /// Characters of the paragraph already committed to earlier lines.
+    pub line_start: usize,
+}
+
+/// The size, weight, slant and tracking the character at `at` is set in.
+///
+/// Falls back to the paragraph's own values for a character past the last run,
+/// which is what a line ending in generated text (a field's cached value) hits.
+fn style_at(
+    styles: &RunStyles<'_>,
+    at: usize,
+    fs: f32,
+    bold: bool,
+    italic: bool,
+    letter_spacing: bool,
+) -> (f32, bool, bool, f32) {
+    let mut seen = 0usize;
+    for run in styles.runs {
+        let n = run.text.chars().count();
+        if at < seen + n {
+            return (
+                run.font_size.unwrap_or(fs),
+                run.bold,
+                run.italic,
+                if letter_spacing { run.spacing.unwrap_or(0.0) } else { 0.0 },
+            );
+        }
+        seen += n;
+    }
+    (fs, bold, italic, 0.0)
+}
+
+/// The paragraph's tracking, taken from its first run.
+///
+/// A paragraph whose runs disagree takes [`master_units_runs`] instead, so one
+/// value for the whole line is right exactly when this is used.
+pub fn para_spc(runs: &[crate::ir::SlideRun], letter_spacing: bool) -> f32 {
+    if !letter_spacing {
+        return 0.0;
+    }
+    runs.first().and_then(|r| r.spacing).unwrap_or(0.0)
+}
+
+/// Master units for `text` with every character measured at its OWN run's
+/// size, weight and slant.
+///
+/// The single-style [`master_units`] measures a mixed line in one face, which
+/// makes one bold word widen every line of its paragraph. The rounding is the
+/// same -- per glyph, then summed -- only the style varies along the line.
+///
+/// Coverage is asked ONCE for the whole line, not per character: the
+/// per-character form issues a face lookup per character per candidate prefix,
+/// which is quadratic in the paragraph.
+pub fn master_units_runs(
+    metrics: &dyn FaceMetrics,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    styles: &RunStyles<'_>,
+    letter_spacing: bool,
+) -> Option<i64> {
+    if text.chars().any(|c| c as u32 > 0xFFFF) {
+        return None;
+    }
+    if !metrics.has_all_glyphs(family, bold, italic, text) {
+        return None;
+    }
+    let mut sum: i64 = 0;
+    for (i, ch) in text.chars().enumerate() {
+        let (run_fs, run_bold, run_italic, run_track) =
+            style_at(styles, styles.line_start + i, fs, bold, italic, letter_spacing);
+        let em = metrics.advance_em(family, run_bold, run_italic, ch)?;
+        sum += f64::from((em * run_fs + run_track) * MASTER_UNITS_PER_PT as f32).round() as i64;
+    }
+    Some(sum)
+}
+
+/// The pieces a line may break between.
+///
+/// Words, keeping the space that follows them so a trailing space stays with
+/// the line it ends -- and, when `hyphen_breaks` is set, after a hyphen too, so
+/// `"e-mail"` can break as `"e-"` + `"mail"`. A trailing hyphen does not split,
+/// which would leave an empty tail piece.
+pub fn break_pieces(text: &str, hyphen_breaks: bool) -> Vec<&str> {
+    if !hyphen_breaks {
+        return text.split_inclusive(' ').collect();
+    }
+    let mut out = Vec::new();
+    for chunk in text.split_inclusive(' ') {
+        let mut start = 0usize;
+        for (i, ch) in chunk.char_indices() {
+            if ch == '-' && i + 1 < chunk.len() {
+                out.push(&chunk[start..i + 1]);
+                start = i + 1;
+            }
+        }
+        out.push(&chunk[start..]);
+    }
+    out
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::*;
+
+    fn run(text: &str, size: Option<f32>, bold: bool) -> crate::ir::SlideRun {
+        crate::ir::SlideRun {
+            text: text.to_string(),
+            font_size: size,
+            bold,
+            italic: false,
+            underline: false,
+            color: None,
+            color_alpha: None,
+            highlight: None,
+            font_family: None,
+            spacing: None,
+        }
+    }
+
+    struct ByWeight;
+    impl FaceMetrics for ByWeight {
+        fn advance_em(&self, _: &str, bold: bool, _: bool, _: char) -> Option<f32> {
+            Some(if bold { 0.6 } else { 0.5 })
+        }
+        fn has_all_glyphs(&self, _: &str, _: bool, _: bool, _: &str) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn each_character_is_measured_in_its_own_run() {
+        let runs = [run("ab", None, false), run("cd", None, true)];
+        let st = RunStyles { runs: &runs, line_start: 0 };
+        // 2 chars at 0.5em and 2 at 0.6em, 12pt: 2*48 + 2*57.6->58 = 212.
+        let got = master_units_runs(&ByWeight, "abcd", 12.0, "X", false, false, &st, true);
+        assert_eq!(got, Some(2 * 48 + 2 * 58));
+    }
+
+    #[test]
+    fn line_start_shifts_which_run_owns_a_character() {
+        let runs = [run("ab", None, false), run("cd", None, true)];
+        // The line is the paragraph's tail, so both its characters are bold.
+        let st = RunStyles { runs: &runs, line_start: 2 };
+        assert_eq!(
+            master_units_runs(&ByWeight, "cd", 12.0, "X", false, false, &st, true),
+            Some(2 * 58)
+        );
+    }
+
+    #[test]
+    fn a_words_trailing_space_stays_with_it() {
+        assert_eq!(break_pieces("a bc d", false), vec!["a ", "bc ", "d"]);
+    }
+
+    #[test]
+    fn a_hyphen_opens_a_break_but_not_at_the_end() {
+        assert_eq!(break_pieces("e-mail x-", true), vec!["e-", "mail ", "x-"]);
+        assert_eq!(break_pieces("e-mail", false), vec!["e-mail"]);
+    }
+}
