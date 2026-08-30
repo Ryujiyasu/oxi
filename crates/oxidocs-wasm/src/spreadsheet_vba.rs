@@ -9212,6 +9212,85 @@ mod tests {
     /// `Find`'s awkward cases, read off Excel. `LookAt` is left explicit
     /// throughout: its default is whatever the session last used, which is a
     /// fact about the session and not about Excel.
+    /// Pasting into a single cell lays the whole copied block down from that
+    /// corner — the usual way a macro moves a table. Read off Excel, which
+    /// answers the same for a target of the copied shape.
+    ///
+    /// Targets that are neither one cell nor the copied shape are left out of
+    /// this: with `DisplayAlerts` off Excel pastes at the corner and says
+    /// nothing, and with it on it raises a dialog, so what happens there is a
+    /// fact about the session rather than about pasting.
+    /// Sort's ordering, read off Excel: numbers before text before Booleans,
+    /// blanks last whichever way it runs, ties keeping the order they were
+    /// already in — and, with MatchCase, lower case before upper.
+    #[test]
+    fn sorting_puts_numbers_first_and_blanks_last_both_ways() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"banana\": Range(\"A2\").Value = \"Apple\"
+               Range(\"A4\").Value = \"cherry\": Range(\"A5\").Value = 10
+               Range(\"A6\").Value = True: Range(\"A7\").Value = \"apple\"
+               Range(\"A1:A7\").Sort Key1:=Range(\"A1\"), Order1:=1, Header:=2
+               Debug.Print Range(\"A1\").Text & \"|\" & Range(\"A2\").Text & \"|\" & Range(\"A3\").Text & _
+                 \"|\" & Range(\"A4\").Text & \"|\" & Range(\"A5\").Text & \"|\" & Range(\"A6\").Text & _
+                 \"|\" & Range(\"A7\").Text
+               Range(\"A1:A7\").Sort Key1:=Range(\"A1\"), Order1:=2, Header:=2
+               Debug.Print Range(\"A1\").Text & \"|\" & Range(\"A2\").Text & \"|\" & Range(\"A3\").Text & _
+                 \"|\" & Range(\"A4\").Text & \"|\" & Range(\"A5\").Text & \"|\" & Range(\"A6\").Text & _
+                 \"|\" & Range(\"A7\").Text
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "10|Apple|apple|banana|cherry|TRUE|".to_string(),
+                // Turned about, the blank stays where it was: last.
+                "TRUE|cherry|banana|Apple|apple|10|".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn pasting_into_one_cell_lays_the_whole_block_down() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = 1: Range(\"B1\").Value = 2
+               Range(\"A2\").Value = 3: Range(\"B2\").Value = 4
+               Range(\"A1:B2\").Copy
+               Range(\"D1\").PasteSpecial -4104
+               Debug.Print Range(\"D1\").Value, Range(\"E1\").Value, Range(\"D2\").Value, Range(\"E2\").Value
+               Range(\"A1:B2\").Copy
+               Range(\"D4:E5\").PasteSpecial -4104
+               Debug.Print Range(\"D4\").Value, Range(\"E4\").Value, Range(\"D5\").Value, Range(\"E5\").Value
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "1	2	3	4".to_string(),
+                "1	2	3	4".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn find_starts_after_the_first_cell_and_comes_round() {
         let mut workbook = workbook();
