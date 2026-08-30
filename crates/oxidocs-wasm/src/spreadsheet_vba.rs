@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
-use oxicells_core::{ReferenceShift, ShiftAxis};
+use oxicells_core::{translate_formula_references, ReferenceShift, ShiftAxis};
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
@@ -2302,52 +2302,76 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
-    fn set_range_value(&mut self, range: CellRange, value: Value) -> Result<(), String> {
+    /// Write one string, number or Boolean to every cell of a block.
+    ///
+    /// `.Value`, `.Value2`, `.Formula` and `.Formula2` all arrive here because
+    /// Excel reads a string the same way through any of them: asked of it,
+    /// `.Formula = "0123"` leaves the number 123 with `HasFormula` False,
+    /// `.Formula = "TRUE"` leaves a Boolean and `.Formula = "'=B1"` keeps its
+    /// text — exactly what `.Value` does with the same strings. Only a leading
+    /// `=` with something after it makes a formula, and `"="` alone does not.
+    fn set_range_input(
+        &mut self,
+        range: CellRange,
+        value: Value,
+        operation: &str,
+    ) -> Result<(), String> {
         let count = Self::range_cell_count(range)?;
         match value {
             Value::Array(array) => {
-                validate_range_array_shape(range, &array, "range assignment")?;
+                validate_range_array_shape(range, &array, operation)?;
                 if array.values.len() != count {
                     return Err(format!(
-                        "range assignment needs {count} values, but the array contains {}",
+                        "{operation} needs {count} values, but the array contains {}",
                         array.values.len()
                     ));
                 }
+                // An array names each cell's own content, so nothing moves:
+                // asked of Excel, writing `=A1*7`, `=A1*8`, `=A1*9` down a
+                // column leaves all three pointing at A1.
                 for (address, value) in range.addresses().zip(array.values) {
-                    self.set_cell_value(address, to_cell_value(value)?)?;
+                    match cell_input(value)? {
+                        CellInput::Formula(formula) => self.set_cell_formula(address, formula)?,
+                        CellInput::Constant(value) => self.set_cell_value(address, value)?,
+                    }
                 }
             }
-            value => {
-                let value = to_cell_value(value)?;
-                for address in range.addresses() {
-                    self.set_cell_value(address, value.clone())?;
+            value => match cell_input(value)? {
+                CellInput::Formula(formula) => self.fill_formula(range, &formula)?,
+                CellInput::Constant(value) => {
+                    for address in range.addresses() {
+                        self.set_cell_value(address, value.clone())?;
+                    }
                 }
-            }
+            },
         }
         Ok(())
     }
 
-    fn set_range_formula(&mut self, range: CellRange, value: Value) -> Result<(), String> {
-        let count = Self::range_cell_count(range)?;
-        let formulas = match value {
-            Value::Array(array) => {
-                validate_range_array_shape(range, &array, "range formula assignment")?;
-                if array.values.len() != count {
-                    return Err(format!(
-                        "range formula assignment needs {count} values, but the array contains {}",
-                        array.values.len()
-                    ));
-                }
-                array
-                    .values
-                    .into_iter()
-                    .map(to_formula)
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            value => vec![to_formula(value)?; count],
-        };
-        for (address, formula) in range.addresses().zip(formulas) {
-            self.set_cell_formula(address, formula)?;
+    /// Put a formula in every cell of a block the way typing it into the
+    /// corner and filling from there would.
+    ///
+    /// Relative references move with each cell and absolute ones stay put.
+    /// Asked of Excel, `Range("F1:G2").Formula = "=A1"` leaves F1 `=A1`,
+    /// G1 `=B1`, F2 `=A2` and G2 `=B2`, and `"=$A$1"` leaves all four alone.
+    /// The corner keeps the text it was given, so a formula this build cannot
+    /// read still reaches a single cell unharmed.
+    ///
+    /// Where a reference would move off the sheet Excel writes `#REF!` into
+    /// the formula; this build refuses the assignment instead, which is what
+    /// the paste path already does with the same arithmetic.
+    fn fill_formula(&mut self, range: CellRange, formula: &str) -> Result<(), String> {
+        for address in range.addresses() {
+            let moved = if address.row == range.start_row && address.column == range.start_column {
+                formula.to_string()
+            } else {
+                translate_formula_references(
+                    formula,
+                    i64::from(address.row) - i64::from(range.start_row),
+                    i64::from(address.column) - i64::from(range.start_column),
+                )?
+            };
+            self.set_cell_formula(address, moved)?;
         }
         Ok(())
     }
@@ -3831,7 +3855,7 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
-                    self.set_range_value(range, Value::Empty)?;
+                    self.set_range_input(range, Value::Empty, "range assignment")?;
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("clearformats") {
@@ -4520,11 +4544,11 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
-            self.set_range_value(range, value)?;
+            self.set_range_input(range, value, "range assignment")?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
-            self.set_range_formula(range, value)?;
+            self.set_range_input(range, value, "range formula assignment")?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("verticalalignment") {
@@ -6096,13 +6120,27 @@ fn typed_from_text(written: &str) -> CellValue {
     CellValue::String(written.to_string())
 }
 
-fn to_formula(value: Value) -> Result<String, String> {
-    match value {
-        Value::Empty | Value::Null => Ok(String::new()),
-        Value::Missing => Err("an omitted VBA argument cannot be used as a formula".to_string()),
-        Value::String(value) => Ok(value),
-        _ => Err("a spreadsheet formula must be a String".to_string()),
+/// What one cell is left holding by an assignment.
+enum CellInput {
+    Formula(String),
+    Constant(CellValue),
+}
+
+/// Read an assigned value the way Excel reads it, whichever door it came
+/// through.
+///
+/// A string beginning with `=` and carrying something after it is a formula;
+/// everything else — including `"="` on its own, which Excel leaves as the
+/// text `=` — is read the way typing it would be.
+fn cell_input(value: Value) -> Result<CellInput, String> {
+    if let Value::String(written) = &value {
+        if let Some(rest) = written.strip_prefix('=') {
+            if !rest.is_empty() {
+                return Ok(CellInput::Formula(written.clone()));
+            }
+        }
     }
+    to_cell_value(value).map(CellInput::Constant)
 }
 
 #[derive(Deserialize)]
@@ -10761,6 +10799,86 @@ End Sub
         assert_eq!(
             workbook.sheets[0].rows[0].cells[1].formula.as_deref(),
             Some("A1*2")
+        );
+        // The second cell of the block is not a copy of the first: the
+        // reference moved down with it, as it does in Excel.
+        assert_eq!(
+            workbook.sheets[0].rows[1].cells[1].formula.as_deref(),
+            Some("A2*2")
+        );
+    }
+
+    /// A formula written to a block is filled from its top-left corner.
+    ///
+    /// Every answer here was asked of Excel: `Range("F1:G2").Formula = "=A1"`
+    /// leaves F1 `=A1`, G1 `=B1`, F2 `=A2`, G2 `=B2`; `"=$A$1"` leaves all
+    /// three cells of a column alone; and `.Value` fills the same way, because
+    /// a string starting with `=` is a formula through either door. An array
+    /// names each cell's own content, so nothing in it moves.
+    #[test]
+    fn vba_fills_a_block_with_a_formula_from_its_corner() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function FillBlock() As String
+               Range(\"F1:G2\").Formula = \"=A1\"
+               Range(\"H1:H3\").Value = \"=A1*3\"
+               Range(\"I1:I3\").Formula = \"=$A$1\"
+               Range(\"M1:O1\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")
+               FillBlock = Range(\"F1\").Formula & \"|\" & Range(\"G1\").Formula & \"|\" & _
+                 Range(\"F2\").Formula & \"|\" & Range(\"G2\").Formula & \"|\" & _
+                 Range(\"H2\").Formula & \"|\" & Range(\"H3\").Formula & \"|\" & _
+                 Range(\"I3\").Formula & \"|\" & Range(\"N1\").Formula & \"|\" & _
+                 Range(\"H1:H3\").HasFormula
+             End Function
+",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "FillBlock", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "=A1|=B1|=A2|=B2|=A2*3|=A3*3|=$A$1|=A1*8|True".to_string()
+            )
+        );
+    }
+
+    /// `.Value` and `.Formula` read a string the same way.
+    ///
+    /// Asked of Excel, `.Formula = "0123"` leaves the number 123 with
+    /// `HasFormula` False, `"TRUE"` leaves a Boolean, `"(5)"` leaves −5,
+    /// `"'=B1"` keeps its text, and `"="` on its own stays the text `=`.
+    /// Only a leading `=` with something after it makes a formula.
+    #[test]
+    fn vba_reads_an_assigned_string_the_same_way_through_value_and_formula() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function TypedIn() As String
+               Range(\"A1\").Formula = \"0123\"
+               Range(\"A2\").Formula = \"TRUE\"
+               Range(\"A3\").Formula = \"(5)\"
+               Range(\"A4\").Formula = \"'=B1\"
+               Range(\"A5\").Formula = \"=\"
+               Range(\"A6\").Formula = \"hello\"
+               TypedIn = TypeName(Range(\"A1\").Value) & \"|\" & Range(\"A1\").Value & \"|\" & _
+                 TypeName(Range(\"A2\").Value) & \"|\" & Range(\"A3\").Value & \"|\" & _
+                 Range(\"A4\").Value & \"|\" & Range(\"A5\").Value & \"|\" & _
+                 Range(\"A6\").Value & \"|\" & Range(\"A1:A6\").HasFormula
+             End Function
+",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "TypedIn", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("Double|123|Boolean|-5|=B1|=|hello|False".to_string())
         );
     }
 }
