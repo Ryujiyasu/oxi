@@ -286,7 +286,7 @@ fn default_end_size() -> String {
     "med".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Shape {
     pub x: f32,      // position in points
     pub y: f32,
@@ -479,7 +479,7 @@ pub enum GeomCmd {
     Close,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub enum ShapeContent {
     /// A preset-geometry AutoShape (a:prstGeom). May carry text (a:txBody).
     AutoShape {
@@ -506,6 +506,7 @@ pub enum ShapeContent {
     Unsupported {
         element_type: String,
     },
+    #[default]
     Placeholder, // shapes we can't parse yet
 }
 

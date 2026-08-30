@@ -798,6 +798,53 @@ pub fn break_slide_paragraph(
     }
 }
 
+/// Lay out one text shape the way the engine does, for the browser to draw.
+///
+/// `shape` is a `Shape` from `parse_presentation`, `paragraphs` its
+/// paragraphs, and `master` / `ph_levels` the inherited outline levels. The
+/// answer is one entry per LINE -- its text, where it starts, its baseline,
+/// and which paragraph and character offset it came from, so a click can be
+/// mapped back to a run.
+///
+/// `complete` says whether EVERY paragraph was measured. A shape that comes
+/// back incomplete must not be drawn as if it were the engine's layout: the
+/// measured tables cover 17 of the 142 families the corpora name, and the rest
+/// are still the browser's own wrap.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn layout_slide_shape(
+    shape: JsValue,
+    paragraphs: JsValue,
+    master: JsValue,
+    ph_levels: JsValue,
+    default_family: &str,
+) -> Result<JsValue, JsError> {
+    let shape: oxislides_core::ir::Shape =
+        serde_wasm_bindgen::from_value(shape).map_err(|e| JsError::new(&e.to_string()))?;
+    let paragraphs: Vec<oxislides_core::ir::SlideParagraph> =
+        serde_wasm_bindgen::from_value(paragraphs).map_err(|e| JsError::new(&e.to_string()))?;
+    let master: Vec<oxislides_core::ir::MasterStyleLevel> = if master.is_undefined() || master.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(master).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    let ph_levels: Vec<oxislides_core::ir::MasterStyleLevel> =
+        if ph_levels.is_undefined() || ph_levels.is_null() {
+            Vec::new()
+        } else {
+            serde_wasm_bindgen::from_value(ph_levels).map_err(|e| JsError::new(&e.to_string()))?
+        };
+    let out = oxislides_core::layout::layout_text_shape(
+        &oxislides_core::layout::TableMetrics,
+        &shape,
+        &paragraphs,
+        &master,
+        &ph_levels,
+        default_family,
+    );
+    serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Whether the engine can measure this family at all, so a caller can tell a
 /// person which text on the page is laid out by the engine and which is not.
 #[cfg(feature = "suite")]

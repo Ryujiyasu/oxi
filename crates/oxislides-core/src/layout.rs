@@ -618,9 +618,15 @@ impl FaceMetrics for TableMetrics {
             .all(|c| self.advance_em(family, bold, italic, c).is_some())
     }
 
-    fn resolves(&self, family: &str) -> bool {
-        Self::covers(family)
-    }
+    // ★`resolves` is deliberately left at its default of `true`.
+    //
+    // Answering it with `covers` looked right and is wrong: a family the
+    // tables do not carry may still be one the DECK EMBEDS, and PowerPoint
+    // then draws the deck's own part. Substituting Calibri for it would rename
+    // text PowerPoint sets in its real face -- and worse, it would make the
+    // shape look measurable, because Calibri is in the tables. The honest
+    // answer is to keep the name and let `break_paragraph` return None, which
+    // marks the shape incomplete instead of laying out a fiction.
 }
 
 impl TableMetrics {
@@ -1445,5 +1451,257 @@ mod marker_tests {
     fn a_marker_wider_than_its_indent_pushes_the_first_line() {
         assert_eq!(marker_push(18.0, 0.0, 30.0), 30.0);
         assert_eq!(marker_push(18.0, 0.0, 10.0), 18.0);
+    }
+}
+
+/// One line of a shape's text, placed.
+///
+/// `x` and `baseline` are relative to the shape's own box, in points, so the
+/// caller adds the shape's position and draws.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlacedLine {
+    pub text: String,
+    /// Left edge of the line, from the shape's left edge.
+    pub x: f32,
+    /// Baseline, from the shape's top edge.
+    pub baseline: f32,
+    pub font_size: f32,
+    pub family: String,
+    pub bold: bool,
+    pub italic: bool,
+    /// Which paragraph of the shape this line came from.
+    pub para_index: usize,
+    /// How many characters of that paragraph precede this line, so an editor
+    /// can map a click back to a run.
+    pub char_start: usize,
+}
+
+/// A shape's text, laid out.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShapeLayout {
+    pub lines: Vec<PlacedLine>,
+    /// The block's height, before any vertical anchoring.
+    pub height: f32,
+    /// Whether EVERY paragraph was measured by the engine.
+    ///
+    /// False means at least one fell back to a browser wrap, and a caller that
+    /// draws this without saying so is showing a layout PowerPoint would not
+    /// produce. It is not a small distinction: the tables cover 17 families of
+    /// the corpus's 142.
+    pub complete: bool,
+}
+
+/// Lay out one text shape's paragraphs into placed lines.
+///
+/// This is the loop the renderer runs, with every rule it uses now living in
+/// this module: the level a paragraph inherits, the size it is set at, the
+/// spacing multiple, where its first baseline sits, how its lines break, how
+/// wide each may run, and where each starts for its alignment.
+///
+/// What it does NOT do yet is the part that needs a device: which face GDI
+/// hands back for a name, and the ink. Both are the caller's, through
+/// `metrics`.
+pub fn layout_text_shape(
+    metrics: &dyn FaceMetrics,
+    shape: &crate::ir::Shape,
+    paragraphs: &[crate::ir::SlideParagraph],
+    master: &[crate::ir::MasterStyleLevel],
+    ph_levels: &[crate::ir::MasterStyleLevel],
+    default_family: &str,
+) -> ShapeLayout {
+    let inner_w = (shape.width - shape.l_ins - shape.r_ins).max(0.0);
+    let mut lines: Vec<PlacedLine> = Vec::new();
+    let mut cursor = shape.t_ins;
+    let mut prev_fs: Option<f32> = None;
+    let mut complete = true;
+
+    for (pi, para) in paragraphs.iter().enumerate() {
+        let level = resolve_level(master, ph_levels, para.lvl);
+        let fs = paragraph_font_size(para, level.font_size, prev_fs, true);
+        prev_fs = Some(fs);
+        let n = line_spacing_multiple(para, &level, fs, exact_line_pt(para, true, true));
+        let adv = fs * 1.2 * n;
+
+        // Space before: the paragraph's own, else the level's fraction of the
+        // advance -- and never on the first paragraph, whose top is the inset.
+        if pi > 0 {
+            cursor += para
+                .space_before
+                .or_else(|| level.spc_bef_pct.map(|p| p * adv))
+                .unwrap_or(0.0);
+        }
+
+        let family = effective_family(
+            metrics,
+            para.runs
+                .iter()
+                .find_map(|r| r.font_family.clone())
+                .unwrap_or_else(|| default_family.to_string())
+                .as_str(),
+            true,
+        );
+        let bold = para.runs.iter().any(|r| r.bold) || level.bold.unwrap_or(false);
+        let italic = para.runs.iter().any(|r| r.italic);
+        let geom = indent_geometry(
+            inner_w,
+            para.mar_l.unwrap_or(level.mar_l),
+            para.indent.unwrap_or(level.indent),
+            true,
+        );
+
+        let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+        let broken = break_paragraph(
+            metrics, &text, fs, &family, bold, italic, geom.first_width, &para.runs,
+        );
+        let broken = match broken {
+            Some(b) => b,
+            None => {
+                complete = false;
+                vec![text.clone()]
+            }
+        };
+
+        let first_off = first_baseline_off(metrics, &family, fs, n, true);
+        let align = para.alignment.or(level.algn).unwrap_or_default();
+        let mut char_at = 0usize;
+        for (li, line) in broken.iter().enumerate() {
+            let width = if li == 0 { geom.first_width } else { geom.rest_width };
+            let line_w = master_units(metrics, line.trim_end(), fs, &family, bold, italic, 0.0)
+                .map(|mu| master_units_pt(mu) as f32)
+                .unwrap_or(0.0);
+            let x = if li == 0 { geom.first_x } else { geom.rest_x };
+            lines.push(PlacedLine {
+                text: line.clone(),
+                x: shape.l_ins + x + align_offset(align, width, line_w),
+                baseline: cursor + first_off + li as f32 * adv,
+                font_size: fs,
+                family: family.clone(),
+                bold,
+                italic,
+                para_index: pi,
+                char_start: char_at,
+            });
+            char_at += line.chars().count();
+        }
+        cursor += broken.len() as f32 * adv;
+        cursor += para.space_after.unwrap_or(0.0);
+    }
+
+    let height = (cursor - shape.t_ins).max(0.0);
+    // Vertical anchoring shifts the whole block inside the inner box.
+    let inner_h = (shape.height - shape.t_ins - shape.b_ins).max(0.0);
+    let shift = match shape.anchor.as_deref() {
+        Some("ctr") => ((inner_h - height) / 2.0).max(0.0),
+        Some("b") => (inner_h - height).max(0.0),
+        _ => 0.0,
+    };
+    if shift > 0.0 {
+        for l in &mut lines {
+            l.baseline += shift;
+        }
+    }
+    ShapeLayout { lines, height, complete }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+    use crate::ir::{Shape, ShapeContent, SlideParagraph, SlideRun};
+
+    fn run(text: &str, size: Option<f32>) -> SlideRun {
+        SlideRun {
+            text: text.to_string(),
+            font_size: size,
+            bold: false,
+            italic: false,
+            underline: false,
+            color: None,
+            color_alpha: None,
+            highlight: None,
+            font_family: Some("Arial".to_string()),
+            spacing: None,
+        }
+    }
+
+    fn para(text: &str, size: f32) -> SlideParagraph {
+        SlideParagraph {
+            runs: vec![run(text, Some(size))],
+            alignment: None,
+            line_spacing: None,
+            line_spacing_pts: None,
+            space_before: None,
+            space_after: None,
+            lvl: 0,
+            end_para_size: None,
+            mar_l: None,
+            indent: None,
+            bullet: crate::ir::SlideBullet::default(),
+        }
+    }
+
+    fn shape(w: f32, h: f32, anchor: Option<&str>) -> Shape {
+        let mut s = Shape::default();
+        s.width = w;
+        s.height = h;
+        s.l_ins = 0.0;
+        s.r_ins = 0.0;
+        s.t_ins = 0.0;
+        s.b_ins = 0.0;
+        s.anchor = anchor.map(|a| a.to_string());
+        s.content = ShapeContent::TextBox { paragraphs: vec![] };
+        s
+    }
+
+    #[test]
+    fn a_paragraph_that_fits_is_one_line_at_its_own_ascent() {
+        let p = [para("Hello", 12.0)];
+        let got = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, None), &p, &[], &[], "Arial");
+        assert_eq!(got.lines.len(), 1);
+        assert!(got.complete);
+        // The baseline is the first-baseline offset, not the top.
+        assert!(got.lines[0].baseline > 0.0);
+        assert!((got.height - 12.0 * 1.2).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_long_paragraph_wraps_and_steps_by_the_advance() {
+        let p = [para("The quick brown fox jumps over the lazy dog", 12.0)];
+        let got = layout_text_shape(&TableMetrics, &shape(120.0, 200.0, None), &p, &[], &[], "Arial");
+        assert!(got.lines.len() > 1, "{:?}", got.lines);
+        let step = got.lines[1].baseline - got.lines[0].baseline;
+        assert!((step - 12.0 * 1.2).abs() < 1e-3, "{step}");
+    }
+
+    #[test]
+    fn a_family_nothing_measured_marks_the_shape_incomplete() {
+        let mut p = para("Hello", 12.0);
+        p.runs[0].font_family = Some("Zzyzx Nonexistent".to_string());
+        let got = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, None), &[p], &[], &[], "Arial");
+        assert!(!got.complete, "an unmeasurable family must be flagged");
+    }
+
+    #[test]
+    fn centring_pushes_the_block_down_by_half_the_slack() {
+        let p = [para("Hello", 12.0)];
+        let top = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, None), &p, &[], &[], "Arial");
+        let ctr = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, Some("ctr")), &p, &[], &[], "Arial");
+        let slack = (100.0 - top.height) / 2.0;
+        assert!((ctr.lines[0].baseline - top.lines[0].baseline - slack).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_bottom_anchor_puts_the_last_line_on_the_floor() {
+        let p = [para("Hello", 12.0)];
+        let got = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, Some("b")), &p, &[], &[], "Arial");
+        assert!(got.lines[0].baseline > 80.0, "{:?}", got.lines[0]);
+    }
+
+    #[test]
+    fn a_second_paragraph_starts_below_the_first() {
+        let p = [para("One", 12.0), para("Two", 12.0)];
+        let got = layout_text_shape(&TableMetrics, &shape(400.0, 200.0, None), &p, &[], &[], "Arial");
+        assert_eq!(got.lines.len(), 2);
+        assert!(got.lines[1].baseline > got.lines[0].baseline);
+        assert_eq!(got.lines[1].para_index, 1);
     }
 }
