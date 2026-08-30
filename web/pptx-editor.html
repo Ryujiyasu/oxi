@@ -362,22 +362,50 @@ document.addEventListener('keydown', (e) => {
       ' run' + (state.edits.size === 1 ? '' : 's') + ' edited');
 });
 
-// Enter breaks the paragraph at the caret. The break is recorded rather than
-// applied to the IR: the engine's layout has no notion of half a paragraph, and
-// re-laying out an imagined split would show a placement the file does not yet
-// have. The panel says a break is pending, and the save performs it.
+// Enter breaks the paragraph at the caret, and COMMITS.
+//
+// Every pending edit is written into the bytes along with the break, and the
+// deck is re-opened from the result. That costs a save and a parse per break,
+// and it buys the only thing that matters here: after Enter the screen shows
+// what the file says, because it was re-read from it. The alternative -- to
+// split the paragraphs held in the page and keep the break "pending" -- makes
+// the page's paragraph numbering disagree with the file's for every edit that
+// follows, and the numbering is what an edit is addressed by.
+async function commitBreak() {
+  const { entry, line } = state.sel;
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  const edits = pendingEdits();
+  const split = {
+    slide_index: state.slide, shape_index: entry.shape.sp_index,
+    paragraph_index: line.para_index, at_char: state.sel.charIndex,
+  };
+  const shapeIndex = entry.shapeIndex;
+  const nextPara = line.para_index + 1;
+  try {
+    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, [split]);
+    state.bytes = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+    state.pres = parse_presentation(new Uint8Array(state.bytes));
+    state.edits.clear();
+    state.splits.length = 0;
+    state.undo.length = 0;
+    state.redo.length = 0;
+    state.original.clear();
+    $('save').disabled = true;
+    layoutSlide();
+    placeCaret(shapeIndex, nextPara, 0);
+    describeSelection();
+    paint();
+    coverage();
+    say('paragraph broken');
+  } catch (err) {
+    say('could not break the paragraph: ' + err.message);
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (!state.sel || e.key !== 'Enter') return;
   e.preventDefault();
-  const { entry, line } = state.sel;
-  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
-  state.splits.push({
-    slide_index: state.slide, shape_index: entry.shape.sp_index,
-    paragraph_index: line.para_index, at_char: state.sel.charIndex,
-  });
-  $('save').disabled = false;
-  say(`a paragraph break is pending at character ${state.sel.charIndex}` +
-      ` \u2014 save to apply it`);
+  commitBreak();
 });
 
 document.addEventListener('keydown', (e) => {
@@ -430,13 +458,18 @@ document.addEventListener('keydown', (e) => {
   say(`${state.edits.size} run${state.edits.size === 1 ? '' : 's'} edited`);
 });
 
-$('save').addEventListener('click', () => {
+function pendingEdits() {
   const edits = [];
   for (const [key, text] of state.edits) {
     const [s, sh, p, r] = key.split('/').map(Number);
     edits.push({ slide_index: s, shape_index: sh, paragraph_index: p, run_index: r,
                  new_text: text });
   }
+  return edits;
+}
+
+$('save').addEventListener('click', () => {
+  const edits = pendingEdits();
   try {
     const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, state.splits);
     const a = document.createElement('a');

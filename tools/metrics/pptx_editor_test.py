@@ -20,8 +20,9 @@ What it asserts, per deck:
                 line
   undo          Ctrl+Z puts the text back AND drops the edit, so a save after a
                 full undo writes nothing
-  enter         a paragraph break is recorded, and the saved file really holds
-                one more paragraph in that shape than the original did
+  enter         a paragraph break shows on screen AT ONCE -- the deck is
+                re-opened from the bytes the break produced -- and the file
+                really holds one more paragraph than the original did
   save          the download re-opens as a pptx whose text carries the change
   console       no page error was raised along the way
 
@@ -202,12 +203,25 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         rep.check(deck, "undo clears", save_off is True,
                   "save is disabled again" if save_off else "save still armed")
 
-        # Enter must reach the FILE: the count of <a:p> in the slide has to go
-        # up by one. A break that only moved the caret would look the same on
-        # screen and change nothing.
+        # Enter must show AT ONCE and reach the FILE. The lines the page has
+        # placed are the screen's own account, so a break that only moved the
+        # caret cannot pass: the count of placed lines has to rise.
+        lines_before = page.evaluate(
+            "() => document.getElementById('s-cover').textContent")
+        sel_before = page.eval_on_selector("#s-sel", "e => e.textContent")
         page.keyboard.press("Enter")
-        pending = page.eval_on_selector("#status", "e => e.textContent")
-        rep.check(deck, "enter", "break is pending" in pending, repr(pending))
+        page.wait_for_function(
+            "() => document.getElementById('status').textContent.includes('broken')"
+            " || document.getElementById('status').textContent.includes('could not')",
+            timeout=30000)
+        after = page.eval_on_selector("#status", "e => e.textContent")
+        sel_after = page.eval_on_selector("#s-sel", "e => e.textContent")
+        rep.check(deck, "enter", "broken" in after and sel_after != sel_before,
+                  f"{after!r}, caret moved to the new paragraph")
+
+        # And the bytes the page now holds carry the break: saving without any
+        # further edit must still hand back a file with one more paragraph.
+        page.keyboard.type("Z")
         with page.expect_download() as dl:
             page.click("#save")
         broke = Path(dl.value.path()).read_bytes()
@@ -215,11 +229,9 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         after_n = count_paragraphs(broke, 1)
         rep.check(deck, "enter saved", after_n == before_n + 1,
                   f"paragraphs {before_n} -> {after_n}")
-
-        # Type once more so there is something to save.
-        page.keyboard.type("Z")
-        with page.expect_download() as dl:
+        with page.expect_download() as dl2:
             page.click("#save")
+        dl = dl2
         out = Path(dl.value.path()).read_bytes()
         # The saved file must be a pptx, and the slide that was typed into must
         # carry the change -- a save that writes the ORIGINAL text back would
