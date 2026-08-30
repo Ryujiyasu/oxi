@@ -336,3 +336,184 @@ mod wrap_tests {
         assert_eq!(break_pieces("e-mail", false), vec!["e-mail"]);
     }
 }
+
+/// What a wrap is allowed to do, beyond breaking at spaces.
+pub struct WrapOpts {
+    /// A line's trailing space HANGS past the right edge and is not part of
+    /// the width the break is judged against. Measured on d28 slide 13
+    /// (2026-08-18): "National Cemetery in Gettysburg, Pennsylvania. In just"
+    /// is 1034px against a 1036px box and PowerPoint keeps it whole, but with
+    /// the trailing space it is 1047px -- so a per-word accumulation broke
+    /// before "just" and the paragraph needed 11 lines where PowerPoint needs
+    /// 10. Off restores the old per-word accumulation.
+    pub trim_trailing_space: bool,
+    /// A single "word" wider than the line breaks INSIDE itself. d11 and d24
+    /// slide 38 are 53 emoji with no space between them in a 490pt box;
+    /// PowerPoint lays them out in four rows. 45 paragraphs across nine decks
+    /// carry a space-free run of 30 characters or more.
+    pub char_wrap: bool,
+    /// A hyphen opens a break site, so `"e-mail"` may break as `"e-" + "mail"`.
+    pub hyphen_breaks: bool,
+}
+
+/// Break `text` into lines that fit `first_width_pt`, then `rest_width_pt`.
+///
+/// The two widths differ because a hanging indent or a bullet narrows every
+/// line after the first.
+///
+/// The platform appears only as two questions:
+///
+///   * `fits(candidate, width_pt, width_px, line_start)` -- does this candidate
+///     line fit? `line_start` is how many characters of the paragraph earlier
+///     lines already took, which is what maps a character back to its run.
+///   * `measure_px(text)` -- the running width, consulted only when
+///     `trim_trailing_space` is off.
+///
+/// Measuring the candidate PREFIX rather than summing per-word widths also
+/// drops the per-word integer-pixel rounding, which pushed breaks the same way
+/// the trailing space did.
+pub fn wrap_lines<F, M>(
+    text: &str,
+    first_width_pt: f32,
+    rest_width_pt: f32,
+    scale: f64,
+    opts: &WrapOpts,
+    fits: F,
+    measure_px: M,
+) -> Vec<String>
+where
+    F: Fn(&str, f32, i32, usize) -> bool,
+    M: Fn(&str) -> i32,
+{
+    let first_px = (first_width_pt as f64 * scale).round().max(1.0) as i32;
+    let rest_px = (rest_width_pt as f64 * scale).round().max(1.0) as i32;
+    let mut width_px = first_px;
+    let mut width_pt = first_width_pt;
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0i32;
+    // Characters already committed to finished lines.
+    let mut emitted = 0usize;
+    for word in break_pieces(text, opts.hyphen_breaks) {
+        let ok = if opts.trim_trailing_space {
+            let mut candidate = current.clone();
+            candidate.push_str(word);
+            fits(candidate.trim_end(), width_pt, width_px, emitted)
+        } else {
+            current_w + measure_px(word) <= width_px
+        };
+        if !current.is_empty() && !ok {
+            emitted += current.chars().count();
+            lines.push(std::mem::take(&mut current));
+            current_w = 0;
+            width_px = rest_px;
+            width_pt = rest_width_pt;
+        }
+        if opts.char_wrap && current.is_empty() {
+            let mut rest = word;
+            loop {
+                let trimmed = rest.trim_end();
+                if trimmed.is_empty() || fits(trimmed, width_pt, width_px, emitted) {
+                    break;
+                }
+                // Longest prefix that fits, never empty so the loop ends.
+                let mut last_ok = 0usize;
+                for (i, ch) in rest.char_indices() {
+                    let end = i + ch.len_utf8();
+                    if fits(rest[..end].trim_end(), width_pt, width_px, emitted) {
+                        last_ok = end;
+                    } else {
+                        break;
+                    }
+                }
+                let take = if last_ok > 0 {
+                    last_ok
+                } else {
+                    rest.char_indices().nth(1).map(|(i, _)| i).unwrap_or(rest.len())
+                };
+                emitted += rest[..take].chars().count();
+                lines.push(rest[..take].to_string());
+                rest = &rest[take..];
+                width_px = rest_px;
+                width_pt = rest_width_pt;
+            }
+            current.push_str(rest);
+            current_w += measure_px(rest);
+            continue;
+        }
+        current.push_str(word);
+        current_w += measure_px(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+#[cfg(test)]
+mod wrap_loop_tests {
+    use super::*;
+
+    const OPTS: WrapOpts = WrapOpts {
+        trim_trailing_space: true,
+        char_wrap: true,
+        hyphen_breaks: false,
+    };
+
+    /// Every character is one point wide, so a width in points is a character
+    /// budget and the breaks can be read by eye.
+    fn one_pt_per_char(t: &str, w: f32, _px: i32, _start: usize) -> bool {
+        t.chars().count() as f32 <= w
+    }
+
+    #[test]
+    fn a_line_breaks_at_the_last_word_that_fits() {
+        let got = wrap_lines("aa bb cc dd", 6.0, 6.0, 1.0, &OPTS, one_pt_per_char, |t| {
+            t.len() as i32
+        });
+        assert_eq!(got, vec!["aa bb ", "cc dd"]);
+    }
+
+    #[test]
+    fn the_trailing_space_does_not_count_against_the_box() {
+        // "aa bb" is 5 characters and fits 5; its trailing space would not.
+        let got = wrap_lines("aa bb cc", 5.0, 5.0, 1.0, &OPTS, one_pt_per_char, |t| {
+            t.len() as i32
+        });
+        assert_eq!(got, vec!["aa bb ", "cc"]);
+    }
+
+    #[test]
+    fn later_lines_are_judged_against_the_continuation_width() {
+        let got = wrap_lines("aa bb cc dd", 6.0, 3.0, 1.0, &OPTS, one_pt_per_char, |t| {
+            t.len() as i32
+        });
+        assert_eq!(got, vec!["aa bb ", "cc ", "dd"]);
+    }
+
+    #[test]
+    fn a_word_wider_than_the_line_breaks_inside_itself() {
+        let got = wrap_lines("aaaaaaa", 3.0, 3.0, 1.0, &OPTS, one_pt_per_char, |t| {
+            t.len() as i32
+        });
+        assert_eq!(got, vec!["aaa", "aaa", "a"]);
+    }
+
+    #[test]
+    fn char_wrap_off_leaves_the_long_word_whole() {
+        let opts = WrapOpts { char_wrap: false, ..OPTS };
+        let got = wrap_lines("aaaaaaa", 3.0, 3.0, 1.0, &opts, one_pt_per_char, |t| {
+            t.len() as i32
+        });
+        assert_eq!(got, vec!["aaaaaaa"]);
+    }
+
+    #[test]
+    fn empty_text_still_yields_one_empty_line() {
+        let got = wrap_lines("", 10.0, 10.0, 1.0, &OPTS, one_pt_per_char, |t| t.len() as i32);
+        assert_eq!(got, vec![String::new()]);
+    }
+}

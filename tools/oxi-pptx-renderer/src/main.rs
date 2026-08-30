@@ -14387,112 +14387,32 @@ fn gdi_wrap_lines(
     italic: bool,
     runs: Option<(&[oxislides_core::ir::SlideRun], usize)>,
 ) -> Vec<String> {
-    let first_px = (first_width_pt as f64 * scale).round().max(1.0) as i32;
-    let rest_px = (rest_width_pt as f64 * scale).round().max(1.0) as i32;
-    let mut width_px = first_px;
-    let mut width_pt = first_width_pt;
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut current_w = 0i32;
-    // Characters already committed to finished lines: the candidate's offset in
-    // the paragraph, which is what maps a character back to its run.
-    let mut emitted = 0usize;
-    let styles = |start: usize| {
-        runs.map(|(runs, base)| RunStyles {
-            runs,
-            line_start: base + start,
-        })
+    let opts = oxislides_core::layout::WrapOpts {
+        trim_trailing_space: std::env::var("OXI_WRAPTRIM_DISABLE").is_err(),
+        char_wrap: charwrap_on(),
+        hyphen_breaks: hyphbrk_on(),
     };
-    let trim_on = std::env::var("OXI_WRAPTRIM_DISABLE").is_err();
-    for word in break_pieces(text) {
-        // A line's trailing space HANGS past the right edge -- it is not part
-        // of the width the break is judged against. Measured on d28 slide 13
-        // (2026-08-18): "National Cemetery in Gettysburg, Pennsylvania. In
-        // just" is 1034px in its own font against a 1036px box and PowerPoint
-        // keeps it whole, but with the trailing space it is 1047px, so the
-        // per-word accumulation broke before "just" and the paragraph needed
-        // 11 lines where PowerPoint needs 10.
-        //
-        // Measuring the candidate PREFIX rather than summing per-word widths
-        // also drops the per-word integer-pixel rounding, which pushed the
-        // same way.
-        let fits = if trim_on {
-            let mut candidate = current.clone();
-            candidate.push_str(word);
-            let trimmed = candidate.trim_end();
-            fits_line(dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale, styles(emitted))
-        } else {
-            current_w + gdi_measure_text_px(dc, word) <= width_px
-        };
-        if !current.is_empty() && !fits {
-            emitted += current.chars().count();
-            lines.push(std::mem::take(&mut current));
-            current_w = 0;
-            // Every line after the first is judged against the continuation
-            // width, which a hanging indent or a bullet makes narrower.
-            width_px = rest_px;
-            width_pt = rest_width_pt;
-        }
-        // A single "word" wider than the line has to break INSIDE itself --
-        // splitting on spaces alone leaves it as one overflowing line. d11 and
-        // d24 slide 38 are 53 emoji with no space between them in a 490pt box;
-        // PowerPoint lays them out in four rows and Oxi drew one that ran off
-        // the page. 45 paragraphs across nine decks carry a space-free run of
-        // 30 characters or more (long URLs are the other kind).
-        if charwrap_on() && current.is_empty() {
-            let mut rest = word;
-            loop {
-                let trimmed = rest.trim_end();
-                if trimmed.is_empty()
-                    || fits_line(
-                        dc, trimmed, fs, family, bold, italic, width_pt, width_px, scale,
-                        styles(emitted),
-                    )
-                {
-                    break;
-                }
-                // Longest prefix that fits, never empty so the loop ends.
-                let mut last_ok = 0usize;
-                for (i, ch) in rest.char_indices() {
-                    let end = i + ch.len_utf8();
-                    if fits_line(
-                        dc, rest[..end].trim_end(), fs, family, bold, italic,
-                        width_pt, width_px, scale, styles(emitted),
-                    ) {
-                        last_ok = end;
-                    } else {
-                        break;
-                    }
-                }
-                let take = if last_ok > 0 {
-                    last_ok
-                } else {
-                    rest.char_indices().nth(1).map(|(i, _)| i).unwrap_or(rest.len())
-                };
-                emitted += rest[..take].chars().count();
-                lines.push(rest[..take].to_string());
-                rest = &rest[take..];
-                width_px = rest_px;
-                width_pt = rest_width_pt;
-            }
-            current.push_str(rest);
-            current_w += gdi_measure_text_px(dc, rest);
-            continue;
-        }
-        current.push_str(word);
-        current_w += gdi_measure_text_px(dc, word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
+    let lines = oxislides_core::layout::wrap_lines(
+        text,
+        first_width_pt,
+        rest_width_pt,
+        scale,
+        &opts,
+        |candidate, width_pt, width_px, emitted| {
+            let styles = runs.map(|(runs, base)| RunStyles {
+                runs,
+                line_start: base + emitted,
+            });
+            fits_line(
+                dc, candidate, fs, family, bold, italic, width_pt, width_px, scale, styles,
+            )
+        },
+        |t| gdi_measure_text_px(dc, t),
+    );
     if let Ok(want) = std::env::var("OXI_LINE_DEBUG") {
         if text.contains(&want) {
             eprintln!(
-                "LINE fam={family:?} fs={fs} bold={bold} first={first_width_pt} rest={rest_width_pt} \
-                 scale={scale:.4} mu={:?} lines={lines:?}",
+                "LINE fam={family:?} fs={fs} bold={bold} first={first_width_pt} rest={rest_width_pt}                  scale={scale:.4} mu={:?} lines={lines:?}",
                 master_units(text, fs, family, bold, italic, 0.0),
             );
         }
