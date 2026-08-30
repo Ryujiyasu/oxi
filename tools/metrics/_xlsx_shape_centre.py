@@ -37,7 +37,11 @@ SCRATCH = Path(r"C:\tmp\xlsx_shape_centre")
 BOOK = SCRATCH / "centre.xlsx"
 EMU = 9525.0
 
-SPACING = 5             # rows a case
+# Rows between one case and the next. A row is about twenty pixels, so this has
+# to clear the TALLEST box in `cases()` — the seven-line arms are 200 pixels and
+# at 150% their block overflows the box, which then spills into the arm below
+# and the reader answers with its neighbour's ink.
+SPACING = 12            # rows a case
 WORD = "A"              # sits on the baseline, so its ink foot is baseline - 1
 FACES = [("Yu Gothic UI", 12.0), ("メイリオ", 12.0), ("ＭＳ Ｐゴシック", 12.0)]
 HEIGHTS = list(range(40, 56))
@@ -51,22 +55,34 @@ PCTS = [70000, 80000, 90000, 100000, 115000, 150000]
 PCT_HEIGHT = 74         # the height `glossary_05`'s own centred box works out to
 
 
+# And a third sweep, on the question the second could not answer. The line
+# spacing that came out of the one-line arms — Excel divides
+# `own × (0.25 + 0.75p)` rather than the sum of the pitches — was implemented
+# and cost `glossary_05` 0.0329: the two-line boxes came right and the
+# seven-line ones broke, so the correction depends on how many lines there
+# are. These arms hold the box and vary the count.
+LINES = [1, 2, 3, 7]
+LINE_HEIGHT = 200       # tall enough for seven lines at 150%
+
+
 def cases():
-    plain = [(face, size, tall, None) for face, size in FACES for tall in HEIGHTS]
-    scaled = [(face, size, PCT_HEIGHT, pct) for face, size in FACES for pct in PCTS]
-    return plain + scaled
+    plain = [(face, size, tall, None, 1) for face, size in FACES for tall in HEIGHTS]
+    scaled = [(face, size, PCT_HEIGHT, pct, 1) for face, size in FACES for pct in PCTS]
+    counted = [(face, size, LINE_HEIGHT, pct, lines)
+               for face, size in FACES for pct in PCTS for lines in LINES]
+    return plain + scaled + counted
 
 
 def anchors_xml():
     held = []
-    for index, (face, points, tall, pct) in enumerate(cases()):
+    for index, (face, points, tall, pct, lines) in enumerate(cases()):
         spec = "" if pct is None else f'<a:lnSpc><a:spcPct val="{pct}"/></a:lnSpc>'
         one = (
             f'<a:p><a:pPr algn="l">{spec}</a:pPr>'
             f'<a:r><a:rPr lang="ja-JP" sz="{int(points * 100)}">'
             f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/>'
             f"</a:rPr><a:t>{WORD}</a:t></a:r></a:p>"
-        )
+        ) * lines
         held.append(
             f"<xdr:oneCellAnchor>"
             f"<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
@@ -177,6 +193,15 @@ def foot(picture, top, bottom, lane):
     return top + int(lit[-1]) if len(lit) else None
 
 
+def head(picture, top, bottom, lane):
+    """The FIRST row of ink. A block of many lines has its foot governed by
+    the leading as well as by the division, so the head is the cleaner reading
+    of where the block was put."""
+    held = (picture[top:bottom, lane:] < 128).sum(axis=1)
+    lit = np.where(held > 0)[0]
+    return top + int(lit[0]) if len(lit) else None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
@@ -196,10 +221,11 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    print(f"{'face':<14}{'box':>5}{'pct':>7}{'area':>12}{'block':>9}{'slack':>8}"
-          f"{'Excel':>7}{'ours':>6}{'round':>7}{'floor':>7}{'ceil':>6}")
+    print(f"{'face':<14}{'box':>5}{'pct':>7}{'n':>3}{'area':>12}{'block':>9}{'slack':>8}"
+          f"{'Excel':>7}{'ours':>6}{'head E':>8}{'head O':>7}"
+          f"{'round':>7}{'floor':>7}{'ceil':>6}")
     seen = {}
-    for index, (face, points, tall, pct) in enumerate(cases()):
+    for index, (face, points, tall, pct, lines) in enumerate(cases()):
         top = edges.get(index * SPACING)
         bottom = edges.get(index * SPACING + SPACING - 1)
         if top is None or bottom is None or index >= len(told):
@@ -222,9 +248,13 @@ def main():
         got = [name for name, value in base.items() if value == _at]
         seen.setdefault(face, []).append(
             (tall, theirs - mine_foot, {name: int(value - _at) for name, value in base.items()}))
-        print(f"{face:<14}{tall:>5}{(pct or 0) // 1000:>7}"
+        their_head = head(truth, top, bottom, lane)
+        my_head = head(mine, top, bottom, lane)
+        print(f"{face:<14}{tall:>5}{(pct or 0) // 1000:>7}{lines:>3}"
               f"{f'{area_top:.0f}..{area_foot:.0f}':>12}{block:>9.3f}"
               f"{slack:>8.3f}{theirs:>7}{mine_foot:>6}"
+              f"{their_head if their_head is not None else -1:>8}"
+              f"{my_head if my_head is not None else -1:>7}"
               f"{int(base['round'] - _at):>7}{int(base['floor'] - _at):>7}"
               f"{int(base['ceil'] - _at):>6}"
               f"{'' if theirs == mine_foot else '  <<'}")
