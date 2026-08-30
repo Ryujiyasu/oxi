@@ -227,6 +227,11 @@ def main():
     parser.add_argument("--heights",
                         help="only these box heights, for sweeping the "
                              "percentage finely at a fixed height instead")
+    parser.add_argument("--sizes",
+                        help="`a:b:step` — sweep the FONT SIZE instead of the "
+                             "percentage. A height that Excel quantises before "
+                             "halving shows a staircase against the size where "
+                             "a plain multiple of it would show a straight line")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     if args.staircase:
@@ -241,8 +246,15 @@ def main():
         # Height first, so each height's run of percentages reads as one block:
         # at a fixed height the division's phase is fixed too, and where the
         # answer STEPS as the percentage grows is what says how far off `d` is.
-        STAIRS = [(args.staircase, args.points, high, int(round(pct * 1000)), 1)
-                  for high in tall for pct in pcts]
+        if args.sizes:
+            first, last, step = (float(one) for one in args.sizes.split(":"))
+            count = int(round((last - first) / step)) + 1
+            sizes = [first + at * step for at in range(count)]
+            STAIRS = [(args.staircase, size, high, int(round(pcts[0] * 1000)), 1)
+                      for high in tall for size in sizes]
+        else:
+            STAIRS = [(args.staircase, args.points, high, int(round(pct * 1000)), 1)
+                      for high in tall for pct in pcts]
 
     build()
     picture = BOOK.with_suffix(".excel.png") if args.reuse else shoot()
@@ -257,7 +269,7 @@ def main():
         edges[index] = at
         at += heights[index]
 
-    print(f"{'face':<14}{'box':>5}{'pct':>7}{'n':>3} {'area':>12}{'block':>9}{'slack':>8}"
+    print(f"{'face':<14}{'pt':>6}{'box':>5}{'pct':>7}{'n':>3} {'area':>12}{'block':>9}{'slack':>8}"
           f"{'Excel':>7}{'ours':>6}{'head E':>8}{'head O':>7}"
           f"{'round':>7}{'floor':>7}{'ceil':>6}")
     seen = {}
@@ -286,7 +298,7 @@ def main():
             (tall, theirs - mine_foot, {name: int(value - _at) for name, value in base.items()}))
         their_head = head(truth, top, bottom, lane)
         my_head = head(mine, top, bottom, lane)
-        print(f"{face:<14}{tall:>5}{(pct or 0) // 1000:>7}{lines:>3}"
+        print(f"{face:<14}{points:>6.1f}{tall:>5}{(pct or 0) // 1000:>7}{lines:>3}"
               f" {f'{area_top:.0f}..{area_foot:.0f}':>12}{block:>9.3f}"
               f"{slack:>8.3f}{theirs:>7}{mine_foot:>6}"
               f"{their_head if their_head is not None else -1:>8}"
