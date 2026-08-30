@@ -963,3 +963,140 @@ mod geometry_tests {
         assert!((step - 76.4).abs() < 1.5, "{step}");
     }
 }
+
+/// The exact line height a paragraph asks for in POINTS, if it asks in points.
+///
+/// S-LNSPCPTS (2026-08-27): `a:lnSpc/a:spcPts` states a height outright and
+/// outranks any multiple. S-LNSPCROUND (2026-08-29): PowerPoint rounds that
+/// height to a whole point before using it -- read off its own PDF, where a
+/// 12.984pt request steps 13.
+pub fn exact_line_pt(
+    para: &crate::ir::SlideParagraph,
+    honour_points: bool,
+    round_points: bool,
+) -> Option<f32> {
+    let v = para.line_spacing_pts.filter(|v| *v > 0.0 && honour_points)?;
+    Some(if round_points { v.round() } else { v })
+}
+
+/// The size a paragraph is set at.
+///
+/// A run's explicit `sz` wins -- the LARGEST of them, since one big word sets
+/// the line -- then whatever the placeholder chain inherited, then 18pt.
+///
+/// An EMPTY paragraph has no run to ask, and is sized by its paragraph MARK
+/// (`a:endParaRPr`) instead; failing that it keeps the previous paragraph's
+/// size, because an empty line between two paragraphs is as tall as the text
+/// around it, not as tall as the default.
+pub fn paragraph_font_size(
+    para: &crate::ir::SlideParagraph,
+    inherited: Option<f32>,
+    prev_fs: Option<f32>,
+    empty_para_rule: bool,
+) -> f32 {
+    let explicit = para
+        .runs
+        .iter()
+        .filter_map(|r| r.font_size)
+        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a: f32| a.max(x))));
+    if empty_para_rule && para.runs.iter().all(|r| r.text.is_empty()) {
+        if let Some(fs) = para.end_para_size.or(prev_fs) {
+            return fs;
+        }
+    }
+    explicit.or(inherited).unwrap_or(18.0)
+}
+
+/// Where a line starts inside the width it may use, for its alignment.
+///
+/// Centre and right are measured from the width the line actually occupies, so
+/// a line measured in a face it is not drawn in starts in the wrong place --
+/// which is why the width handed in must come from the same per-run
+/// measurement the wrap uses (S-RUNALIGN).
+pub fn align_offset(alignment: crate::ir::SlideAlignment, area_w: f32, line_w: f32) -> f32 {
+    match alignment {
+        crate::ir::SlideAlignment::Center => ((area_w - line_w) / 2.0).max(0.0),
+        crate::ir::SlideAlignment::Right => (area_w - line_w).max(0.0),
+        _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    use crate::ir::{SlideAlignment, SlideParagraph, SlideRun};
+
+    fn para(runs: Vec<SlideRun>) -> SlideParagraph {
+        SlideParagraph {
+            runs,
+            alignment: None,
+            line_spacing: None,
+            line_spacing_pts: None,
+            space_before: None,
+            space_after: None,
+            lvl: 0,
+            end_para_size: None,
+            mar_l: None,
+            indent: None,
+            bullet: crate::ir::SlideBullet::default(),
+        }
+    }
+
+    fn run(text: &str, size: Option<f32>) -> SlideRun {
+        SlideRun {
+            text: text.to_string(),
+            font_size: size,
+            bold: false,
+            italic: false,
+            underline: false,
+            color: None,
+            color_alpha: None,
+            highlight: None,
+            font_family: None,
+            spacing: None,
+        }
+    }
+
+    #[test]
+    fn the_largest_explicit_size_sets_the_paragraph() {
+        let p = para(vec![run("a", Some(12.0)), run("b", Some(40.0))]);
+        assert_eq!(paragraph_font_size(&p, Some(18.0), None, true), 40.0);
+    }
+
+    #[test]
+    fn an_inherited_size_is_used_when_no_run_states_one() {
+        let p = para(vec![run("a", None)]);
+        assert_eq!(paragraph_font_size(&p, Some(32.0), None, true), 32.0);
+        assert_eq!(paragraph_font_size(&p, None, None, true), 18.0);
+    }
+
+    #[test]
+    fn an_empty_paragraph_keeps_the_size_around_it() {
+        let p = para(vec![run("", None)]);
+        assert_eq!(paragraph_font_size(&p, Some(18.0), Some(44.0), true), 44.0);
+        // With the rule off it falls back to what it inherited.
+        assert_eq!(paragraph_font_size(&p, Some(18.0), Some(44.0), false), 18.0);
+    }
+
+    #[test]
+    fn a_stated_line_height_is_rounded_to_a_whole_point() {
+        let mut p = para(vec![run("a", None)]);
+        p.line_spacing_pts = Some(12.984);
+        assert_eq!(exact_line_pt(&p, true, true), Some(13.0));
+        assert_eq!(exact_line_pt(&p, true, false), Some(12.984));
+        assert_eq!(exact_line_pt(&p, false, true), None);
+    }
+
+    #[test]
+    fn centre_and_right_are_measured_from_the_line_width() {
+        assert_eq!(align_offset(SlideAlignment::Center, 100.0, 40.0), 30.0);
+        assert_eq!(align_offset(SlideAlignment::Right, 100.0, 40.0), 60.0);
+        assert_eq!(align_offset(SlideAlignment::Left, 100.0, 40.0), 0.0);
+    }
+
+    #[test]
+    fn a_line_wider_than_its_area_is_not_pushed_left_of_it() {
+        assert_eq!(align_offset(SlideAlignment::Center, 100.0, 140.0), 0.0);
+        assert_eq!(align_offset(SlideAlignment::Right, 100.0, 140.0), 0.0);
+    }
+}

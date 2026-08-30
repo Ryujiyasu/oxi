@@ -1134,8 +1134,7 @@ fn lnspcround_on() -> bool {
 /// ★Rounded HERE and not in the parser: the IR keeps what the file says, so a
 /// round-trip save cannot write 3200 back over a deck's 3220.
 fn exact_line_pt(p: &oxislides_core::ir::SlideParagraph) -> Option<f32> {
-    let v = p.line_spacing_pts.filter(|v| *v > 0.0 && lnspcpts_on())?;
-    Some(if lnspcround_on() { v.round() } else { v })
+    oxislides_core::layout::exact_line_pt(p, lnspcpts_on(), lnspcround_on())
 }
 
 fn cellbox_on() -> bool {
@@ -3845,17 +3844,7 @@ fn paragraph_font_size(
     inherited: Option<f32>,
     prev_fs: Option<f32>,
 ) -> f32 {
-    let explicit = para
-        .runs
-        .iter()
-        .filter_map(|r| r.font_size)
-        .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a| a.max(x))));
-    if emptypara_on() && para.runs.iter().all(|r| r.text.is_empty()) {
-        if let Some(fs) = para.end_para_size.or(prev_fs) {
-            return fs;
-        }
-    }
-    explicit.or(inherited).unwrap_or(18.0)
+    oxislides_core::layout::paragraph_font_size(para, inherited, prev_fs, emptypara_on())
 }
 
 /// `a:alphaModFix/@amt` scales a picture's opacity unless this is set.
@@ -15505,7 +15494,6 @@ fn layout_paragraph_baselines(
         let align = para
             .alignment
             .unwrap_or(m.algn.unwrap_or(SlideAlignment::Left));
-        let is_justify_last = matches!(align, SlideAlignment::Justify) && i + 1 == n_lines;
         let base_off = if i == 0 { line0_x_off } else { para_left_rel };
         // S-CTRBULLET (2026-08-27). A centred line is centred in what is LEFT of
         // the text area after its own indent, not in the whole area. d24 s2's
@@ -15518,12 +15506,9 @@ fn layout_paragraph_baselines(
         } else {
             area_w
         };
-        let align_off = match align {
-            SlideAlignment::Center => (avail - line_w).max(0.0) / 2.0,
-            SlideAlignment::Right => (avail - line_w).max(0.0),
-            SlideAlignment::Justify if is_justify_last => 0.0,
-            _ => 0.0,
-        };
+        // Justify needs no offset on either its last line or its others: the
+        // stretch is done by the draw path, not by moving the line's start.
+        let align_off = oxislides_core::layout::align_offset(align, avail, line_w);
         if i == 0 {
             if let Some(mk) = marker.as_mut() {
                 mk.baseline = baseline;
