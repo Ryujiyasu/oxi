@@ -59,6 +59,8 @@ pub struct PptxEditor {
     edits: HashMap<usize, HashMap<(usize, usize, usize), String>>,
     /// (slide_idx) -> { (shape, para) -> character offset to break at }
     splits: HashMap<usize, HashMap<(usize, usize), usize>>,
+    /// (slide_idx) -> { (shape, para) } -- paragraphs joined onto the one before
+    merges: HashMap<usize, std::collections::HashSet<(usize, usize)>>,
 }
 
 impl PptxEditor {
@@ -69,6 +71,7 @@ impl PptxEditor {
             presentation,
             edits: HashMap::new(),
             splits: HashMap::new(),
+            merges: HashMap::new(),
         })
     }
 
@@ -119,6 +122,27 @@ impl PptxEditor {
             .insert((shape_index, paragraph_index), at_char);
     }
 
+    /// Join `paragraph_index` onto the paragraph before it -- what Backspace at
+    /// the start of a paragraph asks for.
+    ///
+    /// The joined paragraph keeps the FIRST one's properties: a line pulled up
+    /// into a bulleted paragraph joins that bullet, it does not bring its own.
+    /// Nothing happens for paragraph 0, which has nothing to join.
+    pub fn merge_paragraph(
+        &mut self,
+        slide_index: usize,
+        shape_index: usize,
+        paragraph_index: usize,
+    ) {
+        if paragraph_index == 0 {
+            return;
+        }
+        self.merges
+            .entry(slide_index)
+            .or_default()
+            .insert((shape_index, paragraph_index));
+    }
+
     pub fn addressable_runs(&self) -> Result<Vec<Vec<Vec<Vec<String>>>>, PptxError> {
         let paths = self.resolve_slide_paths()?;
         let mut archive = OoxmlArchive::new(&self.original_data)?;
@@ -143,14 +167,14 @@ impl PptxEditor {
     }
 
     pub fn has_edits(&self) -> bool {
-        if !self.splits.is_empty() {
+        if !self.splits.is_empty() || !self.merges.is_empty() {
             return true;
         }
         !self.edits.is_empty()
     }
 
     pub fn save(&self) -> Result<Vec<u8>, PptxError> {
-        if self.edits.is_empty() && self.splits.is_empty() {
+        if self.edits.is_empty() && self.splits.is_empty() && self.merges.is_empty() {
             return Ok(self.original_data.clone());
         }
 
@@ -171,8 +195,17 @@ impl PptxEditor {
                 path_splits.insert(path.clone(), splits);
             }
         }
+        let mut path_merges: HashMap<String, &std::collections::HashSet<(usize, usize)>> =
+            HashMap::new();
+        for (si, merges) in &self.merges {
+            if let Some(path) = slide_paths.get(*si) {
+                path_merges.insert(path.clone(), merges);
+            }
+        }
         let no_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
         let no_splits: HashMap<(usize, usize), usize> = HashMap::new();
+        let no_merges: std::collections::HashSet<(usize, usize)> =
+            std::collections::HashSet::new();
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive =
@@ -193,14 +226,19 @@ impl PptxEditor {
                     .start_file(&name, options)
                     .map_err(|e| PptxError::InvalidData(e.to_string()))?;
 
-                if path_edits.contains_key(&name) || path_splits.contains_key(&name) {
+                if path_edits.contains_key(&name)
+                    || path_splits.contains_key(&name)
+                    || path_merges.contains_key(&name)
+                {
                     let slide_edits = path_edits.get(&name).copied().unwrap_or(&no_edits);
                     let slide_splits = path_splits.get(&name).copied().unwrap_or(&no_splits);
+                    let slide_merges = path_merges.get(&name).copied().unwrap_or(&no_merges);
                     let mut xml = String::new();
                     entry
                         .read_to_string(&mut xml)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
-                    let patched = patch_slide_xml(&xml, slide_edits, slide_splits)?;
+                    let patched =
+                        patch_slide_xml(&xml, slide_edits, slide_splits, slide_merges)?;
                     writer
                         .write_all(patched.as_bytes())
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
@@ -503,6 +541,7 @@ fn patch_slide_xml(
     xml: &str,
     edits: &HashMap<(usize, usize, usize), String>,
     splits: &HashMap<(usize, usize), usize>,
+    merges: &std::collections::HashSet<(usize, usize)>,
 ) -> Result<String, PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -519,6 +558,11 @@ fn patch_slide_xml(
     // written, because the second half needs the first half's properties and
     // they arrive before the cut is reached.
     let mut buffer: Option<(usize, Vec<Event<'static>>)> = None;
+    // A paragraph joined onto the one before it drops its own opening tag, its
+    // own properties and the previous paragraph's closing tag, so its runs flow
+    // into the paragraph above.
+    let mut swallow_ppr = false;
+    let mut ppr_depth = 0usize;
 
     loop {
         match reader.read_event().map_err(PptxError::Xml)? {
@@ -540,6 +584,18 @@ fn patch_slide_xml(
                         if let Some(at) = splits.get(&(shape_idx, para_idx)) {
                             buffer = Some((*at, Vec::new()));
                         }
+                        if merges.contains(&(shape_idx, para_idx)) {
+                            swallow_ppr = true;
+                            continue;
+                        }
+                    }
+                    "pPr" if swallow_ppr => {
+                        ppr_depth += 1;
+                        continue;
+                    }
+                    _ if ppr_depth > 0 => {
+                        ppr_depth += 1;
+                        continue;
                     }
                     "r" if in_paragraph => {
                         in_run = true;
@@ -559,6 +615,13 @@ fn patch_slide_xml(
             }
             Event::End(ref e) => {
                 let name = local_name(e.name().as_ref());
+                if ppr_depth > 0 {
+                    ppr_depth -= 1;
+                    if ppr_depth == 0 {
+                        swallow_ppr = false;
+                    }
+                    continue;
+                }
                 match name.as_str() {
                     "spTree" => {
                         in_sp_tree = false;
@@ -580,6 +643,15 @@ fn patch_slide_xml(
                     }
                     _ => {}
                 }
+                // The closer of the paragraph BEFORE a joined one is dropped, so
+                // the two become one. `para_idx` has already advanced past this
+                // paragraph, so it names the paragraph that follows -- which is
+                // exactly the one asking to be joined.
+                if local_name(e.name().as_ref()) == "p"
+                    && merges.contains(&(shape_idx, para_idx))
+                {
+                    continue;
+                }
                 let closing_split = local_name(e.name().as_ref()) == "p" && buffer.is_some();
                 if let Some((_, buf)) = buffer.as_mut() {
                     buf.push(Event::End(e.clone().into_owned()));
@@ -592,6 +664,9 @@ fn patch_slide_xml(
                     let (at, buf) = buffer.take().expect("just checked");
                     write_split_paragraph(&mut writer, &buf, at)?;
                 }
+            }
+            Event::Text(ref e) if ppr_depth > 0 => {
+                let _ = e;
             }
             Event::Text(ref e) => {
                 // A text edit is applied BEFORE any split, so the split counts
@@ -611,6 +686,15 @@ fn patch_slide_xml(
                         .write_event(out)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
                 }
+            }
+            Event::Empty(ref e)
+                if swallow_ppr && local_name(e.name().as_ref()) == "pPr" =>
+            {
+                // A self-closing `<a:pPr/>` never opens, so it is dropped here.
+                swallow_ppr = false;
+            }
+            event if ppr_depth > 0 => {
+                let _ = event;
             }
             event => {
                 if let Some((_, buf)) = buffer.as_mut() {
@@ -664,7 +748,7 @@ mod tests {
 #[cfg(test)]
 mod split_tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     const SLIDE: &str = concat!(
         r#"<?xml version="1.0"?><p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>"#,
@@ -679,7 +763,7 @@ mod split_tests {
     fn split_at(at: usize) -> String {
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), at);
-        patch_slide_xml(SLIDE, &HashMap::new(), &splits).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -767,7 +851,7 @@ mod split_tests {
         edits.insert((0usize, 0usize, 0usize), "Goodbye now".to_string());
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), 7);
-        let out = patch_slide_xml(SLIDE, &edits, &splits).expect("patch");
+        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new()).expect("patch");
         let ps = paragraphs(&out);
         assert_eq!(texts(&ps[0]), "Goodbye");
         assert_eq!(texts(&ps[1]), " now");
@@ -775,7 +859,94 @@ mod split_tests {
 
     #[test]
     fn a_slide_with_no_split_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new()).expect("patch");
         assert_eq!(paragraphs(&out).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    const SLIDE: &str = concat!(
+        r#"<?xml version="1.0"?><p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>"#,
+        r#"<p:sp><p:txBody>"#,
+        r#"<a:p><a:pPr lvl="1"><a:buChar char="-"/></a:pPr>"#,
+        r#"<a:r><a:t>First</a:t></a:r></a:p>"#,
+        r#"<a:p><a:pPr lvl="3" algn="ctr"/><a:r><a:t>Second</a:t></a:r></a:p>"#,
+        r#"<a:p><a:r><a:t>Third</a:t></a:r></a:p>"#,
+        r#"</p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+    );
+
+    fn merge(which: usize) -> String {
+        let mut m = HashSet::new();
+        m.insert((0usize, which));
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m).expect("patch")
+    }
+
+    fn paragraphs(xml: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = xml;
+        while let Some(i) = rest.find("<a:p>") {
+            let after = &rest[i..];
+            let end = after.find("</a:p>").map(|e| e + 6).unwrap_or(after.len());
+            out.push(after[..end].to_string());
+            rest = &after[end..];
+        }
+        out
+    }
+
+    fn texts(p: &str) -> String {
+        let mut out = String::new();
+        let mut rest = p;
+        while let Some(i) = rest.find("<a:t>") {
+            let after = &rest[i + 5..];
+            let end = after.find("</a:t>").unwrap_or(after.len());
+            out.push_str(&after[..end]);
+            rest = &after[end..];
+        }
+        out
+    }
+
+    #[test]
+    fn joining_the_second_onto_the_first_leaves_one_paragraph_with_both() {
+        let ps = paragraphs(&merge(1));
+        assert_eq!(ps.len(), 2, "three paragraphs became two");
+        assert_eq!(texts(&ps[0]), "FirstSecond");
+        assert_eq!(texts(&ps[1]), "Third");
+    }
+
+    #[test]
+    fn the_joined_paragraph_keeps_the_first_ones_properties() {
+        let ps = paragraphs(&merge(1));
+        assert!(ps[0].contains(r#"lvl="1""#), "kept the first level: {}", ps[0]);
+        assert!(ps[0].contains("buChar"), "kept the first bullet: {}", ps[0]);
+        assert!(!ps[0].contains(r#"lvl="3""#), "dropped the second's: {}", ps[0]);
+        assert!(!ps[0].contains("algn"), "and its alignment: {}", ps[0]);
+    }
+
+    #[test]
+    fn a_paragraph_with_no_properties_joins_just_as_well() {
+        let ps = paragraphs(&merge(2));
+        assert_eq!(ps.len(), 2);
+        assert_eq!(texts(&ps[1]), "SecondThird");
+    }
+
+    #[test]
+    fn joining_the_first_paragraph_is_refused_at_the_api() {
+        // `merge_paragraph` declines paragraph 0, which has nothing above it.
+        let data = include_bytes!("../../../tests/fixtures/basic_test.pptx");
+        if let Ok(mut ed) = PptxEditor::new(data) {
+            ed.merge_paragraph(0, 0, 0);
+            assert!(!ed.has_edits(), "paragraph 0 must not register a join");
+        }
+    }
+
+    #[test]
+    fn a_slide_with_no_join_is_left_alone() {
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new())
+            .expect("patch");
+        assert_eq!(paragraphs(&out).len(), 3);
     }
 }

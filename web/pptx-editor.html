@@ -371,18 +371,10 @@ document.addEventListener('keydown', (e) => {
 // split the paragraphs held in the page and keep the break "pending" -- makes
 // the page's paragraph numbering disagree with the file's for every edit that
 // follows, and the numbering is what an edit is addressed by.
-async function commitBreak() {
-  const { entry, line } = state.sel;
-  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+async function commitStructural(splits, merges, shapeIndex, caretPara, caretChar, done) {
   const edits = pendingEdits();
-  const split = {
-    slide_index: state.slide, shape_index: entry.shape.sp_index,
-    paragraph_index: line.para_index, at_char: state.sel.charIndex,
-  };
-  const shapeIndex = entry.shapeIndex;
-  const nextPara = line.para_index + 1;
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, [split]);
+    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, splits, merges);
     state.bytes = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
     state.pres = parse_presentation(new Uint8Array(state.bytes));
     state.edits.clear();
@@ -392,20 +384,49 @@ async function commitBreak() {
     state.original.clear();
     $('save').disabled = true;
     layoutSlide();
-    placeCaret(shapeIndex, nextPara, 0);
+    placeCaret(shapeIndex, caretPara, caretChar);
     describeSelection();
     paint();
     coverage();
-    say('paragraph broken');
+    say(done);
   } catch (err) {
-    say('could not break the paragraph: ' + err.message);
+    say('could not change the paragraphs: ' + err.message);
   }
 }
 
+// Enter breaks the paragraph at the caret.
 document.addEventListener('keydown', (e) => {
   if (!state.sel || e.key !== 'Enter') return;
   e.preventDefault();
-  commitBreak();
+  const { entry, line } = state.sel;
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  commitStructural(
+    [{ slide_index: state.slide, shape_index: entry.shape.sp_index,
+       paragraph_index: line.para_index, at_char: state.sel.charIndex }],
+    [], entry.shapeIndex, line.para_index + 1, 0, 'paragraph broken');
+});
+
+// Backspace at the very start of a paragraph joins it onto the one above --
+// the inverse of Enter, and the only Backspace that is not a character.
+document.addEventListener('keydown', (e) => {
+  if (!state.sel || e.key !== 'Backspace') return;
+  const { entry, line } = state.sel;
+  if (state.sel.charIndex !== 0 || line.para_index === 0) return;
+  e.preventDefault();
+  // ★And stop the plain Backspace handler, which is a later listener on the
+  // same element: `preventDefault` only tells the BROWSER to stand down, not
+  // the rest of the page. Without this the join happened and then a character
+  // was deleted on top of it, and the status line showed only the second.
+  e.stopImmediatePropagation();
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  // The caret lands where the join happened: the end of what the paragraph
+  // above used to be.
+  const above = entry.paragraphs[line.para_index - 1];
+  const at = above.runs.reduce((n, r) => n + [...r.text].length, 0);
+  commitStructural(
+    [], [{ slide_index: state.slide, shape_index: entry.shape.sp_index,
+           paragraph_index: line.para_index }],
+    entry.shapeIndex, line.para_index - 1, at, 'paragraphs joined');
 });
 
 document.addEventListener('keydown', (e) => {
@@ -471,7 +492,8 @@ function pendingEdits() {
 $('save').addEventListener('click', () => {
   const edits = pendingEdits();
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, state.splits);
+    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits,
+                                      state.splits, []);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([out], {
       type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));

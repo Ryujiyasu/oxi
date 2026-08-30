@@ -23,6 +23,8 @@ What it asserts, per deck:
   enter         a paragraph break shows on screen AT ONCE -- the deck is
                 re-opened from the bytes the break produced -- and the file
                 really holds one more paragraph than the original did
+  backspace     Backspace at the head of a paragraph joins it onto the one
+                above, taking the file back to where it started
   save          the download re-opens as a pptx whose text carries the change
   console       no page error was raised along the way
 
@@ -229,8 +231,25 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         after_n = count_paragraphs(broke, 1)
         rep.check(deck, "enter saved", after_n == before_n + 1,
                   f"paragraphs {before_n} -> {after_n}")
+
+        # And the inverse: Backspace at the head of the new paragraph joins it
+        # back. The count must return to where it started -- a join that only
+        # LOOKED right would leave the file one paragraph long.
+        page.keyboard.press("Home")
+        page.keyboard.press("Backspace")
+        page.wait_for_function(
+            "() => document.getElementById('status').textContent.includes('joined')"
+            " || document.getElementById('status').textContent.includes('could not')",
+            timeout=30000)
+        joined = page.eval_on_selector("#status", "e => e.textContent")
+        rep.check(deck, "backspace", "joined" in joined, repr(joined))
+        page.keyboard.type("Z")
         with page.expect_download() as dl2:
             page.click("#save")
+        rejoined = Path(dl2.value.path()).read_bytes()
+        rep.check(deck, "backspace saved",
+                  count_paragraphs(rejoined, 1) == before_n,
+                  f"paragraphs back to {count_paragraphs(rejoined, 1)}")
         dl = dl2
         out = Path(dl.value.path()).read_bytes()
         # The saved file must be a pptx, and the slide that was typed into must

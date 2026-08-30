@@ -731,6 +731,15 @@ struct JsSlideSplit {
     at_char: usize,
 }
 
+/// One paragraph join from JavaScript.
+#[cfg(feature = "suite")]
+#[derive(Deserialize)]
+struct JsSlideMerge {
+    slide_index: usize,
+    shape_index: usize,
+    paragraph_index: usize,
+}
+
 /// Edit a .pptx and break paragraphs in it, returning the modified bytes.
 ///
 /// `edits` replaces run text; `splits` cuts a paragraph in two at a character
@@ -743,6 +752,7 @@ pub fn edit_pptx_with_splits(
     data: &[u8],
     edits: JsValue,
     splits: JsValue,
+    merges: JsValue,
 ) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsSlideTextEdit> = if edits.is_undefined() || edits.is_null() {
         Vec::new()
@@ -753,6 +763,11 @@ pub fn edit_pptx_with_splits(
         Vec::new()
     } else {
         serde_wasm_bindgen::from_value(splits).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    let js_merges: Vec<JsSlideMerge> = if merges.is_undefined() || merges.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(merges).map_err(|e| JsError::new(&e.to_string()))?
     };
     let mut editor = oxislides_core::PptxEditor::new(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
@@ -769,6 +784,9 @@ pub fn edit_pptx_with_splits(
     editor.apply_edits(&edits);
     for sp in js_splits {
         editor.split_paragraph(sp.slide_index, sp.shape_index, sp.paragraph_index, sp.at_char);
+    }
+    for mg in js_merges {
+        editor.merge_paragraph(mg.slide_index, mg.shape_index, mg.paragraph_index);
     }
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }
