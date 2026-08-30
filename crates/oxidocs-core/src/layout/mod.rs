@@ -4884,6 +4884,10 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         .unwrap_or(0.0)
                 };
                 let sep_h = special_h(u32::MAX);
+                if std::env::var("OXI_FN_PROBE").is_ok() {
+                    eprintln!("[FN_SEP] branch=s833 declared={} sep_h={:.3} notice={:.3}",
+                        self.fn_special_declared, sep_h, special_h(u32::MAX - 1));
+                }
                 if sep_h > 0.0 {
                     // Experiment knob (default 0 = unchanged). The `_pb_fnkeep`
                     // sweep puts Oxi's keep boundary a flat 16tw = 0.8pt below
@@ -4896,7 +4900,19 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     return sep_h + special_h(u32::MAX - 1) + sepx;
                 }
             }
-            if page.grid_line_pitch.is_none() && std::env::var("OXI_S596B_DISABLE").is_err() {
+            // S1247 (opt-in OXI_S1247=1): S596b's scope was "no docGrid at all",
+            // written when bunkacontract was the corpus's only such footnote doc.
+            // The EN corpus writes <w:docGrid w:linePitch="N"/> with NO w:type,
+            // and `_pb_fnkeep` re-run WITH that grid flips at the SAME spacer
+            // (600 keeps / 604 breaks, both with and without) -- the separator
+            // reservation is grid-independent, so an untyped grid must not fall
+            // back to the legacy 12pt base. Latin scope, as derived.
+            let s1247_no_type = std::env::var("OXI_S1247").ok().as_deref() == Some("1")
+                && page.doc_grid_no_type
+                && !self.doc_body_has_real_cjk;
+            if (page.grid_line_pitch.is_none() || s1247_no_type)
+                && std::env::var("OXI_S596B_DISABLE").is_err()
+            {
                 if let Some(note) = page.footnotes.iter().find(|n| n.number == first_id) {
                     if let Some(Block::Paragraph(p)) = note.blocks.first() {
                         let fs = self.resolve_font_size(
@@ -4928,7 +4944,12 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         } else {
                             0.0
                         };
-                        return metrics.word_line_height_no_grid(fs).max(base) + s804_sep;
+                        let v = metrics.word_line_height_no_grid(fs).max(base) + s804_sep;
+                        if std::env::var("OXI_FN_PROBE").is_ok() {
+                            eprintln!("[FN_SEP] branch=s596b first_note_fs={:.2} line={:.3} base={:.3} s804={:.3} -> {:.3}",
+                                fs, metrics.word_line_height_no_grid(fs), base, s804_sep, v);
+                        }
+                        return v;
                     }
                 }
             }
@@ -4949,6 +4970,10 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             } else {
                 0.0
             };
+            if std::env::var("OXI_FN_PROBE").is_ok() {
+                eprintln!("[FN_SEP] branch=base base={:.3} s804={:.3} -> {:.3}",
+                    base, s804_sep, base + s804_sep);
+            }
             base + s804_sep
         };
 

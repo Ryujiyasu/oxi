@@ -34,10 +34,15 @@ if SEPID == "1":
     SETTINGS = SETTINGS.replace('<w:footnote w:id="0"/><w:footnote w:id="1"/>',
                                 '<w:footnote w:id="-1"/><w:footnote w:id="0"/>')
 
+# The EN corpus writes <w:docGrid w:linePitch="N"/> with no w:type. Oxi gates
+# its separator-reservation rule on having NO docGrid at all, so ask Word
+# whether an untyped grid moves the boundary.
+GRID = os.environ.get("FNK_GRID", "0")
 NPRIOR = int(os.environ.get("FNK_PRIOR", "2"))
 FNSZ = int(os.environ.get("FNK_FNSZ", "20"))      # footnote size, half-points
 NFILL = int(os.environ.get("FNK_FILL", "43"))
-OUT = r"C:\tmp\pb_fnkeep_p%d_z%d_f%d_s%s" % (NPRIOR, FNSZ, NFILL, SEPID)
+OUT = (r"C:\tmp\pb_fnkeep_p%d_z%d_f%d_s%s" % (NPRIOR, FNSZ, NFILL, SEPID)
+       + ("_g" + GRID if GRID != "0" else ""))
 NOWN = [1, 2, 3]
 NOTE = ("Note %d: a single line of footnote text, long enough to fill one line "
         "of the note area but not two. ")
@@ -73,7 +78,8 @@ def build(tag, spacer_tw, nown):
            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
            '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"'
            ' w:header="708" w:footer="708" w:gutter="0"/>'
-           "</w:sectPr></w:body></w:document>")
+           + ('<w:docGrid w:linePitch="%s"/>' % GRID if GRID != "0" else "")
+           + "</w:sectPr></w:body></w:document>")
     notes = ""
     for n, fid in enumerate(ids):
         notes += ('<w:footnote w:id="%d"><w:p><w:pPr><w:spacing w:after="0" w:line="240" '
