@@ -5954,10 +5954,63 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         // Excel, `Range("F1").Value = ""` leaves the cell Empty, and TypeName
         // says so.
         Value::String(value) if value.is_empty() => Ok(CellValue::Empty),
-        Value::String(value) => Ok(CellValue::String(value)),
+        Value::String(value) => Ok(typed_from_text(&value)),
         Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
     }
+}
+
+/// The mark that tells Excel to leave what follows as text.
+const APOSTROPHE: char = '\u{27}';
+
+/// A string assigned to a cell is read the way typing it would be.
+///
+/// Asked of Excel, `Range("A1").Value = "0123"` leaves the NUMBER 123 behind,
+/// not the text; `"TRUE"` leaves a Boolean; `"(5)"` leaves −5; a leading
+/// apostrophe forces the rest to stay text; and anything Excel cannot read as
+/// a number stays as it was written.
+///
+/// Excel reads more than this. `"50%"`, `"1e3"`, `"$5"`, `"1/2"`, `"1:30"`,
+/// `"1,234"` and `"1 1/2"` all become numbers too — but each of them also sets
+/// the cell's number format, which this cannot do from here, and four of them
+/// read differently under a different locale: on the machine this was measured
+/// `"1/2"` became a date formatted `m"月"d"日"` and `"$5"` took a yen-less
+/// dollar format, neither of which is a fact about Excel. Those are left as
+/// text on purpose until the format can travel with the value and the locale
+/// has been measured rather than assumed.
+fn typed_from_text(written: &str) -> CellValue {
+    // An apostrophe is the instruction "leave this alone", and is not kept.
+    if let Some(rest) = written.strip_prefix(APOSTROPHE) {
+        return CellValue::String(rest.to_string());
+    }
+    let trimmed = written.trim();
+    if trimmed.eq_ignore_ascii_case("true") {
+        return CellValue::Boolean(true);
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return CellValue::Boolean(false);
+    }
+    // A number in brackets is a negative one, the way an accountant writes it.
+    let (body, bracketed) = match trimmed.strip_prefix('(').and_then(|rest| rest.strip_suffix(')'))
+    {
+        Some(inside) => (inside.trim(), true),
+        None => (trimmed, false),
+    };
+    // Only plain decimal digits with an optional sign: `1e3` and the rest all
+    // carry a format with them, so they are not read here.
+    let readable = !body.is_empty()
+        && body
+            .chars()
+            .enumerate()
+            .all(|(at, one)| one.is_ascii_digit() || one == '.' || (at == 0 && matches!(one, '+' | '-')))
+        && body.chars().filter(|one| *one == '.').count() <= 1
+        && body.chars().any(|one| one.is_ascii_digit());
+    if readable {
+        if let Ok(number) = body.parse::<f64>() {
+            return CellValue::Number(if bracketed { -number } else { number });
+        }
+    }
+    CellValue::String(written.to_string())
 }
 
 fn to_formula(value: Value) -> Result<String, String> {
@@ -9135,6 +9188,62 @@ mod tests {
     /// off Excel before it was written down.
     /// A second differential audit — geometry and assignment this time. Every
     /// answer below was read off Excel first.
+    /// A string put into a cell is read the way typing it would be. Every
+    /// answer here was read off Excel; the ones Excel also gives a number
+    /// format to are left alone on purpose and are named in `typed_from_text`.
+    #[test]
+    fn a_string_put_in_a_cell_is_read_as_it_would_be_typed() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"0123\"
+               Range(\"A2\").Value = \"abc\"
+               Range(\"A3\").Value = \"1.5\"
+               Range(\"A4\").Value = \" 12 \"
+               Range(\"A5\").Value = \"TRUE\"
+               Range(\"A6\").Value = \"'123\"
+               Range(\"A7\").Value = \"(5)\"
+               Range(\"A8\").Value = \"-7\"
+               Range(\"A9\").Value = \"+8\"
+               Range(\"A10\").Value = \"0.0\"
+               Range(\"A11\").Value = \"12a\"
+               Range(\"A12\").Value = \"1.2.3\"
+               Debug.Print Range(\"A1\").Value, TypeName(Range(\"A1\").Value)
+               Debug.Print Range(\"A2\").Value, TypeName(Range(\"A2\").Value)
+               Debug.Print Range(\"A3\").Value, Range(\"A4\").Value
+               Debug.Print Range(\"A5\").Value, TypeName(Range(\"A5\").Value)
+               Debug.Print Range(\"A6\").Value, TypeName(Range(\"A6\").Value)
+               Debug.Print Range(\"A7\").Value, Range(\"A8\").Value, Range(\"A9\").Value
+               Debug.Print Range(\"A10\").Value, Range(\"A11\").Value, Range(\"A12\").Value
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                // Leading noughts go; what is left is a number.
+                "123	Double".to_string(),
+                "abc	String".to_string(),
+                // Spaces either side do not stop it being read.
+                "1.5	12".to_string(),
+                "True	Boolean".to_string(),
+                // The apostrophe is an instruction, not a character.
+                "123	String".to_string(),
+                // Brackets are how an accountant writes a minus.
+                "-5	-7	8".to_string(),
+                // And anything Excel cannot read stays as it was written.
+                "0	12a	1.2.3".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn the_awkward_geometry_answers_the_way_excel_does() {
         let mut workbook = workbook();
