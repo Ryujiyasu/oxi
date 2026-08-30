@@ -4007,6 +4007,24 @@ impl Host for WorkbookHost<'_> {
                     .uniform_style(range, |style| style.italic)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
+            if name.eq_ignore_ascii_case("name") {
+                // As with the alignment, what comes back is what the cells
+                // EFFECTIVELY wear: a cell that names no face of its own
+                // answers for the workbook's default style, which is what
+                // Excel's own `Styles("Normal").Font.Name` says.
+                let fallback = self.workbook.default_style.font_name.clone();
+                return self
+                    .uniform_style(range, |style| style.font_name.clone())
+                    .map(|value| {
+                        Some(match value {
+                            None => Value::Null,
+                            Some(Some(named)) => Value::String(named),
+                            Some(None) => Value::String(
+                                fallback.clone().unwrap_or_else(|| "Calibri".to_string()),
+                            ),
+                        })
+                    });
+            }
             if name.eq_ignore_ascii_case("size") {
                 return self
                     .uniform_style(range, |style| style.font_size)
@@ -4323,6 +4341,28 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         }
         if let Some(range) = self.range_font(receiver) {
+            if name.eq_ignore_ascii_case("name") {
+                // Excel keeps whatever it is given — a face this machine has
+                // never heard of is stored verbatim — and a number is taken as
+                // its own text. An empty name is not an empty face: it puts
+                // the cell back on the workbook's default.
+                let named = match &value {
+                    Value::String(named) if named.is_empty() => None,
+                    Value::String(named) => Some(named.clone()),
+                    Value::Integer(number) => Some(number.to_string()),
+                    Value::Double(number) if number.is_finite() => {
+                        Some(if number.fract() == 0.0 {
+                            format!("{}", *number as i64)
+                        } else {
+                            number.to_string()
+                        })
+                    }
+                    Value::Empty | Value::Missing => None,
+                    _ => return Err("Font.Name must be a name".to_string()),
+                };
+                self.set_range_style(range, |_, style| style.font_name = named.clone())?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("bold") {
                 let value = style_boolean(&value, "Font.Bold")?;
                 self.set_range_style(range, |_, style| style.bold = value)?;
@@ -8967,6 +9007,58 @@ mod tests {
     /// machine this was measured Excel's own default workbook writes
     /// `<alignment vertical="center"/>` into Normal and so a brand new cell
     /// answers xlCenter rather than the file format's bottom.
+    /// Asked of Excel: a cell that names no face answers for the workbook's
+    /// default style; cells that disagree answer Null; a face this machine has
+    /// never heard of is kept verbatim; an empty name puts the cell back on
+    /// the default rather than leaving it faceless; and a number is taken as
+    /// its own text.
+    #[test]
+    fn a_cell_can_be_given_a_face_to_wear() {
+        let mut workbook = workbook();
+        workbook.default_style.font_name = Some("Yu Gothic".to_string());
+        let module = parse_module(
+            "Public Sub Act()
+               Debug.Print Range(\"A1\").Font.Name
+               Range(\"A1\").Font.Name = \"Meiryo\"
+               Debug.Print Range(\"A1\").Font.Name
+               Range(\"A2\").Font.Name = \"Arial\"
+               Debug.Print TypeName(Range(\"A1:A2\").Font.Name)
+               Range(\"A2\").Font.Name = \"Meiryo\"
+               Debug.Print Range(\"A1:A2\").Font.Name
+               Range(\"B1\").Font.Name = \"No Such Face 123\"
+               Debug.Print Range(\"B1\").Font.Name
+               Range(\"B2\").Font.Name = \"\"
+               Debug.Print Range(\"B2\").Font.Name
+               Range(\"B3\").Font.Name = 12
+               Debug.Print Range(\"B3\").Font.Name
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                // Nothing of its own, so the workbook's default.
+                "Yu Gothic".to_string(),
+                "Meiryo".to_string(),
+                // Two faces, so neither.
+                "Null".to_string(),
+                "Meiryo".to_string(),
+                // Excel does not check that a face exists.
+                "No Such Face 123".to_string(),
+                // An empty name is not a face; it is the default again.
+                "Yu Gothic".to_string(),
+                "12".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn a_cell_says_where_its_text_sits_in_its_height() {
         let mut workbook = workbook();
