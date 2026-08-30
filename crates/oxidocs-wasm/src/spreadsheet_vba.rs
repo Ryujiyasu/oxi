@@ -4179,6 +4179,21 @@ impl Host for WorkbookHost<'_> {
                 self.object(HostObject::RangeBorders(range, BorderSelection::All)),
             ));
         }
+        if name.eq_ignore_ascii_case("wraptext") {
+            // A range whose cells disagree answers Null, as Bold and
+            // NumberFormat already do — measured on a pair where only one of
+            // the two wraps.
+            return self
+                .uniform_style(range, |style| style.wrap_text)
+                .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+        }
+        if name.eq_ignore_ascii_case("indentlevel") {
+            return self
+                .uniform_style(range, |style| style.indent)
+                .map(|value| {
+                    Some(value.map(|indent| Value::Integer(i64::from(indent))).unwrap_or(Value::Null))
+                });
+        }
         if name.eq_ignore_ascii_case("numberformat") {
             return self
                 .uniform_style(range, |style| style.number_format.clone())
@@ -4318,6 +4333,35 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
             self.set_range_formula(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("wraptext") {
+            let wraps = style_boolean(&value, "Range.WrapText")?;
+            self.set_range_style(range, |_, style| style.wrap_text = wraps)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("indentlevel") {
+            // Excel takes anything up to 250 and refuses 251; a negative
+            // number is not refused but quietly becomes nought. Measured with
+            // -1, 15, 250 and 251.
+            let asked = match &value {
+                Value::Integer(number) => *number,
+                Value::Double(number) if number.is_finite() => number.trunc() as i64,
+                _ => return Err("Range.IndentLevel must be a number".to_string()),
+            };
+            if asked > 250 {
+                return Err("Range.IndentLevel cannot be set past 250".to_string());
+            }
+            let indent = asked.max(0) as u32;
+            self.set_range_style(range, |_, style| {
+                style.indent = indent;
+                // Indenting a cell that was left to its own devices makes it
+                // left-aligned: asked of Excel, a General cell given an indent
+                // reads back xlLeft.
+                if indent > 0 && style.horizontal_align.is_none() {
+                    style.horizontal_align = Some("left".to_string());
+                }
+            })?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("numberformat") {
@@ -8861,6 +8905,76 @@ mod tests {
     /// had to be got round to ask at all: `Intersect` declares thirty optional
     /// arguments, so ordinary overload resolution refuses it, and a Range is
     /// enumerable, so returning one from a function unrolls it into its cells.
+    /// Asked of Excel: a fresh cell does not wrap and is not indented; a
+    /// range whose cells disagree answers Null; an indent of −1 becomes 0
+    /// without complaint where 251 is refused; and indenting a cell that was
+    /// left to its own devices makes it left-aligned.
+    #[test]
+    fn a_cell_can_be_told_to_wrap_and_to_indent() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Debug.Print Range(\"A1\").WrapText, Range(\"A1\").IndentLevel
+               Range(\"A1\").WrapText = True
+               Debug.Print Range(\"A1\").WrapText, TypeName(Range(\"A1:A2\").WrapText)
+               Range(\"A2\").WrapText = True
+               Debug.Print Range(\"A1:A2\").WrapText
+               Range(\"A1\").WrapText = False
+               Debug.Print Range(\"A1\").WrapText
+               Range(\"C1\").IndentLevel = 3
+               Debug.Print Range(\"C1\").IndentLevel, TypeName(Range(\"C1:C2\").IndentLevel)
+               Range(\"C3\").IndentLevel = -1
+               Debug.Print Range(\"C3\").IndentLevel
+               Range(\"C4\").IndentLevel = 250
+               Debug.Print Range(\"C4\").IndentLevel
+               Range(\"E1\").IndentLevel = 2
+               Debug.Print Range(\"E1\").HorizontalAlignment
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "False	0".to_string(),
+                // One of the two wraps, so the pair answers neither.
+                "True	Null".to_string(),
+                "True".to_string(),
+                "False".to_string(),
+                "3	Null".to_string(),
+                // Below nought is not refused; it is simply nought.
+                "0".to_string(),
+                "250".to_string(),
+                // An indent on a General cell reads back as xlLeft.
+                "-4131".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_indent_past_two_hundred_and_fifty_is_refused() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+  Range(\"A1\").IndentLevel = 251
+End Sub
+",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let failed = execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
+        assert!(
+            failed.to_string().contains("past 250"),
+            "unexpected error: {failed}"
+        );
+    }
+
     #[test]
     fn intersect_answers_the_rectangle_two_ranges_share() {
         let mut workbook = workbook();
