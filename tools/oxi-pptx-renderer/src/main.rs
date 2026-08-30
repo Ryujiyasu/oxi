@@ -15122,34 +15122,7 @@ fn layout_paragraph_baselines(
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
-    let mut m = if master.is_empty() {
-        MasterStyleLevel::default()
-    } else {
-        let idx = (para.lvl as usize).min(master.len() - 1);
-        master[idx].clone()
-    };
-    // The LAYOUT placeholder's own a:lstStyle overrides the master level, field
-    // by field. Resolving it only in the draw loop and not here wrapped d24's
-    // title at the master's 18pt and then drew it at the layout's 60pt, so the
-    // line ran off the box instead of breaking into PowerPoint's three.
-    if !ph_levels.is_empty() {
-        let l = &ph_levels[(para.lvl as usize).min(ph_levels.len() - 1)];
-        if l.font_size.is_some() {
-            m.font_size = l.font_size;
-        }
-        if l.color.is_some() {
-            m.color = l.color.clone();
-        }
-        if l.algn.is_some() {
-            m.algn = l.algn;
-        }
-        if l.line_spacing.is_some() {
-            m.line_spacing = l.line_spacing;
-        }
-        if l.bold.is_some() {
-            m.bold = l.bold;
-        }
-    }
+    let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
     // run 14pt overrides master 32pt); else the engine default. An EMPTY
@@ -15171,12 +15144,7 @@ fn layout_paragraph_baselines(
     // 0.9159 and the step becomes 107.25pt against PowerPoint's measured 107.06
     // / 106.95. Oxi stepped the flat 117.10 and its three baselines fell 9.91 /
     // 19.97 / 29.66pt below PowerPoint's.
-    let n = exact_line_pt(para)
-        .filter(|_| fs > 0.0)
-        .map(|pts| pts / (fs * 1.2))
-        .or(para.line_spacing)
-        .or(m.line_spacing)
-        .unwrap_or(1.0);
+    let n = oxislides_core::layout::line_spacing_multiple(para, &m, fs, exact_line_pt(para));
     let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
     // The same chain the draw path uses, so the wrap measures the face that
     // will actually be drawn: run, then the placeholder's own lstStyle (layout

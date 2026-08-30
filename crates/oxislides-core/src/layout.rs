@@ -1026,6 +1026,11 @@ mod size_tests {
     use super::*;
     use crate::ir::{SlideAlignment, SlideParagraph, SlideRun};
 
+    /// A paragraph with nothing set, for the tests that only vary one field.
+    pub(super) fn para_for_spacing() -> SlideParagraph {
+        para(vec![])
+    }
+
     fn para(runs: Vec<SlideRun>) -> SlideParagraph {
         SlideParagraph {
             runs,
@@ -1098,5 +1103,120 @@ mod size_tests {
     fn a_line_wider_than_its_area_is_not_pushed_left_of_it() {
         assert_eq!(align_offset(SlideAlignment::Center, 100.0, 140.0), 0.0);
         assert_eq!(align_offset(SlideAlignment::Right, 100.0, 140.0), 0.0);
+    }
+}
+
+/// The outline level a paragraph inherits, master first and the placeholder's
+/// own `a:lstStyle` over it, field by field.
+///
+/// Both lists are indexed by the paragraph's `lvl`, clamped to what the list
+/// actually holds -- a deck may declare fewer levels than a paragraph asks for.
+///
+/// ★The LAYOUT placeholder's list must be resolved HERE, not only where the
+/// text is drawn. Resolving it late wrapped d24's title at the master's 18pt
+/// and then drew it at the layout's 60pt, so the line ran off its box instead
+/// of breaking into the three PowerPoint gives it.
+pub fn resolve_level(
+    master: &[crate::ir::MasterStyleLevel],
+    ph_levels: &[crate::ir::MasterStyleLevel],
+    lvl: u32,
+) -> crate::ir::MasterStyleLevel {
+    let mut m = if master.is_empty() {
+        crate::ir::MasterStyleLevel::default()
+    } else {
+        master[(lvl as usize).min(master.len() - 1)].clone()
+    };
+    if !ph_levels.is_empty() {
+        let l = &ph_levels[(lvl as usize).min(ph_levels.len() - 1)];
+        if l.font_size.is_some() {
+            m.font_size = l.font_size;
+        }
+        if l.color.is_some() {
+            m.color = l.color.clone();
+        }
+        if l.algn.is_some() {
+            m.algn = l.algn;
+        }
+        if l.line_spacing.is_some() {
+            m.line_spacing = l.line_spacing;
+        }
+        if l.bold.is_some() {
+            m.bold = l.bold;
+        }
+    }
+    m
+}
+
+/// The line-spacing multiple a paragraph is set at.
+///
+/// A height stated in POINTS wins and is carried as the equivalent multiple of
+/// the 1.2 default, so `fs * 1.2 * n` reproduces it and everything downstream --
+/// the first-baseline rule, the space-before fraction, the mixed-pitch step --
+/// keeps working unchanged. Otherwise the paragraph's own percentage, then the
+/// placeholder chain's, then single.
+///
+/// d36 s1's title asks 107.25pt against 97.58pt of type, so n = 0.9159 and the
+/// step becomes 107.25pt against PowerPoint's measured 107.06. Stepping the
+/// flat 117.10 put its three baselines 9.91 / 19.97 / 29.66pt low.
+pub fn line_spacing_multiple(
+    para: &crate::ir::SlideParagraph,
+    level: &crate::ir::MasterStyleLevel,
+    fs: f32,
+    exact_pt: Option<f32>,
+) -> f32 {
+    exact_pt
+        .filter(|_| fs > 0.0)
+        .map(|pts| pts / (fs * 1.2))
+        .or(para.line_spacing)
+        .or(level.line_spacing)
+        .unwrap_or(1.0)
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+    use crate::ir::MasterStyleLevel;
+
+    fn lvl(size: Option<f32>, spacing: Option<f32>) -> MasterStyleLevel {
+        MasterStyleLevel {
+            font_size: size,
+            line_spacing: spacing,
+            ..MasterStyleLevel::default()
+        }
+    }
+
+    #[test]
+    fn the_placeholders_own_list_overrides_the_master_field_by_field() {
+        let master = [lvl(Some(18.0), Some(1.0))];
+        let ph = [lvl(Some(60.0), None)];
+        let got = resolve_level(&master, &ph, 0);
+        assert_eq!(got.font_size, Some(60.0), "the layout's size wins");
+        assert_eq!(got.line_spacing, Some(1.0), "and the master keeps what it did not override");
+    }
+
+    #[test]
+    fn a_level_past_the_end_of_the_list_takes_the_last_one() {
+        let master = [lvl(Some(18.0), None), lvl(Some(14.0), None)];
+        assert_eq!(resolve_level(&master, &[], 9).font_size, Some(14.0));
+    }
+
+    #[test]
+    fn no_lists_at_all_is_the_default_level() {
+        assert_eq!(resolve_level(&[], &[], 0).font_size, None);
+    }
+
+    #[test]
+    fn a_height_in_points_becomes_the_multiple_that_reproduces_it() {
+        let p = super::size_tests::para_for_spacing();
+        // 107.25pt asked against 97.58pt of type at 1.2.
+        let n = line_spacing_multiple(&p, &lvl(None, None), 97.58 / 1.2, Some(107.25));
+        assert!((n * (97.58 / 1.2) * 1.2 - 107.25).abs() < 1e-3, "{n}");
+    }
+
+    #[test]
+    fn without_a_stated_height_the_paragraph_then_the_level_decides() {
+        let p = super::size_tests::para_for_spacing();
+        assert_eq!(line_spacing_multiple(&p, &lvl(None, Some(0.9)), 60.0, None), 0.9);
+        assert_eq!(line_spacing_multiple(&p, &lvl(None, None), 60.0, None), 1.0);
     }
 }
