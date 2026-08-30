@@ -18114,9 +18114,19 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // (_pb_fnarea) reproduced the roll (R07 stays, note 7 rolls at
             // room 3.7 < 9.2) and bracketed the keep-test sep to (13.5,15.5]
             // ∋ one Normal line = the same model.
+            // S1244: rolling is a LEGACY-compat behaviour. The same document
+            // rolls with compatibilityMode <= 14 (or none) and stops rolling
+            // at 15: at 15 Word reserves the line's own notes in full and
+            // moves the LINE instead, so a note never lands on a later page
+            // than its reference. 81e80, which S900 was derived from, is
+            // compatibilityMode 12; the docs where the roll produced a wrong
+            // break are 15.
+            let s900_legacy_compat = (self.compat_mode <= 14 || !self.compat_mode_explicit)
+                || std::env::var("OXI_S1244_DISABLE").is_ok();
             if natural_needs_page_break
                 && !self.doc_body_has_real_cjk
                 && !para_fn_heights.is_empty()
+                && s900_legacy_compat
                 && std::env::var("OXI_S900_DISABLE").is_err()
             {
                 let own = line_own_fn_ids.get(line_idx).cloned().unwrap_or_default();

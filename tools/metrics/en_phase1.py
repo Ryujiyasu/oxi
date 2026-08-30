@@ -18,13 +18,29 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 REPO = _REPO
 BENCH = REPO / "pipeline_data" / "en_benchmark"
-P1 = BENCH / "p1"
+
+# The frozen 50 live in _final.json / p1; the blind sets are held beside them
+# under their own selection file and artifact dir. Name one as the last
+# argument, e.g. `python en_phase1.py diff blind50`.
+SETS = {
+    "": ("_final.json", "p1"),
+    "blind50": ("_final_blind50.json", "p1_blind50"),
+    "blindB50": ("_final_blindB50.json", "p1_blindB50"),
+    "blindC50": ("_final_blindC50.json", "p1_blindC50"),
+    "next50": ("_final_next50.json", "p1_next50"),
+}
+SET = ""
+for a in sys.argv[1:]:
+    if a in SETS and a:
+        SET = a
+SEL_FILE, P1_DIR = SETS[SET]
+P1 = BENCH / P1_DIR
 WDIR = P1 / "word"
 ODIR = P1 / "oxi"
 
 
 def selected():
-    final = json.load(open(BENCH / "_final.json", encoding="utf-8"))
+    final = json.load(open(BENCH / SEL_FILE, encoding="utf-8"))
     docs = []
     for t, lst in final.items():
         for c in lst:
