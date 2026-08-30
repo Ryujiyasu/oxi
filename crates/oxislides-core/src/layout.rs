@@ -596,12 +596,25 @@ mod wrap_loop_tests {
 pub struct TableMetrics;
 
 impl FaceMetrics for TableMetrics {
-    fn advance_em(&self, family: &str, _bold: bool, _italic: bool, ch: char) -> Option<f32> {
-        crate::font_adv::hmtx_advance_em(family, ch)
+    fn advance_em(&self, family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+        // The wide table first, because it knows the style; the renderer's
+        // shared one is style-blind and only covers three faces.
+        crate::font_adv_local::local_advance_em(family, bold, italic, ch)
+            .or_else(|| crate::font_adv::hmtx_advance_em(family, ch))
     }
 
-    fn has_all_glyphs(&self, family: &str, _bold: bool, _italic: bool, text: &str) -> bool {
-        text.chars().all(|c| crate::font_adv::hmtx_advance_em(family, c).is_some())
+    fn has_all_glyphs(&self, family: &str, bold: bool, italic: bool, text: &str) -> bool {
+        text.chars()
+            .all(|c| self.advance_em(family, bold, italic, c).is_some())
+    }
+}
+
+impl TableMetrics {
+    /// Whether any face of `family` was measured, so a caller can tell a person
+    /// which text on the page the engine laid out and which it could not.
+    pub fn covers(family: &str) -> bool {
+        crate::font_adv_local::local_family_supported(family)
+            || crate::font_adv::family_supported(family)
     }
 }
 
@@ -759,5 +772,38 @@ mod baseline_tests {
         let n = 1.2f32;
         let got = first_baseline_off(&NoTables, "Arial", fs, n, false);
         assert_eq!(got, 0.75 * (fs * 1.2 * n));
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn the_wide_table_reaches_families_the_shared_one_does_not() {
+        assert!(!crate::font_adv::family_supported("Montserrat"));
+        assert!(TableMetrics::covers("Montserrat"));
+        assert!(TableMetrics::covers("Barlow Light"));
+    }
+
+    #[test]
+    fn a_style_the_machine_had_is_measured_apart_from_the_upright() {
+        let m = TableMetrics;
+        let up = m.advance_em("Montserrat", false, false, 'a').unwrap();
+        let bd = m.advance_em("Montserrat", true, false, 'a').unwrap();
+        assert!(bd > up, "bold {bd} should advance more than regular {up}");
+    }
+
+    #[test]
+    fn a_family_nobody_measured_is_still_refused() {
+        assert!(!TableMetrics::covers("Zzyzx Nonexistent"));
+        assert!(TableMetrics.advance_em("Zzyzx Nonexistent", false, false, 'a').is_none());
+    }
+
+    #[test]
+    fn a_missing_style_falls_back_to_the_upright_face() {
+        // Fira Sans was installed regular-only; asking bold must still answer.
+        let m = TableMetrics;
+        assert!(m.advance_em("Fira Sans", true, false, 'a').is_some());
     }
 }

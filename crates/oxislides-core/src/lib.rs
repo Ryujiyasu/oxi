@@ -4,6 +4,7 @@
 
 pub mod editor;
 pub mod font_adv;
+pub mod font_adv_local;
 pub mod ir;
 pub mod layout;
 pub mod parser;

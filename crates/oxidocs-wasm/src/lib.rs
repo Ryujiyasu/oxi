@@ -803,7 +803,7 @@ pub fn break_slide_paragraph(
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn slide_family_measurable(family: &str) -> bool {
-    oxislides_core::font_adv::family_supported(family)
+    oxislides_core::layout::TableMetrics::covers(family)
 }
 
 #[derive(Serialize)]
