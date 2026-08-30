@@ -377,6 +377,12 @@ pub struct Comment {
     /// Six hex digits; Excel's own note is FFFFE1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
+    /// The cell the note is ABOUT, counted from zero, which is not where the
+    /// box sits: Excel draws a hairline from the box back to it, and that line
+    /// is the only thing on the sheet that says which cell a note belongs to
+    /// once the box has been dragged away.
+    #[serde(default)]
+    pub cell: (u32, u32),
 }
 
 /// One step of a shape's own outline, in the space the path states.

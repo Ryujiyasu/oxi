@@ -2327,6 +2327,7 @@ fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
         held.push(Comment {
             from: corner(left, dx, top, dy),
             size: (wide, tall),
+            cell: (row, column),
             to: Some(far),
             text: ShapeText {
                 paragraphs: paragraphs.clone(),

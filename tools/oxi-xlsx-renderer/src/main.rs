@@ -1249,6 +1249,43 @@ fn along(edge: f32, next: Option<f32>, off: i64, scale: f32, hold: bool) -> f32 
     }
 }
 
+/// The point a note's leader line runs to: the top-right corner of the merged
+/// block holding the cell the note is about, or of the cell itself when it is
+/// not merged.
+#[cfg(windows)]
+pub(crate) fn note_target(
+    sheet: &oxicells_core::ir::Sheet,
+    note: &oxicells_core::ir::Comment,
+    layout: &Geometry,
+) -> Option<(i32, i32)> {
+    // The note counts its cell from zero on both axes; a merge states its rows
+    // from one and its columns from zero.
+    let (row, col) = note.cell;
+    let mut last_col = col;
+    let mut top_row = row;
+    for merge in &sheet.merge_cells {
+        let first = merge.start_row.saturating_sub(1);
+        let last = merge.end_row.saturating_sub(1);
+        if (first..=last).contains(&row) && (merge.start_col..=merge.end_col).contains(&col) {
+            last_col = merge.end_col;
+            top_row = first;
+            break;
+        }
+    }
+    // Two pixels BELOW that corner, not on it. Every arm of
+    // `_xlsx_note_leader.py` reads the line passing under the corner rather
+    // than through it — thirteen of sixteen between 1.3 and 2.2 pixels, and
+    // the three that read wider are the arms whose line runs along the cell's
+    // own top edge, where how far below it passes is the one thing a fit
+    // cannot say. `002` reads 1.9 the same way. It is where the arrowhead's
+    // tip sits: the corner of what the cell can be drawn in, one rule inside
+    // the corner of the cell.
+    Some((
+        column_edge(layout, last_col + 1)?.round() as i32,
+        row_edge(layout, top_row)?.round() as i32 + 2,
+    ))
+}
+
 /// A group child's own box, in exact pixels, from the box the group is DRAWN
 /// in.
 ///
@@ -7544,6 +7581,41 @@ mod windows_draw {
                 box_.bottom += 1;
                 if box_.right <= box_.left || box_.bottom <= box_.top {
                     continue;
+                }
+                // The hairline back to the cell the note is about. Excel
+                // draws it from whichever corner of the box is nearest that
+                // cell — never the bottom-left — to the TOP-RIGHT corner of
+                // the cell's merged block.
+                //
+                // Measured by `_xlsx_note_leader.py`: twelve arms walking the
+                // box around its cell, eight of them plain and four over a
+                // merge three and five columns wide. The box corner is on the
+                // fitted line to within a tenth of a pixel in every arm, and
+                // the merged block's top-right within a pixel and a half — the
+                // plain cell's own corner is sixty pixels off it whenever the
+                // two differ. The corner up and to the left is never used:
+                // with the box above and right of the cell, where that corner
+                // is the nearest of the four, Excel takes the one below it.
+                if let Some(target) = super::note_target(sheet, note, layout) {
+                    let corners = [
+                        (box_.left, box_.top),
+                        (box_.right, box_.top),
+                        (box_.right, box_.bottom),
+                    ];
+                    let near = corners
+                        .iter()
+                        .min_by_key(|(x, y)| {
+                            let (dx, dy) = ((x - target.0) as i64, (y - target.1) as i64);
+                            dx * dx + dy * dy
+                        })
+                        .copied()
+                        .unwrap_or((box_.left, box_.top));
+                    let leader = CreatePen(PS_SOLID, 1, COLORREF(0x0000_0000));
+                    let was = SelectObject(dc, leader);
+                    let _ = MoveToEx(dc, near.0, near.1, None);
+                    let _ = LineTo(dc, target.0, target.1);
+                    SelectObject(dc, was);
+                    let _ = DeleteObject(leader);
                 }
                 let paper = CreateSolidBrush(colour(note.fill.as_deref(), 0x00E1_FFFF));
                 FillRect(dc, &box_, paper);
