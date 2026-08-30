@@ -51,6 +51,19 @@ pub struct SlideParagraphSplit {
     pub at_char: usize,
 }
 
+/// What to change about a run's look. `None` leaves a property alone.
+///
+/// These are the `a:rPr` ATTRIBUTES, which is why colour is not here: a colour
+/// is a `<a:solidFill>` child element, a different shape of edit.
+#[derive(Debug, Clone, Default)]
+pub struct RunFormat {
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    /// Size in POINTS. The file stores hundredths, which this converts.
+    pub font_size: Option<f32>,
+}
+
 /// Round-trip pptx editor.
 pub struct PptxEditor {
     original_data: Vec<u8>,
@@ -61,6 +74,8 @@ pub struct PptxEditor {
     splits: HashMap<usize, HashMap<(usize, usize), usize>>,
     /// (slide_idx) -> { (shape, para) } -- paragraphs joined onto the one before
     merges: HashMap<usize, std::collections::HashSet<(usize, usize)>>,
+    /// (slide_idx) -> { (shape, para, run) -> what to change about its look }
+    formats: HashMap<usize, HashMap<(usize, usize, usize), RunFormat>>,
 }
 
 impl PptxEditor {
@@ -72,6 +87,7 @@ impl PptxEditor {
             edits: HashMap::new(),
             splits: HashMap::new(),
             merges: HashMap::new(),
+            formats: HashMap::new(),
         })
     }
 
@@ -143,6 +159,21 @@ impl PptxEditor {
             .insert((shape_index, paragraph_index));
     }
 
+    /// Change how one run looks. Properties left `None` keep what they had.
+    pub fn set_run_format(
+        &mut self,
+        slide_index: usize,
+        shape_index: usize,
+        paragraph_index: usize,
+        run_index: usize,
+        format: RunFormat,
+    ) {
+        self.formats
+            .entry(slide_index)
+            .or_default()
+            .insert((shape_index, paragraph_index, run_index), format);
+    }
+
     pub fn addressable_runs(&self) -> Result<Vec<Vec<Vec<Vec<String>>>>, PptxError> {
         let paths = self.resolve_slide_paths()?;
         let mut archive = OoxmlArchive::new(&self.original_data)?;
@@ -167,14 +198,18 @@ impl PptxEditor {
     }
 
     pub fn has_edits(&self) -> bool {
-        if !self.splits.is_empty() || !self.merges.is_empty() {
+        if !self.splits.is_empty() || !self.merges.is_empty() || !self.formats.is_empty() {
             return true;
         }
         !self.edits.is_empty()
     }
 
     pub fn save(&self) -> Result<Vec<u8>, PptxError> {
-        if self.edits.is_empty() && self.splits.is_empty() && self.merges.is_empty() {
+        if self.edits.is_empty()
+            && self.splits.is_empty()
+            && self.merges.is_empty()
+            && self.formats.is_empty()
+        {
             return Ok(self.original_data.clone());
         }
 
@@ -202,6 +237,14 @@ impl PptxEditor {
                 path_merges.insert(path.clone(), merges);
             }
         }
+        let mut path_formats: HashMap<String, &HashMap<(usize, usize, usize), RunFormat>> =
+            HashMap::new();
+        for (si, formats) in &self.formats {
+            if let Some(path) = slide_paths.get(*si) {
+                path_formats.insert(path.clone(), formats);
+            }
+        }
+        let no_formats: HashMap<(usize, usize, usize), RunFormat> = HashMap::new();
         let no_edits: HashMap<(usize, usize, usize), String> = HashMap::new();
         let no_splits: HashMap<(usize, usize), usize> = HashMap::new();
         let no_merges: std::collections::HashSet<(usize, usize)> =
@@ -229,16 +272,19 @@ impl PptxEditor {
                 if path_edits.contains_key(&name)
                     || path_splits.contains_key(&name)
                     || path_merges.contains_key(&name)
+                    || path_formats.contains_key(&name)
                 {
                     let slide_edits = path_edits.get(&name).copied().unwrap_or(&no_edits);
                     let slide_splits = path_splits.get(&name).copied().unwrap_or(&no_splits);
                     let slide_merges = path_merges.get(&name).copied().unwrap_or(&no_merges);
+                    let slide_formats = path_formats.get(&name).copied().unwrap_or(&no_formats);
                     let mut xml = String::new();
                     entry
                         .read_to_string(&mut xml)
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
-                    let patched =
-                        patch_slide_xml(&xml, slide_edits, slide_splits, slide_merges)?;
+                    let patched = patch_slide_xml(
+                        &xml, slide_edits, slide_splits, slide_merges, slide_formats,
+                    )?;
                     writer
                         .write_all(patched.as_bytes())
                         .map_err(|e| PptxError::InvalidData(e.to_string()))?;
@@ -537,11 +583,60 @@ fn write_split_paragraph<W: std::io::Write>(
     Ok(())
 }
 
+/// Rewrite one `a:rPr`'s attributes to carry `format`.
+///
+/// Attributes the format leaves alone are copied through, so a run that
+/// already says `sz="1800"` keeps it when only the weight is being changed.
+fn apply_format(tag: &BytesStart<'_>, format: &RunFormat) -> BytesStart<'static> {
+    let name = String::from_utf8_lossy(tag.name().as_ref()).into_owned();
+    let mut out = BytesStart::new(name);
+    let touched = |k: &str| {
+        matches!(
+            (k, format.bold.is_some(), format.italic.is_some(),
+             format.underline.is_some(), format.font_size.is_some()),
+            ("b", true, _, _, _) | ("i", _, true, _, _)
+                | ("u", _, _, true, _) | ("sz", _, _, _, true)
+        )
+    };
+    for attr in tag.attributes().flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        if touched(&key) {
+            continue;
+        }
+        out.push_attribute((key.as_str(), attr.unescape_value().unwrap_or_default().as_ref()));
+    }
+    if let Some(b) = format.bold {
+        out.push_attribute(("b", if b { "1" } else { "0" }));
+    }
+    if let Some(i) = format.italic {
+        out.push_attribute(("i", if i { "1" } else { "0" }));
+    }
+    if let Some(u) = format.underline {
+        // `u` names an underline STYLE, not a flag: "sng" for a single rule and
+        // "none" for none at all.
+        out.push_attribute(("u", if u { "sng" } else { "none" }));
+    }
+    if let Some(sz) = format.font_size {
+        // The file counts in hundredths of a point.
+        out.push_attribute(("sz", (sz * 100.0).round().to_string().as_str()));
+    }
+    out
+}
+
+/// A fresh `a:rPr` for a run that carries none, named with the run's own prefix.
+fn new_rpr(run_tag: &BytesStart<'_>, format: &RunFormat) -> BytesStart<'static> {
+    let run_name = String::from_utf8_lossy(run_tag.name().as_ref()).into_owned();
+    let prefix = run_name.rsplit_once(':').map(|(p, _)| p).unwrap_or("");
+    let name = if prefix.is_empty() { "rPr".to_string() } else { format!("{prefix}:rPr") };
+    apply_format(&BytesStart::new(name), format)
+}
+
 fn patch_slide_xml(
     xml: &str,
     edits: &HashMap<(usize, usize, usize), String>,
     splits: &HashMap<(usize, usize), usize>,
     merges: &std::collections::HashSet<(usize, usize)>,
+    formats: &HashMap<(usize, usize, usize), RunFormat>,
 ) -> Result<String, PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -563,6 +658,10 @@ fn patch_slide_xml(
     // into the paragraph above.
     let mut swallow_ppr = false;
     let mut ppr_depth = 0usize;
+    // A run whose look is being changed: the tag is kept so a missing `a:rPr`
+    // can be written with the run's own namespace prefix, and the flag says
+    // whether one has been seen yet.
+    let mut format_run: Option<(BytesStart<'static>, RunFormat)> = None;
 
     loop {
         match reader.read_event().map_err(PptxError::Xml)? {
@@ -597,13 +696,45 @@ fn patch_slide_xml(
                         ppr_depth += 1;
                         continue;
                     }
+                    "rPr" if format_run.is_some() => {
+                        // The run's properties as an OPEN tag, which is what a
+                        // run carrying a fill or a typeface has. Rewritten in
+                        // place; the fresh-rPr path below must not also fire,
+                        // or the run ends up with two and the original wins.
+                        let (_, f) = format_run.take().expect("just checked");
+                        let tag = apply_format(e, &f);
+                        if let Some((_, buf)) = buffer.as_mut() {
+                            buf.push(Event::Start(tag));
+                        } else {
+                            writer
+                                .write_event(Event::Start(tag))
+                                .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                        }
+                        continue;
+                    }
                     "r" if in_paragraph => {
                         in_run = true;
+                        format_run = formats
+                            .get(&(shape_idx, para_idx, run_idx))
+                            .map(|f| (e.clone().into_owned(), f.clone()));
                     }
                     "t" if in_run => {
                         in_text = true;
                     }
                     _ => {}
+                }
+                if format_run.is_some() && name != "r" {
+                    // The run carried no `a:rPr`, so one is written before
+                    // whatever its first child turned out to be.
+                    let (run_tag, f) = format_run.take().expect("just checked");
+                    let fresh = Event::Empty(new_rpr(&run_tag, &f));
+                    if let Some((_, buf)) = buffer.as_mut() {
+                        buf.push(fresh);
+                    } else {
+                        writer
+                            .write_event(fresh)
+                            .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                    }
                 }
                 if let Some((_, buf)) = buffer.as_mut() {
                     buf.push(Event::Start(e.clone().into_owned()));
@@ -688,6 +819,19 @@ fn patch_slide_xml(
                 }
             }
             Event::Empty(ref e)
+                if format_run.is_some() && local_name(e.name().as_ref()) == "rPr" =>
+            {
+                let (_, f) = format_run.take().expect("just checked");
+                let tag = apply_format(e, &f);
+                if let Some((_, buf)) = buffer.as_mut() {
+                    buf.push(Event::Empty(tag));
+                } else {
+                    writer
+                        .write_event(Event::Empty(tag))
+                        .map_err(|e| PptxError::InvalidData(e.to_string()))?;
+                }
+            }
+            Event::Empty(ref e)
                 if swallow_ppr && local_name(e.name().as_ref()) == "pPr" =>
             {
                 // A self-closing `<a:pPr/>` never opens, so it is dropped here.
@@ -763,7 +907,7 @@ mod split_tests {
     fn split_at(at: usize) -> String {
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), at);
-        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new()).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &splits, &HashSet::new(), &HashMap::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -851,7 +995,7 @@ mod split_tests {
         edits.insert((0usize, 0usize, 0usize), "Goodbye now".to_string());
         let mut splits = HashMap::new();
         splits.insert((0usize, 0usize), 7);
-        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &edits, &splits, &HashSet::new(), &HashMap::new()).expect("patch");
         let ps = paragraphs(&out);
         assert_eq!(texts(&ps[0]), "Goodbye");
         assert_eq!(texts(&ps[1]), " now");
@@ -859,7 +1003,7 @@ mod split_tests {
 
     #[test]
     fn a_slide_with_no_split_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new()).expect("patch");
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new()).expect("patch");
         assert_eq!(paragraphs(&out).len(), 2);
     }
 }
@@ -882,7 +1026,7 @@ mod merge_tests {
     fn merge(which: usize) -> String {
         let mut m = HashSet::new();
         m.insert((0usize, which));
-        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m).expect("patch")
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &m, &HashMap::new()).expect("patch")
     }
 
     fn paragraphs(xml: &str) -> Vec<String> {
@@ -945,8 +1089,121 @@ mod merge_tests {
 
     #[test]
     fn a_slide_with_no_join_is_left_alone() {
-        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new())
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &HashMap::new())
             .expect("patch");
         assert_eq!(paragraphs(&out).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    const SLIDE: &str = concat!(
+        r#"<?xml version="1.0"?><p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>"#,
+        r#"<p:sp><p:txBody><a:p>"#,
+        r#"<a:r><a:rPr sz="1800" lang="en"/><a:t>Styled</a:t></a:r>"#,
+        r#"<a:r><a:t>Bare</a:t></a:r>"#,
+        r#"</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+    );
+
+    fn format(run: usize, f: RunFormat) -> String {
+        let mut m = HashMap::new();
+        m.insert((0usize, 0usize, run), f);
+        patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m)
+            .expect("patch")
+    }
+
+    fn rpr_of(xml: &str, run: usize) -> String {
+        let mut rest = xml;
+        for _ in 0..run {
+            let i = rest.find("<a:r>").expect("run");
+            rest = &rest[i + 5..];
+        }
+        let i = rest.find("<a:r>").expect("run");
+        let after = &rest[i..];
+        let end = after.find("</a:r>").unwrap_or(after.len());
+        after[..end].to_string()
+    }
+
+    #[test]
+    fn making_a_run_bold_leaves_its_other_properties_alone() {
+        let out = format(0, RunFormat { bold: Some(true), ..Default::default() });
+        let r = rpr_of(&out, 0);
+        assert!(r.contains(r#"b="1""#), "{r}");
+        assert!(r.contains(r#"sz="1800""#), "the size it already had survives: {r}");
+        assert!(r.contains(r#"lang="en""#), "and everything else: {r}");
+    }
+
+    #[test]
+    fn clearing_bold_writes_it_off_rather_than_dropping_it() {
+        // A run inside a bold paragraph needs to SAY it is not bold; removing
+        // the attribute would let the level's weight back in.
+        let out = format(0, RunFormat { bold: Some(false), ..Default::default() });
+        assert!(rpr_of(&out, 0).contains(r#"b="0""#));
+    }
+
+    #[test]
+    fn a_size_is_written_in_hundredths_of_a_point() {
+        let out = format(0, RunFormat { font_size: Some(24.0), ..Default::default() });
+        let r = rpr_of(&out, 0);
+        assert!(r.contains(r#"sz="2400""#), "{r}");
+        assert!(!r.contains(r#"sz="1800""#), "the old size is gone: {r}");
+    }
+
+    #[test]
+    fn an_underline_names_a_style_not_a_flag() {
+        let on = format(0, RunFormat { underline: Some(true), ..Default::default() });
+        assert!(rpr_of(&on, 0).contains(r#"u="sng""#));
+        let off = format(0, RunFormat { underline: Some(false), ..Default::default() });
+        assert!(rpr_of(&off, 0).contains(r#"u="none""#));
+    }
+
+    #[test]
+    fn a_run_with_no_properties_gets_one() {
+        let out = format(1, RunFormat { bold: Some(true), ..Default::default() });
+        let r = rpr_of(&out, 1);
+        assert!(r.contains("<a:rPr"), "an rPr was inserted: {r}");
+        assert!(r.contains(r#"b="1""#), "{r}");
+        assert!(r.find("<a:rPr").unwrap() < r.find("<a:t>").unwrap(),
+                "and it comes before the text: {r}");
+    }
+
+    /// ★The run whose properties are an OPEN tag -- one carrying a fill or a
+    /// typeface, which is most real runs. The self-closing shape the other
+    /// tests use went down a different path, and that path was the only one
+    /// wired: a real deck came back with TWO `a:rPr`, the inserted one first
+    /// and the original second, so the file kept its old weight.
+    #[test]
+    fn a_run_whose_properties_have_children_is_rewritten_in_place() {
+        const OPEN: &str = concat!(
+            r#"<?xml version="1.0"?><p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>"#,
+            r#"<p:sp><p:txBody><a:p><a:r>"#,
+            r#"<a:rPr b="0" sz="5000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill>"#,
+            r#"</a:rPr><a:t>Text</a:t></a:r></a:p></p:txBody></p:sp>"#,
+            r#"</p:spTree></p:cSld></p:sld>"#,
+        );
+        let mut m = HashMap::new();
+        m.insert((0usize, 0usize, 0usize), RunFormat { bold: Some(true), ..Default::default() });
+        let out = patch_slide_xml(OPEN, &HashMap::new(), &HashMap::new(), &HashSet::new(), &m)
+            .expect("patch");
+        assert_eq!(out.matches("<a:rPr").count(), 1, "exactly one rPr: {out}");
+        assert!(out.contains(r#"b="1""#), "{out}");
+        assert!(!out.contains(r#"b="0""#), "the old weight is gone: {out}");
+        assert!(out.contains("srgbClr"), "and its children survive: {out}");
+    }
+
+    #[test]
+    fn the_other_runs_are_untouched() {
+        let out = format(0, RunFormat { bold: Some(true), ..Default::default() });
+        assert!(!rpr_of(&out, 1).contains("rPr"), "run 1 stays bare");
+    }
+
+    #[test]
+    fn a_slide_with_no_format_change_is_left_alone() {
+        let out = patch_slide_xml(SLIDE, &HashMap::new(), &HashMap::new(),
+                                  &HashSet::new(), &HashMap::new()).expect("patch");
+        assert!(out.contains(r#"<a:rPr sz="1800" lang="en"/>"#), "{out}");
     }
 }

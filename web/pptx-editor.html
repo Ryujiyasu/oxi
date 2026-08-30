@@ -92,6 +92,7 @@ const state = {
   edits: new Map(),    // "slide/shape/para/run" -> new text
   undo: [], redo: [],  // each step: what a run said before and after
   splits: [],          // {slide, shape, para, at} -- where Enter broke a paragraph
+  formats: [],         // {slide, shape, para, run, bold?, italic?, ...}
   original: new Map(), // "shape/para/run" -> the text the file opened with
 };
 
@@ -325,6 +326,57 @@ function describeSelection() {
 
 // Type into the selected paragraph. The run that owns the character takes the
 // change, so the edit can be expressed the way `edit_pptx` addresses it.
+// Ctrl+B and Ctrl+I change how the selected runs look.
+//
+// The change is recorded against every run the selection covers -- or the run
+// under the caret when there is no selection -- and applied at the save. The
+// screen shows it at once by changing the run in the page's own copy, which is
+// safe here because a look does not move any paragraph: the numbering an edit
+// is addressed by cannot drift under it.
+document.addEventListener('keydown', (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!state.sel || !mod) return;
+  const k = e.key.toLowerCase();
+  if (k !== 'b' && k !== 'i') return;
+  e.preventDefault();
+  const { entry, line } = state.sel;
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  const range = selectedRange();
+  const para = entry.paragraphs[line.para_index];
+  const from = range ? range.from : state.sel.charIndex;
+  const to = range ? range.to : state.sel.charIndex + 1;
+  let seen = 0, touched = 0;
+  para.runs.forEach((run, ri) => {
+    const n = [...run.text].length;
+    const start = seen; seen += n;
+    if (Math.min(to, start + n) <= Math.max(from, start)) return;
+    // ★Toggle against the EFFECTIVE weight, not the run's own flag. A run
+    // inside a bold placeholder level looks bold while `run.bold` is false,
+    // and toggling the flag there would set `b="1"` and change nothing on
+    // screen. The line the engine placed carries the weight actually drawn.
+    const effective = k === 'b' ? line.bold : line.italic;
+    const now = !effective;
+    if (k === 'b') run.bold = now; else run.italic = now;
+    state.formats = state.formats.filter(f => !(
+      f.shape_index === entry.shape.sp_index &&
+      f.paragraph_index === line.para_index && f.run_index === ri));
+    state.formats.push({
+      slide_index: state.slide, shape_index: entry.shape.sp_index,
+      paragraph_index: line.para_index, run_index: ri,
+      bold: run.bold, italic: run.italic,
+    });
+    touched++;
+  });
+  if (!touched) { say('nothing to change'); return; }
+  $('save').disabled = false;
+  layoutSlide();
+  placeCaret(entry.shapeIndex, line.para_index, state.sel.charIndex);
+  describeSelection();
+  paint();
+  say(`${k === 'b' ? 'bold' : 'italic'} changed on ${touched} ` +
+      `run${touched === 1 ? '' : 's'}`);
+});
+
 // Moving the caret: within a line, across lines, and across paragraphs.
 document.addEventListener('keydown', (e) => {
   if (!state.sel) return;
@@ -421,7 +473,8 @@ document.addEventListener('keydown', (e) => {
 async function commitStructural(splits, merges, shapeIndex, caretPara, caretChar, done) {
   const edits = pendingEdits();
   try {
-    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, splits, merges);
+    const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits, splits, merges,
+                                      state.formats);
     state.bytes = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
     state.pres = parse_presentation(new Uint8Array(state.bytes));
     state.edits.clear();
@@ -585,7 +638,7 @@ $('save').addEventListener('click', () => {
   const edits = pendingEdits();
   try {
     const out = edit_pptx_with_splits(new Uint8Array(state.bytes), edits,
-                                      state.splits, []);
+                                      state.splits, [], state.formats);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([out], {
       type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
@@ -662,6 +715,7 @@ $('file').addEventListener('change', async (e) => {
   state.undo.length = 0;
   state.redo.length = 0;
   state.splits.length = 0;
+  state.formats.length = 0;
   state.original.clear();
   state.anchor = null;
   $('save').disabled = true;

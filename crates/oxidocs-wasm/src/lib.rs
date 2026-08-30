@@ -740,6 +740,24 @@ struct JsSlideMerge {
     paragraph_index: usize,
 }
 
+/// One run's look, from JavaScript. Absent fields leave a property alone.
+#[cfg(feature = "suite")]
+#[derive(Deserialize)]
+struct JsRunFormat {
+    slide_index: usize,
+    shape_index: usize,
+    paragraph_index: usize,
+    run_index: usize,
+    #[serde(default)]
+    bold: Option<bool>,
+    #[serde(default)]
+    italic: Option<bool>,
+    #[serde(default)]
+    underline: Option<bool>,
+    #[serde(default)]
+    font_size: Option<f32>,
+}
+
 /// Edit a .pptx and break paragraphs in it, returning the modified bytes.
 ///
 /// `edits` replaces run text; `splits` cuts a paragraph in two at a character
@@ -753,6 +771,7 @@ pub fn edit_pptx_with_splits(
     edits: JsValue,
     splits: JsValue,
     merges: JsValue,
+    formats: JsValue,
 ) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsSlideTextEdit> = if edits.is_undefined() || edits.is_null() {
         Vec::new()
@@ -787,6 +806,25 @@ pub fn edit_pptx_with_splits(
     }
     for mg in js_merges {
         editor.merge_paragraph(mg.slide_index, mg.shape_index, mg.paragraph_index);
+    }
+    let js_formats: Vec<JsRunFormat> = if formats.is_undefined() || formats.is_null() {
+        Vec::new()
+    } else {
+        serde_wasm_bindgen::from_value(formats).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    for f in js_formats {
+        editor.set_run_format(
+            f.slide_index,
+            f.shape_index,
+            f.paragraph_index,
+            f.run_index,
+            oxislides_core::editor::RunFormat {
+                bold: f.bold,
+                italic: f.italic,
+                underline: f.underline,
+                font_size: f.font_size,
+            },
+        );
     }
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }

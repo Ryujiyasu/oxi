@@ -27,6 +27,8 @@ What it asserts, per deck:
                 above, taking the file back to where it started
   select        Shift+arrow builds a range and the panel counts it; deleting it
                 removes exactly that many characters from the file
+  format        Ctrl+B flips the weight of the runs under the selection, and
+                the saved file says so on the run itself
   save          the download re-opens as a pptx whose text carries the change
   console       no page error was raised along the way
 
@@ -102,6 +104,14 @@ def slide_text(pptx: bytes, slide_no: int) -> str:
     with zipfile.ZipFile(io.BytesIO(pptx)) as z:
         xml = z.read(f"ppt/slides/slide{slide_no}.xml").decode("utf-8", "replace")
     return "".join(re.findall(r"<a:t>([^<]*)</a:t>", xml))
+
+
+def slide_xml(pptx: bytes, slide_no: int) -> str:
+    """One slide's XML, for the checks that read an attribute rather than text."""
+    import io as _io
+
+    with zipfile.ZipFile(_io.BytesIO(pptx)) as z:
+        return z.read(f"ppt/slides/slide{slide_no}.xml").decode("utf-8", "replace")
 
 
 def count_paragraphs(pptx: bytes, slide_no: int) -> int:
@@ -206,6 +216,33 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         save_off = page.eval_on_selector("#save", "e => e.disabled")
         rep.check(deck, "undo clears", save_off is True,
                   "save is disabled again" if save_off else "save still armed")
+
+        # Weight: Ctrl+B on a selection must reach the run's own properties in
+        # the file. The panel's claim is not enough -- the attribute is.
+        page.keyboard.press("Home")
+        for _ in range(4):
+            page.keyboard.press("Shift+ArrowRight")
+        # ★The toggle is judged against the weight actually DRAWN, so the file
+        # must end up saying the opposite of what was drawn before. Reading the
+        # panel AFTER the toggle does not work: it shows the effective weight,
+        # and a run that says `b="0"` inside a bold LEVEL still draws bold --
+        # the IR has no way to carry "explicitly not bold", so the placed line
+        # cannot show it.
+        was_bold = "bold" in page.eval_on_selector("#s-sel", "e => e.textContent")
+        page.keyboard.press("Control+b")
+        bolded = page.eval_on_selector("#status", "e => e.textContent")
+        rep.check(deck, "format", "bold changed on" in bolded, repr(bolded))
+        now_bold = not was_bold
+        with page.expect_download() as dfmt:
+            page.click("#save")
+        styled = Path(dfmt.value.path()).read_bytes()
+        want = 'b="1"' if now_bold else 'b="0"'
+        before_n = slide_xml(pptx.read_bytes(), 1).count(want)
+        after_n = slide_xml(styled, 1).count(want)
+        rep.check(deck, "format saved", after_n > before_n,
+                  f"{want} on the run: {before_n} -> {after_n}")
+        page.keyboard.press("Control+z")
+        page.wait_for_timeout(200)
 
         # A selection: shift extends it, a plain arrow drops it, and deleting
         # it takes exactly the selected characters out of the run text.
