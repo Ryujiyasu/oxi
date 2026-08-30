@@ -8522,6 +8522,11 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     // of the floated cap (start shifted, available width reduced).
                     let dc_indent = pending_dropcap.take().unwrap_or(0.0);
                     let dbg_para_start_y = cursor.cursor_y;
+                    // S1249: the space the PREVIOUS paragraph left behind, kept
+                    // before `prev_space_after` is overwritten with this one's.
+                    // The chain back-pull below needs it: the pulled chain's
+                    // trailing space is not part of the chain's own extent.
+                    let s1249_prev_sa = prev_space_after;
                     let dbg_para_start_pages = pages.len();
                     let (mut para_elements, sa, final_col) = self.layout_paragraph(
                         para,
@@ -8799,7 +8804,22 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                                 e.paragraph_index
                                     .is_some_and(|pi| !pulled_here.contains(&pi))
                             });
-                            let chain_advance = dbg_para_start_y - chain_min_y;
+                            // S1249 (default ON, opt-out OXI_S1249_DISABLE): `dbg_para_start_y` is the
+                            // cursor at this paragraph's START, i.e. the chain's last
+                            // element bottom -- the collapsed gap BETWEEN the chain and
+                            // this paragraph is applied as this paragraph's leading and
+                            // is therefore missing from the advance. On the old page that
+                            // leading was dropped (the paragraph had moved to a page top);
+                            // once the chain is pulled over, the paragraph is interior
+                            // again and the gap has to come back. legal__000ad039: the
+                            // "Authors Cited" heading carries w:after=720 (36pt) and Oxi
+                            // shifted its follower by the heading's 13.8pt line alone.
+                            let s1249_gap = if std::env::var("OXI_S1249_DISABLE").is_err() {
+                                s1249_prev_sa.max(para.style.space_before.unwrap_or(0.0))
+                            } else {
+                                0.0
+                            };
+                            let chain_advance = dbg_para_start_y - chain_min_y + s1249_gap;
                             let (new_top, new_ch) = s755_geom
                                 .as_ref()
                                 .map_or((start_y, effective_content_h), |g| {
