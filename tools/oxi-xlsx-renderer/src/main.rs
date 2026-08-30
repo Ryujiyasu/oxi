@@ -5956,14 +5956,19 @@ mod windows_draw {
                         &cell.style.border_right
                     };
                     // Two cells sharing an edge both state a rule for it, and
-                    // Excel draws ONE: the one belonging to the cell below, or
-                    // to the right. `_xlsx_border_contest.py` stacks two cells
-                    // and sweeps the style each states at the edge between
-                    // them — thin, medium, thick, double, dashed, dotted,
-                    // hair — and in all forty-two pairs, both ways round and
-                    // in both directions, what is drawn is the lower or
-                    // righthand cell's rule, whatever the two styles are. It
-                    // is not the heavier that wins; it is the later.
+                    // Excel draws ONE: the HEAVIER. `_xlsx_border_contest_file.py`
+                    // sweeps the style each side states — thin, medium, thick,
+                    // double, dashed, dotted, hair — and reads
+                    // `double > thick > medium > thin ≈ dashed > dotted ≈ hair`
+                    // in all forty-two pairs, the same whichever side says
+                    // which.
+                    //
+                    // It has to be staged in the FILE. Set through COM the two
+                    // cells share ONE edge — writing `B2`'s right writes
+                    // `C2`'s left to match, and writing `C2`'s left writes
+                    // `B2`'s right back — so `_xlsx_border_contest.py` and its
+                    // sideways twin were reading their own write order, which
+                    // is what made "the later wins" look like a law.
                     //
                     // Drawing both is only visible when one of them is hollow:
                     // `R6kessan` stacks `bottom thin` on `top double`, and the
@@ -6021,12 +6026,76 @@ mod windows_draw {
                     let hollow = |line: &Option<BorderLine>| {
                         line.as_ref().is_some_and(|line| super::rule_for(&line.style).hollow)
                     };
-                    let below = holder(row.index + spans_rows + 1, cell.col, true)
-                        .and_then(|(row_at, column)| beside(row_at, column))
-                        .is_some_and(|held| hollow(&held.style.border_top));
-                    let after = holder(row.index, cell.col + spans_columns + 1, false)
-                        .and_then(|(row_at, column)| beside(row_at, column))
-                        .is_some_and(|held| hollow(&held.style.border_left));
+                    // Standing aside is for a rule that would land in a
+                    // double's gap. A double facing a double would not — the
+                    // two are the same pixels — and if BOTH stand aside the
+                    // edge is drawn by nobody, which cost five workbooks 0.054
+                    // apiece the first time this was tried.
+                    let below = !hollow(foot)
+                        && holder(row.index + spans_rows + 1, cell.col, true)
+                            .and_then(|(row_at, column)| beside(row_at, column))
+                            .is_some_and(|held| hollow(&held.style.border_top));
+                    let after = !hollow(far)
+                        && holder(row.index, cell.col + spans_columns + 1, false)
+                            .and_then(|(row_at, column)| beside(row_at, column))
+                            .is_some_and(|held| hollow(&held.style.border_left));
+                    // And the same the other way. The two probes that read
+                    // "the lower or righthand cell's rule is what is drawn"
+                    // set both borders through COM, where the two cells share
+                    // ONE edge: setting `B2`'s right sets `C2`'s left to match
+                    // and setting `C2`'s left sets `B2`'s right back, so every
+                    // arm ended holding whatever was written last. Staged in
+                    // the FILE instead — `_xlsx_border_contest_file.py`, which
+                    // writes a border record and a cell format for each side
+                    // into `styles.xml` — the answer is not the later but the
+                    // HEAVIER: double beats thick beats medium beats thin,
+                    // both ways round, in all forty-two pairs.
+                    //
+                    // Only the hollow case needs acting on, as before: where
+                    // both are solid the winner is laid down over the loser
+                    // and the picture comes out right either way. A double is
+                    // the only hollow style and it beats every other, so a
+                    // rule facing one across an edge must stand aside — else
+                    // it lands in the gap that makes the double a double.
+                    // `28C006_3` and `28C001_3` each draw a column of that:
+                    // 144 and 127 pixels of solid bar where Excel has two
+                    // hairlines and a space.
+                    let ends = |row_at: u32, column: u32, horizontal: bool| {
+                        if !inside(row_at, column) {
+                            return None;
+                        }
+                        match merged.get(&(row_at, column)) {
+                            Some(super::Merged::Covered) => {
+                                let held = sheet.merge_cells.iter().find(|merge| {
+                                    merge.start_row <= row_at
+                                        && row_at <= merge.end_row
+                                        && merge.start_col <= column
+                                        && column <= merge.end_col
+                                })?;
+                                let finishes = if horizontal {
+                                    held.end_row == row_at
+                                } else {
+                                    held.end_col == column
+                                };
+                                finishes.then_some((row_at, column))
+                            }
+                            _ => Some((row_at, column)),
+                        }
+                    };
+                    let above = !hollow(&cell.style.border_top)
+                        && row
+                            .index
+                            .checked_sub(1)
+                            .and_then(|row_at| ends(row_at, cell.col, true))
+                            .and_then(|(row_at, column)| beside(row_at, column))
+                            .is_some_and(|held| hollow(&held.style.border_bottom));
+                    let before = !hollow(&cell.style.border_left)
+                        && cell
+                            .col
+                            .checked_sub(1)
+                            .and_then(|column| ends(row.index, column, false))
+                            .and_then(|(row_at, column)| beside(row_at, column))
+                            .is_some_and(|held| hollow(&held.style.border_right));
                     if std::env::var("OXI_XLSX_DUMP_EDGES").is_ok() {
                         // `left`/`right` here are the CELL's own; a merged
                         // block draws its far edges from `foot` and `far`,
@@ -6041,9 +6110,9 @@ mod windows_draw {
                         );
                     }
                     let edges: [(&Option<BorderLine>, bool, i32); 4] = [
-                        (&cell.style.border_top, true, box_.top),
+                        (if above { &None } else { &cell.style.border_top }, true, box_.top),
                         (if below { &None } else { foot }, true, box_.bottom),
-                        (&cell.style.border_left, false, box_.left),
+                        (if before { &None } else { &cell.style.border_left }, false, box_.left),
                         (if after { &None } else { far }, false, box_.right),
                     ];
                     // A vertical rule does not show inside a horizontal
