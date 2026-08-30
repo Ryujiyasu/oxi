@@ -4885,7 +4885,15 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                 };
                 let sep_h = special_h(u32::MAX);
                 if sep_h > 0.0 {
-                    return sep_h + special_h(u32::MAX - 1);
+                    // Experiment knob (default 0 = unchanged). The `_pb_fnkeep`
+                    // sweep puts Oxi's keep boundary a flat 16tw = 0.8pt below
+                    // Word's on this path, at both 3 and 4 notes — a constant,
+                    // not a per-note error. OXI_SEPX sweeps that constant.
+                    let sepx: f32 = std::env::var("OXI_SEPX")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0);
+                    return sep_h + special_h(u32::MAX - 1) + sepx;
                 }
             }
             if page.grid_line_pitch.is_none() && std::env::var("OXI_S596B_DISABLE").is_err() {
