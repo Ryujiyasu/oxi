@@ -1627,23 +1627,41 @@ impl<'a> WorkbookHost<'a> {
     ///
     /// Excel answers Null for a range covering more than one cell, since there
     /// is no single text to give. Text cannot be written to; it only reports.
+    /// What a person would see in the cell.
+    ///
+    /// A range of more than one cell answers Null only where the cells SHOW
+    /// different things — two cells both holding 5 answer "5", the same
+    /// uniform-or-Null convention Bold and NumberFormat follow. Asked of
+    /// Excel, which returns DBNull for a pair showing different strings and
+    /// the string itself for a pair showing the same one.
+    ///
+    /// One case this cannot answer: Excel shows `##` where a column is too
+    /// narrow for the number in it, and says so through `.Text` as well. That
+    /// needs the width of the rendered digits, which this side has no way to
+    /// measure. Everything else — formats, dates, Booleans, errors, blanks —
+    /// is the string Excel gives.
     fn range_text(&self, range: CellRange) -> Value {
-        if !range.is_single() {
-            return Value::Null;
+        let mut seen: Option<String> = None;
+        for address in range.addresses() {
+            let shown = match self.workbook.sheets[address.sheet]
+                .rows
+                .iter()
+                .find(|row| row.index == address.row)
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+            {
+                Some(cell) => shown_text(
+                    &from_cell_value(&cell.value),
+                    cell.style.number_format.as_deref(),
+                ),
+                None => String::new(),
+            };
+            match &seen {
+                None => seen = Some(shown),
+                Some(held) if *held == shown => {}
+                Some(_) => return Value::Null,
+            }
         }
-        let address = range.addresses().next().unwrap();
-        let Some(cell) = self.workbook.sheets[address.sheet]
-            .rows
-            .iter()
-            .find(|row| row.index == address.row)
-            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
-        else {
-            return Value::String(String::new());
-        };
-        Value::String(shown_text(
-            &from_cell_value(&cell.value),
-            cell.style.number_format.as_deref(),
-        ))
+        Value::String(seen.unwrap_or_default())
     }
 
     fn cell_formula(&self, address: CellAddress) -> Value {
@@ -9012,6 +9030,53 @@ mod tests {
     /// never heard of is kept verbatim; an empty name puts the cell back on
     /// the default rather than leaving it faceless; and a number is taken as
     /// its own text.
+    /// Asked of Excel: `.Text` is what a person would see. A number under a
+    /// format is formatted, a date serial is a date, an error is its own
+    /// legend, a Boolean is shouted, an empty cell is an empty string — and a
+    /// range answers Null only where its cells SHOW different things.
+    #[test]
+    fn a_range_says_what_a_person_would_see_in_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = 1234.5
+               Range(\"A2\").Value = 1234.5: Range(\"A2\").NumberFormat = \"#,##0.00\"
+               Range(\"A3\").Value = 0.15: Range(\"A3\").NumberFormat = \"0%\"
+               Range(\"A4\").Value = 45000: Range(\"A4\").NumberFormat = \"yyyy-mm-dd\"
+               Range(\"A5\").Value = \"plain text\"
+               Range(\"A7\").Value = True
+               Debug.Print Range(\"A1\").Text, Range(\"A2\").Text
+               Debug.Print Range(\"A3\").Text, Range(\"A4\").Text
+               Debug.Print Range(\"A5\").Text, Range(\"A7\").Text
+               Debug.Print \"[\" & Range(\"A9\").Text & \"]\"
+               Debug.Print TypeName(Range(\"A1:A2\").Text)
+               Range(\"D1\").Value = 5: Range(\"D2\").Value = 5
+               Debug.Print Range(\"D1:D2\").Text
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "1234.5	1,234.50".to_string(),
+                "15%	2023-03-15".to_string(),
+                "plain text	TRUE".to_string(),
+                "[]".to_string(),
+                // Two cells showing different things answer neither.
+                "Null".to_string(),
+                // Two showing the same thing answer it.
+                "5".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn a_cell_can_be_given_a_face_to_wear() {
         let mut workbook = workbook();
