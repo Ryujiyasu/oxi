@@ -15273,7 +15273,8 @@ fn layout_paragraph_baselines(
             let marker_family = font.clone().unwrap_or_else(|| family.clone());
             let marker_w =
                 font_adv::bullet_advance_em(&marker_family, *ch).unwrap_or(0.0) * fs;
-            line0_x_off = line0_x_off.max(marker_rel + marker_w);
+            line0_x_off =
+                oxislides_core::layout::marker_push(line0_x_off, marker_rel, marker_w);
             marker = Some(MarkerInfo {
                 text: ch.to_string(),
                 font: marker_family,
@@ -15294,21 +15295,17 @@ fn layout_paragraph_baselines(
             // because the (lvl,kind) key never changed its startAt.
             let key = (para.lvl, kind.clone());
             let entry = counters.entry(key).or_insert((None, 0u32));
-            let (last_start, c) = *entry;
-            let n = if c == 0 || last_start != *start_at {
-                start_at.unwrap_or(1) // new list (first use, or startAt changed)
-            } else {
-                c // same list: continue the sequence
-            };
-            *entry = (*start_at, n + 1);
-            let text = autonum_text(kind, n);
+            let (n, next) = oxislides_core::layout::next_autonum(*entry, *start_at);
+            *entry = next;
+            let text = oxislides_core::layout::autonum_text(kind, n);
             // The number is ASCII (digits / I V X / a-z A-Z) so its width is
             // the hmtx design-advance sum (unsupported families -> 0.0, the
             // same fallback buChar uses).
             let marker_family = family.clone();
             let marker_w =
                 font_adv::line_hmtx_width_pt(&text, fs, &marker_family).unwrap_or(0.0);
-            line0_x_off = line0_x_off.max(marker_rel + marker_w);
+            line0_x_off =
+                oxislides_core::layout::marker_push(line0_x_off, marker_rel, marker_w);
             marker = Some(MarkerInfo {
                 text,
                 font: marker_family,
@@ -15520,67 +15517,8 @@ fn layout_paragraph_baselines(
 /// alpha (Excel-column style: 1=A .. 26=Z .. 27=AA); the wrapper is
 /// `<body>.` (Period), `<body>)` (ParenR), `(<body>)` (ParenBoth), or the
 /// bare body (Plain). Unknown kinds fall back to arabicPeriod ("N.") — the
-/// *Plain roman/alpha kinds crash PowerPoint and never appear in real docs.
-fn autonum_text(kind: &str, n: u32) -> String {
-    let body = if kind.starts_with("romanUc") {
-        to_roman(n)
-    } else if kind.starts_with("romanLc") {
-        to_roman(n).to_lowercase()
-    } else if kind.starts_with("alphaUc") {
-        to_alpha(n)
-    } else if kind.starts_with("alphaLc") {
-        to_alpha(n).to_lowercase()
-    } else {
-        n.to_string()
-    };
-    if kind.ends_with("ParenBoth") {
-        format!("({})", body)
-    } else if kind.ends_with("ParenR") {
-        format!("{})", body)
-    } else if kind.ends_with("Period") {
-        format!("{}.", body)
-    } else {
-        body // Plain and any unknown kind
-    }
-}
 
-/// Standard greedy decimal -> uppercase Roman numeral (1=I .. 3999=MMMCMXCIX).
-fn to_roman(mut n: u32) -> String {
-    const ROMAN: [(u32, &str); 13] = [
-        (1000, "M"),
-        (900, "CM"),
-        (500, "D"),
-        (400, "CD"),
-        (100, "C"),
-        (90, "XC"),
-        (50, "L"),
-        (40, "XL"),
-        (10, "X"),
-        (9, "IX"),
-        (5, "V"),
-        (4, "IV"),
-        (1, "I"),
-    ];
-    let mut s = String::new();
-    for &(v, r) in ROMAN.iter() {
-        while n >= v {
-            s.push_str(r);
-            n -= v;
-        }
-    }
-    s
-}
 
-/// Excel-column style alphabetic numbering: 1=A, 2=B, .. 26=Z, 27=AA.
-fn to_alpha(mut n: u32) -> String {
-    let mut s = String::new();
-    while n > 0 {
-        let d = ((n - 1) % 26) as u8;
-        s.insert(0, (b'A' + d) as char);
-        n = (n - 1) / 26;
-    }
-    s
-}
 
 /// Draw text at a baseline position (converts baseline -> cell top via tmAscent).
 #[cfg(windows)]

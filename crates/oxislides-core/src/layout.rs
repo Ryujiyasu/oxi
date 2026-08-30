@@ -1311,3 +1311,139 @@ mod family_tests {
         assert_eq!(effective_family(&m, "", true), "");
     }
 }
+
+/// Decimal to uppercase Roman, greedily (1 = I .. 3999 = MMMCMXCIX).
+pub fn to_roman(mut n: u32) -> String {
+    const ROMAN: [(u32, &str); 13] = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+        (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+    ];
+    let mut out = String::new();
+    for (v, s) in ROMAN {
+        while n >= v {
+            out.push_str(s);
+            n -= v;
+        }
+    }
+    out
+}
+
+/// Decimal to a spreadsheet-style letter label (1 = A, 26 = Z, 27 = AA).
+pub fn to_alpha(mut n: u32) -> String {
+    let mut s = String::new();
+    while n > 0 {
+        let d = ((n - 1) % 26) as u8;
+        s.insert(0, (b'A' + d) as char);
+        n = (n - 1) / 26;
+    }
+    s
+}
+
+/// The text of an auto-numbered bullet, for `a:buAutoNum/@type` and a count.
+pub fn autonum_text(kind: &str, n: u32) -> String {
+    let body = if kind.starts_with("romanUc") {
+        to_roman(n)
+    } else if kind.starts_with("romanLc") {
+        to_roman(n).to_lowercase()
+    } else if kind.starts_with("alphaUc") {
+        to_alpha(n)
+    } else if kind.starts_with("alphaLc") {
+        to_alpha(n).to_lowercase()
+    } else {
+        n.to_string()
+    };
+    if kind.ends_with("ParenBoth") {
+        format!("({body})")
+    } else if kind.ends_with("ParenR") {
+        format!("{body})")
+    } else if kind.ends_with("Period") {
+        format!("{body}.")
+    } else {
+        body
+    }
+}
+
+/// The next number in an auto-numbered list, and the counter state to keep.
+///
+/// Spec #11: the counter is per (level, kind). The sequence CONTINUES while
+/// `start_at` stays the same -- absent staying absent, or the same value -- and
+/// starts a NEW list whenever it changes, present to absent or to a different
+/// number, resetting to `start_at` or 1.
+///
+/// Word truth: `autonum4` G with [None][5][None] renders 1, 5, 1 -- the second
+/// None restarts, because its startAt differs from the [5] list's. And
+/// `autonum` p1 level 0 runs 1,2,3..4 across interleaved levels, because the
+/// (lvl, kind) key never changed its startAt.
+///
+/// `state` is the counter's `(last_start_at, count)`; the returned state
+/// replaces it.
+pub fn next_autonum(
+    state: (Option<u32>, u32),
+    start_at: Option<u32>,
+) -> (u32, (Option<u32>, u32)) {
+    let (last_start, count) = state;
+    let n = if count == 0 || last_start != start_at {
+        start_at.unwrap_or(1)
+    } else {
+        count
+    };
+    (n, (start_at, n + 1))
+}
+
+/// Where a marker sits and how far it pushes the first line.
+///
+/// The marker is set at the hanging-indent position, and the first line starts
+/// after it when the marker is wider than the indent leaves room for --
+/// otherwise a long number would overlap its own text.
+pub fn marker_push(first_x: f32, marker_x: f32, marker_width: f32) -> f32 {
+    first_x.max(marker_x + marker_width)
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn roman_and_alpha_count_the_usual_way() {
+        assert_eq!(to_roman(1), "I");
+        assert_eq!(to_roman(4), "IV");
+        assert_eq!(to_roman(1994), "MCMXCIV");
+        assert_eq!(to_alpha(1), "A");
+        assert_eq!(to_alpha(26), "Z");
+        assert_eq!(to_alpha(27), "AA");
+    }
+
+    #[test]
+    fn the_kind_decides_the_letters_and_the_punctuation() {
+        assert_eq!(autonum_text("arabicPeriod", 3), "3.");
+        assert_eq!(autonum_text("romanLcParenBoth", 4), "(iv)");
+        assert_eq!(autonum_text("alphaUcParenR", 2), "B)");
+        assert_eq!(autonum_text("arabicPlain", 7), "7");
+        assert_eq!(autonum_text("somethingUnknown", 7), "7");
+    }
+
+    #[test]
+    fn a_list_continues_while_its_start_stays_put() {
+        let (n1, st) = next_autonum((None, 0), None);
+        assert_eq!(n1, 1);
+        let (n2, st) = next_autonum(st, None);
+        assert_eq!(n2, 2);
+        let (n3, _) = next_autonum(st, None);
+        assert_eq!(n3, 3);
+    }
+
+    #[test]
+    fn changing_the_start_begins_a_new_list() {
+        // autonum4's G: [None] [5] [None] renders 1, 5, 1.
+        let (a, st) = next_autonum((None, 0), None);
+        let (b, st) = next_autonum(st, Some(5));
+        let (c, _) = next_autonum(st, None);
+        assert_eq!((a, b, c), (1, 5, 1));
+    }
+
+    #[test]
+    fn a_marker_wider_than_its_indent_pushes_the_first_line() {
+        assert_eq!(marker_push(18.0, 0.0, 30.0), 30.0);
+        assert_eq!(marker_push(18.0, 0.0, 10.0), 18.0);
+    }
+}
