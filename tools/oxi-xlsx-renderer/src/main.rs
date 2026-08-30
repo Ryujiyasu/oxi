@@ -7597,6 +7597,30 @@ mod windows_draw {
                 // with the box above and right of the cell, where that corner
                 // is the nearest of the four, Excel takes the one below it.
                 if let Some(target) = super::note_target(sheet, note, layout) {
+                    // The red flag Excel puts in the corner of a cell whose
+                    // note is open: a right triangle six pixels on each leg,
+                    // hard against the cell's own rules — its widest row one
+                    // pixel below the top rule, its right edge one pixel
+                    // inside the right one.
+                    //
+                    // Only where the note is OPEN. `002` pins five of its
+                    // fifty comments and Excel's picture holds five flags;
+                    // `001` pins four and holds four; `data_A07` and
+                    // `data_A28` pin none of their twenty and hold none. A
+                    // hidden note is flagged on screen in Excel and is not in
+                    // the picture it hands over, which is the picture being
+                    // matched.
+                    let flag = CreateSolidBrush(COLORREF(0x0000_00FF));
+                    for step in 0..6 {
+                        let mark = windows::Win32::Foundation::RECT {
+                            left: target.0 - 6 + step,
+                            top: target.1 - 1 + step,
+                            right: target.0,
+                            bottom: target.1 + step,
+                        };
+                        FillRect(dc, &mark, flag);
+                    }
+                    let _ = DeleteObject(flag);
                     let corners = [
                         (box_.left, box_.top),
                         (box_.right, box_.top),
