@@ -4688,6 +4688,10 @@ mod windows_draw {
                     .into_iter()
                     .find(|points| *points > 0.0)
                     .unwrap_or(10.0);
+                if std::env::var("OXI_XLSX_DUMP_LABELS").is_ok() {
+                    eprintln!("label {:?} idx {} own {} series {} -> {size}",
+                        said.trim(), label.index, label.size, series.label_size);
+                }
                 let named = match (&label.face, &series.label_face) {
                     (Some(own), _) => face(&Some(own.clone())),
                     (None, held) => face(held),

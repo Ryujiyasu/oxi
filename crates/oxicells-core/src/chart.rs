@@ -151,7 +151,14 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                     "size" if in_marker => {
                         marker.size = number(&value).unwrap_or(7.0) as u32;
                     }
-                    "spPr" | "txPr" => paint = Painted::default(),
+                    // `<c:rich>` dresses text the way `<c:txPr>` does — a
+                    // data label that states its own words carries its size
+                    // in there and has no `txPr` at all. Both of the labels
+                    // `e12c…zuhyo` draws at ten points where Excel draws
+                    // fourteen are of that shape, and the `<c:spPr>` that
+                    // follows was throwing the size away before anything
+                    // could read it.
+                    "spPr" | "txPr" | "rich" => paint = Painted::default(),
                     "ln" => {
                         in_line = true;
                         paint.line = Some(ShapeLine {
@@ -308,7 +315,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             }
                         }
                     }
-                    "spPr" | "txPr" => match whose.last() {
+                    "spPr" | "txPr" | "rich" => match whose.last() {
                         Some(Whose::Series) => {
                             if current.line.is_none() {
                                 current.line = paint.line.take();
