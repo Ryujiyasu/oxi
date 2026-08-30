@@ -4179,6 +4179,35 @@ impl Host for WorkbookHost<'_> {
                 self.object(HostObject::RangeBorders(range, BorderSelection::All)),
             ));
         }
+        if name.eq_ignore_ascii_case("verticalalignment") {
+            // A cell that says nothing of its own wears the workbook's default
+            // style, and only when that says nothing either does the file
+            // format's own answer — the bottom — apply.
+            //
+            // Worth saying because the measurement nearly became a law: on the
+            // machine this was asked, a brand new cell answered xlCenter, and
+            // the reason is that Excel had written `<alignment
+            // vertical="center"/>` into the Normal style of its own default
+            // workbook. The object model reports what a cell EFFECTIVELY
+            // wears, not what it states.
+            let fallback = self.workbook.default_style.vertical_align.clone();
+            return self
+                .uniform_style(range, |style| style.vertical_align.clone())
+                .map(|value| {
+                    let seen = match value {
+                        None => return Some(Value::Null),
+                        Some(Some(named)) => Some(named),
+                        Some(None) => fallback.clone(),
+                    };
+                    Some(Value::Integer(match seen.as_deref() {
+                        Some("top") => -4160,
+                        Some("center") | Some("centre") => -4108,
+                        Some("justify") => -4130,
+                        Some("distributed") => -4117,
+                        _ => -4107,
+                    }))
+                });
+        }
         if name.eq_ignore_ascii_case("wraptext") {
             // A range whose cells disagree answers Null, as Bold and
             // NumberFormat already do — measured on a pair where only one of
@@ -4333,6 +4362,29 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
             self.set_range_formula(range, value)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("verticalalignment") {
+            // The five Excel accepts. Asked with xlLeft, and with a bare 7, it
+            // refuses outright rather than passing them through.
+            let asked = match &value {
+                Value::Integer(number) => *number,
+                Value::Double(number) if number.is_finite() => number.trunc() as i64,
+                _ => return Err("Range.VerticalAlignment must be a number".to_string()),
+            };
+            let named = match asked {
+                -4160 => "top",
+                -4108 => "center",
+                -4107 => "bottom",
+                -4130 => "justify",
+                -4117 => "distributed",
+                _ => {
+                    return Err(format!("Range.VerticalAlignment cannot be set to {asked}"))
+                }
+            };
+            self.set_range_style(range, |_, style| {
+                style.vertical_align = Some(named.to_string());
+            })?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("wraptext") {
@@ -8909,6 +8961,75 @@ mod tests {
     /// range whose cells disagree answers Null; an indent of −1 becomes 0
     /// without complaint where 251 is refused; and indenting a cell that was
     /// left to its own devices makes it left-aligned.
+    /// The five constants Excel accepts, and its refusal of anything else,
+    /// asked of Excel. A cell that states nothing answers for the workbook's
+    /// default style — the reading that nearly became a law here, since on the
+    /// machine this was measured Excel's own default workbook writes
+    /// `<alignment vertical="center"/>` into Normal and so a brand new cell
+    /// answers xlCenter rather than the file format's bottom.
+    #[test]
+    fn a_cell_says_where_its_text_sits_in_its_height() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Debug.Print Range(\"A1\").VerticalAlignment
+               Range(\"B1\").VerticalAlignment = -4160
+               Debug.Print Range(\"B1\").VerticalAlignment
+               Range(\"B2\").VerticalAlignment = -4108
+               Debug.Print Range(\"B2\").VerticalAlignment
+               Range(\"B3\").VerticalAlignment = -4107
+               Debug.Print Range(\"B3\").VerticalAlignment
+               Range(\"B4\").VerticalAlignment = -4117
+               Debug.Print Range(\"B4\").VerticalAlignment
+               Range(\"C1\").VerticalAlignment = -4160
+               Range(\"C2\").VerticalAlignment = -4107
+               Debug.Print TypeName(Range(\"C1:C2\").VerticalAlignment)
+               Range(\"C2\").VerticalAlignment = -4160
+               Debug.Print Range(\"C1:C2\").VerticalAlignment
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                // Nothing said anywhere, so the file format's own answer.
+                "-4107".to_string(),
+                "-4160".to_string(),
+                "-4108".to_string(),
+                "-4107".to_string(),
+                "-4117".to_string(),
+                // Two cells that disagree answer neither.
+                "Null".to_string(),
+                "-4160".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vertical_alignment_excel_does_not_know_is_refused() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+  Range(\"A1\").VerticalAlignment = -4131
+End Sub
+",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let failed = execute_with_host(&module, "Act", vec![], &mut host).unwrap_err();
+        assert!(
+            failed.to_string().contains("cannot be set to"),
+            "unexpected error: {failed}"
+        );
+    }
+
     #[test]
     fn a_cell_can_be_told_to_wrap_and_to_indent() {
         let mut workbook = workbook();
