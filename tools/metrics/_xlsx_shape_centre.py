@@ -65,7 +65,18 @@ LINES = [1, 2, 3, 7]
 LINE_HEIGHT = 200       # tall enough for seven lines at 150%
 
 
+# A staircase: the box height swept a pixel at a time AT a given percentage.
+# Reading the delta on its own only ever answers in whole pixels, and the term
+# being looked for is under two of them across the whole range of percentages.
+# Walking the height instead moves the rounding boundary past the answer over
+# and over, and WHERE the staircase steps says what height Excel is halving to
+# sub-pixel precision. Set by `--staircase`.
+STAIRS: list[tuple[str, float, int, int | None, int]] = []
+
+
 def cases():
+    if STAIRS:
+        return STAIRS
     plain = [(face, size, tall, None, 1) for face, size in FACES for tall in HEIGHTS]
     scaled = [(face, size, PCT_HEIGHT, pct, 1) for face, size in FACES for pct in PCTS]
     counted = [(face, size, LINE_HEIGHT, pct, lines)
@@ -203,10 +214,20 @@ def head(picture, top, bottom, lane):
 
 
 def main():
+    global STAIRS
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
+    parser.add_argument("--staircase",
+                        help="one face's name: sweep the box height at each "
+                             "percentage instead of the usual three groups")
+    parser.add_argument("--points", type=float, default=12.0)
+    parser.add_argument("--pcts", default="70,90,115",
+                        help="percentages to walk the height at")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    if args.staircase:
+        STAIRS = [(args.staircase, args.points, tall, int(pct) * 1000, 1)
+                  for pct in args.pcts.split(",") for tall in HEIGHTS]
 
     build()
     picture = BOOK.with_suffix(".excel.png") if args.reuse else shoot()
