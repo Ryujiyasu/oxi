@@ -1,58 +1,84 @@
 # -*- coding: utf-8 -*-
-"""Read the widow/orphan probe. Usage: _pb_widow_read.py word|oxi"""
+"""Read the widow/orphan probe. Usage: _pb_widow_read.py word|oxi
+
+Per arm: how many lines of the test paragraph stayed on page 1. With
+widowControl ON, Word should never leave exactly one of them behind (nor carry
+exactly one over); with it OFF the split should follow the room alone.
+"""
 import os, sys, json, subprocess
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _pb_widow_gen import ARMS, OUT, SHAPES, FILLS, TALL
-from _pb_kntbl_read import word_pages
-import json, subprocess
+from _pb_widow_gen import ARMS, OUT, FILLERS, PLINES, WIDOW
+
 REND = os.path.abspath("tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
 
+
+def word_pages(docx):
+    import fitz, win32com.client
+    pdf = docx[:-5] + ".pdf"
+    if not os.path.exists(pdf):
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        try:
+            d = word.Documents.Open(os.path.abspath(docx), ReadOnly=True)
+            d.SaveAs2(os.path.abspath(pdf), FileFormat=17)
+            d.Close(False)
+        finally:
+            word.Quit()
+    doc = fitz.open(pdf)
+    out = []
+    for pno in range(doc.page_count):
+        lines = []
+        for blk in doc[pno].get_text("dict")["blocks"]:
+            for l in blk.get("lines", []):
+                t = "".join(s["text"] for s in l["spans"]).strip()
+                if t:
+                    lines.append(t)
+        out.append(lines)
+    return out
+
+
 def oxi_pages(docx):
-    """Same as _pb_kntbl_read.oxi_pages but joins same-baseline runs with a
-    SPACE.  Oxi emits a justified body line one word per run, and joining those
-    with "" welds them into a single token no word matcher can read."""
     dump = docx[:-5] + ".layout.json"
     subprocess.run([REND, docx, docx[:-5] + "_r", "96", "--dump-layout=" + dump],
                    capture_output=True)
-    d = json.load(open(dump, encoding="utf-8")); out = []
-    for pi, pg in enumerate(d["pages"], 1):
+    d = json.load(open(dump, encoding="utf-8"))
+    out = []
+    for pg in d["pages"]:
         rows = {}
         for e in pg["elements"]:
-            if not (e.get("text") or "").strip(): continue
-            rows.setdefault(round(e["y"], 1), []).append((round(e["x"], 1), e["text"]))
-        for y, frs in rows.items():
-            frs.sort(); out.append((pi, y, " ".join(t for _, t in frs)))
-    return sorted(out)
-WORDS = TALL.split()
+            if not (e.get("text") or "").strip():
+                continue
+            rows.setdefault(round(e["y"], 2), []).append((e.get("x", 0), e["text"]))
+        out.append(["".join(t for _, t in sorted(v)).strip() for _, v in sorted(rows.items())])
+    return out
 
-def split_shape(lines):
-    """Lines of the probe paragraph per page.
 
-    Both readers concatenate everything sharing a y: the cell arms pick up the
-    neighbour cell's "B", and Oxi emits the body arms one word per run.  Keep
-    only words belonging to the probe string and require a contiguous slice, so
-    a line is counted wherever it is drawn and whatever shares its baseline.
+def pcount(page_lines, plines):
+    """How many LINES of the test paragraph are on this page.
+
+    ★Counting the P01/P02 markers counts the wrong thing: they are words inside
+    one wrapping paragraph and do not start lines, so a 3-line paragraph could
+    report 2 with all three lines present. The filler word `wwww` appears only in
+    that paragraph, so a line carrying it IS one of its lines.
     """
-    per = {}
-    for p, y, t in lines:
-        w = [x for x in t.replace("|", " ").split() if x in WORDS]
-        if not w or len(w) > len(WORDS): continue
-        n = len(w)
-        if any(WORDS[i:i + n] == w for i in range(len(WORDS) - n + 1)):
-            per[p] = per.get(p, 0) + 1
-    return per
+    return sum(1 for t in page_lines if "wwww" in t)
+
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "word"
-res = {}
-for tag, n, blk, off in ARMS:
-    docx = os.path.join(OUT, tag + ".docx")
-    res[tag] = split_shape(word_pages(docx) if mode == "word" else oxi_pages(docx))
-print(f"{mode.upper()}  lines of the 5-line paragraph left on p1 / carried to p2")
-print("  fill  " + "".join(f"{s:>12s}" for s in SHAPES))
-for n in FILLS:
-    cells = []
-    for s in SHAPES:
-        per = res[f"{s}{n}"]
-        cells.append("/".join(str(per.get(p, 0)) for p in (1, 2)))
-    print(f"  {n:4d}  " + "".join(f"{c:>12s}" for c in cells))
+reader = word_pages if mode == "word" else oxi_pages
+print("%s   lines of the test paragraph kept on page 1\n" % mode.upper())
+print("  widow  plines   " + "  ".join("fill=%d" % f for f in FILLERS))
+for w in WIDOW:
+    for p in PLINES:
+        cells = []
+        for f in FILLERS:
+            docx = os.path.join(OUT, "%s_f%d_p%d.docx" % (w, f, p))
+            if not os.path.exists(docx):
+                cells.append("  --   ")
+                continue
+            pages = reader(docx)
+            on1 = pcount(pages[0], p) if pages else 0
+            cells.append(" %d/%d   " % (on1, p))
+        print("  %-6s %-7d  %s" % (w, p, "".join(cells)))
