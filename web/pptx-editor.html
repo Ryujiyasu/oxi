@@ -87,7 +87,8 @@ const cv = $('slide'), ctx = cv.getContext('2d');
 const state = {
   bytes: null, pres: null, slide: 0, scale: 1,
   laid: [],            // per shape: {shape, shapeIndex, paragraphs, layout}
-  sel: null,           // {shapeIndex, paraIndex, charIndex}
+  sel: null,           // {entry, line, charIndex, inLine}
+  anchor: null,        // where a selection began, as a character offset
   edits: new Map(),    // "slide/shape/para/run" -> new text
   undo: [], redo: [],  // each step: what a run said before and after
   splits: [],          // {slide, shape, para, at} -- where Enter broke a paragraph
@@ -167,6 +168,27 @@ function paintShapeBox(shape, k) {
   }
 }
 
+// The band behind the selected characters, drawn line by line so a selection
+// that wraps is shown where it actually sits.
+function paintSelection(k) {
+  const range = selectedRange();
+  if (!range) return;
+  const { entry } = state.sel;
+  ctx.fillStyle = 'rgba(96,165,250,.32)';
+  for (const line of entry.layout.lines) {
+    if (line.para_index !== range.para) continue;
+    const s0 = Math.max(range.from - line.char_start, 0);
+    const s1 = Math.min(range.to - line.char_start, line.text.length);
+    if (s1 <= s0) continue;
+    ctx.font = `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
+               `${line.font_size * k}px "${line.family}", sans-serif`;
+    const x0 = (entry.shape.x + line.x) * k + ctx.measureText(line.text.slice(0, s0)).width;
+    const x1 = (entry.shape.x + line.x) * k + ctx.measureText(line.text.slice(0, s1)).width;
+    const y = (entry.shape.y + line.baseline) * k;
+    ctx.fillRect(x0, y - line.font_size * k * 0.85, x1 - x0, line.font_size * k * 1.05);
+  }
+}
+
 function paintLines(entry, k) {
   const { shape, layout } = entry;
   for (const line of layout.lines) {
@@ -193,6 +215,7 @@ function paint() {
   cv.height = state.pres.slide_height * k;
   paintBackground(slide, cv.width, cv.height);
   for (const shape of slide.shapes) paintShapeBox(shape, k);
+  paintSelection(k);
   for (const entry of state.laid) paintLines(entry, k);
   paintCaret();
 }
@@ -243,6 +266,7 @@ function paintCaret() {
 cv.addEventListener('mousedown', (e) => {
   const r = cv.getBoundingClientRect();
   state.sel = hitTest(e.clientX - r.left, e.clientY - r.top);
+  state.anchor = null;
   describeSelection();
   paint();
 });
@@ -274,11 +298,25 @@ function linesOfSelection() {
   return state.sel ? state.sel.entry.layout.lines : [];
 }
 
+// The selected range within the caret's paragraph, or null.
+//
+// A selection stays inside ONE paragraph. Reaching across paragraphs is a
+// different operation -- it joins them -- and pretending otherwise would let a
+// delete quietly change the structure.
+function selectedRange() {
+  if (!state.sel || state.anchor === null) return null;
+  const a = Math.min(state.anchor, state.sel.charIndex);
+  const b = Math.max(state.anchor, state.sel.charIndex);
+  return a === b ? null : { from: a, to: b, para: state.sel.line.para_index };
+}
+
 function describeSelection() {
   if (!state.sel) { $('s-sel').textContent = 'nothing selected'; return; }
   const { entry, line, charIndex } = state.sel;
+  const range = selectedRange();
   $('s-sel').innerHTML =
     `shape ${entry.shapeIndex}, paragraph ${line.para_index}, char ${charIndex}` +
+    (range ? ` <b>selected ${range.to - range.from}</b>` : '') +
     `<br><span class="hint">${line.family} ${line.font_size}pt` +
     `${line.bold ? ' bold' : ''}${line.italic ? ' italic' : ''}</span>`;
 }
@@ -293,6 +331,10 @@ document.addEventListener('keydown', (e) => {
   const moves = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
   if (!moves.includes(e.key)) return;
   e.preventDefault();
+  // Shift starts a selection at the caret and keeps it; moving without shift
+  // drops it, which is what every editor does.
+  if (e.shiftKey && state.anchor === null) state.anchor = state.sel.charIndex;
+  else if (!e.shiftKey) state.anchor = null;
   const { entry, line } = state.sel;
   const lines = linesOfSelection();
   const at = lines.indexOf(line);
@@ -331,12 +373,17 @@ document.addEventListener('keydown', (e) => {
 function applyStep(step, direction) {
   const entry = state.laid.find(x => x.shapeIndex === step.shapeIndex);
   if (!entry) return;
-  const run = entry.paragraphs[step.paraIndex].runs[step.runIndex];
-  run.text = direction === 'undo' ? step.before : step.after;
-  const key = state.slide + '/' + entry.shape.sp_index + '/' +
-              step.paraIndex + '/' + step.runIndex;
-  if (run.text === step.original) state.edits.delete(key);
-  else state.edits.set(key, run.text);
+  // A step carries every run it touched: deleting a selection can rewrite
+  // several at once, and an undo that put back only the first would leave the
+  // rest of the range deleted.
+  for (const r of step.runs) {
+    const run = entry.paragraphs[step.paraIndex].runs[r.runIndex];
+    run.text = direction === 'undo' ? r.before : r.after;
+    const key = state.slide + '/' + entry.shape.sp_index + '/' +
+                step.paraIndex + '/' + r.runIndex;
+    if (run.text === r.original) state.edits.delete(key);
+    else state.edits.set(key, run.text);
+  }
   layoutSlide();
   placeCaret(step.shapeIndex, step.paraIndex,
              direction === 'undo' ? step.caretBefore : step.caretAfter);
@@ -429,6 +476,51 @@ document.addEventListener('keydown', (e) => {
     entry.shapeIndex, line.para_index - 1, at, 'paragraphs joined');
 });
 
+// Delete or Backspace over a selection removes the whole range, across as many
+// runs as it covers. Each run keeps its own identity -- only the characters
+// inside the range go -- so the weights and sizes of what remains are untouched.
+document.addEventListener('keydown', (e) => {
+  if (!state.sel) return;
+  const range = selectedRange();
+  if (!range) return;
+  const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
+  if (e.key !== 'Backspace' && e.key !== 'Delete' && !printable) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const { entry, line } = state.sel;
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  const para = entry.paragraphs[range.para];
+  const touched = [];
+  let seen = 0;
+  para.runs.forEach((run, ri) => {
+    const chars = [...run.text];
+    const start = seen, end = seen + chars.length;
+    seen = end;
+    const from = Math.max(range.from, start), to = Math.min(range.to, end);
+    if (to <= from) return;
+    const before = run.text;
+    chars.splice(from - start, to - from);
+    run.text = chars.join('');
+    const okey = entry.shapeIndex + '/' + range.para + '/' + ri;
+    touched.push({ runIndex: ri, before, after: run.text,
+                   original: state.original.has(okey) ? state.original.get(okey) : before });
+    const key = state.slide + '/' + entry.shape.sp_index + '/' + range.para + '/' + ri;
+    if (run.text === touched[touched.length - 1].original) state.edits.delete(key);
+    else state.edits.set(key, run.text);
+  });
+  state.undo.push({ shapeIndex: entry.shapeIndex, paraIndex: range.para, runs: touched,
+                    caretBefore: range.to, caretAfter: range.from });
+  state.redo.length = 0;
+  state.anchor = null;
+  layoutSlide();
+  placeCaret(entry.shapeIndex, range.para, range.from);
+  $('save').disabled = state.edits.size === 0;
+  describeSelection();
+  paint();
+  say(`${range.to - range.from} characters deleted \u2014 ` +
+      `${state.edits.size} run${state.edits.size === 1 ? '' : 's'} edited`);
+});
+
 document.addEventListener('keydown', (e) => {
   if (!state.sel) return;
   const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
@@ -457,9 +549,9 @@ document.addEventListener('keydown', (e) => {
   const caretAfter = caretBefore + (e.key === 'Backspace' ? -1 : 1);
   const okey = entry.shapeIndex + '/' + line.para_index + '/' + ri;
   state.undo.push({
-    shapeIndex: entry.shapeIndex, paraIndex: line.para_index, runIndex: ri,
-    before, after: para.runs[ri].text,
-    original: state.original.has(okey) ? state.original.get(okey) : before,
+    shapeIndex: entry.shapeIndex, paraIndex: line.para_index,
+    runs: [{ runIndex: ri, before, after: para.runs[ri].text,
+             original: state.original.has(okey) ? state.original.get(okey) : before }],
     caretBefore, caretAfter,
   });
   state.redo.length = 0;
@@ -571,6 +663,7 @@ $('file').addEventListener('change', async (e) => {
   state.redo.length = 0;
   state.splits.length = 0;
   state.original.clear();
+  state.anchor = null;
   $('save').disabled = true;
   try {
     state.pres = parse_presentation(new Uint8Array(state.bytes));

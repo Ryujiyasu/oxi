@@ -25,6 +25,8 @@ What it asserts, per deck:
                 really holds one more paragraph than the original did
   backspace     Backspace at the head of a paragraph joins it onto the one
                 above, taking the file back to where it started
+  select        Shift+arrow builds a range and the panel counts it; deleting it
+                removes exactly that many characters from the file
   save          the download re-opens as a pptx whose text carries the change
   console       no page error was raised along the way
 
@@ -204,6 +206,33 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
         save_off = page.eval_on_selector("#save", "e => e.disabled")
         rep.check(deck, "undo clears", save_off is True,
                   "save is disabled again" if save_off else "save still armed")
+
+        # A selection: shift extends it, a plain arrow drops it, and deleting
+        # it takes exactly the selected characters out of the run text.
+        page.keyboard.press("Home")
+        for _ in range(4):
+            page.keyboard.press("Shift+ArrowRight")
+        sel_text = page.eval_on_selector("#s-sel", "e => e.textContent")
+        rep.check(deck, "select", "selected 4" in sel_text, repr(sel_text[:60]))
+
+        before_text = page.evaluate(
+            "() => document.getElementById('s-sel').textContent")
+        page.keyboard.press("Delete")
+        deleted = page.eval_on_selector("#status", "e => e.textContent")
+        rep.check(deck, "select delete", "4 characters deleted" in deleted,
+                  repr(deleted))
+        with page.expect_download() as dsel:
+            page.click("#save")
+        cut = Path(dsel.value.path()).read_bytes()
+        # The typed Z was undone before this, so the only difference is the
+        # four deleted characters.
+        rep.check(deck, "select saved",
+                  len(slide_text(cut, 1)) == len(slide_text(pptx.read_bytes(), 1)) - 4,
+                  f"slide text {len(slide_text(pptx.read_bytes(), 1))} -> "
+                  f"{len(slide_text(cut, 1))}")
+        # Put the deck back where the rest of the checks expect it.
+        page.keyboard.press("Control+z")
+        page.wait_for_timeout(300)
 
         # Enter must show AT ONCE and reach the FILE. The lines the page has
         # placed are the screen's own account, so a break that only moved the
