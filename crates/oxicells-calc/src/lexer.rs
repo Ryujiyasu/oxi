@@ -512,7 +512,7 @@ fn shifted_coordinate(value: u32, offset: i64, maximum: u32) -> Result<u32, Stri
         .ok_or_else(|| "copied formula reference moves outside the worksheet".to_string())
 }
 
-fn render_token(output: &mut String, token: Token) {
+pub(crate) fn render_token(output: &mut String, token: Token) {
     match token {
         Token::Number(value) => output.push_str(&value.to_string()),
         Token::Text(value) => {

@@ -31,8 +31,8 @@ use oxicells_calc::reference::col_to_letters;
 use oxicells_calc::{ExcelError, Value};
 
 pub use oxicells_calc::{
-    format_number, shift_formula_references, translate_formula_references, ReferenceShift,
-    ShiftAxis,
+    format_number, formula_from_r1c1, formula_to_r1c1, shift_formula_references,
+    translate_formula_references, ReferenceShift, ShiftAxis,
 };
 
 /// Recalculate every formula in a single sheet, overwriting cached values.

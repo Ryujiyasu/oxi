@@ -48,6 +48,7 @@ pub mod functions;
 pub mod lexer;
 pub mod parser;
 pub mod numfmt;
+pub mod r1c1;
 pub mod reference;
 pub mod value;
 
@@ -59,5 +60,6 @@ pub use lexer::{
 };
 pub use lexer::ParseError;
 pub use parser::parse;
+pub use r1c1::{formula_from_r1c1, formula_to_r1c1};
 pub use reference::{CellRef, RangeRef, Reference};
 pub use value::{ExcelError, Value};

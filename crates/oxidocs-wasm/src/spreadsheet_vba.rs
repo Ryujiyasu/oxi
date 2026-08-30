@@ -4,7 +4,9 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
-use oxicells_core::{translate_formula_references, ReferenceShift, ShiftAxis};
+use oxicells_core::{
+    formula_from_r1c1, formula_to_r1c1, translate_formula_references, ReferenceShift, ShiftAxis,
+};
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
@@ -34,6 +36,16 @@ struct CellRange {
 enum RangeAxis {
     Rows,
     Columns,
+}
+
+/// Which of Excel's two ways of writing a reference a formula is being asked
+/// for or given in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaStyle {
+    /// `=A1*2`, which is what the file keeps.
+    A1,
+    /// `=RC[-1]*2`, said from where the formula sits.
+    R1C1,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1734,10 +1746,38 @@ impl<'a> WorkbookHost<'a> {
         })
     }
 
-    fn range_formula(&self, range: CellRange) -> Result<Value, String> {
+    /// The same, said from where the formula sits.
+    ///
+    /// Only a cell that really holds a formula is rewritten. A cell holding the
+    /// TEXT `=A1*3` — which is what a leading apostrophe leaves — answers with
+    /// that text unchanged, as it does through `.Formula`.
+    fn cell_formula_r1c1(&self, address: CellAddress) -> Result<Value, String> {
+        let holds_formula = self
+            .workbook
+            .sheets
+            .get(address.sheet)
+            .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+            .is_some_and(|cell| cell.formula.is_some());
+        match self.cell_formula(address) {
+            Value::String(written) if holds_formula => formula_to_r1c1(
+                &written,
+                address.row.saturating_sub(1),
+                address.column,
+            )
+            .map(Value::String),
+            other => Ok(other),
+        }
+    }
+
+    fn range_formula(&self, range: CellRange, style: FormulaStyle) -> Result<Value, String> {
         Self::range_cell_count(range)?;
+        let written = |address| match style {
+            FormulaStyle::A1 => Ok(self.cell_formula(address)),
+            FormulaStyle::R1C1 => self.cell_formula_r1c1(address),
+        };
         if range.is_single() {
-            return Ok(self.cell_formula(range.addresses().next().unwrap()));
+            return written(range.addresses().next().unwrap());
         }
         Ok(Value::Array(ArrayValue {
             dimensions: vec![
@@ -1752,8 +1792,8 @@ impl<'a> WorkbookHost<'a> {
             ],
             values: range
                 .addresses()
-                .map(|address| self.cell_formula(address))
-                .collect(),
+                .map(written)
+                .collect::<Result<Vec<_>, _>>()?,
             element_default: Box::new(Value::String(String::new())),
             resizable: true,
         }))
@@ -2315,6 +2355,7 @@ impl<'a> WorkbookHost<'a> {
         range: CellRange,
         value: Value,
         operation: &str,
+        style: FormulaStyle,
     ) -> Result<(), String> {
         let count = Self::range_cell_count(range)?;
         match value {
@@ -2331,12 +2372,23 @@ impl<'a> WorkbookHost<'a> {
                 // column leaves all three pointing at A1.
                 for (address, value) in range.addresses().zip(array.values) {
                     match cell_input(value)? {
-                        CellInput::Formula(formula) => self.set_cell_formula(address, formula)?,
+                        CellInput::Formula(formula) => {
+                            let formula = Self::placed_formula(address, formula, style)?;
+                            self.set_cell_formula(address, formula)?;
+                        }
                         CellInput::Constant(value) => self.set_cell_value(address, value)?,
                     }
                 }
             }
             value => match cell_input(value)? {
+                // R1C1 needs no filling: the text already says where each cell
+                // should look, so every cell reads it for itself.
+                CellInput::Formula(formula) if style == FormulaStyle::R1C1 => {
+                    for address in range.addresses() {
+                        let placed = Self::placed_formula(address, formula.clone(), style)?;
+                        self.set_cell_formula(address, placed)?;
+                    }
+                }
                 CellInput::Formula(formula) => self.fill_formula(range, &formula)?,
                 CellInput::Constant(value) => {
                     for address in range.addresses() {
@@ -2346,6 +2398,22 @@ impl<'a> WorkbookHost<'a> {
             },
         }
         Ok(())
+    }
+
+    /// Read a formula as it was written, in whichever of the two styles.
+    fn placed_formula(
+        address: CellAddress,
+        formula: String,
+        style: FormulaStyle,
+    ) -> Result<String, String> {
+        match style {
+            FormulaStyle::A1 => Ok(formula),
+            FormulaStyle::R1C1 => formula_from_r1c1(
+                &formula,
+                address.row.saturating_sub(1),
+                address.column,
+            ),
+        }
     }
 
     /// Put a formula in every cell of a block the way typing it into the
@@ -3855,7 +3923,7 @@ impl Host for WorkbookHost<'_> {
                     if !args.is_empty() {
                         return Err("Range.ClearContents does not accept arguments".to_string());
                     }
-                    self.set_range_input(range, Value::Empty, "range assignment")?;
+                    self.set_range_input(range, Value::Empty, "range assignment", FormulaStyle::A1)?;
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("clearformats") {
@@ -4295,7 +4363,10 @@ impl Host for WorkbookHost<'_> {
             return self.range_value(range).map(Some);
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
-            return self.range_formula(range).map(Some);
+            return self.range_formula(range, FormulaStyle::A1).map(Some);
+        }
+        if name.eq_ignore_ascii_case("formular1c1") || name.eq_ignore_ascii_case("formula2r1c1") {
+            return self.range_formula(range, FormulaStyle::R1C1).map(Some);
         }
         if name.eq_ignore_ascii_case("hasformula") {
             return self.range_has_formula(range).map(Some);
@@ -4544,11 +4615,20 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
-            self.set_range_input(range, value, "range assignment")?;
+            self.set_range_input(range, value, "range assignment", FormulaStyle::A1)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
-            self.set_range_input(range, value, "range formula assignment")?;
+            self.set_range_input(range, value, "range formula assignment", FormulaStyle::A1)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("formular1c1") || name.eq_ignore_ascii_case("formula2r1c1") {
+            self.set_range_input(
+                range,
+                value,
+                "range formula assignment",
+                FormulaStyle::R1C1,
+            )?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("verticalalignment") {
@@ -10819,18 +10899,17 @@ End Sub
     fn vba_fills_a_block_with_a_formula_from_its_corner() {
         let mut workbook = workbook();
         let module = parse_module(
-            "Public Function FillBlock() As String
-               Range(\"F1:G2\").Formula = \"=A1\"
-               Range(\"H1:H3\").Value = \"=A1*3\"
-               Range(\"I1:I3\").Formula = \"=$A$1\"
-               Range(\"M1:O1\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")
-               FillBlock = Range(\"F1\").Formula & \"|\" & Range(\"G1\").Formula & \"|\" & _
-                 Range(\"F2\").Formula & \"|\" & Range(\"G2\").Formula & \"|\" & _
-                 Range(\"H2\").Formula & \"|\" & Range(\"H3\").Formula & \"|\" & _
-                 Range(\"I3\").Formula & \"|\" & Range(\"N1\").Formula & \"|\" & _
-                 Range(\"H1:H3\").HasFormula
-             End Function
-",
+            "Public Function FillBlock() As String\n\
+               Range(\"F1:G2\").Formula = \"=A1\"\n\
+               Range(\"H1:H3\").Value = \"=A1*3\"\n\
+               Range(\"I1:I3\").Formula = \"=$A$1\"\n\
+               Range(\"M1:O1\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")\n\
+               FillBlock = Range(\"F1\").Formula & \"|\" & Range(\"G1\").Formula & \"|\" & _\n\
+                 Range(\"F2\").Formula & \"|\" & Range(\"G2\").Formula & \"|\" & _\n\
+                 Range(\"H2\").Formula & \"|\" & Range(\"H3\").Formula & \"|\" & _\n\
+                 Range(\"I3\").Formula & \"|\" & Range(\"N1\").Formula & \"|\" & _\n\
+                 Range(\"H1:H3\").HasFormula\n\
+             End Function\n",
         )
         .unwrap();
         let result = {
@@ -10856,19 +10935,18 @@ End Sub
     fn vba_reads_an_assigned_string_the_same_way_through_value_and_formula() {
         let mut workbook = workbook();
         let module = parse_module(
-            "Public Function TypedIn() As String
-               Range(\"A1\").Formula = \"0123\"
-               Range(\"A2\").Formula = \"TRUE\"
-               Range(\"A3\").Formula = \"(5)\"
-               Range(\"A4\").Formula = \"'=B1\"
-               Range(\"A5\").Formula = \"=\"
-               Range(\"A6\").Formula = \"hello\"
-               TypedIn = TypeName(Range(\"A1\").Value) & \"|\" & Range(\"A1\").Value & \"|\" & _
-                 TypeName(Range(\"A2\").Value) & \"|\" & Range(\"A3\").Value & \"|\" & _
-                 Range(\"A4\").Value & \"|\" & Range(\"A5\").Value & \"|\" & _
-                 Range(\"A6\").Value & \"|\" & Range(\"A1:A6\").HasFormula
-             End Function
-",
+            "Public Function TypedIn() As String\n\
+               Range(\"A1\").Formula = \"0123\"\n\
+               Range(\"A2\").Formula = \"TRUE\"\n\
+               Range(\"A3\").Formula = \"(5)\"\n\
+               Range(\"A4\").Formula = \"'=B1\"\n\
+               Range(\"A5\").Formula = \"=\"\n\
+               Range(\"A6\").Formula = \"hello\"\n\
+               TypedIn = TypeName(Range(\"A1\").Value) & \"|\" & Range(\"A1\").Value & \"|\" & _\n\
+                 TypeName(Range(\"A2\").Value) & \"|\" & Range(\"A3\").Value & \"|\" & _\n\
+                 Range(\"A4\").Value & \"|\" & Range(\"A5\").Value & \"|\" & _\n\
+                 Range(\"A6\").Value & \"|\" & Range(\"A1:A6\").HasFormula\n\
+             End Function\n",
         )
         .unwrap();
         let result = {
@@ -10879,6 +10957,68 @@ End Sub
         assert_eq!(
             result,
             Value::String("Double|123|Boolean|-5|=B1|=|hello|False".to_string())
+        );
+    }
+
+    /// `FormulaR1C1` says a formula from where it sits, so one string fills a
+    /// column correctly. Every answer was asked of Excel: a formula in B2
+    /// pointing at A1 shows `=R[-1]C[-1]*2`, `=RC[-3]*2` written down D1:D3
+    /// leaves `=A1*2`, `=A2*2`, `=A3*2`, `=R1C1` leaves `=$A$1`, and a cell
+    /// holding a number answers with the number.
+    #[test]
+    fn vba_says_a_formula_from_where_it_sits() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function R1C1() As String\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"B2\").Formula = \"=A1*2\"\n\
+               Range(\"D1:D3\").FormulaR1C1 = \"=RC[-3]*2\"\n\
+               Range(\"D5\").FormulaR1C1 = \"=R1C1\"\n\
+               Range(\"F1:F3\").FormulaR1C1 = \"=R1C1+RC[-5]\"\n\
+               R1C1 = Range(\"B2\").FormulaR1C1 & \"|\" & Range(\"D1\").Formula & \"|\" & _\n\
+                 Range(\"D3\").Formula & \"|\" & Range(\"D3\").FormulaR1C1 & \"|\" & _\n\
+                 Range(\"D5\").Formula & \"|\" & Range(\"F2\").Formula & \"|\" & _\n\
+                 Range(\"A1\").FormulaR1C1\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "R1C1", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "=R[-1]C[-1]*2|=A1*2|=A3*2|=RC[-3]*2|=$A$1|=$A$1+A2|10".to_string()
+            )
+        );
+    }
+
+    /// A block answers with one formula per cell, each said from that cell.
+    #[test]
+    fn vba_reads_a_block_of_r1c1_formulas_cell_by_cell() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Block() As String\n\
+               Range(\"B1:B2\").Formula = \"=A1*2\"\n\
+               Dim said, plain\n\
+               said = Range(\"B1:B2\").FormulaR1C1\n\
+               plain = Range(\"B1:B2\").Formula\n\
+               Block = said(1, 1) & \"|\" & said(2, 1) & \"|\" & plain(2, 1)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Block", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("=RC[-1]*2|=RC[-1]*2|=A2*2".to_string())
         );
     }
 }
