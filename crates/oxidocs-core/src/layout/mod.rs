@@ -18129,10 +18129,46 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             } else {
                 break_threshold
             };
+            // S1248 (default ON, opt-out OXI_S1248_DISABLE): on a page whose foot is spoken
+            // for by notes, a paragraph's TRAILING SPACE has to fit above the note
+            // area as well as its last line. Measured both ways on the real
+            // document (`_pb_18715_gap`, sweeping the paragraph's own w:after with
+            // its position fixed: Word keeps at 0 and pushes at 0.8pt, exactly
+            // where line_bottom + after crosses Oxi's own content bottom) and on a
+            // self-authored repro. At a PLAIN page bottom the same sweep does NOT
+            // move the flip (`_pb_botafter` with no notes: after 0 / 8 / 16pt all
+            // flip at the same spacer), so the term is footnote-scoped -- there the
+            // trailing space simply falls off the page.
+            // Like the roll rule (S1244) this is compatibilityMode >= 15 only: the
+            // same repro with no settings.xml flips at one spacer for after 0, 8
+            // and 16pt, where at 15 the flip moves by exactly the after value.
+            let s1248_modern = self.compat_mode >= 15 && self.compat_mode_explicit;
+            let s1248_para_after = if std::env::var("OXI_S1248_DISABLE").is_err()
+                && s835_boundary_is_fn
+                && s1248_modern
+                && !self.doc_body_has_real_cjk
+            {
+                para.style.space_after.unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            // The term belongs to the paragraph's LAST line, so the per-line test
+            // takes it at line_idx == len-1 and the widow look-ahead (which asks
+            // about line_idx+1) at len-2.
+            let s1248_after = if line_idx + 1 == lines.len() {
+                s1248_para_after
+            } else {
+                0.0
+            };
+            let s1248_next_after = if line_idx + 2 == lines.len() {
+                s1248_para_after
+            } else {
+                0.0
+            };
             let mut natural_needs_page_break = if in_textbox || s832_trailing_empty {
                 false
             } else {
-                cursor.cursor_y + break_threshold - s835_fn_relief
+                cursor.cursor_y + break_threshold + s1248_after - s835_fn_relief
                     > effective_break_bottom + s967_tol
             };
             // S916 (2026-07-18, opt-out OXI_S916_DISABLE): force the split at
@@ -18697,7 +18733,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         false
                     } else {
                         let next_h = last_line_fit_h(line_idx + 1);
-                        cursor.cursor_y + line_height + next_h - s835_fn_relief
+                        // S1248: the look-ahead asks the same question the
+                        // per-line test does, so it has to count the trailing
+                        // space too — otherwise the last line is rejected there
+                        // and kept here, and the paragraph splits 2+1 where
+                        // widowControl forbids any split at all.
+                        cursor.cursor_y + line_height + next_h + s1248_next_after - s835_fn_relief
                             > page_top + content_height
                     }
                 } else {
