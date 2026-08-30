@@ -3861,19 +3861,30 @@ impl Host for WorkbookHost<'_> {
                     return self.delete_range(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("merge") {
-                    match args {
-                        [] => {}
-                        [across] => {
-                            if style_boolean(across, "Range.Merge Across")? {
-                                return Err(
-                                    "Range.Merge Across:=True is not supported in the browser"
-                                        .to_string(),
-                                );
-                            }
+                    let across = match args {
+                        [] => false,
+                        [across] => style_boolean(across, "Range.Merge Across")?,
+                        _ => {
+                            return Err("Range.Merge expects zero or one argument".to_string())
                         }
-                        _ => return Err("Range.Merge expects zero or one argument".to_string()),
+                    };
+                    // Across makes one merge of each ROW rather than one of
+                    // the block: asked of Excel, `D1:E2` merged across leaves
+                    // `D1:E1` and `D2:E2`, each keeping its own leftmost
+                    // value where the block would have kept only D1's.
+                    if across {
+                        for row in range.start_row..=range.end_row {
+                            self.merge_range(CellRange {
+                                sheet: range.sheet,
+                                start_row: row,
+                                end_row: row,
+                                start_column: range.start_column,
+                                end_column: range.end_column,
+                            })?;
+                        }
+                    } else {
+                        self.merge_range(range)?;
                     }
-                    self.merge_range(range)?;
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("unmerge") {
@@ -4361,6 +4372,22 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("hidden") {
             return self.range_hidden(range).map(Some);
+        }
+        if name.eq_ignore_ascii_case("mergearea") {
+            // The block a cell belongs to, or the range itself where it
+            // belongs to none: asked of Excel, `Range("B2").MergeArea` inside
+            // the merge `A1:B2` answers `$A$1:$B$2`, and a cell in no merge
+            // answers with itself.
+            let held = self
+                .workbook
+                .sheets
+                .get(range.sheet)
+                .ok_or_else(|| "worksheet no longer exists".to_string())?
+                .merge_cells
+                .iter()
+                .map(|merge| merge_range(range.sheet, merge))
+                .find(|merge| ranges_overlap(range, *merge));
+            return Ok(Some(self.object(HostObject::Range(held.unwrap_or(range)))));
         }
         if name.eq_ignore_ascii_case("mergecells") {
             return self.range_merge_state(range).map(Some);
@@ -9223,6 +9250,53 @@ mod tests {
     /// Sort's ordering, read off Excel: numbers before text before Booleans,
     /// blanks last whichever way it runs, ties keeping the order they were
     /// already in — and, with MatchCase, lower case before upper.
+    /// Merging, read off Excel: the block keeps the top-left value and the
+    /// others are gone for good — unmerging does not bring them back. Across,
+    /// it makes one merge a row, each keeping its own leftmost value.
+    #[test]
+    fn merging_keeps_the_corner_and_loses_the_rest() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"one\": Range(\"B1\").Value = \"two\"
+               Range(\"A2\").Value = \"three\"
+               Range(\"A1:B2\").Merge
+               Debug.Print Range(\"A1\").Text & \"|\" & Range(\"B1\").Text & \"|\" & Range(\"A2\").Text
+               Debug.Print Range(\"B2\").MergeArea.Address, Range(\"B2\").MergeCells
+               Range(\"A1:B2\").UnMerge
+               Debug.Print Range(\"A1\").Text & \"|\" & Range(\"B1\").Text & \"|\" & Range(\"A2\").Text
+               Range(\"D1\").Value = \"x\": Range(\"E1\").Value = \"y\"
+               Range(\"D2\").Value = \"z\"
+               Range(\"D1:E2\").Merge True
+               Debug.Print Range(\"D1\").MergeArea.Address, Range(\"D2\").MergeArea.Address
+               Debug.Print Range(\"D1\").Text & \"|\" & Range(\"D2\").Text
+               Debug.Print Range(\"H8\").MergeArea.Address
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "one||".to_string(),
+                "$A$1:$B$2	True".to_string(),
+                // Taking the merge apart does not give the words back.
+                "one||".to_string(),
+                // Across, each row is its own merge.
+                "$D$1:$E$1	$D$2:$E$2".to_string(),
+                "x|z".to_string(),
+                // A cell in no merge is its own merge area.
+                "$H$8".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn sorting_puts_numbers_first_and_blanks_last_both_ways() {
         let mut workbook = workbook();
