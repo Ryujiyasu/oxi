@@ -2836,14 +2836,16 @@ impl<'a> WorkbookHost<'a> {
     /// Booleans — and leaves blanks at the end whichever way the sort runs.
     /// Text compares without regard to case, and equal values keep the order
     /// they were already in.
+    ///
+    /// Told to tell case apart, it still compares the letters without regard
+    /// to case and puts the LOWER case first where they are the same:
+    /// `b A a B` sorts to `a A b B`. See `compare_text_by_case`.
     fn sort_range(&mut self, range: CellRange, args: &[Value]) -> Result<(), String> {
         let given = |index: usize| match args.get(index) {
             Some(Value::Missing) | None => None,
             Some(value) => Some(value),
         };
-        if given(9).is_some_and(|value| matches!(value, Value::Boolean(true))) {
-            return Err("Range.Sort cannot tell case apart in the browser".to_string());
-        }
+        let match_case = given(9).is_some_and(|value| matches!(value, Value::Boolean(true)));
         let sideways = match given(10) {
             None => false,
             Some(value) => match sort_number(value, "Orientation")? {
@@ -2931,10 +2933,11 @@ impl<'a> WorkbookHost<'a> {
         };
         lines.sort_by(|left, right| {
             for (lane, descending) in &keys {
-                let ordering = sort_compare(
+                let ordering = sort_compare_cased(
                     &self.cell_value(cell_at(*left, *lane)),
                     &self.cell_value(cell_at(*right, *lane)),
                     *descending,
+                    match_case,
                 );
                 if ordering != Ordering::Equal {
                     return ordering;
@@ -5173,7 +5176,38 @@ fn sort_rank(value: &Value) -> u8 {
     }
 }
 
+/// How two strings compare when the sort has been told to tell case apart.
+///
+/// Case is a TIEBREAK, not a part of the comparison. Asked of Excel,
+/// `a10 A2 a2 A10` sorts to `a10 A10 a2 A2`: if case were weighed at the first
+/// letter, `a2` would come before `A10`, and it does not. The strings are
+/// compared without regard to case first, and only where they are the same
+/// does the case decide — lower before upper, at the first letter where they
+/// differ. That gives `b A a B` → `a A b B` and `aB Ab ab AB` → `ab aB Ab AB`.
+fn compare_text_by_case(left: &str, right: &str) -> Ordering {
+    let folded = left.to_lowercase().cmp(&right.to_lowercase());
+    if folded != Ordering::Equal {
+        return folded;
+    }
+    for (ours, other) in left.chars().zip(right.chars()) {
+        let cased = ours.is_uppercase().cmp(&other.is_uppercase());
+        if cased != Ordering::Equal {
+            return cased;
+        }
+    }
+    Ordering::Equal
+}
+
 fn sort_compare(left: &Value, right: &Value, descending: bool) -> Ordering {
+    sort_compare_cased(left, right, descending, false)
+}
+
+fn sort_compare_cased(
+    left: &Value,
+    right: &Value,
+    descending: bool,
+    match_case: bool,
+) -> Ordering {
     let (left_rank, right_rank) = (sort_rank(left), sort_rank(right));
     if left_rank == 3 || right_rank == 3 {
         // A blank sinks to the bottom whichever way the rest is going.
@@ -5184,7 +5218,11 @@ fn sort_compare(left: &Value, right: &Value, descending: bool) -> Ordering {
     } else {
         match (left, right) {
             (Value::String(left), Value::String(right)) => {
-                left.to_lowercase().cmp(&right.to_lowercase())
+                if match_case {
+                    compare_text_by_case(left, right)
+                } else {
+                    left.to_lowercase().cmp(&right.to_lowercase())
+                }
             }
             (Value::Boolean(left), Value::Boolean(right)) => left.cmp(right),
             _ => match (number_of(left), number_of(right)) {
@@ -8483,7 +8521,8 @@ mod tests {
             // Excel quietly sorts nothing for a key outside the range.
             "Range(\"A1:A2\").Sort Key1:=Range(\"D1\"), Header:=xlNo",
             "Range(\"A1:A2\").Sort Key1:=Range(\"A1\"), Header:=xlGuess",
-            "Range(\"A1:A2\").Sort Key1:=Range(\"A1\"), Header:=xlNo, MatchCase:=True",
+            // MatchCase used to belong here. It was measured and implemented:
+            // see `sorting_by_case_puts_the_lower_one_first`.
             "Range(\"A1:A2\").Sort Header:=xlNo",
         ] {
             let mut workbook = workbook();
@@ -9253,6 +9292,51 @@ mod tests {
     /// Merging, read off Excel: the block keeps the top-left value and the
     /// others are gone for good — unmerging does not bring them back. Across,
     /// it makes one merge a row, each keeping its own leftmost value.
+    /// Sorting told to tell case apart, read off Excel. The letters still
+    /// compare without regard to case; where they are the same, lower case
+    /// comes first — which is not what comparing the characters as written
+    /// would give.
+    #[test]
+    fn sorting_by_case_puts_the_lower_one_first() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()
+               Range(\"A1\").Value = \"b\": Range(\"A2\").Value = \"A\"
+               Range(\"A3\").Value = \"a\": Range(\"A4\").Value = \"B\"
+               Range(\"A1:A4\").Sort Key1:=Range(\"A1\"), Order1:=1, Header:=2, MatchCase:=True
+               Debug.Print Range(\"A1\").Text & Range(\"A2\").Text & Range(\"A3\").Text & Range(\"A4\").Text
+               Range(\"C1\").Value = \"aB\": Range(\"C2\").Value = \"Ab\"
+               Range(\"C3\").Value = \"ab\": Range(\"C4\").Value = \"AB\"
+               Range(\"C1:C4\").Sort Key1:=Range(\"C1\"), Order1:=1, Header:=2, MatchCase:=True
+               Debug.Print Range(\"C1\").Text & \",\" & Range(\"C2\").Text & \",\" & _
+                 Range(\"C3\").Text & \",\" & Range(\"C4\").Text
+               Range(\"E1\").Value = \"a10\": Range(\"E2\").Value = \"A2\"
+               Range(\"E3\").Value = \"a2\": Range(\"E4\").Value = \"A10\"
+               Range(\"E1:E4\").Sort Key1:=Range(\"E1\"), Order1:=1, Header:=2, MatchCase:=True
+               Debug.Print Range(\"E1\").Text & \",\" & Range(\"E2\").Text & \",\" & _
+                 Range(\"E3\").Text & \",\" & Range(\"E4\").Text
+             End Sub
+",
+        )
+        .unwrap();
+        let debug_output = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            host.take_debug_output()
+        };
+
+        assert_eq!(
+            debug_output,
+            vec![
+                "aAbB".to_string(),
+                // Letter by letter, and the case only settles a tie.
+                "ab,aB,Ab,AB".to_string(),
+                // Still plain text, so the tens come before the twos.
+                "a10,A10,a2,A2".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn merging_keeps_the_corner_and_loses_the_rest() {
         let mut workbook = workbook();
