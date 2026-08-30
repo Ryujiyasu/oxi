@@ -1075,16 +1075,33 @@ function drawnBox(drawn) {
   const corner = anchorAt(drawn.from);
   if (!corner) return null;
   const [left, top] = corner;
+  let right;
+  let bottom;
   if (drawn.to) {
-    const [right, bottom] = anchorAt(drawn.to);
-    return { left, top, right, bottom };
+    [right, bottom] = anchorAt(drawn.to);
+  } else if (drawn.extent) {
+    right = left + drawn.extent[0] / EMU;
+    bottom = top + drawn.extent[1] / EMU;
+  } else {
+    return null;
   }
-  if (!drawn.extent) return null;
-  return {
-    left, top,
-    right: left + drawn.extent[0] / EMU,
-    bottom: top + drawn.extent[1] / EMU,
-  };
+  // A drawing inside a group is kept as a FRACTION of its group rather than as
+  // a box of its own, because the group's size is the rectangle its two cell
+  // anchors give and only this side knows what the rows and columns come to.
+  // The size the group states is a cache Excel does not rewrite when the rows
+  // move underneath it.
+  const frame = drawn.grouped && drawn.frame;
+  if (frame) {
+    const wide = right - left;
+    const tall = bottom - top;
+    return {
+      left: left + frame.x * wide,
+      top: top + frame.y * tall,
+      right: left + (frame.x + frame.w) * wide,
+      bottom: top + (frame.y + frame.h) * tall,
+    };
+  }
+  return { left, top, right, bottom };
 }
 
 /** Every drawing whose anchor falls in this band. */

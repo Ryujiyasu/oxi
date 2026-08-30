@@ -1336,8 +1336,8 @@ fn part_beside(from: &str, target: &str) -> String {
 /// at the top-left, which is where its offsets are measured from anyway.
 fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Option<String>)> {
     use crate::ir::{
-        Anchor, Drawing, DrawingKind, PathStep, Shape, ShapeLine, ShapeParagraph, ShapePath,
-        ShapeRun, ShapeText,
+        Anchor, Drawing, DrawingKind, Frame, PathStep, Shape, ShapeLine, ShapeParagraph,
+        ShapePath, ShapeRun, ShapeText,
     };
 
     /// Which part of the shape a colour being read belongs to.
@@ -2013,18 +2013,32 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                         if let (Some((off, ext, ch_off, ch_ext)), Some(own), Some(size), true) =
                             (group, own_off, own_ext, name != "grpSp")
                         {
-                            let across = if ch_ext.0 != 0 {
-                                ext.0 as f64 / ch_ext.0 as f64
-                            } else {
-                                1.0
+                            // A child sits at a FRACTION of the group's box,
+                            // and the box is the one the group is DRAWN in —
+                            // the rectangle its two cell anchors give, not the
+                            // `<a:ext>` it states. The two are the same number
+                            // in a file Excel has just written and part company
+                            // as soon as the rows move underneath: Excel keeps
+                            // `ext` as a cache and does not rewrite it unless
+                            // it saves the shape again.
+                            //
+                            // Measured by `_xlsx_group_stale.py`, which builds
+                            // the group with Excel and then rewrites the row
+                            // heights in the sheet XML without touching the
+                            // drawing. Over six heights from 0.7x to 2x the
+                            // children move with the ROWS, to the pixel, where
+                            // `ext` would have held them still. `glossary_05`
+                            // is such a workbook and its grouped labels were
+                            // the only text in it out by more than a pixel.
+                            //
+                            // The renderer works the box out because only it
+                            // knows what the rows and columns come to; a group
+                            // hung on one cell has no second anchor to differ
+                            // from, so its stated extent stands and the two
+                            // readings agree again.
+                            let fraction = |part: i64, whole: i64| {
+                                if whole != 0 { part as f64 / whole as f64 } else { 0.0 }
                             };
-                            let down = if ch_ext.1 != 0 {
-                                ext.1 as f64 / ch_ext.1 as f64
-                            } else {
-                                1.0
-                            };
-                            let left = ((own.0 - ch_off.0) as f64 * across) as i64;
-                            let top = ((own.1 - ch_off.1) as f64 * down) as i64;
                             let mut kind = kind.take().unwrap_or(DrawingKind::Other);
                             if let DrawingKind::Shape(held) = &mut kind {
                                 *held = shape.clone();
@@ -2032,24 +2046,21 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Optio
                             let picture = matches!(kind, DrawingKind::Picture { .. });
                             found.push((
                                 Drawing {
-                                    from: Anchor {
-                                        col: from.col,
-                                        col_off: from.col_off + left,
-                                        row: from.row,
-                                        row_off: from.row_off + top,
-                                    },
-                                    to: None,
-                                    extent: Some((
-                                        (size.0 as f64 * across) as i64,
-                                        (size.1 as f64 * down) as i64,
-                                    )),
+                                    from,
+                                    to,
+                                    extent,
                                     kind,
-                                    frame: None,
+                                    frame: Some(Frame {
+                                        x: fraction(own.0 - ch_off.0, ch_ext.0),
+                                        y: fraction(own.1 - ch_off.1, ch_ext.1),
+                                        w: fraction(size.0, ch_ext.0),
+                                        h: fraction(size.1, ch_ext.1),
+                                    }),
                                     grouped: true,
                                 },
                                 if picture { embed.take() } else { None },
                             ));
-                            let _ = (off, ch_off);
+                            let _ = (off, ext);
                         }
                     }
                     "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor"

@@ -1177,6 +1177,14 @@ pub(crate) fn drawing_box(
     // the offset, so it runs past that cell for a reason Excel never sees.
     // Clamping those too cost `glossary_05` 0.0013 — the group's own text
     // re-wrapped a character.
+    if let Some((left, top, right, bottom)) = framed_box(drawn, layout, scale) {
+        return Some(windows::Win32::Foundation::RECT {
+            left: left.round() as i32,
+            top: top.round() as i32,
+            right: right.round() as i32,
+            bottom: bottom.round() as i32,
+        });
+    }
     anchored_box(
         &drawn.from,
         drawn.to.as_ref(),
@@ -1239,6 +1247,62 @@ fn along(edge: f32, next: Option<f32>, off: i64, scale: f32, hold: bool) -> f32 
         Some(next) if hold => edge + want.clamp(0.0, (next - edge).max(0.0)),
         _ => edge + want,
     }
+}
+
+/// A group child's own box, in exact pixels, from the box the group is DRAWN
+/// in.
+///
+/// The parser leaves a group's child as a fraction of its parent rather than a
+/// pair of anchors, because the parent's size is a question only this side can
+/// answer: it is the rectangle the group's two cell anchors give, and that
+/// depends on what the rows and columns come to. The `<a:ext>` the group
+/// states is a cache Excel keeps and does not rewrite when the rows move
+/// underneath — `_xlsx_group_stale.py` rewrites the row heights in the sheet
+/// XML without touching the drawing and reads Excel's own picture at six
+/// heights from 0.7x to 2x: the children move with the ROWS, to the pixel,
+/// where the stated size would have held them still.
+#[cfg(windows)]
+fn framed_box(
+    drawn: &oxicells_core::ir::Drawing,
+    layout: &Geometry,
+    scale: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    let frame = drawn.frame.as_ref().filter(|_| drawn.grouped)?;
+    // The group's own box, taken at its word the way `anchored_room` takes an
+    // offset: what is wanted is the rectangle, not a corner held inside a cell.
+    let across = |anchor: &oxicells_core::ir::Anchor| -> Option<f32> {
+        Some(column_edge(layout, anchor.col)? + anchor.col_off as f32 / EMU * scale)
+    };
+    let down = |anchor: &oxicells_core::ir::Anchor| -> Option<f32> {
+        Some(row_edge(layout, anchor.row)? + anchor.row_off as f32 / EMU * scale)
+    };
+    let left = across(&drawn.from)?;
+    let top = down(&drawn.from)?;
+    let (right, bottom) = match (drawn.to.as_ref(), drawn.extent) {
+        (Some(to), Some((cx, cy))) => (
+            across(to).unwrap_or(left + cx as f32 / EMU * scale),
+            down(to).unwrap_or(top + cy as f32 / EMU * scale),
+        ),
+        (Some(to), None) => (
+            across(to).unwrap_or(*layout.columns.last().unwrap_or(&0.0)),
+            down(to).unwrap_or(*layout.rows.last().unwrap_or(&0.0)),
+        ),
+        // A group hung on ONE cell has no second anchor to disagree with, so
+        // its stated size stands and the two readings agree again.
+        (None, Some((cx, cy))) => (
+            left + cx as f32 / EMU * scale,
+            top + cy as f32 / EMU * scale,
+        ),
+        (None, None) => return None,
+    };
+    let wide = right - left;
+    let tall = bottom - top;
+    Some((
+        left + frame.x as f32 * wide,
+        top + frame.y as f32 * tall,
+        left + (frame.x + frame.w) as f32 * wide,
+        top + (frame.y + frame.h) as f32 * tall,
+    ))
 }
 
 /// The box between two anchors, or between one and a stated size.
@@ -1310,6 +1374,9 @@ pub(crate) fn drawing_room(
     layout: &Geometry,
     scale: f32,
 ) -> Option<f32> {
+    if let Some((left, _, right, _)) = framed_box(drawn, layout, scale) {
+        return Some(right - left);
+    }
     anchored_room(&drawn.from, drawn.to.as_ref(), drawn.extent, layout, scale)
 }
 
@@ -1363,6 +1430,9 @@ pub(crate) fn drawing_edges(
         let left = column_edge(layout, anchor.col)?;
         Some(left + anchor.col_off as f32 / EMU * scale)
     };
+    if let Some((left, _, right, _)) = framed_box(drawn, layout, scale) {
+        return Some((left, right));
+    }
     let left = at(&drawn.from)?;
     let right = match (drawn.to.as_ref(), drawn.extent) {
         (Some(to), _) => at(to).unwrap_or(*layout.columns.last().unwrap_or(&0.0)),
@@ -1394,6 +1464,9 @@ pub(crate) fn drawing_down(
         let top = row_edge(layout, anchor.row)?;
         Some(top + anchor.row_off as f32 / EMU * scale)
     };
+    if let Some((_, top, _, bottom)) = framed_box(drawn, layout, scale) {
+        return Some((top, bottom));
+    }
     let top = at(&drawn.from)?;
     // The foot matters as much as the head: a block anchored `ctr` or `b`
     // divides what is left of the box between the two, so rounding one edge
