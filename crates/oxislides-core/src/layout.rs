@@ -807,3 +807,159 @@ mod coverage_tests {
         assert!(m.advance_em("Fira Sans", true, false, 'a').is_some());
     }
 }
+
+/// Where a paragraph's lines start, and how wide each may run.
+///
+/// All offsets are relative to P0, the inner left edge of the text area.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IndentGeometry {
+    /// Left offset of the FIRST line.
+    pub first_x: f32,
+    /// Left offset of every line after the first.
+    pub rest_x: f32,
+    /// Where a bullet marker is set, which a hanging indent puts left of the
+    /// text it belongs to.
+    pub marker_x: f32,
+    /// The width the first line may use.
+    pub first_width: f32,
+    /// The width every later line may use.
+    pub rest_width: f32,
+}
+
+/// Resolve `marL` and `indent` into line offsets and the widths that go with
+/// them (Spec #8, measured).
+///
+///     para_left = P0 + marL
+///     indent > 0   text_1st = para_left + indent,  marker = para_left
+///     indent <= 0  text_1st = max(para_left, P0 - indent),
+///                  marker   = text_1st + indent
+///     continuation lines = para_left
+///
+/// ★The WIDTH matters as much as the offset. PowerPoint wraps every line
+/// against the same RIGHT EDGE, so a line's usable width is the inner width
+/// less ITS OWN left offset -- and a hanging indent makes line 0's offset
+/// differ from the rest. Probe `wrapwidth` (2026-08-19, 7 arms): with
+/// marL 18 / indent -18 and no bullet, line 0 starts at the inner left and
+/// runs 232.07pt while the continuations start 18pt in and run at most 221.26,
+/// both stopping at the same 316.8. Wrapping everything at the full width and
+/// shifting afterwards lets a continuation run past the inset.
+///
+/// `apply_widths` off restores the older behaviour of wrapping every line at
+/// the full inner width.
+pub fn indent_geometry(
+    inner_width: f32,
+    mar_l: f32,
+    indent: f32,
+    apply_widths: bool,
+) -> IndentGeometry {
+    let (first_x, marker_x) = if indent > 0.0 {
+        (mar_l + indent, mar_l)
+    } else {
+        let t = mar_l.max(-indent);
+        (t, t + indent)
+    };
+    IndentGeometry {
+        first_x,
+        rest_x: mar_l,
+        marker_x,
+        first_width: (inner_width - if apply_widths { first_x } else { 0.0 }).max(1.0),
+        rest_width: (inner_width - if apply_widths { mar_l } else { 0.0 }).max(1.0),
+    }
+}
+
+/// The baseline-to-baseline step between two lines of DIFFERENT size.
+///
+/// A paragraph whose lines are all one size steps by `fs * 1.2 * n` exactly,
+/// and must keep doing so down to the float association. When the sizes differ
+/// the step is not that: `cursor` between lines is the BOTTOM of the previous
+/// line box, and the next baseline sits its own ascent below it.
+///
+/// Probe `mixedpitch` (4 faces x 8 size pairs, 2026-08-18) fits
+///
+///     step = d * prev_size + a * next_size,   a + d = 1.2004
+///
+/// with d = 0.2284 (Arial) / 0.2322 (Georgia) / 0.2636 (Calibri) / 0.2088
+/// (Verdana) -- each within 0.0015 of that face's own
+/// `1.2 * descent / (ascent + descent)`, i.e. the 1.2 line height split by the
+/// FONT's ascent:descent ratio. d28's title is 55pt then 66pt: PowerPoint steps
+/// 159px at 150dpi, a flat rule gives 137px, and this gives 159.7px.
+///
+/// Expressed with the ascent this module already computes, the step from a line
+/// of `prev` to a line of `next` is
+///
+///     (1.2 * prev * n - ascent(prev)) + ascent(next)
+///
+/// which is the previous box's descent plus the next line's ascent.
+pub fn mixed_pitch_step(
+    metrics: &dyn FaceMetrics,
+    family: &str,
+    prev: f32,
+    next: f32,
+    n: f32,
+    joined_rule: bool,
+) -> f32 {
+    let ascent = |size: f32| first_baseline_off(metrics, family, size, n, joined_rule);
+    (1.2 * prev * n - ascent(prev)) + ascent(next)
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    struct Arial;
+    impl FaceMetrics for Arial {
+        fn advance_em(&self, _: &str, _: bool, _: bool, _: char) -> Option<f32> {
+            None
+        }
+        fn has_all_glyphs(&self, _: &str, _: bool, _: bool, _: &str) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_positive_indent_pushes_the_first_line_in_and_leaves_the_marker() {
+        let g = indent_geometry(200.0, 18.0, 18.0, true);
+        assert_eq!(g.first_x, 36.0);
+        assert_eq!(g.rest_x, 18.0);
+        assert_eq!(g.marker_x, 18.0);
+    }
+
+    #[test]
+    fn a_hanging_indent_pulls_the_marker_left_of_the_text() {
+        let g = indent_geometry(200.0, 18.0, -18.0, true);
+        assert_eq!(g.first_x, 18.0);
+        assert_eq!(g.marker_x, 0.0);
+        assert_eq!(g.rest_x, 18.0);
+    }
+
+    #[test]
+    fn every_line_stops_at_the_same_right_edge() {
+        // marL 18 / indent -18: line 0 starts at 18 and the rest at 18 too,
+        // so both stop at 200 -- the widths differ only when the offsets do.
+        let g = indent_geometry(200.0, 18.0, 36.0, true);
+        assert_eq!(g.first_x + g.first_width, 200.0);
+        assert_eq!(g.rest_x + g.rest_width, 200.0);
+    }
+
+    #[test]
+    fn widths_off_gives_every_line_the_whole_inner_width() {
+        let g = indent_geometry(200.0, 18.0, 36.0, false);
+        assert_eq!(g.first_width, 200.0);
+        assert_eq!(g.rest_width, 200.0);
+    }
+
+    #[test]
+    fn a_same_size_step_is_the_flat_advance() {
+        let step = mixed_pitch_step(&Arial, "Arial", 40.0, 40.0, 1.0, true);
+        assert!((step - 40.0 * 1.2).abs() < 1e-4, "{step}");
+    }
+
+    #[test]
+    fn a_growing_step_is_the_old_descent_plus_the_new_ascent() {
+        // d28's 55 -> 66pt title: a flat rule would step 66, PowerPoint steps
+        // about 76.4pt (159px at 150dpi).
+        let step = mixed_pitch_step(&Arial, "Arial", 55.0, 66.0, 1.0, true);
+        assert!(step > 55.0 * 1.2, "{step} should exceed the previous flat step");
+        assert!((step - 76.4).abs() < 1.5, "{step}");
+    }
+}

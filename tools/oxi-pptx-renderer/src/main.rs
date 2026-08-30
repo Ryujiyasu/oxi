@@ -14372,10 +14372,6 @@ fn hyphbrk_on() -> bool {
 /// `https://www.example.com/some/rather/long/path/index.html` broke inside
 /// `long` rather than after `rather/`.
 ///
-/// 76 paragraphs across 31 dev decks carry a mid-word hyphen.
-fn break_pieces(text: &str) -> Vec<&str> {
-    oxislides_core::layout::break_pieces(text, hyphbrk_on())
-}
 
 /// Wrap `text` at word boundaries to fit `effective_width_pt`.
 #[cfg(windows)]
@@ -15294,14 +15290,15 @@ fn layout_paragraph_baselines(
     //   indent <= 0: text_1st = max(para_left, P0 - indent),
     //       marker = text_1st + indent
     //   continuation lines = para_left;  render_x = max(text_1st, marker+bullet_w)
-    let para_left_rel = mar_l;
-    let (line0_x_off, marker_rel) = if indent > 0.0 {
-        (mar_l + indent, mar_l)
-    } else {
-        let t = mar_l.max(-indent);
-        (t, t + indent)
-    };
-    let mut line0_x_off = line0_x_off;
+    let geom = oxislides_core::layout::indent_geometry(
+        effective_width,
+        mar_l,
+        indent,
+        wrapwidth_on(),
+    );
+    let para_left_rel = geom.rest_x;
+    let marker_rel = geom.marker_x;
+    let mut line0_x_off = geom.first_x;
     let mut marker: Option<MarkerInfo> = None;
     match &bullet {
         SlideBullet::Char { ch, font } => {
@@ -15368,8 +15365,12 @@ fn layout_paragraph_baselines(
     // `wrap="none"` means the text does not break at all: PowerPoint draws it
     // past the box edge. Every arm of the COM-built `embedsplit` probes is
     // such a box, auto-sized to 14.5pt around 20pt of text.
+    // `line0_x_off` may have grown since the geometry was resolved -- a bullet
+    // wider than the indent pushes the first line further in -- so the first
+    // line's width is taken from the offset as it stands, not from the
+    // resolved one. The continuation width never moves.
     let first_w = (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0);
-    let rest_w = (effective_width - if wrapwidth_on() { para_left_rel } else { 0.0 }).max(1.0);
+    let rest_w = geom.rest_width;
     // `<a:br/>` arrives as a newline in the run stream and ends the line where
     // it stands. Each segment wraps on its own, and the newline is kept on the
     // END of the line it closed so the caller's character accounting -- which
@@ -15443,7 +15444,9 @@ fn layout_paragraph_baselines(
         for (i, size) in line_sizes.iter().enumerate() {
             if i > 0 {
                 let prev = line_sizes[i - 1];
-                at += (1.2 * prev * n - ascent(prev)) + ascent(*size);
+                at += oxislides_core::layout::mixed_pitch_step(
+                &GdiFaceMetrics, &family, prev, *size, n, firstline_on(),
+            );
             }
             baselines.push(at);
         }
