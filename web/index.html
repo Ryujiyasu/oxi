@@ -4360,11 +4360,19 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
                     const hl = run.highlight || (lvl && lvl.highlight);
                     if (hl) span.style.backgroundColor = '#' + hl;
 
-                    if (editable) {
+                    // ★The edit address is `sp_index`, the count of <p:sp> and
+                    // <p:pic> the SAVER walks -- not the shape's place in
+                    // `slide.shapes`. The IR flattens groups and carries shapes
+                    // the saver never counts (connectors, tables, charts), so
+                    // the two numberings diverge: d15 slide 1 is 33 IR shapes
+                    // against the saver's 29, and every edit past the first
+                    // group went to the wrong shape and wrote nothing.
+                    // Found by `tools/metrics/pptx_editor_test.py` (2026-08-30).
+                    if (editable && shape.sp_index != null) {
                         span.className = 'edit-slide-run';
                         span.contentEditable = 'true';
                         span.dataset.slide = slideIdx;
-                        span.dataset.shape = shapeIdx;
+                        span.dataset.shape = shape.sp_index;
                         span.dataset.para = paraIdx;
                         span.dataset.run = runIdx;
                         span.dataset.original = run.text;

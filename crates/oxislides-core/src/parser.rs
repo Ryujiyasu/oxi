@@ -985,6 +985,9 @@ fn parse_slide(
 
     let mut reader = Reader::from_str(xml);
     let mut shapes = Vec::new();
+    // The editor's own numbering: `<p:sp>` and `<p:pic>` in document order.
+    // Kept here so a shape carries the index an edit must be addressed by.
+    let mut sp_count: usize = 0;
     let mut _depth = 0u32;
     let mut in_sp_tree = false;
 
@@ -2716,6 +2719,14 @@ fn parse_slide(
                         grp_stack.pop();
                     }
                     "sp" | "pic" | "cxnSp" if in_shape => {
+                        // A connector is a shape here but not one the editor
+                        // counts, so it takes no index and does not advance the
+                        // count.
+                        let editable = name != "cxnSp";
+                        let this_sp_index = editable.then_some(sp_count);
+                        if editable {
+                            sp_count += 1;
+                        }
                         let content = if shape_is_image {
                             if let Some(ref r_id) = shape_image_r_id {
                                 if let Some(rel) = rels.get(r_id) {
@@ -2837,6 +2848,7 @@ fn parse_slide(
                         };
 
                         shapes.push(Shape {
+                            sp_index: this_sp_index,
                             x: use_x,
                             y: use_y,
                             width: use_w,
@@ -3018,6 +3030,9 @@ fn parse_slide(
                             }
                         };
                         shapes.push(Shape {
+                            // A graphicFrame is not one of the elements the
+                            // editor counts, so it has no index in its numbering.
+                            sp_index: None,
                             wrap_text: true,
                             text_warp: None,
                             x: shape_x,
@@ -3826,6 +3841,10 @@ fn parse_inherited_shapes(
                                         (ln_color.clone(), ln_width)
                                     };
                                     out.push(Shape {
+                                        // This builder has no view of the
+                                        // document-order count, so it declines
+                                        // to name one rather than guess.
+                                        sp_index: None,
                                         // Group members are walked without a
                                         // bodyPr, and no corpus group asks for
                                         // wrap="none".

@@ -407,6 +407,23 @@ pub struct Shape {
     /// PowerPoint ignores -- a different element with a similar name.
     #[serde(default)]
     pub ph_levels: Vec<MasterStyleLevel>,
+    /// This shape's position in the numbering `PptxEditor` addresses it by:
+    /// the count of `<p:sp>` and `<p:pic>` elements before it, in document
+    /// order and at any depth.
+    ///
+    /// ★It is NOT the shape's index in `Slide::shapes`, and assuming so writes
+    /// an edit to the wrong shape. The IR FLATTENS groups, so a slide whose
+    /// first element is a `grpSp` of four shapes has five IR shapes where the
+    /// editor has counted four; and a `cxnSp` or a `graphicFrame` adds an IR
+    /// shape the editor does not count at all. d15 slide 1 is 33 IR shapes
+    /// against the editor's 29, so an edit aimed at IR shape 4 landed on a
+    /// different `<p:sp>` and the save wrote nothing (found by
+    /// `pptx_editor_test.py`, 2026-08-30).
+    ///
+    /// None for a shape the editor cannot address -- a table, a chart, a
+    /// connector -- so a caller can leave it alone rather than guess.
+    #[serde(default)]
+    pub sp_index: Option<usize>,
     /// `a:gradFill` on the shape itself. The dev corpus has 302 of these on
     /// 35 slides in 4 decks, plus 60 more on layout shapes -- d24's title
     /// slide is built entirely out of them, which is why it renders as a flat

@@ -273,7 +273,13 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Backspace') chars.splice(within, 1);
   else chars.splice(within, 0, e.key);
   para.runs[ri].text = chars.join('');
-  state.edits.set(`${state.slide}/${entry.shapeIndex}/${line.para_index}/${ri}`,
+  // ★The edit is addressed by `sp_index`, NOT by the shape's place in
+  // `slide.shapes`. The IR flattens groups and carries shapes the saver never
+  // counts, so the two numberings differ -- d15 slide 1 has 33 IR shapes
+  // against the saver's 29, and an edit sent under the IR index landed on a
+  // different shape and wrote nothing.
+  if (entry.shape.sp_index == null) { say('this shape cannot be edited yet'); return; }
+  state.edits.set(`${state.slide}/${entry.shape.sp_index}/${line.para_index}/${ri}`,
                   para.runs[ri].text);
   state.sel.charIndex += (e.key === 'Backspace' ? 0 : 1);
   layoutSlide();
