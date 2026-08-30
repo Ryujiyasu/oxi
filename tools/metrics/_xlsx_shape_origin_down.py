@@ -163,9 +163,28 @@ def first_ink(dark: np.ndarray, y0: int, y1: int, x0: int, x1: int) -> int | Non
 
 
 def main() -> int:
+    global FACE, POINTS, FACE2, POINTS2, TOPS
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true")
+    # The sweep was derived at a quarter of a pixel on two faces. A boundary
+    # that falls between two of those steps cannot be seen at that resolution,
+    # and `glossary_05` sets its shapes in Yu Gothic UI at 12pt with tops whose
+    # fractions are .79 and .91 — between the steps and off the faces. These
+    # let the same rig ask a finer question without a second copy of it.
+    parser.add_argument("--face", help="the face both text arms are set in")
+    parser.add_argument("--points", type=float, help="and the size")
+    parser.add_argument("--steps", type=int,
+                        help="how many equal steps to divide ONE pixel into")
+    parser.add_argument("--from-pt", type=float, default=30.0,
+                        help="the first top, in points")
     args = parser.parse_args()
+    if args.face:
+        FACE = FACE2 = args.face
+    if args.points:
+        POINTS = POINTS2 = args.points
+    if args.steps:
+        # A pixel is 0.75pt.
+        TOPS = [args.from_pt + at * 0.75 / args.steps for at in range(args.steps + 1)]
     made = SCRATCH / "origin.xlsx"
     if not args.reuse and not build(made):
         print("  Excel would not hand over a picture")
