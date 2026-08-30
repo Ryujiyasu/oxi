@@ -35,6 +35,70 @@ pub trait FaceMetrics {
     /// `text`. A run whose face is missing one glyph is measured elsewhere,
     /// because a fallback glyph does not advance by the base face's metrics.
     fn has_all_glyphs(&self, family: &str, bold: bool, italic: bool, text: &str) -> bool;
+
+    /// Where the face puts its baseline inside one em, read from its own
+    /// tables. None means "ask the offline table instead" -- which is what a
+    /// source with no font system says, and what the renderer says for a face
+    /// GDI cannot hand tables back for.
+    fn baseline_offset_em(&self, _family: &str) -> Option<f32> {
+        None
+    }
+}
+
+/// The measured ascent split of the faces that were measured, in EM.
+///
+/// Taken before the first-baseline rule was derived and kept as the offline
+/// answer for a face whose own tables cannot be read. Each is within 0.0005 of
+/// what the rule computes for it.
+pub fn table_baseline_offset_em(family: &str) -> f32 {
+    match family.to_ascii_lowercase().as_str() {
+        "arial" => 0.97274,
+        "times new roman" => 0.96587,
+        "calibri" => 0.93648,
+        "segoe ui" => 0.97399,
+        "georgia" => 0.96899,
+        "verdana" => 0.99275,
+        _ => 0.9685,
+    }
+}
+
+/// How far the first baseline sits below the top of a text box.
+///
+/// `n` is the line-spacing multiple. The rule, derived over 31 arms: the
+/// DESCENT the box reserves under the last line is capped at a quarter of the
+/// box at single spacing and floored at a quarter above it, and the first
+/// baseline is what is left. A face already deeper than that quarter gives up
+/// a quarter of whatever the box loses.
+///
+/// `joined_rule` off restores the older split, whose parenthesisation is
+/// load-bearing: `0.75 * (fs * 1.2 * n)` associates differently from
+/// `0.75 * fs * 1.2 * n`, and the 1-ULP difference flipped a page of d37.
+pub fn first_baseline_off(
+    metrics: &dyn FaceMetrics,
+    family: &str,
+    fs: f32,
+    n: f32,
+    joined_rule: bool,
+) -> f32 {
+    let offset_em = metrics
+        .baseline_offset_em(family)
+        .unwrap_or_else(|| table_baseline_offset_em(family));
+    if !joined_rule {
+        return if (n - 1.0).abs() > 1e-4 {
+            0.75 * (fs * 1.2 * n)
+        } else {
+            offset_em * fs
+        };
+    }
+    let pitch = fs * 1.2;
+    let natural_descent = pitch - offset_em * fs;
+    let quarter = 0.25 * pitch;
+    let descent = if n <= 1.0 {
+        (natural_descent + quarter * (n - 1.0)).max(natural_descent.min(quarter * n))
+    } else {
+        natural_descent.max(quarter * n)
+    };
+    pitch * n - descent
 }
 
 /// The PowerPoint-97 master unit: 1/8 pt, 576 to the inch.
@@ -632,5 +696,68 @@ mod paragraph_tests {
         let got = break_paragraph(&TableMetrics, text, 12.0, "Arial", false, false, 400.0, &runs)
             .unwrap();
         assert_eq!(got, vec![text]);
+    }
+}
+
+#[cfg(test)]
+mod baseline_tests {
+    use super::*;
+
+    struct NoTables;
+    impl FaceMetrics for NoTables {
+        fn advance_em(&self, _: &str, _: bool, _: bool, _: char) -> Option<f32> {
+            None
+        }
+        fn has_all_glyphs(&self, _: &str, _: bool, _: bool, _: &str) -> bool {
+            false
+        }
+    }
+
+    struct Says(f32);
+    impl FaceMetrics for Says {
+        fn advance_em(&self, _: &str, _: bool, _: bool, _: char) -> Option<f32> {
+            None
+        }
+        fn has_all_glyphs(&self, _: &str, _: bool, _: bool, _: &str) -> bool {
+            false
+        }
+        fn baseline_offset_em(&self, _: &str) -> Option<f32> {
+            Some(self.0)
+        }
+    }
+
+    #[test]
+    fn a_face_that_can_read_its_own_tables_outranks_the_offline_one() {
+        let a = first_baseline_off(&NoTables, "Arial", 40.0, 1.0, true);
+        let b = first_baseline_off(&Says(0.90), "Arial", 40.0, 1.0, true);
+        assert!((a - b).abs() > 0.1, "{a} vs {b}");
+    }
+
+    #[test]
+    fn an_unmeasured_family_falls_back_to_the_generic_split() {
+        assert_eq!(table_baseline_offset_em("Bebas Neue"), 0.9685);
+    }
+
+    #[test]
+    fn the_quarter_caps_the_descent_at_single_spacing() {
+        // Arial at 40pt: pitch 48, natural descent 48 - 38.9096 = 9.0904,
+        // quarter 12 -- the natural descent is shallower, so it stands.
+        let got = first_baseline_off(&NoTables, "Arial", 40.0, 1.0, true);
+        assert!((got - 38.9096).abs() < 0.01, "{got}");
+    }
+
+    #[test]
+    fn above_single_spacing_the_quarter_becomes_a_floor() {
+        // 120% of 40pt: pitch 48, n 1.2 -> quarter*n = 14.4 > natural 9.09.
+        let got = first_baseline_off(&NoTables, "Arial", 40.0, 1.2, true);
+        assert!((got - (48.0 * 1.2 - 14.4)).abs() < 0.01, "{got}");
+    }
+
+    #[test]
+    fn the_old_rule_keeps_its_parenthesisation() {
+        let fs = 40.0f32;
+        let n = 1.2f32;
+        let got = first_baseline_off(&NoTables, "Arial", fs, n, false);
+        assert_eq!(got, 0.75 * (fs * 1.2 * n));
     }
 }

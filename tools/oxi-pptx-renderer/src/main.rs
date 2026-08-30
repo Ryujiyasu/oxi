@@ -13442,6 +13442,10 @@ impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
     fn has_all_glyphs(&self, family: &str, bold: bool, italic: bool, text: &str) -> bool {
         font_has_all_glyphs(family, bold, italic, text)
     }
+
+    fn baseline_offset_em(&self, family: &str) -> Option<f32> {
+        rtbaseline_on().then(|| runtime_baseline_offset_em(family)).flatten()
+    }
 }
 
 fn master_units(
@@ -14461,18 +14465,7 @@ fn font_baseline_offset_em(family: &str) -> f32 {
             return a;
         }
     }
-    // Measured before the rule was derived; kept as the offline fallback for a
-    // face GDI cannot hand back tables for. Each is within 0.0005 of what the
-    // rule computes for it.
-    match family.to_ascii_lowercase().as_str() {
-        "arial" => 0.97274,
-        "times new roman" => 0.96587,
-        "calibri" => 0.93648,
-        "segoe ui" => 0.97399,
-        "georgia" => 0.96899,
-        "verdana" => 0.99275,
-        _ => 0.9685,
-    }
+    oxislides_core::layout::table_baseline_offset_em(family)
 }
 
 /// Read the ascent split straight out of the resolved face's OS/2 table.
@@ -14669,27 +14662,7 @@ fn lvlitalic_on() -> bool {
 /// installed face that reproduces it, and it is in the probe for that reason.
 #[cfg(windows)]
 fn first_baseline_off(family: &str, fs: f32, n: f32) -> f32 {
-    if !firstline_on() {
-        // ★The parenthesis is load-bearing: the pre-change code computed
-        // `0.75 * adv` with `adv = fs * 1.2 * n`, and `0.75 * fs * 1.2 * n`
-        // associates the other way. The 1-ULP difference flipped one page of
-        // d37 in the opt-out arm -- a byte-identity proof lost to float
-        // association, not to a leak.
-        return if (n - 1.0).abs() > 1e-4 {
-            0.75 * (fs * 1.2 * n)
-        } else {
-            font_baseline_offset_em(family) * fs
-        };
-    }
-    let pitch = fs * 1.2;
-    let natural_descent = pitch - font_baseline_offset_em(family) * fs;
-    let quarter = 0.25 * pitch;
-    let descent = if n <= 1.0 {
-        (natural_descent + quarter * (n - 1.0)).max(natural_descent.min(quarter * n))
-    } else {
-        natural_descent.max(quarter * n)
-    };
-    pitch * n - descent
+    oxislides_core::layout::first_baseline_off(&GdiFaceMetrics, family, fs, n, firstline_on())
 }
 
 /// A level's `a:defRPr/@b` is honoured unless this is set.
