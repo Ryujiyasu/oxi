@@ -12105,18 +12105,29 @@ thread_local! {
 /// own name.
 #[cfg(windows)]
 fn effective_family(dc: windows::Win32::Graphics::Gdi::HDC, requested: &str) -> String {
+    let _ = dc;
+    oxislides_core::layout::effective_family(&GdiFaceMetrics, requested, fontsub_on())
+}
+
+/// Whether GDI hands back the very name it was asked for.
+///
+/// The font mapper never fails: asked for a family nothing has, it returns the
+/// closest thing it does have. So the question "can this machine serve this
+/// name" is answered by asking for it and reading back what arrived.
+#[cfg(windows)]
+fn gdi_serves_family(requested: &str) -> bool {
     use windows::Win32::Graphics::Gdi::*;
 
-    if !fontsub_on() || requested.is_empty() {
-        return requested.to_string();
+    if requested.is_empty() {
+        return true;
     }
     FAMILY_CACHE.with(|cache| {
         if let Some(hit) = cache.borrow().get(requested) {
-            return hit.clone();
+            return hit.eq_ignore_ascii_case(requested);
         }
         let probe = probe_dc();
         let wide: Vec<u16> = requested.encode_utf16().chain(std::iter::once(0)).collect();
-        let resolved = unsafe {
+        let got = unsafe {
             let font = CreateFontW(
                 -64,
                 0,
@@ -12141,23 +12152,19 @@ fn effective_family(dc: windows::Win32::Graphics::Gdi::HDC, requested: &str) -> 
                 let n = GetTextFaceW(probe, Some(&mut name));
                 SelectObject(probe, old);
                 let _ = DeleteObject(font);
-                let got = if n > 0 {
+                if n > 0 {
                     String::from_utf16_lossy(&name[..(n as usize).saturating_sub(1)])
                 } else {
                     String::new()
-                };
-                if got.eq_ignore_ascii_case(requested) {
-                    requested.to_string()
-                } else {
-                    "Calibri".to_string()
                 }
             }
         };
-        let _ = dc;
-        cache
-            .borrow_mut()
-            .insert(requested.to_string(), resolved.clone());
-        resolved
+        let serves = got.eq_ignore_ascii_case(requested);
+        cache.borrow_mut().insert(
+            requested.to_string(),
+            if serves { requested.to_string() } else { "Calibri".to_string() },
+        );
+        serves
     })
 }
 
@@ -13434,6 +13441,10 @@ impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
 
     fn baseline_offset_em(&self, family: &str) -> Option<f32> {
         rtbaseline_on().then(|| runtime_baseline_offset_em(family)).flatten()
+    }
+
+    fn resolves(&self, family: &str) -> bool {
+        gdi_serves_family(family)
     }
 }
 

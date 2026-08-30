@@ -43,6 +43,16 @@ pub trait FaceMetrics {
     fn baseline_offset_em(&self, _family: &str) -> Option<f32> {
         None
     }
+
+    /// Whether this source can serve `family` under its own name.
+    ///
+    /// The default is `true` -- "I cannot tell" must mean "keep the name the
+    /// deck asked for". A source that substitutes on a guess would rename text
+    /// PowerPoint draws in its own face, which is worse than leaving a name
+    /// alone that nothing can serve.
+    fn resolves(&self, _family: &str) -> bool {
+        true
+    }
 }
 
 /// The measured ascent split of the faces that were measured, in EM.
@@ -606,6 +616,10 @@ impl FaceMetrics for TableMetrics {
     fn has_all_glyphs(&self, family: &str, bold: bool, italic: bool, text: &str) -> bool {
         text.chars()
             .all(|c| self.advance_em(family, bold, italic, c).is_some())
+    }
+
+    fn resolves(&self, family: &str) -> bool {
+        Self::covers(family)
     }
 }
 
@@ -1218,5 +1232,82 @@ mod level_tests {
         let p = super::size_tests::para_for_spacing();
         assert_eq!(line_spacing_multiple(&p, &lvl(None, Some(0.9)), 60.0, None), 0.9);
         assert_eq!(line_spacing_multiple(&p, &lvl(None, None), 60.0, None), 1.0);
+    }
+}
+
+/// The family a run is actually set in.
+///
+/// PowerPoint falls back to **Calibri** for a typeface nothing can serve --
+/// measured over Mali / Jua / a name invented for the probe, and it is not the
+/// theme font (d19 asks for Mali over a theme that says something else and
+/// still gets Calibri).
+///
+/// `substitute` off keeps every requested name, which is the arm that shows
+/// what the substitution is worth.
+pub fn effective_family(metrics: &dyn FaceMetrics, requested: &str, substitute: bool) -> String {
+    if !substitute || requested.is_empty() {
+        return requested.to_string();
+    }
+    if metrics.resolves(requested) {
+        requested.to_string()
+    } else {
+        "Calibri".to_string()
+    }
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::*;
+
+    struct Has(&'static [&'static str]);
+    impl FaceMetrics for Has {
+        fn advance_em(&self, _: &str, _: bool, _: bool, _: char) -> Option<f32> {
+            None
+        }
+        fn has_all_glyphs(&self, _: &str, _: bool, _: bool, _: &str) -> bool {
+            false
+        }
+        fn resolves(&self, family: &str) -> bool {
+            self.0.iter().any(|f| f.eq_ignore_ascii_case(family))
+        }
+    }
+
+    struct CannotTell;
+    impl FaceMetrics for CannotTell {
+        fn advance_em(&self, _: &str, _: bool, _: bool, _: char) -> Option<f32> {
+            None
+        }
+        fn has_all_glyphs(&self, _: &str, _: bool, _: bool, _: &str) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_family_the_source_can_serve_keeps_its_name() {
+        let m = Has(&["Arial"]);
+        assert_eq!(effective_family(&m, "Arial", true), "Arial");
+    }
+
+    #[test]
+    fn a_family_nothing_serves_becomes_calibri() {
+        let m = Has(&["Arial"]);
+        assert_eq!(effective_family(&m, "Mali", true), "Calibri");
+    }
+
+    #[test]
+    fn a_source_that_cannot_tell_leaves_the_name_alone() {
+        assert_eq!(effective_family(&CannotTell, "Mali", true), "Mali");
+    }
+
+    #[test]
+    fn substitution_off_keeps_every_name() {
+        let m = Has(&["Arial"]);
+        assert_eq!(effective_family(&m, "Mali", false), "Mali");
+    }
+
+    #[test]
+    fn an_empty_request_stays_empty() {
+        let m = Has(&[]);
+        assert_eq!(effective_family(&m, "", true), "");
     }
 }
