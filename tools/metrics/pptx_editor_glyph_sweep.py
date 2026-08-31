@@ -127,7 +127,16 @@ def deck_url(port: int, pptx: Path) -> str:
 
 
 def pdf_pages(pdf: Path) -> dict[int, list]:
-    """Every character of every page with its x and baseline, in points."""
+    """Every character of every page with its x, baseline and own width.
+
+    The width is carried because a LIGATURE is one glyph that the text layer
+    reports as two characters: PowerPoint drew `fl` as a single glyph, and the
+    extraction gives 'f' the pair's whole advance and 'l' a width of ZERO, at
+    the position the following letter starts. Reading that as a character
+    position says the engine is 2.686pt out when it is not -- d05 slide 4 draws
+    the same sentence three times, two of them without the ligature and
+    matching to 0.224pt.
+    """
     out: dict[int, list] = {}
     doc = pymupdf.open(pdf)
     for pno in range(len(doc)):
@@ -137,6 +146,7 @@ def pdf_pages(pdf: Path) -> dict[int, list]:
                 for span in line.get("spans", []):
                     for ch in span.get("chars", []):
                         chars.append({"c": ch["c"], "x": ch["bbox"][0],
+                                      "w": ch["bbox"][2] - ch["bbox"][0],
                                       "y": span["origin"][1],
                                       "size": span["size"]})
         out[pno + 1] = chars
@@ -386,8 +396,15 @@ def main() -> None:
                         "family": line["family"], "text": line["text"][:38]})
                     continue
                 matched += 1
+                # A zero-width character is the tail of a ligature: one glyph
+                # was drawn for two characters, and the second has no position
+                # of its own to be right or wrong about. The characters either
+                # side still answer the question.
+                real = [k for k in range(len(run)) if run[k].get("w", 1.0) > 0.01]
+                if not real:
+                    continue
                 d = max(abs(line["offs"][k] - (run[k]["x"] - run[0]["x"]))
-                        for k in range(len(run)))
+                        for k in real)
                 worst = max(worst, d)
                 if d > 1.0:
                     offenders.append({
