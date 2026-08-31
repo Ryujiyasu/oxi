@@ -3235,7 +3235,10 @@ function markSaved() {
 }
 
 async function save() {
-  if (!source || changes.size === 0) return;
+  // A style, a merge, a column's width: each is a change with no cell value
+  // behind it. The button already knows to light up for those, so the save
+  // has to agree, or it goes dark again having written nothing.
+  if (!source || (changes.size === 0 && !beyondValues)) return;
   const was = saveButton.textContent;
   saveButton.disabled = true;
   saveButton.textContent = 'Saving…';

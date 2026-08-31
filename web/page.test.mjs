@@ -157,7 +157,10 @@ globalThis.performance = { now: () => 0 };
 globalThis.Blob = class { constructor(parts) { this.parts = parts; } };
 // The real URL class stays: the wasm glue builds one to find its own binary
 // beside itself. Only the two blob helpers are stood in for.
-URL.createObjectURL = () => 'blob:x';
+// What was handed over is kept: a save writes by making a blob and clicking a
+// link at it, and the blob is the only sign out here that anything was written.
+const written = [];
+URL.createObjectURL = (blob) => { written.push(blob); return 'blob:x'; };
 URL.revokeObjectURL = () => {};
 
 // The page fetches two things — its own wasm and the sample workbook — and the
@@ -339,6 +342,26 @@ if (menu && menu.listeners.has('change')) {
   is('and the menu goes back to its own name', menu.value, '');
 } else {
   is('the page has a merge menu listening for a choice', false, true);
+}
+
+// ── Saving a change that no cell value carries ──────────────────────────────
+//
+// Bold is not a value. Neither is a merge, a column's width or a frozen pane,
+// and the button knows it — it lights up for those. The save did not: it left
+// on the first line if no cell value had moved, so the button went dark having
+// written nothing at all, which reads exactly like a save that worked.
+
+const bold = nodes.get('bold');
+const saveButton = nodes.get('save');
+if (bold && saveButton && bold.listeners.has('click')) {
+  written.length = 0;
+  bold.fire('click', {});
+  is('bold alone lights the save button', saveButton.disabled, false);
+  saveButton.fire('click', {});
+  await new Promise((go) => setTimeout(go, 0));
+  is('and saving then writes a file', written.length, 1);
+} else {
+  is('the page has a bold button and a save button', false, true);
 }
 
 console.log(failures === 0 ? '\nthe page loads' : `\n${failures} did not`);
