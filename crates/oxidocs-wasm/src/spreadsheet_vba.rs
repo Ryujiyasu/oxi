@@ -3843,11 +3843,7 @@ impl<'a> WorkbookHost<'a> {
             Some(value) => match sort_number(value, "Header")? {
                 2 => false,
                 1 => true,
-                0 => {
-                    return Err(
-                        "Range.Sort cannot guess whether a range has a header row".to_string()
-                    )
-                }
+                0 => self.guessed_header(range, sideways),
                 other => return Err(format!("Range.Sort has no header setting {other}")),
             },
         };
@@ -4480,6 +4476,52 @@ impl<'a> WorkbookHost<'a> {
         self.record_auto_filter(&filter);
         self.auto_filter = Some(filter);
         Ok(Value::Boolean(true))
+    }
+
+    /// Whether the first line of a range reads as a heading.
+    ///
+    /// Asked of Excel with `xlGuess`: a first row that DIFFERS from the row
+    /// under it is a heading, and it differs either in what it holds — text
+    /// over numbers — or in how it is dressed. Bold, a fill, a larger face and
+    /// an underline each made Excel keep the first row where it was, while a
+    /// plain row like the ones below it was sorted with them. A first row that
+    /// is empty is not a heading, whatever is under it.
+    fn guessed_header(&self, range: CellRange, sideways: bool) -> bool {
+        let (along, across) = if sideways {
+            (range.end_column - range.start_column, range.end_row - range.start_row)
+        } else {
+            (range.end_row - range.start_row, range.end_column - range.start_column)
+        };
+        if along == 0 {
+            return false;
+        }
+        let at = |first: bool, step: u32| {
+            let (row, column) = if sideways {
+                (range.start_row + step, range.start_column + u32::from(!first))
+            } else {
+                (range.start_row + u32::from(!first), range.start_column + step)
+            };
+            self.workbook
+                .sheets
+                .get(range.sheet)
+                .and_then(|sheet| sheet.rows.iter().find(|held| held.index == row))
+                .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+        };
+        let kind = |cell: Option<&Cell>| match cell.map(|cell| &cell.value) {
+            None | Some(CellValue::Empty) => 0,
+            Some(CellValue::Number(_)) => 1,
+            Some(CellValue::Boolean(_)) => 2,
+            Some(CellValue::Error(_)) => 3,
+            _ => 4,
+        };
+        if (0..=across).all(|step| kind(at(true, step)) == 0) {
+            return false;
+        }
+        (0..=across).any(|step| {
+            let (head, below) = (at(true, step), at(false, step));
+            kind(head) != kind(below)
+                || head.map(|cell| &cell.style) != below.map(|cell| &cell.style)
+        })
     }
 
     fn apply_auto_filter(&mut self, filter: &AutoFilter) -> Result<(), String> {
@@ -10544,9 +10586,10 @@ mod tests {
         for call in [
             // Excel quietly sorts nothing for a key outside the range.
             "Range(\"A1:A2\").Sort Key1:=Range(\"D1\"), Header:=xlNo",
-            "Range(\"A1:A2\").Sort Key1:=Range(\"A1\"), Header:=xlGuess",
-            // MatchCase used to belong here. It was measured and implemented:
-            // see `sorting_by_case_puts_the_lower_one_first`.
+            // MatchCase and xlGuess both used to belong here. Each was
+            // measured and implemented: see
+            // `sorting_by_case_puts_the_lower_one_first` and
+            // `vba_guesses_whether_the_first_row_is_a_heading`.
             "Range(\"A1:A2\").Sort Header:=xlNo",
         ] {
             let mut workbook = workbook();
@@ -14195,6 +14238,89 @@ End Sub
         assert_eq!(showing(""), "2,3,4,5,6,7,8,");
         // A list of values keeps a row holding any of them.
         assert_eq!(showing("1, Array(\"10\", \"banana\"), xlFilterValues"), "2,7,8,");
+    }
+
+    /// Whether the first line of a range reads as a heading.
+    ///
+    /// Every answer was asked of Excel with `Header:=xlGuess`. A first row
+    /// that differs from the one under it stays where it is: text over
+    /// numbers, or a row that is bold, filled, larger or underlined where the
+    /// rest is plain. A row like the ones below it is sorted with them, and an
+    /// EMPTY first row is not a heading at all.
+    #[test]
+    fn vba_guesses_whether_the_first_row_is_a_heading() {
+        let sorted = |fill: &str| {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Function Sorted() As String\n\
+                   {fill}\n\
+                   Range(\"A1:A4\").Sort Key1:=Range(\"A1\"), Order1:=xlAscending, \
+                     Header:=xlGuess\n\
+                   Dim seen, row\n\
+                   seen = \"\"\n\
+                   For row = 1 To 4\n\
+                     seen = seen & Range(\"A\" & row).Value & \",\"\n\
+                   Next row\n\
+                   Sorted = seen\n\
+                 End Function\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            match execute_with_host(&module, "Sorted", vec![], &mut host) {
+                Ok(Value::String(seen)) => seen,
+                Ok(other) => format!("{other:?}"),
+                Err(error) => format!("! {error}"),
+            }
+        };
+        let numbers = "Range(\"A1\").Value = 99\n\
+                       Range(\"A2\").Value = 30\n\
+                       Range(\"A3\").Value = 10\n\
+                       Range(\"A4\").Value = 20";
+        let words = "Range(\"A1\").Value = \"zebra\"\n\
+                     Range(\"A2\").Value = \"cherry\"\n\
+                     Range(\"A3\").Value = \"apple\"\n\
+                     Range(\"A4\").Value = \"banana\"";
+
+        // Alike, so the first row is sorted with the rest.
+        assert_eq!(sorted(numbers), "10,20,30,99,");
+        assert_eq!(sorted(words), "apple,banana,cherry,zebra,");
+        // Text over numbers is a heading.
+        assert_eq!(
+            sorted(
+                "Range(\"A1\").Value = \"head\"\n\
+                 Range(\"A2\").Value = 30\n\
+                 Range(\"A3\").Value = 10\n\
+                 Range(\"A4\").Value = 20"
+            ),
+            "head,10,20,30,"
+        );
+        // So is any difference in the dress.
+        for dressed in [
+            "Range(\"A1\").Font.Bold = True",
+            "Range(\"A1\").Interior.Color = 255",
+            "Range(\"A1\").Font.Size = 16",
+            "Range(\"A1\").Font.Underline = xlUnderlineStyleSingle",
+        ] {
+            assert_eq!(
+                sorted(&format!("{numbers}\n{dressed}")),
+                "99,10,20,30,",
+                "with {dressed}"
+            );
+            assert_eq!(
+                sorted(&format!("{words}\n{dressed}")),
+                "zebra,apple,banana,cherry,",
+                "with {dressed}"
+            );
+        }
+        // An empty first row is not a heading.
+        assert_eq!(
+            sorted(
+                "Range(\"A2\").Value = 30\n\
+                 Range(\"A3\").Value = 10\n\
+                 Range(\"A4\").Value = 20"
+            ),
+            "10,20,30,,"
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
