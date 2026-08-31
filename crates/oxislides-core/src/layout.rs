@@ -1834,12 +1834,22 @@ pub fn layout_text_shape(
     let height = (cursor - shape.t_ins).max(0.0);
     // Vertical anchoring shifts the whole block inside the inner box.
     let inner_h = (shape.height - shape.t_ins - shape.b_ins).max(0.0);
+    //
+    // ★Neither anchor clamps at zero. A block TALLER than its box still
+    // centres on it: d24 slide 1's 60pt title needs 178pt in a 91pt box and
+    // PowerPoint puts the block's centre on the box's, overflowing equally
+    // above and below (measured 2026-08-18 from PowerPoint's own render); the
+    // bottom anchor likewise holds the LAST baseline and lets the block run off
+    // the top (probe `anchorb`, 12 arms). Clamping pins an overflowing block to
+    // the box top -- d15 slide 5's five 30pt lines in a 64.6pt box came out
+    // 75.15pt low, every line by the same amount, which is what a clamped
+    // anchor looks like from the outside.
     let shift = match shape.anchor.as_deref() {
-        Some("ctr") => ((inner_h - height) / 2.0).max(0.0),
-        Some("b") => (inner_h - height).max(0.0),
+        Some("ctr") => (inner_h - height) / 2.0,
+        Some("b") => inner_h - height,
         _ => 0.0,
     };
-    if shift > 0.0 {
+    if shift != 0.0 {
         for l in &mut lines {
             l.baseline += shift;
         }
@@ -2022,6 +2032,37 @@ mod shape_tests {
         let segs = line_segments(&[run("Title", None)], 0, "Title", 44.0, "Barlow", true, false);
         assert_eq!(segs.len(), 1);
         assert!(segs[0].bold, "the level's weight must reach the run");
+    }
+
+    #[test]
+    fn a_block_taller_than_its_box_still_centres_on_it() {
+        // Five lines of 30pt type in a 64.6pt box: PowerPoint overflows it
+        // equally above and below rather than pinning it to the top.
+        let p: Vec<_> = (0..5).map(|_| para("Hello", 30.0)).collect();
+        let got = layout_text_shape(
+            &TableMetrics, &shape(400.0, 64.6, Some("ctr")), &p, &[], &[], "Arial");
+        assert!(got.height > 64.6, "the block must overflow: {}", got.height);
+        let shift = (64.6 - got.height) / 2.0;
+        let flat = layout_text_shape(
+            &TableMetrics, &shape(400.0, 64.6, None), &p, &[], &[], "Arial");
+        assert!(
+            (got.lines[0].baseline - flat.lines[0].baseline - shift).abs() < 1e-3,
+            "{} vs {} + {shift}",
+            got.lines[0].baseline,
+            flat.lines[0].baseline
+        );
+        assert!(got.lines[0].baseline < 0.0, "it starts above the box");
+    }
+
+    #[test]
+    fn the_bottom_anchor_does_not_clamp_either() {
+        let p: Vec<_> = (0..5).map(|_| para("Hello", 30.0)).collect();
+        let got = layout_text_shape(
+            &TableMetrics, &shape(400.0, 64.6, Some("b")), &p, &[], &[], "Arial");
+        let flat = layout_text_shape(
+            &TableMetrics, &shape(400.0, 64.6, None), &p, &[], &[], "Arial");
+        let shift = 64.6 - got.height;
+        assert!((got.lines[0].baseline - flat.lines[0].baseline - shift).abs() < 1e-3);
     }
 }
 
