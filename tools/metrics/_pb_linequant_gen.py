@@ -47,6 +47,14 @@ FACES = [
     ("ar12x100", "Arial", 24, 240),          # 13.799 -> 114.99 units
     ("cal11x100", "Calibri", 22, 240),       # 13.428 -> 111.90 units
     ("tnr12x150", "Times New Roman", 24, 360),
+    # A second size per face separates an additive offset (same points at both
+    # sizes) from a metric factor (same fraction of the size).
+    ("ar20x100", "Arial", 40, 240),
+    ("ar08x100", "Arial", 16, 240),
+    ("cal22x100", "Calibri", 44, 240),
+    ("tnr20x100", "Times New Roman", 40, 240),
+    ("cam12x100", "Cambria", 24, 240),
+    ("ver11x100", "Verdana", 22, 240),
 ]
 NLINES = int(os.environ.get("LQ_LINES", "40"))
 WORD_ = "quantisation "
