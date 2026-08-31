@@ -1233,10 +1233,33 @@ pub fn paragraph_font_size(
 /// which is why the width handed in must come from the same per-run
 /// measurement the wrap uses (S-RUNALIGN).
 pub fn align_offset(alignment: crate::ir::SlideAlignment, area_w: f32, line_w: f32) -> f32 {
-    match alignment {
-        crate::ir::SlideAlignment::Center => ((area_w - line_w) / 2.0).max(0.0),
-        crate::ir::SlideAlignment::Right => (area_w - line_w).max(0.0),
+    // ★Not clamped at zero. A line WIDER than its area hangs out of it on
+    // both sides when centred, and off the left when right-aligned -- the
+    // offset simply goes negative. `overwide` probe, all five arms:
+    //
+    //   algn  box   truth      unclamped   clamped
+    //   ctr    40   272.930    272.808     300.000
+    //   r      40   245.690    245.615     300.000
+    //   l      40   300.050    300.000     300.000   (agree)
+    //   ctr   300   402.910    402.808     402.808   (agree)
+    //   r     300   505.750    505.615     505.615   (agree)
+    //
+    // and seven slides of d32, which put a 167.65pt bullet in a 33.24pt
+    // centred box: PowerPoint draws it 12.7pt left of the box, which
+    // `(area - line) / 2` predicts to within 0.085pt on every one of them.
+    //
+    // `OXI_OVERWIDE_DISABLE` restores the clamp.
+    static CLAMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let clamp = *CLAMP.get_or_init(|| std::env::var("OXI_OVERWIDE_DISABLE").is_ok());
+    let off = match alignment {
+        crate::ir::SlideAlignment::Center => (area_w - line_w) / 2.0,
+        crate::ir::SlideAlignment::Right => area_w - line_w,
         _ => 0.0,
+    };
+    if clamp {
+        off.max(0.0)
+    } else {
+        off
     }
 }
 
@@ -1319,9 +1342,12 @@ mod size_tests {
     }
 
     #[test]
-    fn a_line_wider_than_its_area_is_not_pushed_left_of_it() {
-        assert_eq!(align_offset(SlideAlignment::Center, 100.0, 140.0), 0.0);
-        assert_eq!(align_offset(SlideAlignment::Right, 100.0, 140.0), 0.0);
+    fn a_line_wider_than_its_area_hangs_out_of_it() {
+        // This asserted 0.0 for both until 2026-08-31, when the `overwide`
+        // probe and seven slides of d32 said PowerPoint lets the line hang
+        // out rather than pinning it to the left edge.
+        assert_eq!(align_offset(SlideAlignment::Center, 100.0, 140.0), -20.0);
+        assert_eq!(align_offset(SlideAlignment::Right, 100.0, 140.0), -40.0);
     }
 }
 

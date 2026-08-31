@@ -43,10 +43,15 @@ if hasattr(sys.stdout, "reconfigure"):
 BASE = os.path.join("pipeline_data", "pptx_probes", "sizesweep")
 NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
-# Short enough that 48pt still fits on one line of a 720pt slide.
-TEXT = "Handgloves quiz 37"
+# ★Long, because a scale is fitted to the line and a short line has no
+# leverage: 18 characters left the fit's own residual at 0.2pt, which is the
+# size of the effect being measured. The corpus runs that gave a scale
+# reproducible to five decimals were 30 to 90 characters. The box is widened
+# to match, and `wrap="none"` keeps it one line whatever the size.
+TEXT = ("Handgloves quiz for the jumping wizard, box 37 pack my bag with "
+        "five dozen liquor jugs")
 
-INTEGERS = [6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 21, 24, 28, 32, 36, 40, 48]
+INTEGERS = [6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 21, 24]
 FRACTIONS = [11.5, 12.25, 12.5, 12.75, 13.5, 18.5, 20.5]
 CORPUS = [11.04, 12.024, 12.96, 15.96, 18.024, 20.04, 21.024, 23.04]
 FACES = ["Arial", "Calibri"]
