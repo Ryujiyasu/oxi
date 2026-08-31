@@ -3764,6 +3764,34 @@ impl<'a> WorkbookHost<'a> {
 
         let from_sheet = self.workbook.sheets[source.sheet].name.clone();
         let to_sheet = self.workbook.sheets[destination.sheet].name.clone();
+        let corners = (
+            source.start_row.saturating_sub(1),
+            source.start_column,
+            source.end_row.saturating_sub(1),
+            source.end_column,
+        );
+
+        // A name is a reference too, and it follows the cells the same way.
+        // Asked of Excel, a name standing for `Sheet2!$A$1:$A$5` reads
+        // `=Sheet2!$D$1:$D$5` once those cells are cut onto D1. A name always
+        // says which sheet it means, so it is read and written against none.
+        let names = CellMove {
+            first_row: corners.0,
+            first_column: corners.1,
+            last_row: corners.2,
+            last_column: corners.3,
+            down,
+            across,
+            from_sheet: Some(from_sheet.as_str()),
+            to_sheet: Some(to_sheet.as_str()),
+            read_as: None,
+            written_on: None,
+        };
+        for (_, refers_to) in &mut self.workbook.defined_names {
+            if let Ok(rewritten) = move_formula_references(refers_to, &names) {
+                *refers_to = rewritten;
+            }
+        }
         let landed_rows = (source.start_row as i64 + down)..=(source.end_row as i64 + down);
         let landed_columns =
             (source.start_column as i64 + across)..=(source.end_column as i64 + across);
@@ -3781,10 +3809,10 @@ impl<'a> WorkbookHost<'a> {
                         && landed_rows.contains(&i64::from(row.index))
                         && landed_columns.contains(&i64::from(cell.col));
                     let moved = CellMove {
-                        first_row: source.start_row.saturating_sub(1),
-                        first_column: source.start_column,
-                        last_row: source.end_row.saturating_sub(1),
-                        last_column: source.end_column,
+                        first_row: corners.0,
+                        first_column: corners.1,
+                        last_row: corners.2,
+                        last_column: corners.3,
                         down,
                         across,
                         from_sheet: Some(from_sheet.as_str()),
@@ -11488,6 +11516,42 @@ End Sub
         assert_eq!(
             result,
             Value::String("A1:A5|5|200|over here|B2|Sheet1".to_string())
+        );
+    }
+
+    /// A name points at cells, so it follows them when they move.
+    ///
+    /// Asked of Excel: a name standing for `Sheet1!$A$1:$A$5` reads
+    /// `=Sheet1!$D$1:$D$5` once those cells are cut onto D1, and asking for it
+    /// by name afterwards finds them where they went.
+    #[test]
+    fn vba_a_name_follows_the_cells_a_cut_moved() {
+        let mut workbook = named_workbook();
+        let module = parse_module(
+            "Public Function Follow() As String\n\
+               Range(\"A2\").Value = 200\n\
+               Range(\"A1:A5\").Cut Range(\"D1\")\n\
+               Follow = Range(\"Sales\").Address(False, False) & \"|\" & _\n\
+                 Range(\"OneCell\").Address(False, False) & \"|\" & _\n\
+                 Range(\"OneCell\").Value & \"|\" & _\n\
+                 Application.Range(\"Away\").Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Follow", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("D1:D5|D2|200|B2".to_string()));
+        assert_eq!(
+            workbook.defined_names[0],
+            ("Sales".to_string(), "Sheet1!$D$1:$D$5".to_string())
+        );
+        // A name on another sheet was never named by this cut.
+        assert_eq!(
+            workbook.defined_names[2],
+            ("Away".to_string(), "Sheet2!$B$2".to_string())
         );
     }
 
