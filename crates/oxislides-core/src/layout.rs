@@ -1605,6 +1605,79 @@ mod marker_tests {
     }
 }
 
+/// One stretch of a line set in a single face.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LineSegment {
+    pub text: String,
+    pub family: String,
+    pub font_size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    /// Characters of the LINE before this segment.
+    pub start: usize,
+}
+
+/// Split a line into the stretches its runs set it in.
+///
+/// ★A paragraph is not one face. d02 slide 2 opens every bullet with a bold
+/// `Alternative:` and continues in the regular weight; the layout collapsed
+/// that to `any(bold)` and measured all 80 characters bold, which put the last
+/// one 29pt past where PowerPoint drew it. The BREAK was already per-run
+/// (`master_units_runs`); it was the placing that was not.
+///
+/// `line_start` is how many characters of the paragraph precede this line.
+/// `level_bold` is what the paragraph's level says, which a run that does not
+/// mention weight still inherits. The paragraph's own values fill in past the
+/// last run, which is what a line ending in generated text hits.
+pub fn line_segments(
+    runs: &[crate::ir::SlideRun],
+    line_start: usize,
+    text: &str,
+    fs: f32,
+    family: &str,
+    level_bold: bool,
+    italic: bool,
+) -> Vec<LineSegment> {
+    let mut out: Vec<LineSegment> = Vec::new();
+    for (i, ch) in text.chars().enumerate() {
+        let at = line_start + i;
+        let mut seen = 0usize;
+        let mut style = (fs, family.to_string(), level_bold, italic);
+        for run in runs {
+            let n = run.text.chars().count();
+            if at < seen + n {
+                style = (
+                    run.font_size.unwrap_or(fs),
+                    run.font_family.clone().unwrap_or_else(|| family.to_string()),
+                    run.bold || level_bold,
+                    run.italic,
+                );
+                break;
+            }
+            seen += n;
+        }
+        match out.last_mut() {
+            Some(last)
+                if last.font_size == style.0
+                    && last.family == style.1
+                    && last.bold == style.2
+                    && last.italic == style.3 =>
+            {
+                last.text.push(ch);
+            }
+            _ => out.push(LineSegment {
+                text: ch.to_string(),
+                family: style.1,
+                font_size: style.0,
+                bold: style.2,
+                italic: style.3,
+                start: i,
+            }),
+        }
+    }
+    out
+}
+
 /// One line of a shape's text, placed.
 ///
 /// `x` and `baseline` are relative to the shape's own box, in points, so the
@@ -1612,6 +1685,8 @@ mod marker_tests {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlacedLine {
     pub text: String,
+    /// The stretches this line is set in, one per run it crosses.
+    pub segments: Vec<LineSegment>,
     /// Left edge of the line, from the shape's left edge.
     pub x: f32,
     /// Baseline, from the shape's top edge.
@@ -1732,6 +1807,15 @@ pub fn layout_text_shape(
             let x = if li == 0 { geom.first_x } else { geom.rest_x };
             lines.push(PlacedLine {
                 text: line.clone(),
+                segments: line_segments(
+                    &para.runs,
+                    char_at,
+                    line,
+                    fs,
+                    &family,
+                    level.bold.unwrap_or(false),
+                    italic,
+                ),
                 x: shape.l_ins + x + align_offset(align, width, line_w),
                 baseline: cursor + first_off + li as f32 * adv,
                 font_size: fs,
@@ -1887,6 +1971,57 @@ mod shape_tests {
         assert_eq!(got.lines.len(), 2);
         assert!(got.lines[1].baseline > got.lines[0].baseline);
         assert_eq!(got.lines[1].para_index, 1);
+    }
+
+    #[test]
+    fn a_line_that_crosses_runs_is_split_where_they_do() {
+        let runs = vec![
+            crate::ir::SlideRun { bold: true, ..run("Alternative: ", None) },
+            run("click the button", None),
+        ];
+        let segs = line_segments(&runs, 0, "Alternative: click the button",
+                                 18.0, "Nunito", false, false);
+        assert_eq!(segs.len(), 2, "{segs:?}");
+        assert_eq!(segs[0].text, "Alternative: ");
+        assert!(segs[0].bold);
+        assert_eq!(segs[1].text, "click the button");
+        assert!(!segs[1].bold);
+        assert_eq!(segs[1].start, 13);
+    }
+
+    #[test]
+    fn a_later_line_takes_the_styles_it_actually_covers() {
+        let runs = vec![
+            crate::ir::SlideRun { bold: true, ..run("HEAD", None) },
+            run("tail text", None),
+        ];
+        // The second line starts four characters in, past the bold run.
+        let segs = line_segments(&runs, 4, "tail text", 18.0, "Nunito", false, false);
+        assert_eq!(segs.len(), 1);
+        assert!(!segs[0].bold);
+    }
+
+    #[test]
+    fn a_run_that_names_its_own_face_or_size_starts_a_segment() {
+        let runs = vec![
+            run("name", None),
+            crate::ir::SlideRun {
+                font_family: Some("Arial".to_string()),
+                font_size: Some(9.0),
+                ..run("JOB", None)
+            },
+        ];
+        let segs = line_segments(&runs, 0, "nameJOB", 12.0, "IBM Plex Sans", false, false);
+        assert_eq!(segs.len(), 2, "{segs:?}");
+        assert_eq!(segs[1].family, "Arial");
+        assert_eq!(segs[1].font_size, 9.0);
+    }
+
+    #[test]
+    fn a_level_that_says_bold_reaches_a_run_that_does_not_mention_it() {
+        let segs = line_segments(&[run("Title", None)], 0, "Title", 44.0, "Barlow", true, false);
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].bold, "the level's weight must reach the run");
     }
 }
 

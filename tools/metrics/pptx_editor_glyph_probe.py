@@ -62,15 +62,22 @@ async ([bytes, slideNo]) => {
     if (!lay || !lay.complete) continue;
     for (const line of lay.lines) {
       if (!line.text.trim()) continue;
-      // The editor's own rule, character by character.
-      // The editor's own chain: what the page measured, else the tables.
-      const cps = [...line.text];
-      const em = m.measureFace(line.family, line.bold, line.italic, line.text)
-        || cps.map(ch => w.slide_face_advance(line.family, line.bold, line.italic, ch));
-      if (!em || em.some(v => v === null || v === undefined)) continue;
+      // The editor's own chain, per RUN: what the page measured, else the
+      // tables. A paragraph that opens bold and continues regular is two
+      // faces, and either one is wrong for the other's half.
+      const parts = (line.segments && line.segments.length) ? line.segments
+        : [{ text: line.text, family: line.family, font_size: line.font_size,
+             bold: line.bold, italic: line.italic }];
       const offs = [0];
-      let x = 0;
-      cps.forEach((ch, i) => { x += em[i] * line.font_size; offs.push(x); });
+      let x = 0, ok = true;
+      for (const sg of parts) {
+        const cps = [...sg.text];
+        const em = m.measureFace(sg.family, sg.bold, sg.italic, sg.text)
+          || cps.map(ch => w.slide_face_advance(sg.family, sg.bold, sg.italic, ch));
+        if (!em || em.some(v => v === null || v === undefined)) { ok = false; break; }
+        cps.forEach((ch, i) => { x += em[i] * sg.font_size; offs.push(x); });
+      }
+      if (!ok) continue;
       out.push({ text: line.text, x: sh.x + line.x, baseline: sh.y + line.baseline,
                  size: line.font_size, family: line.family, offs });
     }

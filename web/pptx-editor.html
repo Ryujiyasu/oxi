@@ -178,30 +178,41 @@ function layoutSlide() {
 // browser's own measuring, which is what an unmeasurable shape already gets.
 function lineOffsets(line) {
   if (line.__off !== undefined) return line.__off;
-  const cps = [...line.text];
-  // What the page measured, else what the engine's own tables say. The engine
-  // laid the line out on one of those two, so drawing on the other -- or on
-  // whatever face the browser substituted -- would put the glyphs somewhere
-  // the layout never agreed to.
-  const em = measureFace(line.family, line.bold, line.italic, line.text)
-    || cps.map(ch => slide_face_advance(line.family, line.bold, line.italic, ch));
-  if (!em) { line.__off = null; return null; }
   const off = [0];
   let x = 0;
-  for (let i = 0; i < cps.length; i++) {
-    if (em[i] === null || em[i] === undefined) { line.__off = null; return null; }
-    x += em[i] * line.font_size;
-    // One entry per CODE UNIT, so the callers can keep indexing with
-    // `slice(0, i)` offsets while the advances are indexed by code point.
-    for (let u = 0; u < cps[i].length; u++) off.push(x);
+  for (const sg of lineParts(line)) {
+    const cps = [...sg.text];
+    // What the page measured, else what the engine's own tables say. The
+    // engine laid the line out on one of those two, so drawing on the other --
+    // or on whatever face the browser substituted -- would put the glyphs
+    // somewhere the layout never agreed to.
+    const em = measureFace(sg.family, sg.bold, sg.italic, sg.text)
+      || cps.map(ch => slide_face_advance(sg.family, sg.bold, sg.italic, ch));
+    if (!em) { line.__off = null; return null; }
+    for (let i = 0; i < cps.length; i++) {
+      if (em[i] === null || em[i] === undefined) { line.__off = null; return null; }
+      x += em[i] * sg.font_size;
+      // One entry per CODE UNIT, so the callers can keep indexing with
+      // `slice(0, i)` offsets while the advances are indexed by code point.
+      for (let u = 0; u < cps[i].length; u++) off.push(x);
+    }
   }
   line.__off = off;
   return off;
 }
 
-function lineFont(line, k) {
-  return `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
-         `${line.font_size * k}px ${JSON.stringify(String(line.family))}, sans-serif`;
+// The stretches a line is set in. A paragraph is not one face: a bullet that
+// opens with a bold `Alternative:` and continues in the regular weight is two,
+// and measuring the whole line in either one puts the rest of it wrong.
+function lineParts(line) {
+  if (line.segments && line.segments.length) return line.segments;
+  return [{ text: line.text, family: line.family, font_size: line.font_size,
+            bold: line.bold, italic: line.italic, start: 0 }];
+}
+
+function lineFont(part, k) {
+  return `${part.italic ? 'italic ' : ''}${part.bold ? '700 ' : ''}` +
+         `${part.font_size * k}px ${JSON.stringify(String(part.family))}, sans-serif`;
 }
 
 // How far into a line character `n` starts, in device pixels.
@@ -264,18 +275,22 @@ function paintLines(entry, k) {
   for (const line of layout.lines) {
     const px = (shape.x + line.x) * k;
     const py = (shape.y + line.baseline) * k;
-    ctx.font = lineFont(line, k);
     ctx.fillStyle = '#111';
     ctx.textBaseline = 'alphabetic';
     const off = lineOffsets(line);
     if (off) {
-      // Character by character, each at its own design position.
-      let u = 0;
-      for (const ch of line.text) {
-        ctx.fillText(ch, px + off[u] * k, py);
-        u += ch.length;
+      // Character by character, each at its own design position, in the face
+      // its own run is set in.
+      for (const sg of lineParts(line)) {
+        ctx.font = lineFont(sg, k);
+        let u = sg.start;
+        for (const ch of sg.text) {
+          ctx.fillText(ch, px + off[u] * k, py);
+          u += ch.length;
+        }
       }
     } else {
+      ctx.font = lineFont(line, k);
       ctx.fillText(line.text, px, py);
     }
   }
