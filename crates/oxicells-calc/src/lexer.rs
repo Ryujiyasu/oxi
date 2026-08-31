@@ -530,11 +530,12 @@ impl CellMove<'_> {
 /// the one the formula sits on. That is why a formula carried across says
 /// `=Sheet3!G9` about a neighbour it left behind.
 ///
-/// One case Excel answers differently: a range whose FAR end alone is
-/// overwritten closes up to the last cell that survived (`SUM(D1:D2)` becomes
-/// `SUM(D1:D1)`), while a range whose near end alone is overwritten is left
-/// untouched. Neither is done here; a partly overwritten range keeps its
-/// text.
+/// A range the block landed on the END of closes up to just before it, but
+/// only where the block reaches PAST that end: `SUM(D1:D2)` becomes
+/// `SUM(D1:D1)` when D2:E3 is landed on, and `SUM(D1:D3)` is left alone when
+/// the block stops at row 3. A block landing on a range's near end, or inside
+/// it, changes nothing — what is written there is somebody else's number now,
+/// but the range still names the same cells.
 pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<String, String> {
     crate::parser::parse(input).map_err(|error| error.to_string())?;
     let had_equals = input.trim_start().starts_with('=');
@@ -604,6 +605,51 @@ pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<Stri
             });
         if overwritten {
             written.push(Token::ErrorLit(ExcelError::Ref));
+            index += width;
+            continue;
+        }
+
+        // A range the block landed on the END of closes up to just before it.
+        // The block has to reach PAST that end — where it stops exactly at the
+        // end, or starts at it, or sits in the middle, Excel leaves the range
+        // as it was.
+        let closes_up = |(first_row, first_column, last_row, last_column): (u32, u32, u32, u32)| {
+            let across_inside = span.1 >= first_column && span.3 <= last_column;
+            let down_inside = span.0 >= first_row && span.2 <= last_row;
+            if across_inside && first_row > span.0 && first_row <= span.2 && last_row > span.2 {
+                return Some((span.0, span.1, first_row - 1, span.3));
+            }
+            if down_inside
+                && first_column > span.1
+                && first_column <= span.3
+                && last_column > span.3
+            {
+                return Some((span.0, span.1, span.2, first_column - 1));
+            }
+            None
+        };
+        let closed = (!follows && same(points_at, landed_on) && end.is_some())
+            .then(|| landing.and_then(closes_up))
+            .flatten();
+        if let Some((first_row, first_column, last_row, last_column)) = closed {
+            let keep = |reference: CellRef, row: u32, col: u32| CellRef {
+                row,
+                col,
+                ..reference
+            };
+            written.push(Token::Name {
+                sheet: sheet.clone(),
+                name: keep(start, first_row, first_column).to_a1(),
+            });
+            written.push(Token::Colon);
+            let end_sheet = match &tokens[index + 2] {
+                Token::Name { sheet, .. } => sheet.clone(),
+                _ => None,
+            };
+            written.push(Token::Name {
+                sheet: end_sheet,
+                name: keep(far, last_row, last_column).to_a1(),
+            });
             index += width;
             continue;
         }
@@ -1512,6 +1558,30 @@ mod shift_tests {
         assert_eq!(said("=D2+D4"), "=#REF!+D4");
         assert_eq!(said("=$D$3"), "=#REF!");
         assert_eq!(said("=SUM(D4:D6)"), "=SUM(D4:D6)");
+    }
+
+    /// A range the block landed on the END of closes up to just before it.
+    ///
+    /// Every answer was asked of Excel, cutting a block onto D2 so that
+    /// D2:E3 is what gets written over. It closes up only where the block
+    /// reaches PAST the range's end: `D1:D2` becomes `D1:D1`, while `D1:D3` —
+    /// which ends where the block does — is left alone.
+    #[test]
+    fn a_range_the_block_landed_on_the_end_of_closes_up() {
+        let moved = cut_a2b3_onto_d2(Some("Sheet1"));
+        let said = |formula: &str| move_formula_references(formula, &moved).unwrap();
+
+        assert_eq!(said("=SUM(D1:D2)"), "=SUM(D1:D1)");
+        assert_eq!(said("=SUM(C2:D3)"), "=SUM(C2:C3)");
+        // The block has to reach past the end, not merely up to it.
+        assert_eq!(said("=SUM(D1:D3)"), "=SUM(D1:D3)");
+        assert_eq!(said("=SUM(D1:E3)"), "=SUM(D1:E3)");
+        // Landing on the near end, or in the middle, changes nothing.
+        assert_eq!(said("=SUM(D2:D5)"), "=SUM(D2:D5)");
+        assert_eq!(said("=SUM(D1:D4)"), "=SUM(D1:D4)");
+        assert_eq!(said("=SUM(D2:F3)"), "=SUM(D2:F3)");
+        // And what it covers entirely still has nothing left to name.
+        assert_eq!(said("=SUM(D2:E3)"), "=SUM(#REF!)");
     }
 
     /// The cut reaches another sheet's formulas, but only where they name the
