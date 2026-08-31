@@ -376,8 +376,27 @@ pub fn shift_formula_references(
             (Some(_), None) => false,
         };
         let Some(start) = parse_a1(name).filter(|_| names_moved_sheet) else {
-            shifted.push(tokens[index].clone());
-            index += 1;
+            // A range whose near end names another sheet has to be stepped
+            // over WHOLE. Its far end is written without a sheet of its own,
+            // so reading that one alone takes it for this sheet's cell and
+            // moves half the range: `SUM(Other!$B$3:$B$5)` came out as
+            // `SUM(Other!$B$3:$B$6)`.
+            let width = match (
+                parse_a1(name),
+                tokens.get(index + 1),
+                tokens.get(index + 2),
+            ) {
+                (Some(_), Some(Token::Colon), Some(Token::Name { name, .. }))
+                    if parse_a1(name).is_some() =>
+                {
+                    3
+                }
+                _ => 1,
+            };
+            for step in 0..width {
+                shifted.push(tokens[index + step].clone());
+            }
+            index += width;
             continue;
         };
 
@@ -1340,6 +1359,35 @@ mod shift_tests {
                 "{formula} with {count} at column 2 across row 2"
             );
         }
+    }
+
+    /// A range on another sheet is stepped over whole.
+    ///
+    /// Its far end carries no sheet of its own, so judging that end alone
+    /// takes it for this sheet's cell and moves half the range.
+    #[test]
+    fn another_sheets_range_is_left_alone_at_both_ends() {
+        let shift = ReferenceShift {
+            axis: ShiftAxis::Rows,
+            at: 1,
+            count: 1,
+            across: (1, u32::MAX),
+            sheet: Some("Sheet1"),
+            on_sheet: Some("Sheet1"),
+        };
+        assert_eq!(
+            shift_formula_references("=SUM(Other!$B$3:$B$5)", &shift).unwrap(),
+            "=SUM(Other!$B$3:$B$5)"
+        );
+        assert_eq!(
+            shift_formula_references("=SUM(Other!B3:B5)+SUM(B3:B5)", &shift).unwrap(),
+            "=SUM(Other!B3:B5)+SUM(B4:B6)"
+        );
+        // The sheet that did move still moves, named or not.
+        assert_eq!(
+            shift_formula_references("=SUM(Sheet1!$B$3:$B$5)", &shift).unwrap(),
+            "=SUM(Sheet1!$B$4:$B$6)"
+        );
     }
 
     /// A function's name is not a reference, however much it reads like one.
