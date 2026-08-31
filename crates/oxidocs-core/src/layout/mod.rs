@@ -4304,7 +4304,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             s755_first_hdr
         };
         let header_bottom = self.s755_header_bottom(s755_first_hdr, page);
-        let mut start_y = page.margin.top.max(header_bottom);
+        let mut start_y = page.body_start_y(header_bottom);
 
         // §11.2.2 LM2 unified P0 formula (Round 23, COM-confirmed 2026-04-08).
         // In linesAndChars (LM2) mode, the FIRST body paragraph is allocated a
@@ -4419,14 +4419,14 @@ h_tw={} pitch_tw={} cells={} text={:?}",
         // construction. Page 1 = the (start_y, content_height) just computed.
         let s755_geom: Option<S755Geom> = if s755_on && (page.title_pg || page.even_odd_hf) {
             let hb_odd = self.s755_header_bottom(&page.header, page);
-            let sy_odd = page.margin.top.max(hb_odd);
+            let sy_odd = page.body_start_y(hb_odd);
             let (fr_odd, _) = self.s755_footer_geom(&page.footer, page);
             let ch_odd = page.size.height - sy_odd - fr_odd;
             let (sy_even, ch_even) = if page.even_odd_hf {
                 // Absent even reference with the flag set = BLANK even header
                 // (ECMA-376), like the titlePg first-page rule.
                 let hb = self.s755_header_bottom(&page.header_even, page);
-                let sy = page.margin.top.max(hb);
+                let sy = page.body_start_y(hb);
                 let (fr, _) = self.s755_footer_geom(&page.footer_even, page);
                 (sy, page.size.height - sy - fr)
             } else {
@@ -4464,7 +4464,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         rp.header_distance = *hd;
                         rp.footer_distance = *fd;
                         let geom = |hdr: &[Block], ftr: &[Block]| {
-                            let sy = rp.margin.top.max(self.s755_header_bottom(hdr, &rp));
+                            let sy = rp.body_start_y(self.s755_header_bottom(hdr, &rp));
                             let (mut fr, _) = self.s755_footer_geom(ftr, &rp);
                             // A zero footer distance pins the footer to the physical
                             // page edge. Word then lets body flow use the bottom margin
@@ -5588,7 +5588,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                         let map = Self::s1174_map();
                         let hb_odd = self
                             .s755_header_bottom(&Self::s1174_substitute(&page.header, &map), page);
-                        let sy_odd = page.margin.top.max(hb_odd);
+                        let sy_odd = page.body_start_y(hb_odd);
                         let (fr_odd, _) = self
                             .s755_footer_geom(&Self::s1174_substitute(&page.footer, &map), page);
                         let ch_odd = page.size.height - sy_odd - fr_odd;
@@ -5597,7 +5597,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                                 &Self::s1174_substitute(&page.header_even, &map),
                                 page,
                             );
-                            let sy = page.margin.top.max(hb);
+                            let sy = page.body_start_y(hb);
                             let (fr, _) = self.s755_footer_geom(
                                 &Self::s1174_substitute(&page.footer_even, &map),
                                 page,

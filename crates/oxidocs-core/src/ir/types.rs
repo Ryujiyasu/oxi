@@ -107,6 +107,13 @@ pub struct Page {
     pub blocks: Vec<Block>,
     pub size: PageSize,
     pub margin: Margin,
+    /// S1267: the section declared a NEGATIVE `w:pgMar/@top`. `margin.top`
+    /// then carries |value| -- Word lays the body out at that distance from
+    /// the page top -- and the header does NOT push the body down (measured:
+    /// tools/metrics/_pb_negtop_gen.py). This flag records the second half;
+    /// the absolute value is already in `margin.top`.
+    #[serde(default)]
+    pub margin_top_negative: bool,
     /// Document grid line pitch in points (from w:docGrid w:linePitch).
     /// When set with grid_type "lines" or "linesAndChars", line spacing
     /// snaps to multiples of this pitch.
@@ -1949,6 +1956,24 @@ pub struct Margin {
     pub bottom: f32,
     pub left: f32,
     pub right: f32,
+}
+
+impl Page {
+    /// S1267 (2026-09-01, default ON, opt-out `OXI_S1267_DISABLE`): the y at
+    /// which this page's BODY starts, given how far the header reaches.
+    /// Normally the header pushes the body down when it overruns the top
+    /// margin. A section whose `w:pgMar/@top` is NEGATIVE does not do that:
+    /// Word lays the body out at |top| from the page edge and lets the header
+    /// overlap it. Measured in tools/metrics/_pb_negtop_gen.py -- growing the
+    /// header from 1 to 6 lines moves the first body baseline 71.04 -> 102.26
+    /// -> 148.94 at top=+284, and leaves it at 27.12 at top=-284.
+    pub fn body_start_y(&self, header_bottom: f32) -> f32 {
+        if self.margin_top_negative && std::env::var("OXI_S1267_DISABLE").is_err() {
+            self.margin.top
+        } else {
+            self.margin.top.max(header_bottom)
+        }
+    }
 }
 
 impl Default for Margin {

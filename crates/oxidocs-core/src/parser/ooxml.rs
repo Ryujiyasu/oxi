@@ -487,6 +487,7 @@ impl OoxmlParser {
                     blocks: section.blocks,
                     size: section.properties.page_size,
                     margin: section.properties.margin,
+                    margin_top_negative: section.properties.margin_top_negative,
                     grid_line_pitch: section.properties.grid_line_pitch,
                     grid_char_pitch: section.properties.grid_char_pitch,
                     grid_char_space_raw: section.properties.grid_char_space_raw,
@@ -2068,6 +2069,7 @@ fn parse_body(
     let last_sp = final_sect_pr.unwrap_or(SectionProperties {
         page_size: PageSize::default(),
         margin: sectionless_margin,
+        margin_top_negative: false,
         grid_line_pitch: sectionless_grid,
         grid_char_pitch: None,
         grid_char_space_raw: None,
@@ -10545,6 +10547,8 @@ struct HdrFtrRef {
 struct SectionProperties {
     page_size: PageSize,
     margin: Margin,
+    /// S1267: `w:pgMar/@top` was negative (see Page::margin_top_negative).
+    margin_top_negative: bool,
     /// Document grid line pitch in points (from w:docGrid w:linePitch, twips/20)
     grid_line_pitch: Option<f32>,
     /// Character grid pitch in points (for linesAndChars mode)
@@ -10592,6 +10596,7 @@ struct SectionProperties {
 fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionProperties, ParseError> {
     let mut page_size = PageSize::default();
     let mut margin = Margin::default();
+    let mut margin_top_negative = false;
     let mut grid_line_pitch: Option<f32> = None;
     let mut grid_char_pitch: Option<f32> = None;
     let mut char_space_section: Option<i32> = None;
@@ -10839,6 +10844,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                         // margins (a 0.25pt shift never moves a grid-snapped
                         // page boundary).
                         let to_pt = |tw: f32| -> f32 { tw / 20.0 };
+                        let s1267 = std::env::var("OXI_S1267_DISABLE").is_err();
                         let s1097 = std::env::var("OXI_S1097").is_ok();
                         let to_pt_round10 = move |tw: f32| -> f32 {
                             if s1097 {
@@ -10854,7 +10860,26 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                             match key.as_str() {
                                 "top" => {
                                     if let Ok(v) = val.parse::<f32>() {
-                                        margin.top = to_pt_round10(v);
+                                        // S1267 (2026-09-01, default ON, opt-out
+                                        // OXI_S1267_DISABLE): a NEGATIVE top margin
+                                        // means "the body starts |top| below the page
+                                        // edge and may overlap the header", not
+                                        // "clamp to zero". Word truth
+                                        // (tools/metrics/_pb_negtop_gen.py, first body
+                                        // baseline out of SaveAs2 PDF, header held at
+                                        // 851tw): top -568/-284/-142 -> L01 baseline
+                                        // 41.40/27.12/20.04 = |top| + 12.95 each time,
+                                        // while every top >= 0 lands on the SAME 71.04
+                                        // because the header pushes. Oxi clamped the
+                                        // body to y=0, putting the whole first page of
+                                        // correspondence__04a3e3e17960b59a (the JA
+                                        // blind floor doc, 0.459) 14.2pt too high.
+                                        if s1267 && v < 0.0 {
+                                            margin.top = to_pt_round10(-v);
+                                            margin_top_negative = true;
+                                        } else {
+                                            margin.top = to_pt_round10(v);
+                                        }
                                     }
                                 }
                                 "bottom" => {
@@ -10863,7 +10888,11 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                         // Word rounds top margin to 10tw for content start Y,
                                         // but uses exact bottom margin for page break limit.
                                         // COM-confirmed (0e7a): bottom=1134tw=56.7pt, limit=785.2pt
-                                        margin.bottom = to_pt(v);
+                                        // S1267: a negative bottom is its ABSOLUTE value --
+                                        // the same probe's 60-line arms put 43/44/45/44/42
+                                        // lines on page 1 for bottom -568/-284/0/+284/+1134,
+                                        // i.e. -284 and +284 are indistinguishable.
+                                        margin.bottom = if s1267 { to_pt(v.abs()) } else { to_pt(v) };
                                     }
                                 }
                                 "left" => {
@@ -11144,6 +11173,7 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     Ok(SectionProperties {
         page_size,
         margin,
+        margin_top_negative,
         grid_line_pitch,
         grid_char_pitch,
         grid_char_space_raw: char_space_section,
