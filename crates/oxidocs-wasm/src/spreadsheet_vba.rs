@@ -112,6 +112,11 @@ enum BorderSelection {
     InsideHorizontal,
 }
 
+/// What an undressed cell answers with: its writing is black and its fill is
+/// white, which is what Excel says of a cell nobody has touched.
+const BLACK: i64 = 0;
+const WHITE: i64 = 16_777_215;
+
 const MAX_WORKSHEET_ROW: u32 = 1_048_576;
 const MAX_WORKSHEET_COLUMN: u32 = 16_383;
 
@@ -4718,7 +4723,7 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("color") {
                 return self
                     .uniform_style(range, |style| style.font_color.clone())
-                    .map(|value| Some(style_color_value(value)));
+                    .map(|value| Some(style_color_value(value, BLACK)));
             }
             return Ok(None);
         }
@@ -4726,7 +4731,15 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("color") {
                 return self
                     .uniform_style(range, |style| style.bg_color.clone())
-                    .map(|value| Some(style_color_value(value)));
+                    .map(|value| {
+                        // The one place Excel does not answer Null for cells
+                        // that disagree: a block of mixed fills answers 0,
+                        // where `Font.Color` in the same shape answers Null.
+                        Some(match value {
+                            None => Value::Integer(BLACK),
+                            held => style_color_value(held, WHITE),
+                        })
+                    });
             }
             return Ok(None);
         }
@@ -6084,18 +6097,23 @@ fn style_color(value: &Value, property: &str) -> Result<Option<String>, String> 
     }))
 }
 
-fn style_color_value(value: Option<Option<String>>) -> Value {
+/// A colour as VBA counts it, or the one the cell is wearing without saying.
+///
+/// A cell that names no colour is not colourless: asked of Excel, an untouched
+/// cell answers `0` for `Font.Color` — black — and `16777215` for
+/// `Interior.Color`, which is white. `bare` is that answer.
+fn style_color_value(value: Option<Option<String>>, bare: i64) -> Value {
     let Some(value) = value else {
         return Value::Null;
     };
     let Some(value) = value else {
-        return Value::Empty;
+        return Value::Integer(bare);
     };
     let Some(hex) = value.strip_prefix('#').filter(|hex| hex.len() == 6) else {
-        return Value::Empty;
+        return Value::Integer(bare);
     };
     let Ok(rgb) = u32::from_str_radix(hex, 16) else {
-        return Value::Empty;
+        return Value::Integer(bare);
     };
     let red = (rgb >> 16) & 0xff;
     let green = (rgb >> 8) & 0xff;
@@ -12092,6 +12110,65 @@ End Sub
                 "{call} should have refused"
             );
         }
+    }
+
+    /// What a format getter answers about a cell nobody has dressed, and about
+    /// a block whose cells disagree.
+    ///
+    /// Asked of Excel: an untouched cell answers with the value it is actually
+    /// WEARING — `False`, `11`, `General`, white — rather than with nothing.
+    /// A block whose cells disagree answers Null, which is how a macro can
+    /// tell "they all say X" from "they do not agree".
+    #[test]
+    fn vba_answers_for_the_format_a_cell_is_actually_wearing() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Dressed() As String\n\
+               Range(\"A2\").Value = \"dressed\"\n\
+               Range(\"A3\").Value = \"plain\"\n\
+               Range(\"A2\").Font.Bold = True\n\
+               Range(\"A2\").Font.Size = 14\n\
+               Range(\"A2\").NumberFormat = \"0.00\"\n\
+               Range(\"A2\").HorizontalAlignment = xlRight\n\
+               Range(\"A2\").WrapText = True\n\
+               Range(\"A2\").IndentLevel = 2\n\
+               Range(\"E1:E2\").Font.Bold = True\n\
+               Range(\"G1\").Font.Color = 255\n\
+               Range(\"G1\").Interior.Color = 255\n\
+               Range(\"H1\").Interior.Color = 255\n\
+               Range(\"H2\").Interior.Color = 255\n\
+               Dressed = TypeName(Range(\"C5\").Font.Bold) & \":\" & Range(\"C5\").Font.Bold & \"|\" & _\n\
+                 Range(\"C5\").Font.Italic & \"|\" & Range(\"C5\").Font.Size & \"|\" & _\n\
+                 Range(\"C5\").Interior.Color & \"|\" & Range(\"C5\").NumberFormat & \"|\" & _\n\
+                 Range(\"C5\").HorizontalAlignment & \"|\" & Range(\"C5\").WrapText & \"|\" & _\n\
+                 Range(\"C5\").IndentLevel & \"|\" & _\n\
+                 TypeName(Range(\"A2:A3\").Font.Bold) & \"|\" & _\n\
+                 TypeName(Range(\"A2:A3\").Font.Size) & \"|\" & _\n\
+                 TypeName(Range(\"A2:A3\").NumberFormat) & \"|\" & _\n\
+                 TypeName(Range(\"A2:A3\").HorizontalAlignment) & \"|\" & _\n\
+                 TypeName(Range(\"A2:A3\").WrapText) & \"|\" & _\n\
+                 TypeName(Range(\"A2:A3\").IndentLevel) & \"|\" & _\n\
+                 Range(\"E1:E2\").Font.Bold & \"|\" & Range(\"E1:E2\").Font.Size & \"|\" & _\n\
+                 Range(\"C5\").Font.Color & \"|\" & _\n\
+                 TypeName(Range(\"G1:G2\").Font.Color) & \"|\" & _\n\
+                 Range(\"G1:G2\").Interior.Color & \"|\" & _\n\
+                 Range(\"H1:H2\").Interior.Color\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Dressed", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "Boolean:False|False|11|16777215|General|1|False|0|\
+                 Null|Null|Null|Null|Null|Null|True|11|0|Null|0|255"
+                    .to_string()
+            )
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
