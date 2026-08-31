@@ -76,6 +76,10 @@ pub struct XlsxEditor {
     filters: HashMap<usize, Option<AutoFilter>>,
     /// What the workbook's sheets should end up as, when they are changing.
     sheet_plan: Option<Vec<PlannedSheet>>,
+    /// The names the workbook should end up keeping, when they have changed.
+    /// Held whole, because a name is not edited in place: the list travels
+    /// together so that one taken away really goes.
+    name_plan: Option<Vec<(String, String)>>,
 }
 
 /// One sheet of a rearranged workbook: either one the file already holds, or a
@@ -116,6 +120,7 @@ impl XlsxEditor {
             styles: HashMap::new(),
             filters: HashMap::new(),
             sheet_plan: None,
+            name_plan: None,
         })
     }
 
@@ -168,6 +173,12 @@ impl XlsxEditor {
         // Sheets are matched by position when there are as many as before, so a
         // rename is a rename. Otherwise they are matched by name, and whatever
         // is left over has been added or taken away.
+        // A name is a reference the workbook keeps; it changes on its own,
+        // without any cell being touched.
+        if edited.defined_names != self.workbook.defined_names {
+            self.name_plan = Some(edited.defined_names.clone());
+        }
+
         let same_count = edited.sheets.len() == self.workbook.sheets.len();
         let mut origins: Vec<Option<usize>> = Vec::with_capacity(edited.sheets.len());
         for (index, sheet) in edited.sheets.iter().enumerate() {
@@ -395,6 +406,7 @@ impl XlsxEditor {
             || !self.styles.is_empty()
             || !self.filters.is_empty()
             || self.sheet_plan.is_some()
+            || self.name_plan.is_some()
     }
 
     /// Save edited xlsx.
@@ -605,22 +617,28 @@ impl XlsxEditor {
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     continue;
                 }
-                if let (Some(plan), "xl/workbook.xml") = (self.sheet_plan.as_ref(), name.as_str())
+                if name == "xl/workbook.xml"
+                    && (self.sheet_plan.is_some() || self.name_plan.is_some())
                 {
                     let mut xml = String::new();
                     entry
                         .read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                    let names: Vec<String> = plan
-                        .iter()
-                        .map(|planned| match planned {
-                            PlannedSheet::Held { name, .. } => name.clone(),
-                            PlannedSheet::Added(sheet) => sheet.name.clone(),
-                        })
-                        .collect();
-                    let patched = patch_workbook_sheets(&xml, &names)?;
+                    if let Some(plan) = self.sheet_plan.as_ref() {
+                        let names: Vec<String> = plan
+                            .iter()
+                            .map(|planned| match planned {
+                                PlannedSheet::Held { name, .. } => name.clone(),
+                                PlannedSheet::Added(sheet) => sheet.name.clone(),
+                            })
+                            .collect();
+                        xml = patch_workbook_sheets(&xml, &names)?;
+                    }
+                    if let Some(plan) = self.name_plan.as_ref() {
+                        xml = patch_workbook_names(&xml, plan)?;
+                    }
                     writer
-                        .write_all(patched.as_bytes())
+                        .write_all(xml.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     continue;
                 }
@@ -1239,6 +1257,100 @@ fn builtin_number_format_id(format: &str) -> Option<u32> {
         "m/d/yy h:mm" => Some(22),
         _ => None,
     }
+}
+
+/// Rewrites the `<definedNames>` list of `xl/workbook.xml`.
+///
+/// The names this crate reads are only SOME of the ones a workbook keeps: the
+/// built-in `_xlnm.` ones — a print area, a filter range — and those scoped to
+/// a single sheet are passed over on the way in, because a workbook-wide list
+/// cannot hold two sheets' answers to one name. Writing the IR's list out
+/// whole would therefore delete them, so each of those is carried through
+/// exactly as it stood and only the rest is replaced.
+fn patch_workbook_names(xml: &str, names: &[(String, String)]) -> Result<String, XlsxError> {
+    let (start, end, carried) = match xml.find("<definedNames") {
+        Some(start) => {
+            let head_end = xml[start..]
+                .find('>')
+                .map(|at| start + at + 1)
+                .ok_or_else(|| {
+                    XlsxError::InvalidData("the workbook's name list has no end".to_string())
+                })?;
+            // A self-closing `<definedNames/>` holds nothing, but is the place.
+            if xml[start..head_end].ends_with("/>") {
+                (start, head_end, String::new())
+            } else {
+                let inner_end = xml[head_end..]
+                    .find("</definedNames>")
+                    .map(|at| head_end + at)
+                    .ok_or_else(|| {
+                        XlsxError::InvalidData("the workbook's name list has no end".to_string())
+                    })?;
+                let after = inner_end + "</definedNames>".len();
+                (start, after, carried_names(&xml[head_end..inner_end]))
+            }
+        }
+        // A workbook that had no names says where one goes: the schema puts
+        // the list straight after the sheets.
+        None => {
+            let after = xml
+                .find("</sheets>")
+                .map(|at| at + "</sheets>".len())
+                .ok_or_else(|| {
+                    XlsxError::InvalidData("the workbook does not list its sheets".to_string())
+                })?;
+            (after, after, String::new())
+        }
+    };
+
+    if names.is_empty() && carried.is_empty() {
+        return Ok(format!("{}{}", &xml[..start], &xml[end..]));
+    }
+    let mut listed = String::from("<definedNames>");
+    listed.push_str(&carried);
+    for (name, refers_to) in names {
+        listed.push_str(&format!(
+            "<definedName name=\"{}\">{}</definedName>",
+            escape(name),
+            escape(refers_to)
+        ));
+    }
+    listed.push_str("</definedNames>");
+    Ok(format!("{}{}{}", &xml[..start], listed, &xml[end..]))
+}
+
+/// The `<definedName>` elements that never reached the IR, exactly as written.
+fn carried_names(inner: &str) -> String {
+    let mut carried = String::new();
+    let mut rest = inner;
+    while let Some(at) = rest.find("<definedName") {
+        let Some(head_end) = rest[at..].find('>').map(|end| at + end + 1) else {
+            break;
+        };
+        let head = &rest[at..head_end];
+        let element_end = if head.ends_with("/>") {
+            head_end
+        } else {
+            match rest[head_end..].find("</definedName>") {
+                Some(close) => head_end + close + "</definedName>".len(),
+                None => break,
+            }
+        };
+        let name = tag_attribute(head, "name").unwrap_or_default();
+        if head.contains("localSheetId=") || name.is_empty() || name.starts_with("_xlnm") {
+            carried.push_str(&rest[at..element_end]);
+        }
+        rest = &rest[element_end..];
+    }
+    carried
+}
+
+/// One attribute off an opening tag, as it was written.
+fn tag_attribute(head: &str, attribute: &str) -> Option<String> {
+    let needle = format!("{attribute}=\"");
+    let at = head.find(&needle)? + needle.len();
+    let end = head[at..].find('"')? + at;
+    Some(head[at..end].to_string())
 }
 
 /// Rewrites the `<sheets>` list of `xl/workbook.xml`.
@@ -2438,6 +2550,81 @@ mod tests {
         assert_eq!(col_to_letter(25), "Z");
         assert_eq!(col_to_letter(26), "AA");
         assert_eq!(col_to_letter(27), "AB");
+    }
+
+    /// A workbook that had no names gets a list, put where the schema wants
+    /// it: straight after the sheets.
+    #[test]
+    fn a_workbook_with_no_names_is_given_a_list() {
+        let xml = "<workbook><sheets><sheet name=\"S\"/></sheets><calcPr/></workbook>";
+        let patched =
+            patch_workbook_names(xml, &[("Sales".to_string(), "S!$A$1:$A$5".to_string())]).unwrap();
+        assert_eq!(
+            patched,
+            "<workbook><sheets><sheet name=\"S\"/></sheets>\
+             <definedNames><definedName name=\"Sales\">S!$A$1:$A$5</definedName></definedNames>\
+             <calcPr/></workbook>"
+        );
+    }
+
+    /// The names this crate never read are carried through untouched.
+    ///
+    /// A print area and a sheet-scoped name are both dropped on the way in, so
+    /// writing the IR's list out whole would delete them from the file.
+    #[test]
+    fn the_names_the_ir_never_saw_are_not_thrown_away() {
+        let xml = "<workbook><sheets/><definedNames>\
+                   <definedName name=\"_xlnm.Print_Area\" localSheetId=\"0\">S!$A$1:$B$9</definedName>\
+                   <definedName name=\"Local\" localSheetId=\"1\">S!$C$1</definedName>\
+                   <definedName name=\"Sales\">S!$A$1:$A$5</definedName>\
+                   </definedNames></workbook>";
+        let patched =
+            patch_workbook_names(xml, &[("Sales".to_string(), "S!$A$1".to_string())]).unwrap();
+        assert!(patched.contains("_xlnm.Print_Area\" localSheetId=\"0\">S!$A$1:$B$9<"));
+        assert!(patched.contains("name=\"Local\" localSheetId=\"1\">S!$C$1<"));
+        assert!(patched.contains("<definedName name=\"Sales\">S!$A$1</definedName>"));
+        assert!(
+            !patched.contains("$A$1:$A$5"),
+            "the old reference should be gone: {patched}"
+        );
+    }
+
+    /// Taking the last name away takes the list with it, unless something the
+    /// IR never saw is still standing in it.
+    #[test]
+    fn a_list_with_nothing_left_in_it_goes() {
+        let xml = "<workbook><sheets/><definedNames>\
+                   <definedName name=\"Sales\">S!$A$1</definedName></definedNames><calcPr/></workbook>";
+        let patched = patch_workbook_names(xml, &[]).unwrap();
+        assert_eq!(patched, "<workbook><sheets/><calcPr/></workbook>");
+
+        let with_a_print_area = "<workbook><sheets/><definedNames>\
+                   <definedName name=\"_xlnm.Print_Area\">S!$A$1</definedName>\
+                   <definedName name=\"Sales\">S!$B$1</definedName></definedNames></workbook>";
+        let patched = patch_workbook_names(with_a_print_area, &[]).unwrap();
+        assert!(patched.contains("_xlnm.Print_Area"));
+        assert!(!patched.contains("Sales"));
+    }
+
+    /// A name written and read back comes through the file whole.
+    #[test]
+    fn a_name_reaches_the_saved_file() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut edited = parse_xlsx(data).expect("should parse");
+        let sheet = edited.sheets[0].name.clone();
+        edited
+            .defined_names
+            .push(("Sales".to_string(), format!("{sheet}!$A$1:$A$5")));
+
+        let mut editor = XlsxEditor::new(data).expect("should open");
+        editor.apply_workbook(&edited).expect("should apply");
+        let saved = editor.save().expect("should save");
+
+        let read_back = parse_xlsx(&saved).expect("should parse");
+        assert_eq!(
+            read_back.defined_names,
+            vec![("Sales".to_string(), format!("{sheet}!$A$1:$A$5"))]
+        );
     }
 
     #[test]
