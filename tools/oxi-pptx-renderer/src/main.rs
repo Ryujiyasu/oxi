@@ -189,8 +189,8 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                             let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
                             if let Some(paragraphs) = p.get_mut("paragraphs") {
                                 if let Some(arr) = paragraphs.as_array_mut() {
-                                    let (gh, gv) = geom_text_inset(sh);
-                                    let mut cursor_pt = sh.y + sh.t_ins + gv;
+                                    let (gl, gr, gt, _gb) = geom_text_inset(sh);
+                                    let mut cursor_pt = sh.y + sh.t_ins + gt;
                                     let anchor_off = compute_shape_anchor_off(dc, pres, sh);
                                     let master_ctx: &Vec<MasterStyleLevel> =
                                         match sh.ph_type.as_deref() {
@@ -217,8 +217,8 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 scale,
                                                 i == 0,
                                                 &def_family,
-                                                sh.l_ins + gh,
-                                                sh.r_ins + gh,
+                                                sh.l_ins + gl,
+                                                sh.r_ins + gr,
                                                 &master_ctx[..],
                                                 &sh.ph_levels[..],
                                                 anchor_off,
@@ -328,8 +328,8 @@ fn compute_shape_anchor_off(
     if paragraphs.is_empty() {
         return 0.0;
     }
-    let (geom_h_ins, geom_v_ins) = geom_text_inset(sh);
-    let inner_h = (sh.height - sh.t_ins - sh.b_ins - 2.0 * geom_v_ins).max(0.0);
+    let (geom_l, geom_r, geom_t, geom_b) = geom_text_inset(sh);
+    let inner_h = (sh.height - sh.t_ins - sh.b_ins - geom_t - geom_b).max(0.0);
     let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
         Some("title") | Some("ctrTitle") => &pres.master_styles.title,
         Some(_) => &pres.master_styles.body,
@@ -351,8 +351,8 @@ fn compute_shape_anchor_off(
             scale,
             i == 0,
             &def_family,
-            sh.l_ins + geom_h_ins,
-            sh.r_ins + geom_h_ins,
+            sh.l_ins + geom_l,
+            sh.r_ins + geom_r,
             &master_ctx[..],
             &sh.ph_levels[..],
             0.0,
@@ -4680,12 +4680,12 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // WordArt takes its own path above and stays upright;
                         // no corpus `prstTxWarp` shape is turned.
                         let turned_text = begin_turned_text(mem_dc, sh, paragraphs, scale);
-                        let (geom_h_ins, geom_v_ins) = geom_text_inset(sh);
+                        let (geom_l, geom_r, geom_t, _geom_b) = geom_text_inset(sh);
                         let left_x =
-                            x + ((sh.l_ins + geom_h_ins) as f64 * scale).round() as i32;
+                            x + ((sh.l_ins + geom_l) as f64 * scale).round() as i32;
                         let right_x = x
-                            + ((sh.width - sh.r_ins - geom_h_ins) as f64 * scale).round() as i32;
-                        let mut cursor_pt = sh.y + sh.t_ins + geom_v_ins;
+                            + ((sh.width - sh.r_ins - geom_r) as f64 * scale).round() as i32;
+                        let mut cursor_pt = sh.y + sh.t_ins + geom_t;
                         let anchor_off = compute_shape_anchor_off(mem_dc, pres, sh);
                         let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
                             Some("title") | Some("ctrTitle") => &pres.master_styles.title,
@@ -4766,8 +4766,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 scale,
                                 pi == 0,
                                 &family,
-                                sh.l_ins + geom_h_ins,
-                                sh.r_ins + geom_h_ins,
+                                sh.l_ins + geom_l,
+                                sh.r_ins + geom_r,
                                 &master_ctx[..],
                                 &sh.ph_levels[..],
                                 anchor_off,
@@ -14591,17 +14591,39 @@ fn wrapnone_on() -> bool {
 ///
 /// 108 text-bearing ellipses across 8 dev decks. Opt-out
 /// `OXI_GEOMINSET_DISABLE`.
-fn geom_text_inset(sh: &Shape) -> (f32, f32) {
+fn geom_text_inset(sh: &Shape) -> (f32, f32, f32, f32) {
     if !geominset_on() {
-        return (0.0, 0.0);
+        return (0.0, 0.0, 0.0, 0.0);
     }
+    // ★Four values, not two. The ellipse this once handled is symmetric, so a
+    // single horizontal number served; a `homePlate` gives up only its RIGHT
+    // and a chevron gives up both ends, and folding those into one number
+    // would move the text by half the inset in the wrong direction. The
+    // rectangles themselves are measured -- see `geom_text_insets`.
+    if geomrect_on() {
+        return oxislides_core::layout::geom_text_insets(
+            sh.shape_type.as_deref(),
+            &sh.adjustments,
+            sh.width,
+            sh.height,
+        );
+    }
+    // The ellipse-only, symmetric rule this had before the `textrect` probe,
+    // so an A/B measures the presets that were ADDED and not the one that was
+    // already right.
     match sh.shape_type.as_deref() {
         Some("ellipse") => {
             let k = (1.0 - std::f32::consts::FRAC_1_SQRT_2) / 2.0;
-            (sh.width * k, sh.height * k)
+            (sh.width * k, sh.width * k, sh.height * k, sh.height * k)
         }
-        _ => (0.0, 0.0),
+        _ => (0.0, 0.0, 0.0, 0.0),
     }
+}
+
+/// Every preset's own text rectangle is used unless this is set, which
+/// restores the ellipse-only rule.
+fn geomrect_on() -> bool {
+    std::env::var("OXI_GEOMRECT_DISABLE").is_err()
 }
 
 /// A preset geometry insets its own text unless this is set.

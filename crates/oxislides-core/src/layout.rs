@@ -2417,3 +2417,131 @@ mod supplied_tests {
         );
     }
 }
+
+/// How far inside its bounding box a preset shape holds its text, as
+/// (left, right, top, bottom) in points.
+///
+/// A `prstGeom` names a shape, and the shape names its own text rectangle --
+/// which for most presets is smaller than the bounding box. Laying text out in
+/// the box instead puts every centred or right-aligned line in the wrong
+/// place: d35 s17's `homePlate` centres 'first' 7.86pt left of where the box
+/// would, and d15 s17's (adj 50000) 6.59pt left. Both are what PowerPoint drew,
+/// to within 0.13pt.
+///
+/// Measured by the `textrect` probe -- three alignments per preset, so the
+/// left and right edges are each read directly rather than inferred from a
+/// centre. Box 300x200pt, `Wq` at 18pt, no insets:
+///
+///     preset                 left    right    of a 300pt box
+///     rect                  0.040  300.090   the box itself
+///     ellipse              43.980  256.170   0.1466 .. 0.8539
+///     teardrop             43.980  256.170   same as ellipse
+///     pie                  43.980  256.170   same as ellipse
+///     homePlate            0.040  250.020   right only
+///     homePlate adj=30129   0.040  269.820
+///     homePlate adj=50000   0.040  250.020
+///     roundRect             9.810  290.150   all four sides
+///     chevron             100.050  200.030   left and right
+///     wedgeRectCallout      0.040  300.090   the box itself
+///
+/// `ss` is the shorter side, which is what the DrawingML preset formulas
+/// measure their adjustments against; the probe's box is 300x200 so the two
+/// are distinguishable.
+///
+/// ★`homePlate` with no `a:gd` behaves as **adj = 50000**, not the 16667 the
+/// preset definition documents -- the empty-`avLst` arm measures identical to
+/// the explicit 50000 arm and 19.8pt away from the 30129 one. Recorded as
+/// measured; the disagreement with the published default is not resolved.
+pub fn geom_text_insets(
+    shape_type: Option<&str>,
+    adjustments: &std::collections::HashMap<String, f32>,
+    width: f32,
+    height: f32,
+) -> (f32, f32, f32, f32) {
+    let ss = width.min(height);
+    let adj = |name: &str, default: f32| -> f32 {
+        adjustments.get(name).copied().unwrap_or(default)
+    };
+    match shape_type {
+        // The inscribed rectangle at 45 degrees: (1 - cos45) / 2 of each side.
+        Some("ellipse") | Some("teardrop") | Some("pie") => {
+            let k = (1.0 - std::f32::consts::FRAC_1_SQRT_2) / 2.0;
+            (width * k, width * k, height * k, height * k)
+        }
+        // Only the point is taken out, and only from the right: the rectangle
+        // ends halfway between the notch and the box edge.
+        Some("homePlate") => (0.0, ss * adj("adj", 50_000.0) / 200_000.0, 0.0, 0.0),
+        // Both points, and the full depth of each.
+        Some("chevron") => {
+            let dx = ss * adj("adj", 50_000.0) / 100_000.0;
+            (dx, dx, 0.0, 0.0)
+        }
+        // The corner radius, less what the arc gives back.
+        Some("roundRect") => {
+            let idx = ss * adj("adj", 16_667.0) / 100_000.0 * 0.29289;
+            (idx, idx, idx, idx)
+        }
+        _ => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
+#[cfg(test)]
+mod geom_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// The probe's own box, so the numbers below are the measured ones.
+    fn probe(preset: &str, adj: Option<f32>) -> (f32, f32, f32, f32) {
+        let mut a = HashMap::new();
+        if let Some(v) = adj {
+            a.insert("adj".to_string(), v);
+        }
+        geom_text_insets(Some(preset), &a, 300.0, 200.0)
+    }
+
+    #[test]
+    fn a_plain_rectangle_holds_text_in_its_whole_box() {
+        assert_eq!(probe("rect", None), (0.0, 0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn an_ellipse_holds_text_in_the_box_inscribed_at_45_degrees() {
+        // Probe: left 43.980 of 300, right 256.170.
+        let (l, r, t, b) = probe("ellipse", None);
+        assert!((l - 43.934).abs() < 0.1, "{l}");
+        assert!((300.0 - r - 256.066).abs() < 0.1, "{r}");
+        assert!((t - 29.289).abs() < 0.1, "{t}");
+        assert!((b - 29.289).abs() < 0.1, "{b}");
+        // A teardrop and a pie are the same ellipse.
+        assert_eq!(probe("teardrop", None), (l, r, t, b));
+        assert_eq!(probe("pie", None), (l, r, t, b));
+    }
+
+    #[test]
+    fn a_home_plate_gives_up_only_its_point() {
+        // Probe: right edge 269.820 at adj 30129, 250.020 at adj 50000, and
+        // the same 250.020 with no adj at all.
+        let (l, r, t, b) = probe("homePlate", Some(30_129.0));
+        assert_eq!((l, t, b), (0.0, 0.0, 0.0));
+        assert!((300.0 - r - 269.871).abs() < 0.1, "{r}");
+        assert!((300.0 - probe("homePlate", Some(50_000.0)).1 - 250.0).abs() < 0.1);
+        assert_eq!(probe("homePlate", None), probe("homePlate", Some(50_000.0)));
+    }
+
+    #[test]
+    fn a_chevron_gives_up_a_point_at_each_end() {
+        // Probe: left 100.050, right 200.030 of a 300pt box.
+        let (l, r, ..) = probe("chevron", None);
+        assert!((l - 100.0).abs() < 0.1, "{l}");
+        assert!((r - 100.0).abs() < 0.1, "{r}");
+    }
+
+    #[test]
+    fn a_rounded_rectangle_gives_up_its_corner_radius() {
+        // Probe: left 9.810 of a 300pt box.
+        let (l, r, t, b) = probe("roundRect", None);
+        for v in [l, r, t, b] {
+            assert!((v - 9.763).abs() < 0.1, "{v}");
+        }
+    }
+}
