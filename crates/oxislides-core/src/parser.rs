@@ -1108,6 +1108,7 @@ fn parse_slide(
     // (resolved through the placeholder chain at shape end).
     let mut shape_anchor: Option<String> = None;
     let mut shape_wrap = true;
+    let mut shape_spc_first_last = false;
 
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
@@ -1816,6 +1817,13 @@ fn parse_slide(
                         if let Some(w) = get_attr(&e, "wrap") {
                             shape_wrap = w != "none";
                         }
+                        // `a:bodyPr/@spcFirstLastPara` -- keep the first
+                        // paragraph's spcBef instead of dropping it. See
+                        // `Shape::spc_first_last_para` for the probe that
+                        // settled what it does.
+                        if let Some(v) = get_attr(&e, "spcFirstLastPara") {
+                            shape_spc_first_last = v == "1" || v == "true";
+                        }
                     }
                     "pPr" if in_paragraph => {
                         // Spec #6: a:pPr/@algn — the paragraph's own alignment
@@ -2457,6 +2465,13 @@ fn parse_slide(
                         if let Some(w) = get_attr(&e, "wrap") {
                             shape_wrap = w != "none";
                         }
+                        // `a:bodyPr/@spcFirstLastPara` -- keep the first
+                        // paragraph's spcBef instead of dropping it. See
+                        // `Shape::spc_first_last_para` for the probe that
+                        // settled what it does.
+                        if let Some(v) = get_attr(&e, "spcFirstLastPara") {
+                            shape_spc_first_last = v == "1" || v == "true";
+                        }
                     }
                     "pPr" if in_paragraph => {
                         if let Some(algn) = get_attr(&e, "algn") {
@@ -2887,6 +2902,10 @@ fn parse_slide(
                             b_ins: shape_b_ins,
                             anchor: resolved_anchor,
                             wrap_text: std::mem::replace(&mut shape_wrap, true),
+                            spc_first_last_para: std::mem::replace(
+                                &mut shape_spc_first_last,
+                                false,
+                            ),
                             text_warp: shape_text_warp.take(),
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
@@ -3034,6 +3053,7 @@ fn parse_slide(
                             // editor counts, so it has no index in its numbering.
                             sp_index: None,
                             wrap_text: true,
+                            spc_first_last_para: false,
                             text_warp: None,
                             x: shape_x,
                             y: shape_y,
@@ -3849,6 +3869,7 @@ fn parse_inherited_shapes(
                                         // bodyPr, and no corpus group asks for
                                         // wrap="none".
                                         wrap_text: true,
+                            spc_first_last_para: false,
                                         text_warp: None,
                                         x,
                                         y,

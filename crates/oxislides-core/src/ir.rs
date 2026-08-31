@@ -370,6 +370,19 @@ pub struct Shape {
     /// for it; every arm of the COM-built `embedsplit` probes does.
     #[serde(default = "default_true")]
     pub wrap_text: bool,
+
+    /// `a:bodyPr/@spcFirstLastPara` -- the FIRST paragraph's `spcBef` is to be
+    /// honoured rather than dropped (and the last one's `spcAft` likewise).
+    ///
+    /// Probe `spcfirst` (2026-08-31, 8 arms): with the flag off, 0 / 6 / 10 /
+    /// 18pt of `spcBef` on the first paragraph all leave its baseline exactly
+    /// where 0pt does; with it on, they move it 0 / 6.000 / 9.960 / 18.000pt
+    /// down, and the gap to the SECOND paragraph is unchanged in every arm.
+    /// Three corpus decks agree and agree by tracking rather than by a
+    /// constant: d06 and d35 declare 10pt and PowerPoint draws 9.815 / 9.834pt
+    /// lower, d16 declares 6pt and draws 6.065pt lower.
+    #[serde(default)]
+    pub spc_first_last_para: bool,
     /// `a:bodyPr/a:prstTxWarp/@prst` — WordArt text fitting. On an AUTOSHAPE
     /// PowerPoint stretches the text's ink box onto the shape box exactly; on
     /// a plain text box it changes nothing.

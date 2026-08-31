@@ -1772,8 +1772,18 @@ pub fn layout_text_shape(
         let adv = fs * 1.2 * n;
 
         // Space before: the paragraph's own, else the level's fraction of the
-        // advance -- and never on the first paragraph, whose top is the inset.
-        if pi > 0 {
+        // advance.
+        //
+        // The first paragraph normally gets none -- its top IS the inset --
+        // unless the shape sets `a:bodyPr/@spcFirstLastPara`, which says to
+        // honour it. Probe `spcfirst` (8 arms): with the flag off, 0 / 6 / 10 /
+        // 18pt all leave the first baseline where 0pt does; with it on they
+        // move it 0 / 6.000 / 9.960 / 18.000pt down, and the gap to the second
+        // paragraph is unchanged in every arm. d06 and d35 declare 10pt and
+        // PowerPoint draws 9.815 / 9.834pt lower; d16 declares 6pt and draws
+        // 6.065 lower -- it tracks the declared amount rather than being a
+        // constant, which is what made it findable.
+        if pi > 0 || shape.spc_first_last_para {
             cursor += para
                 .space_before
                 .or_else(|| level.spc_bef_pct.map(|p| p * adv))
@@ -2124,6 +2134,48 @@ mod shape_tests {
         assert_eq!(segs.len(), 2, "{segs:?}");
         assert!(segs[0].italic);
         assert!(!segs[1].italic);
+    }
+
+    #[test]
+    fn the_first_paragraph_keeps_its_space_when_the_shape_asks() {
+        let mut p = para("Alpha", 24.0);
+        p.space_before = Some(10.0);
+        let mut sh = shape(400.0, 300.0, None);
+        let plain = layout_text_shape(&TableMetrics, &sh, &[p.clone()], &[], &[], "Arial");
+        sh.spc_first_last_para = true;
+        let kept = layout_text_shape(&TableMetrics, &sh, &[p], &[], &[], "Arial");
+        assert!(
+            (kept.lines[0].baseline - plain.lines[0].baseline - 10.0).abs() < 1e-3,
+            "{} vs {}",
+            kept.lines[0].baseline,
+            plain.lines[0].baseline
+        );
+    }
+
+    #[test]
+    fn the_flag_does_not_disturb_the_gap_between_paragraphs() {
+        let mut a = para("Alpha", 24.0);
+        let mut b = para("Beta", 24.0);
+        a.space_before = Some(10.0);
+        b.space_before = Some(10.0);
+        let mut sh = shape(400.0, 300.0, None);
+        let plain = layout_text_shape(&TableMetrics, &sh, &[a.clone(), b.clone()],
+                                      &[], &[], "Arial");
+        sh.spc_first_last_para = true;
+        let kept = layout_text_shape(&TableMetrics, &sh, &[a, b], &[], &[], "Arial");
+        let gap = |l: &ShapeLayout| l.lines[1].baseline - l.lines[0].baseline;
+        assert!((gap(&plain) - gap(&kept)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_shape_that_does_not_ask_still_drops_it() {
+        let mut p = para("Alpha", 24.0);
+        p.space_before = Some(18.0);
+        let bare = para("Alpha", 24.0);
+        let sh = shape(400.0, 300.0, None);
+        let with_space = layout_text_shape(&TableMetrics, &sh, &[p], &[], &[], "Arial");
+        let without = layout_text_shape(&TableMetrics, &sh, &[bare], &[], &[], "Arial");
+        assert!((with_space.lines[0].baseline - without.lines[0].baseline).abs() < 1e-3);
     }
 }
 
