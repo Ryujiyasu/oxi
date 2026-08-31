@@ -292,9 +292,12 @@ struct AutoFilter {
 struct FieldTest {
     /// One-based column within the filtered range.
     field: u32,
-    first: Criteria,
-    second: Option<Criteria>,
-    /// True when the two criteria are joined by xlOr rather than xlAnd.
+    /// What the cell is tested against. Usually one, or two joined by
+    /// `either`; a filter given a LIST of values (`xlFilterValues`) holds one
+    /// equality test per value, all joined by `either`, which is the same
+    /// thing said longer.
+    criteria: Vec<Criteria>,
+    /// True when the criteria are joined by xlOr rather than xlAnd.
     either: bool,
 }
 
@@ -4415,21 +4418,51 @@ impl<'a> WorkbookHost<'a> {
                 return Err("Range.AutoFilter needs criteria to test against".to_string());
             }
         };
-        let either = match given(2) {
-            None => false,
-            Some(value) => match sort_number(value, "AutoFilter operator")? {
-                1 => false,
-                2 => true,
-                other => {
-                    return Err(format!("Range.AutoFilter cannot join criteria with {other}"))
-                }
-            },
+        let operator = match given(2) {
+            None => 1,
+            Some(value) => sort_number(value, "AutoFilter operator")?,
+        };
+        // A list of values is the same question asked of each of them:
+        // `Array("10", "banana")` with xlFilterValues keeps a row holding
+        // either, which is what two criteria joined by xlOr already mean.
+        if operator == 7 {
+            let Some(Value::Array(listed)) = given(1) else {
+                return Err(
+                    "Range.AutoFilter with xlFilterValues needs an array of values".to_string(),
+                );
+            };
+            let criteria = listed
+                .values
+                .iter()
+                .map(parse_criteria)
+                .collect::<Vec<_>>();
+            if criteria.is_empty() {
+                return Err("Range.AutoFilter was given no values to keep".to_string());
+            }
+            return self.filter_on(range, field, criteria, true);
+        }
+        let either = match operator {
+            1 => false,
+            2 => true,
+            other => return Err(format!("Range.AutoFilter cannot join criteria with {other}")),
         };
         let second = match given(3) {
             Some(value) => Some(parse_criteria(&self.criteria_value(value)?)),
             None => None,
         };
 
+        let criteria = [Some(first), second].into_iter().flatten().collect();
+        self.filter_on(range, field, criteria, either)
+    }
+
+    /// Put one column's test in place, keeping whatever the other columns ask.
+    fn filter_on(
+        &mut self,
+        range: CellRange,
+        field: u32,
+        criteria: Vec<Criteria>,
+        either: bool,
+    ) -> Result<Value, String> {
         let mut filter = match self.auto_filter.take() {
             Some(filter) if ranges_equal(filter.range, range) => filter,
             _ => AutoFilter {
@@ -4440,8 +4473,7 @@ impl<'a> WorkbookHost<'a> {
         filter.fields.retain(|held| held.field != field);
         filter.fields.push(FieldTest {
             field,
-            first,
-            second,
+            criteria,
             either,
         });
         self.apply_auto_filter(&filter)?;
@@ -4459,11 +4491,10 @@ impl<'a> WorkbookHost<'a> {
                     row,
                     column: filter.range.start_column + test.field - 1,
                 });
-                let first = test.first.matches(&value);
-                match (&test.second, test.either) {
-                    (Some(second), true) => first || second.matches(&value),
-                    (Some(second), false) => first && second.matches(&value),
-                    (None, _) => first,
+                if test.either {
+                    test.criteria.iter().any(|one| one.matches(&value))
+                } else {
+                    test.criteria.iter().all(|one| one.matches(&value))
                 }
             });
             self.set_row_visible(filter.range.sheet, row, showing);
@@ -4478,11 +4509,7 @@ impl<'a> WorkbookHost<'a> {
             .iter()
             .map(|test| oxicells_core::ir::AutoFilterColumn {
                 field: test.field,
-                criteria: [Some(&test.first), test.second.as_ref()]
-                    .into_iter()
-                    .flatten()
-                    .map(criteria_text)
-                    .collect(),
+                criteria: test.criteria.iter().map(criteria_text).collect(),
                 either: test.either,
             })
             .collect();
@@ -7442,6 +7469,7 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastespecialoperationsubtract" => 3,
         "xlpastespecialoperationmultiply" => 4,
         "xlpastespecialoperationdivide" => 5,
+        "xlfiltervalues" => 7,
         "xlsolid" => 1,
         "xlpatternnone" => -4142,
         "xlpatternsolid" => 1,
@@ -14113,6 +14141,60 @@ End Sub
 
         assert_eq!(result, Value::String("True|False|Null|-4142".to_string()));
         assert!(workbook.sheets[0].rows[0].cells[0].style.strikethrough);
+    }
+
+    /// What a filter counts as a match.
+    ///
+    /// Every answer was asked of Excel about a column holding 10, "apple", a
+    /// blank, 30, "Apricot", "banana" and 10 under a heading. Note `<>10`,
+    /// which keeps the BLANK row, and that text is matched without regard to
+    /// case.
+    #[test]
+    fn vba_filters_the_rows_a_criterion_names() {
+        let showing = |criteria: &str| {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Function Showing() As String\n\
+                   Range(\"A1\").Value = \"head\"\n\
+                   Range(\"A2\").Value = 10\n\
+                   Range(\"A3\").Value = \"apple\"\n\
+                   Range(\"A5\").Value = 30\n\
+                   Range(\"A6\").Value = \"Apricot\"\n\
+                   Range(\"A7\").Value = \"banana\"\n\
+                   Range(\"A8\").Value = 10\n\
+                   Range(\"A1:A8\").AutoFilter {criteria}\n\
+                   Dim seen, row\n\
+                   seen = \"\"\n\
+                   For row = 2 To 8\n\
+                     If Not Rows(row).Hidden Then seen = seen & row & \",\"\n\
+                   Next row\n\
+                   Showing = seen\n\
+                 End Function\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            match execute_with_host(&module, "Showing", vec![], &mut host) {
+                Ok(Value::String(seen)) => seen,
+                Ok(other) => format!("{other:?}"),
+                Err(error) => format!("! {error}"),
+            }
+        };
+
+        assert_eq!(showing("1, \"10\""), "2,8,");
+        assert_eq!(showing("1, \">10\""), "5,");
+        assert_eq!(showing("1, \">=10\""), "2,5,8,");
+        // A blank is not 10 either, so it stays.
+        assert_eq!(showing("1, \"<>10\""), "3,4,5,6,7,");
+        assert_eq!(showing("1, \"=\""), "4,");
+        assert_eq!(showing("1, \"<>\""), "2,3,5,6,7,8,");
+        assert_eq!(showing("1, \"apple\""), "3,");
+        assert_eq!(showing("1, \"APPLE\""), "3,");
+        assert_eq!(showing("1, \"a*\""), "3,6,");
+        assert_eq!(showing("1, \"10\", xlOr, \"30\""), "2,5,8,");
+        assert_eq!(showing("1, \">=10\", xlAnd, \"<=20\""), "2,8,");
+        assert_eq!(showing(""), "2,3,4,5,6,7,8,");
+        // A list of values keeps a row holding any of them.
+        assert_eq!(showing("1, Array(\"10\", \"banana\"), xlFilterValues"), "2,7,8,");
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
