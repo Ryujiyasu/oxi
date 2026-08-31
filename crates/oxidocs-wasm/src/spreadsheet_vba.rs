@@ -327,6 +327,10 @@ struct WorkbookHost<'a> {
     calculation: i64,
     last_find: Option<FindState>,
     objects: Vec<HostObject>,
+    /// Whether anything was written to a cell. Excel works the formulas out
+    /// after a change; this build does it once, when the macro is done, so
+    /// that a loop writing a hundred cells does not pay for a hundred passes.
+    wrote: bool,
     /// What moment the page says it is, as a serial. `TODAY()` and `NOW()`
     /// are answered from it when a macro asks for a recalculation; a browser
     /// has no clock of its own to ask.
@@ -363,6 +367,7 @@ impl<'a> WorkbookHost<'a> {
             calculation: -4105,
             last_find: None,
             objects: Vec::new(),
+            wrote: false,
             now: None,
             blocks: Vec::new(),
             name_handles: Vec::new(),
@@ -3121,6 +3126,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn set_cell_value(&mut self, address: CellAddress, value: CellValue) -> Result<(), String> {
+        self.wrote = true;
         let sheet = self
             .workbook
             .sheets
@@ -3169,6 +3175,7 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn set_cell_formula(&mut self, address: CellAddress, formula: String) -> Result<(), String> {
+        self.wrote = true;
         let sheet = self
             .workbook
             .sheets
@@ -4846,6 +4853,7 @@ impl<'a> WorkbookHost<'a> {
     /// Lift a cell off the sheet, leaving nothing behind — not its value, not
     /// its formula, and not the face it was wearing.
     fn take_cell(&mut self, address: CellAddress) -> Option<Cell> {
+        self.wrote = true;
         let sheet = self.workbook.sheets.get_mut(address.sheet)?;
         let row = sheet.rows.iter_mut().find(|row| row.index == address.row)?;
         let at = row.cells.iter().position(|cell| cell.col == address.column)?;
@@ -6948,6 +6956,9 @@ fn compare_text_by_case(left: &str, right: &str) -> Ordering {
     Ordering::Equal
 }
 
+/// The plain comparison, with the case ignored — which is what every caller
+/// but a `MatchCase` sort wants, and what the tests below are written against.
+#[cfg(test)]
 fn sort_compare(left: &Value, right: &Value, descending: bool) -> Ordering {
     sort_compare_cased(left, right, descending, false)
 }
@@ -8488,6 +8499,14 @@ pub fn run_spreadsheet_vba(
         .with_current_time(current_time)
         .call(procedure, args.into_iter().map(Value::from).collect())
         .map_err(|error| JsError::new(&error.to_string()))?;
+    // Excel works the formulas out after a change. This does it once, when the
+    // macro is done: a hundred writes cost one pass rather than a hundred, and
+    // the workbook that goes back to the page holds the answers rather than
+    // blanks where the formulas are. A macro that turned calculation off is
+    // taken at its word.
+    if host.wrote && host.calculation == -4105 {
+        host.recalculate();
+    }
     let debug_output = host.take_debug_output();
     let messages = host.take_messages();
     drop(host);
@@ -14139,6 +14158,47 @@ End Sub
             result,
             Value::String("=G1*2|255|0.00|-4142|99|25|5|0.00|65280".to_string())
         );
+    }
+
+    /// A macro that writes leaves the workbook with its answers worked out.
+    ///
+    /// Excel does that after every change; this build waits until the macro is
+    /// done, so a loop writing a hundred cells pays for one pass rather than a
+    /// hundred. What goes back to the page holds the answers rather than
+    /// blanks where the formulas are.
+    #[test]
+    fn a_macro_that_writes_leaves_its_formulas_worked_out() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Fill()\n\
+               Range(\"A1\").Value = 5\n\
+               Range(\"A2\").Value = 7\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"B2\").Formula = \"=SUM(A1:A2)\"\n\
+             End Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Fill", vec![], &mut host).unwrap();
+            assert!(host.wrote, "the macro wrote to cells");
+            // The page's own entry point does this; here it is done by hand,
+            // since these tests drive the host rather than that entry point.
+            host.recalculate();
+        }
+        let value_at = |row: u32, column: u32| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|held| held.index == row)
+                .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+                .map(|cell| match &cell.value {
+                    CellValue::Number(number) => format!("{number}"),
+                    other => format!("{other:?}"),
+                })
+        };
+        assert_eq!(value_at(1, 1).as_deref(), Some("10"));
+        assert_eq!(value_at(2, 1).as_deref(), Some("12"));
     }
 
     /// A macro can ask for the formulas to be worked out.
