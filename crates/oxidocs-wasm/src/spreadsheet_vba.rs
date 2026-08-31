@@ -3010,6 +3010,25 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
         }
+
+        // A name points at cells too. Asked of Excel, a name standing for
+        // `$B$3:$B$5` reads `$B$4:$B$6` after a row goes in above it,
+        // `$B$3:$B$6` after one goes in the middle of it, and `#REF!` once all
+        // three are taken out. A name always says which sheet it means, so
+        // there is no home sheet to read it against.
+        let named = ReferenceShift {
+            axis,
+            at,
+            count,
+            across,
+            sheet: Some(&moved_sheet),
+            on_sheet: None,
+        };
+        for (_, refers_to) in &mut self.workbook.defined_names {
+            if let Ok(shifted) = oxicells_core::shift_formula_references(refers_to, &named) {
+                *refers_to = shifted;
+            }
+        }
         Ok(())
     }
 
@@ -11552,6 +11571,49 @@ End Sub
         assert_eq!(
             workbook.defined_names[2],
             ("Away".to_string(), "Sheet2!$B$2".to_string())
+        );
+    }
+
+    /// A name follows rows put in and taken out, the same as a formula does.
+    ///
+    /// Asked of Excel with a name standing for `$A$1:$A$5`: a row put in above
+    /// leaves `$A$2:$A$6`, and taking out a row it covers closes it up to
+    /// `$A$1:$A$4` while a name on that one row alone is left with `#REF!`.
+    #[test]
+    fn vba_a_name_follows_rows_put_in_and_taken_out() {
+        let mut workbook = named_workbook();
+        let module = parse_module(
+            "Public Function Pushed() As String\n\
+               Range(\"A1\").EntireRow.Insert\n\
+               Pushed = Range(\"Sales\").Address(False, False) & \"|\" & _\n\
+                 Range(\"OneCell\").Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Pushed", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("A2:A6|A3".to_string()));
+
+        let mut workbook = named_workbook();
+        let module = parse_module(
+            "Public Function Closed() As String\n\
+               Range(\"A2\").EntireRow.Delete\n\
+               Closed = Range(\"Sales\").Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Closed", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("A1:A4".to_string()));
+        // The name standing on the row that went has nothing left to point at.
+        assert!(
+            workbook.defined_names[1].1.contains("#REF!"),
+            "OneCell says {:?}",
+            workbook.defined_names[1].1
         );
     }
 

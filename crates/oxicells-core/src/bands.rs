@@ -52,6 +52,7 @@ fn move_band(workbook: &mut Workbook, sheet: &str, band: Band, at: u32, count: i
     // The formulas first, and across the WHOLE workbook: `=Data!A5` on another
     // sheet follows a row inserted on Data.
     reword_formulas(workbook, sheet, band, at, count);
+    reword_names(workbook, sheet, band, at, count);
 
     let Some(target) = workbook.sheets.iter_mut().find(|one| one.name == sheet) else {
         return;
@@ -105,6 +106,43 @@ fn reword_formulas(workbook: &mut Workbook, sheet: &str, band: Band, at: u32, co
                     cell.formula = Some(moved);
                 }
             }
+        }
+    }
+}
+
+/// A name points at cells, so it moves with them.
+///
+/// Asked of Excel, a name standing for `Sheet1!$B$3:$B$5`: a row put in above
+/// leaves `$B$4:$B$6`, one put in the middle of it leaves `$B$3:$B$6`, taking
+/// the middle row out leaves `$B$3:$B$4`, and taking all three out leaves
+/// `#REF!`. A name reaching PAST a part-width band is left alone, exactly as a
+/// formula is — pushing `B2` down moves a name on `$B$3:$B$5` but not one on
+/// `$A$3:$C$5`.
+///
+/// A name always says which sheet it means, so there is no home sheet to read
+/// an unqualified reference against.
+fn reword_names(workbook: &mut Workbook, sheet: &str, band: Band, at: u32, count: i64) {
+    let axis = match band {
+        Band::Rows => ShiftAxis::Rows,
+        Band::Columns => ShiftAxis::Columns,
+    };
+    let at = match band {
+        Band::Rows => at,
+        Band::Columns => at + 1,
+    };
+    let shift = ReferenceShift {
+        axis,
+        at,
+        count,
+        across: (1, u32::MAX),
+        sheet: Some(sheet),
+        on_sheet: None,
+    };
+    for (_, refers_to) in &mut workbook.defined_names {
+        // One this crate cannot read keeps the text it had, the same as a
+        // formula it cannot read.
+        if let Ok(moved) = shift_formula_references(refers_to, &shift) {
+            *refers_to = moved;
         }
     }
 }

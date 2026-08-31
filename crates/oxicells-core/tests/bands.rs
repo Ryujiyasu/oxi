@@ -308,3 +308,70 @@ fn a_sheet_that_is_not_there_is_left_alone() {
     bands::insert(&mut book, "Nowhere", Band::Rows, 2, 1);
     assert_eq!(format!("{:?}", book.sheets[0].rows), before);
 }
+
+/// A name is a reference, and it moves the same way one does.
+///
+/// Every answer here was read off Excel, which was asked about a workbook
+/// carrying `Block` = `$B$3:$B$5`, `Wide` = `$A$3:$C$5` and `One` = `$B$4`.
+#[test]
+fn a_name_follows_the_cells_it_was_given_to() {
+    let named = |book: &Workbook, wanted: &str| {
+        book.defined_names
+            .iter()
+            .find(|(held, _)| held == wanted)
+            .map(|(_, refers_to)| refers_to.clone())
+            .unwrap()
+    };
+    let a_named_workbook = || {
+        let mut book = a_workbook();
+        book.defined_names = vec![
+            ("Block".to_string(), "Sheet1!$B$3:$B$5".to_string()),
+            ("Wide".to_string(), "Sheet1!$A$3:$C$5".to_string()),
+            ("One".to_string(), "Sheet1!$B$4".to_string()),
+            ("Elsewhere".to_string(), "Sheet9!$B$3:$B$5".to_string()),
+        ];
+        book
+    };
+
+    // A row above pushes it down; one inside makes it taller.
+    let mut book = a_named_workbook();
+    bands::insert(&mut book, "Sheet1", Band::Rows, 1, 1);
+    assert_eq!(named(&book, "Block"), "Sheet1!$B$4:$B$6");
+    assert_eq!(named(&book, "Wide"), "Sheet1!$A$4:$C$6");
+    assert_eq!(named(&book, "One"), "Sheet1!$B$5");
+    // Another sheet's name was never named by this.
+    assert_eq!(named(&book, "Elsewhere"), "Sheet9!$B$3:$B$5");
+
+    let mut book = a_named_workbook();
+    bands::insert(&mut book, "Sheet1", Band::Rows, 4, 1);
+    assert_eq!(named(&book, "Block"), "Sheet1!$B$3:$B$6");
+    assert_eq!(named(&book, "One"), "Sheet1!$B$5");
+
+    let mut book = a_named_workbook();
+    bands::insert(&mut book, "Sheet1", Band::Rows, 7, 1);
+    assert_eq!(named(&book, "Block"), "Sheet1!$B$3:$B$5", "put in below it");
+
+    // Taking a row out of the middle closes it up; the single cell is gone.
+    let mut book = a_named_workbook();
+    bands::remove(&mut book, "Sheet1", Band::Rows, 4, 1);
+    assert_eq!(named(&book, "Block"), "Sheet1!$B$3:$B$4");
+    assert!(named(&book, "One").contains("#REF!"));
+
+    // Taking all of it out leaves nothing to name.
+    let mut book = a_named_workbook();
+    bands::remove(&mut book, "Sheet1", Band::Rows, 3, 3);
+    assert!(named(&book, "Block").contains("#REF!"));
+    assert!(named(&book, "Wide").contains("#REF!"));
+
+    // Columns work the same way, and a name reaching past a removed column
+    // closes up rather than going.
+    let mut book = a_named_workbook();
+    bands::insert(&mut book, "Sheet1", Band::Columns, 0, 1);
+    assert_eq!(named(&book, "Block"), "Sheet1!$C$3:$C$5");
+    assert_eq!(named(&book, "Wide"), "Sheet1!$B$3:$D$5");
+
+    let mut book = a_named_workbook();
+    bands::remove(&mut book, "Sheet1", Band::Columns, 1, 1);
+    assert!(named(&book, "Block").contains("#REF!"));
+    assert_eq!(named(&book, "Wide"), "Sheet1!$A$3:$B$5");
+}
