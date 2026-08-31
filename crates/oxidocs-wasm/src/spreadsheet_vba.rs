@@ -499,6 +499,89 @@ impl<'a> WorkbookHost<'a> {
         Ok(self.object(HostObject::Blocks(handle)))
     }
 
+    /// The cells of a block that answer to a description.
+    ///
+    /// Asked of Excel about a column holding 10, "text", a blank, `=A1*2`, 30,
+    /// `=1/0`, a blank and TRUE: the constants are `A1:A2,A5,A8`, the formulas
+    /// `A4,A6`, the blanks `A3,A7`. The second argument is a MASK over what a
+    /// value may be — 1 a number, 2 text, 4 a Boolean, 16 an error — so
+    /// constants asked for 3 answer `A1:A2,A5`. A block of one cell is taken
+    /// to mean the whole of the sheet that has been written on, the same way
+    /// `Find` takes it. Where nothing answers, Excel raises rather than
+    /// handing back an empty range.
+    fn special_cells(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        let (kind, mask) = match args {
+            [kind] | [kind, Value::Missing] => (sort_number(kind, "SpecialCells")?, 23),
+            [kind, mask] => (
+                sort_number(kind, "SpecialCells")?,
+                sort_number(mask, "SpecialCells")?,
+            ),
+            _ => return Err("Range.SpecialCells takes a kind and what it may hold".to_string()),
+        };
+        // The last cell is the corner of everything written on the sheet, and
+        // it does not depend on the block it was asked of.
+        if kind == 11 {
+            let used = self.used_range(range.sheet)?;
+            return Ok(self.object(HostObject::Range(CellRange::single(CellAddress {
+                sheet: used.sheet,
+                row: used.end_row,
+                column: used.end_column,
+            }))));
+        }
+        let hunted = if range.is_single() {
+            self.used_range(range.sheet)?
+        } else {
+            range
+        };
+        Self::range_cell_count(hunted)?;
+
+        let mut found = Vec::new();
+        for address in hunted.addresses() {
+            let cell = self
+                .workbook
+                .sheets
+                .get(address.sheet)
+                .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column));
+            let wanted = match kind {
+                4 => cell.is_none_or(|cell| {
+                    cell.formula.is_none() && matches!(cell.value, CellValue::Empty)
+                }),
+                12 => !self.is_cell_hidden(address),
+                2 | -4123 => cell.is_some_and(|cell| {
+                    let by_formula = cell.formula.is_some();
+                    let holds_something = by_formula || !matches!(cell.value, CellValue::Empty);
+                    holds_something
+                        && by_formula == (kind == -4123)
+                        && value_answers(&cell.value, mask)
+                }),
+                other => return Err(format!("Range.SpecialCells cannot look for {other}")),
+            };
+            if wanted {
+                found.push(CellRange::single(address));
+            }
+        }
+        if found.is_empty() {
+            return Err("Range.SpecialCells found no cells like that".to_string());
+        }
+        self.blocks_object(found)
+    }
+
+    /// Whether a cell is out of sight, by its row or by its column.
+    fn is_cell_hidden(&self, address: CellAddress) -> bool {
+        let Some(sheet) = self.workbook.sheets.get(address.sheet) else {
+            return false;
+        };
+        if sheet.hidden_cols.contains(&address.column) {
+            return true;
+        }
+        sheet
+            .rows
+            .iter()
+            .find(|row| row.index == address.row)
+            .is_some_and(|row| row.hidden)
+    }
+
     /// What `Application.Union` was handed.
     fn union_ranges(&mut self, args: &[Value]) -> Result<Value, String> {
         let mut given = Vec::new();
@@ -4892,6 +4975,9 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("cut") {
                     return self.cut_range(range, args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("specialcells") {
+                    return self.special_cells(range, args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("select") {
                     if !args.is_empty() {
                         return Err("Range.Select does not accept arguments".to_string());
@@ -7131,6 +7217,15 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastespecialoperationsubtract" => 3,
         "xlpastespecialoperationmultiply" => 4,
         "xlpastespecialoperationdivide" => 5,
+        "xlcelltypeconstants" => 2,
+        "xlcelltypeformulas" => -4123,
+        "xlcelltypeblanks" => 4,
+        "xlcelltypelastcell" => 11,
+        "xlcelltypevisible" => 12,
+        "xlnumbers" => 1,
+        "xltextvalues" => 2,
+        "xllogical" => 4,
+        "xlerrors" => 16,
         "xlnone" => -4142,
         "xlautomatic" => -4105,
         "xlcolorindexnone" => -4142,
@@ -7319,6 +7414,26 @@ fn optional_integer_offset(value: &Value, default: i64, label: &str) -> Result<i
     } else {
         integer_offset(value, label)
     }
+}
+
+/// Whether what a cell holds is one of the kinds asked for.
+///
+/// The mask is Excel's: 1 a number, 2 text, 4 a Boolean, 16 an error, and 23 —
+/// the default — all of them. A formula whose answer this build has not worked
+/// out holds nothing it can name, so it answers only to that default rather
+/// than being counted as some kind it might not be.
+fn value_answers(value: &CellValue, mask: i64) -> bool {
+    if mask == 23 {
+        return true;
+    }
+    let kind = match value {
+        CellValue::Number(_) => 1,
+        CellValue::String(_) => 2,
+        CellValue::Boolean(_) => 4,
+        CellValue::Error(_) => 16,
+        _ => return false,
+    };
+    mask & kind != 0
 }
 
 /// The one block two make, where two make one.
@@ -13435,6 +13550,72 @@ End Sub
             result,
             Value::String("255|255|16777215|True|7|7|[]".to_string())
         );
+    }
+
+    /// The cells of a block that answer to a description.
+    ///
+    /// Every answer was asked of Excel about A1:A8 holding 10, "text", a
+    /// blank, `=A1*2`, 30, `=1/0`, a blank and TRUE.
+    #[test]
+    fn vba_picks_out_the_cells_that_answer_a_description() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Picked() As String\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = \"text\"\n\
+               Range(\"A4\").Formula = \"=A1*2\"\n\
+               Range(\"A5\").Value = 30\n\
+               Range(\"A6\").Value = True\n\
+               Range(\"C3\").Value = \"corner\"\n\
+               Picked = Range(\"A1:A8\").SpecialCells(xlCellTypeConstants).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeConstants, xlNumbers).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeConstants, xlTextValues).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeConstants, 3).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeConstants, xlLogical).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeFormulas).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeBlanks).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeBlanks).Areas.Count & \"|\" & _\n\
+                 Range(\"A1:A8\").SpecialCells(xlCellTypeVisible).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1\").SpecialCells(xlCellTypeLastCell).Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Picked", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "A1:A2,A5:A6|A1,A5|A2|A1:A2,A5|A6|A4|A3,A7:A8|2|A1:A8|C6".to_string()
+            )
+        );
+    }
+
+    /// After a filter, the visible cells are the rows the filter left showing.
+    #[test]
+    fn vba_picks_out_the_rows_a_filter_left_showing() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Showing() As String\n\
+               Range(\"G1\").Value = \"head\"\n\
+               Range(\"G2\").Value = 1\n\
+               Range(\"G3\").Value = 2\n\
+               Range(\"G4\").Value = 1\n\
+               Range(\"G5\").Value = 2\n\
+               Range(\"G1:G5\").AutoFilter 1, \"1\"\n\
+               Showing = Range(\"G1:G5\").SpecialCells(xlCellTypeVisible).Address(False, False) & \"|\" & _\n\
+                 Range(\"G1:G5\").SpecialCells(xlCellTypeVisible).Areas.Count\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Showing", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("G1:G2,G4|2".to_string()));
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
