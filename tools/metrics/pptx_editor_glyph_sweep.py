@@ -200,6 +200,32 @@ def match_line(line, chars, near=6.0):
     return anywhere, True, False
 
 
+# How far a pairing's first character may sit from where the engine put the
+# line before the pairing stops being evidence about ADVANCES.
+#
+# ★d30 slide 24 reported 10.698pt -- the worst line in the whole corpus -- and
+# none of it was the engine's. Its paragraphs begin with a literal space, and
+# PowerPoint draws the autonum marker's trailing tab as a space glyph right
+# after "2."; the two spaces are the same character, both followed by "Lorem",
+# so the sequence matched one character early and every advance after it
+# carried the tab's width. The engine had the text at marL exactly, which is
+# where PowerPoint put it. A run that starts somewhere else is a different run
+# -- or a position defect, which is worth reporting AS one rather than folding
+# into a number about advances.
+POSITION_NEAR = 2.0
+
+
+def horizontal_offset(line, run):
+    """How far the pairing's first character is from where the engine put it.
+
+    The PDF's x is an ink bbox and the engine's is a pen position, so a few
+    tenths of a point of left side bearing are expected and mean nothing.
+    """
+    if not run or line.get("x") is None:
+        return None
+    return run[0]["x"] - line["x"]
+
+
 def vertical_error(line, run):
     """How far the engine's baseline is from the one PowerPoint drew on.
 
@@ -256,7 +282,8 @@ def main() -> None:
 
     offenders = []
     vertical = []
-    totals = {"lines": 0, "matched": 0, "unsure": 0}
+    misplaced = []
+    totals = {"lines": 0, "matched": 0, "unsure": 0, "misplaced": 0}
     # ★A deck can take the page down with it -- d12 closed the driver
     # connection mid-evaluate, and every deck after it then "refused" against a
     # browser that was no longer there. A failure has to cost one deck, not the
@@ -264,9 +291,10 @@ def main() -> None:
 
     for r in done.values():
         for k in totals:
-            totals[k] += r["totals"][k]
+            totals[k] += r["totals"].get(k, 0)
         offenders += r["offenders"]
         vertical += r.get("vertical", [])
+        misplaced += r.get("misplaced", [])
     with sync_playwright() as p:
         state = {"browser": None, "page": None}
 
@@ -350,6 +378,13 @@ def main() -> None:
                 if loose:
                     unsure += 1
                     continue
+                dx = horizontal_offset(line, run)
+                if dx is not None and abs(dx) > POSITION_NEAR:
+                    misplaced.append({
+                        "deck": stem, "slide": line["slide"],
+                        "dx": round(dx, 3), "size": line["size"],
+                        "family": line["family"], "text": line["text"][:38]})
+                    continue
                 matched += 1
                 d = max(abs(line["offs"][k] - (run[k]["x"] - run[0]["x"]))
                         for k in range(len(run)))
@@ -363,6 +398,8 @@ def main() -> None:
             totals["lines"] += len(lines)
             totals["matched"] += matched
             totals["unsure"] += unsure
+            off_here = [m for m in misplaced if m["deck"] == stem]
+            totals["misplaced"] += len(off_here)
             worst_dy = max(dys) if dys else 0.0
             mine = [o for o in offenders if o["deck"] == stem]
             with store.open("a", encoding="utf-8") as fh:
@@ -370,12 +407,14 @@ def main() -> None:
                     "deck": stem, "worst": round(worst, 3),
                     "worst_dy": round(worst_dy, 3),
                     "totals": {"lines": len(lines), "matched": matched,
-                               "unsure": unsure},
+                               "unsure": unsure, "misplaced": len(off_here)},
                     "offenders": mine,
+                    "misplaced": off_here,
                     "vertical": [v for v in vertical if v["deck"] == stem]})
                     + chr(10))
             print(f"{stem:6} {len(lines):5} lines  {matched:5} matched  "
-                  f"{unsure:4} unsure  {turned:3} turned  "
+                  f"{unsure:4} unsure  {len(off_here):3} misplaced  "
+                  f"{turned:3} turned  "
                   f"worst dx {worst:7.3f}pt  dy {worst_dy:7.3f}pt", flush=True)
         if state["browser"] is not None:
             # A browser that already died takes the close with it; the results
@@ -386,8 +425,16 @@ def main() -> None:
                 pass
 
     offenders.sort(key=lambda o: -o["worst"])
+    misplaced.sort(key=lambda m: -abs(m["dx"]))
     print(f"\n{totals['matched']} of {totals['lines']} lines matched to a truth PDF; "
           f"{len(offenders)} disagree by more than 1pt")
+    if misplaced:
+        print(f"\n{len(misplaced)} pairings begin more than {POSITION_NEAR}pt from "
+              f"where the engine put the line, so they measure POSITION and not "
+              f"advances; worst {args.report // 2}:")
+        for m in misplaced[: args.report // 2]:
+            print(f"   {m['deck']} s{m['slide']:<3} {m['dx']:+8.3f}pt  "
+                  f"{m['size']:6.2f}pt {m['family'][:22]:23} {m['text']!r}")
     by_family: dict[str, int] = {}
     for o in offenders:
         by_family[o["family"]] = by_family.get(o["family"], 0) + 1
@@ -409,7 +456,8 @@ def main() -> None:
                   f"{o['size']:6.2f}pt {o['family'][:22]:23}"
                   f"{'B' if o['bold'] else ' '} n={o['n']:3} {o['text']!r}")
     (REPO / "pipeline_data" / "pptx_editor_glyph_sweep.json").write_text(
-        json.dumps({"totals": totals, "offenders": offenders[:400]}, indent=1),
+        json.dumps({"totals": totals, "offenders": offenders[:400],
+                    "misplaced": misplaced[:400]}, indent=1),
         encoding="utf-8")
 
 
