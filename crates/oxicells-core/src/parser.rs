@@ -388,6 +388,7 @@ struct FontInfo {
     bold: bool,
     italic: bool,
     underline: bool,
+    strikethrough: bool,
     size: Option<f32>,
     color: Option<String>,
     name: Option<String>,
@@ -978,6 +979,12 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             Some("0") | Some("none")
                         );
                     }
+                    "strike" if in_font => {
+                        // <strike/> strikes the writing through;
+                        // <strike val="0"/> does not.
+                        let val = get_attr(&e, "val");
+                        current_font.strikethrough = val.as_deref() != Some("0");
+                    }
                     "sz" if in_font => {
                         current_font.size =
                             get_attr(&e, "val").and_then(|v| v.parse().ok());
@@ -1268,6 +1275,7 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         bold: font.bold,
         italic: font.italic,
         underline: font.underline,
+        strikethrough: font.strikethrough,
         font_size: font.size,
         font_name: font.name.clone(),
         font_charset: font.charset,

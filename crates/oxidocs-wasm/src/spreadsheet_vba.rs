@@ -5486,6 +5486,12 @@ impl Host for WorkbookHost<'_> {
                     .uniform_style(range, |style| style.italic)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
+            if name.eq_ignore_ascii_case("strikethrough") {
+                // This one IS a Boolean, where Underline beside it is not.
+                return self
+                    .uniform_style(range, |style| style.strikethrough)
+                    .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+            }
             if name.eq_ignore_ascii_case("underline") {
                 // Not a Boolean: Excel answers with the STYLE of rule under
                 // the writing. A cell nobody has underlined answers
@@ -5994,6 +6000,11 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("colorindex") {
                 let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
                 self.set_range_style(range, |_, style| style.font_color = colour.clone())?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("strikethrough") {
+                let struck = style_boolean(&value, "Font.Strikethrough")?;
+                self.set_range_style(range, |_, style| style.strikethrough = struck)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("underline") {
@@ -14074,6 +14085,34 @@ End Sub
             result,
             Value::String("-4142|1|1|16777215|-4142|Null|-4128|-4166|-4128".to_string())
         );
+    }
+
+    /// A line drawn through the writing, which IS a Boolean.
+    ///
+    /// Asked of Excel: a bare cell answers False, one set answers True, and a
+    /// block whose cells disagree answers Null — where `Font.Underline` beside
+    /// it answers with a style rather than True or False.
+    #[test]
+    fn vba_strikes_a_cell_out() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Struck() As String\n\
+               Range(\"A1\").Font.Strikethrough = True\n\
+               Range(\"A3\").Value = \"kept\"\n\
+               Struck = Range(\"A1\").Font.Strikethrough & \"|\" & _\n\
+                 Range(\"Z9\").Font.Strikethrough & \"|\" & _\n\
+                 TypeName(Range(\"A1:A3\").Font.Strikethrough) & \"|\" & _\n\
+                 Range(\"A1\").Font.Underline\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Struck", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("True|False|Null|-4142".to_string()));
+        assert!(workbook.sheets[0].rows[0].cells[0].style.strikethrough);
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.

@@ -736,6 +736,10 @@ pub struct CellStyle {
     pub italic: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub underline: bool,
+    /// A line drawn THROUGH the writing, which a form uses to strike an entry
+    /// out. 154 of the fonts in the 285 conformance workbooks ask for one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strikethrough: bool,
     pub font_size: Option<f32>,
     /// The typeface a cell asks for, when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

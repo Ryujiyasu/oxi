@@ -1152,6 +1152,9 @@ fn font_xml(style: &CellStyle) -> String {
     if style.underline {
         font.push_str("<u/>");
     }
+    if style.strikethrough {
+        font.push_str("<strike/>");
+    }
     if let Some(size) = style.font_size {
         font.push_str(&format!("<sz val=\"{size}\"/>"));
     }
