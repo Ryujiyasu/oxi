@@ -348,6 +348,10 @@ async (text) => {
   }
   // A face nobody has must still be refused rather than guessed at.
   out.ghostAdvances = m.measureFace('Zzyzx Nonesuch Ghost', false, false, 'abc');
+  // A styled legacy name this browser does not have must not resolve to the
+  // base family and be measured as if it were the face the deck asked for.
+  out.styledAbsent = m.familyPresent('Arial Nonesuch Medium');
+  out.baseStillPresent = m.familyPresent('Arial');
   // And a glyph the face itself lacks must be refused too: the browser
   // substitutes for that ONE character without complaining.
   out.kanjiInArial = m.measureFace('Arial', false, false, '漢');
@@ -389,6 +393,9 @@ def run_faces(page, port: int, rep: Report) -> None:
               "a family nobody has is reported absent")
     rep.check("faces", "ghost refused", res["ghostAdvances"] is None,
               "and is not measured through a substitute")
+    rep.check("faces", "styled name", res["styledAbsent"] is False
+              and res["baseStillPresent"] is True,
+              "a styled name that resolves to its base family is refused")
     rep.check("faces", "missing glyph", res["kanjiInArial"] == [None],
               "a kanji is refused in a Latin face")
     rep.check("faces", "present glyph", all(x is not None for x in res["latinInArial"]),

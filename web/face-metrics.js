@@ -48,8 +48,44 @@ export function familyPresent(family) {
     const asked = widthIn(`100px ${quoted}, ${generic}`);
     if (Math.abs(base - asked) > 0.5) { present = true; break; }
   }
+  // ★A generic is not the only thing a browser falls back TO. A deck asks for
+  // the GDI legacy name -- "Rubik Medium", "Barlow Light", "IBM Plex Sans
+  // Condensed" -- and a browser without that face resolves it to the BASE
+  // family, which is a real font and so differs from every generic. The check
+  // above then says "present" and the page measures Rubik where PowerPoint set
+  // Rubik Medium, about 4% narrower, and the engine reports it as its own
+  // layout. So a name that carries a style word must also measure differently
+  // from the name without it.
+  if (present) {
+    const base = baseFamily(family);
+    if (base && Math.abs(widthIn(`100px ${quoted}`)
+                         - widthIn(`100px ${JSON.stringify(base)}`)) < 0.5) {
+      present = false;
+    }
+  }
   presentCache.set(family, present);
   return present;
+}
+
+// The words a GDI legacy family name ends with when it names a styled face.
+const STYLE_WORDS = new Set([
+  'thin', 'hairline', 'extralight', 'ultralight', 'light', 'book', 'regular',
+  'medium', 'semibold', 'demibold', 'bold', 'extrabold', 'ultrabold', 'black',
+  'heavy', 'condensed', 'narrow', 'semicondensed', 'extracondensed', 'expanded',
+  'extended', 'italic', 'oblique', 'display', 'text', 'caption',
+]);
+
+/**
+ * `"Rubik Medium"` -> `"Rubik"`, or null when the name carries no style word.
+ *
+ * Only the trailing words are stripped, and never all of them: "Light" on its
+ * own is somebody's family name, not a style.
+ */
+function baseFamily(family) {
+  const parts = String(family).trim().split(/\s+/);
+  let end = parts.length;
+  while (end > 1 && STYLE_WORDS.has(parts[end - 1].toLowerCase())) end--;
+  return end === parts.length ? null : parts.slice(0, end).join(' ');
 }
 
 // A family no browser can have, used to see what the DEFAULT font measures --
