@@ -14,7 +14,8 @@ pub use editor::{CellEditValue, XlsxEditor};
 pub use formula::{
     evaluate_sheet_formulas, evaluate_workbook_formulas, fill_missing_formula_values,
     format_number, formula_from_r1c1, formula_to_r1c1, move_formula_references,
-    shift_formula_references, translate_formula_references, CellMove, ReferenceShift, ShiftAxis,
+    shift_formula_references, translate_formula_references, transpose_formula_references, CellMove,
+    ReferenceShift, ShiftAxis,
 };
 pub use parser::{parse_xlsx, parse_xlsx_preserving_values};
 

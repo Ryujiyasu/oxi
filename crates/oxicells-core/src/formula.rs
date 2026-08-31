@@ -32,7 +32,8 @@ use oxicells_calc::{ExcelError, Value};
 
 pub use oxicells_calc::{
     format_number, formula_from_r1c1, formula_to_r1c1, move_formula_references,
-    shift_formula_references, translate_formula_references, CellMove, ReferenceShift, ShiftAxis,
+    shift_formula_references, translate_formula_references, transpose_formula_references, CellMove,
+    ReferenceShift, ShiftAxis,
 };
 
 /// Recalculate every formula in a single sheet, overwriting cached values.

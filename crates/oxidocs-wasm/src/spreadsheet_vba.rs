@@ -3729,23 +3729,24 @@ impl<'a> WorkbookHost<'a> {
         // Only a whole paste carries the formula, and it moves with the cell.
         if formats {
             if let Some(formula) = held.formula.as_ref() {
-                if transpose {
-                    // Which way Excel turns a transposed formula's references
-                    // has not been measured, so it is not guessed at here.
-                    return Err(
-                        "Range.PasteSpecial cannot transpose a formula in the browser".to_string(),
-                    );
-                }
-                let row_offset = i64::from(address.row) - i64::from(came_from.row);
-                let column_offset = i64::from(address.column) - i64::from(came_from.column);
-                cell.formula = Some(
+                let turned = if transpose {
+                    // A relative reference is a distance, and turning the
+                    // block a quarter turn swaps the two halves of it.
+                    oxicells_core::transpose_formula_references(
+                        formula,
+                        (came_from.row.saturating_sub(1), came_from.column),
+                        (address.row.saturating_sub(1), address.column),
+                    )
+                } else {
+                    let row_offset = i64::from(address.row) - i64::from(came_from.row);
+                    let column_offset = i64::from(address.column) - i64::from(came_from.column);
                     oxicells_core::translate_formula_references(
                         formula,
                         row_offset,
                         column_offset,
                     )
-                    .unwrap_or_else(|_| formula.clone()),
-                );
+                };
+                cell.formula = Some(turned.unwrap_or_else(|_| formula.clone()));
                 cell.value = CellValue::Empty;
             }
         }
@@ -12837,6 +12838,35 @@ End Sub
             result,
             Value::String("|keep too|110|10|=(A5+1)-3|100|0".to_string())
         );
+    }
+
+    /// A transposed paste turns the formulas it carries as well as the cells.
+    ///
+    /// Asked of Excel with `H1:I2` — two numbers and two formulas each looking
+    /// one cell to their left — pasted transposed onto K5: the block comes out
+    /// on its side and the formulas look one cell ABOVE instead.
+    #[test]
+    fn vba_turns_a_formula_with_the_block_it_is_in() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Turned() As String\n\
+               Range(\"H1\").Value = 1\n\
+               Range(\"H2\").Value = 2\n\
+               Range(\"I1\").Formula = \"=H1*10\"\n\
+               Range(\"I2\").Formula = \"=H2*10\"\n\
+               Range(\"H1:I2\").Copy\n\
+               Range(\"K5\").PasteSpecial xlPasteAll, xlPasteSpecialOperationNone, False, True\n\
+               Turned = Range(\"K5\").Value & \"|\" & Range(\"L5\").Value & \"|\" & _\n\
+                 Range(\"K6\").Formula & \"|\" & Range(\"L6\").Formula\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Turned", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("1|2|=K5*10|=L5*10".to_string()));
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.

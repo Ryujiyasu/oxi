@@ -381,11 +381,7 @@ pub fn shift_formula_references(
             // so reading that one alone takes it for this sheet's cell and
             // moves half the range: `SUM(Other!$B$3:$B$5)` came out as
             // `SUM(Other!$B$3:$B$6)`.
-            let width = match (
-                parse_a1(name),
-                tokens.get(index + 1),
-                tokens.get(index + 2),
-            ) {
+            let width = match (parse_a1(name), tokens.get(index + 1), tokens.get(index + 2)) {
                 (Some(_), Some(Token::Colon), Some(Token::Name { name, .. }))
                     if parse_a1(name).is_some() =>
                 {
@@ -650,6 +646,82 @@ pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<Stri
             });
         }
         index += width;
+    }
+
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in written {
+        render_token(&mut output, token);
+    }
+    Ok(output)
+}
+
+/// Turn a formula's references a quarter turn, as Excel does when a block is
+/// pasted transposed.
+///
+/// A relative reference is a distance from the cell that holds it, and
+/// transposing swaps the two halves of that distance: `=B3*2` written in C3
+/// looks one to the LEFT, so pasted transposed it looks one ABOVE. Asked of
+/// Excel, `=C2*2` in C3 pasted onto F2 reads `=E2*2`, `=Z9` reads `=L30`, and
+/// `=SUM(A3:B3)` — a row — comes out as the column `=SUM(F4:F5)`. An absolute
+/// reference names a fixed cell and does not turn.
+///
+/// A MIXED reference is left as it stands. Asked of Excel, `=B$3` and `=$A1`
+/// both come out of a transposed paste unchanged — though one written as the
+/// end of a RANGE does turn, `$A1:B2` becoming `F$6:G7`, which is a second
+/// rule this does not follow.
+///
+/// `from` and `to` are the cell the formula was written in and the cell it is
+/// being put down at, both zero-based as (row, column).
+pub fn transpose_formula_references(
+    input: &str,
+    from: (u32, u32),
+    to: (u32, u32),
+) -> Result<String, String> {
+    crate::parser::parse(input).map_err(|error| error.to_string())?;
+    let had_equals = input.trim_start().starts_with('=');
+    let tokens = tokenize(input).map_err(|error| error.to_string())?;
+
+    let turned = |reference: CellRef| -> Option<CellRef> {
+        if reference.row_absolute != reference.col_absolute {
+            return Some(reference);
+        }
+        if reference.row_absolute {
+            return Some(reference);
+        }
+        let down = i64::from(reference.col) - i64::from(from.1);
+        let across = i64::from(reference.row) - i64::from(from.0);
+        let row = i64::from(to.0) + down;
+        let col = i64::from(to.1) + across;
+        if row < 0 || col < 0 || row > i64::from(MAX_ROW) || col > i64::from(MAX_COL) {
+            return None;
+        }
+        Some(CellRef {
+            row: row as u32,
+            col: col as u32,
+            ..reference
+        })
+    };
+
+    let mut written = Vec::with_capacity(tokens.len());
+    for (index, token) in tokens.iter().enumerate() {
+        let is_function = matches!(tokens.get(index + 1), Some(Token::LParen));
+        let Token::Name { sheet, name } = token else {
+            written.push(token.clone());
+            continue;
+        };
+        match parse_a1(name).filter(|_| !is_function) {
+            Some(reference) => match turned(reference) {
+                Some(turned) => written.push(Token::Name {
+                    sheet: sheet.clone(),
+                    name: turned.to_a1(),
+                }),
+                None => written.push(Token::ErrorLit(ExcelError::Ref)),
+            },
+            None => written.push(token.clone()),
+        }
     }
 
     let mut output = String::new();
@@ -1123,7 +1195,8 @@ mod tests {
 #[cfg(test)]
 mod shift_tests {
     use super::{
-        move_formula_references, shift_formula_references, CellMove, ReferenceShift, ShiftAxis,
+        move_formula_references, shift_formula_references, transpose_formula_references, CellMove,
+        ReferenceShift, ShiftAxis,
     };
     use crate::reference::{MAX_COL, MAX_ROW};
 
@@ -1456,6 +1529,37 @@ mod shift_tests {
         );
         // Unqualified on another sheet means that sheet's own A2, untouched.
         assert_eq!(move_formula_references("=A2", &elsewhere).unwrap(), "=A2");
+    }
+
+    /// A formula turned a quarter turn, as Excel turns one.
+    ///
+    /// Every answer is what Excel left in the cell after a transposed paste of
+    /// a formula written in C3, which is (2, 2) counting from zero.
+    #[test]
+    fn a_transposed_formula_looks_the_other_way() {
+        let from = (2, 2);
+        let turned = |formula: &str, to| transpose_formula_references(formula, from, to).unwrap();
+
+        // One to the left becomes one above, and one above becomes one left.
+        assert_eq!(turned("=C2*2", (1, 5)), "=E2*2");
+        assert_eq!(turned("=B3*2", (0, 5)), "=#REF!*2");
+        // A row of cells comes out as a column of them.
+        assert_eq!(turned("=SUM(A3:B3)", (5, 5)), "=SUM(F4:F5)");
+        assert_eq!(turned("=SUM(A1:B2)", (8, 8)), "=SUM(G7:H8)");
+        // Far away turns as far.
+        assert_eq!(turned("=Z9", (6, 5)), "=L30");
+        // The cell itself stays the cell itself.
+        assert_eq!(turned("=C3", (9, 9)), "=J10");
+        // What names a fixed cell, or half of one, does not turn.
+        assert_eq!(turned("=$A$1", (2, 5)), "=$A$1");
+        assert_eq!(turned("=B$3", (3, 5)), "=B$3");
+        assert_eq!(turned("=$B3", (4, 5)), "=$B3");
+        // And what names no cell at all is left alone.
+        assert_eq!(turned("=1+1", (7, 5)), "=1+1");
+        assert_eq!(
+            turned("=SUM(A3:B3)+LOG10(100)", (5, 5)),
+            "=SUM(F4:F5)+LOG10(100)"
+        );
     }
 
     /// A cut onto another sheet takes the references there too, and they have
