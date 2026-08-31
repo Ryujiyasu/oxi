@@ -1353,6 +1353,16 @@ impl<'a> WorkbookHost<'a> {
             if reference.contains(',') {
                 let mut given = Vec::new();
                 for part in reference.split(',') {
+                    if let Some(band) = parse_band_reference(part.trim()) {
+                        given.push(CellRange {
+                            sheet,
+                            start_row: band.0,
+                            start_column: band.1,
+                            end_row: band.2,
+                            end_column: band.3,
+                        });
+                        continue;
+                    }
                     let (start, end) = parse_range_reference(part.trim())?;
                     given.push(CellRange {
                         sheet,
@@ -1363,6 +1373,17 @@ impl<'a> WorkbookHost<'a> {
                     });
                 }
                 return self.written_blocks_object(given);
+            }
+        }
+        if let [Value::String(reference)] = args {
+            if let Some(band) = parse_band_reference(reference) {
+                return Ok(self.object(HostObject::Range(CellRange {
+                    sheet,
+                    start_row: band.0,
+                    start_column: band.1,
+                    end_row: band.2,
+                    end_column: band.3,
+                })));
             }
         }
         let (start, end) = match args {
@@ -1771,27 +1792,49 @@ impl<'a> WorkbookHost<'a> {
         axis: RangeAxis,
         index: &Value,
     ) -> Result<Value, String> {
-        let offset = positive_index(index, range_axis_name(axis))? - 1;
+        // Written out, an index is still an index: asked of Excel,
+        // `Range("C5:E10").Columns("B")` is D — the range's second column —
+        // exactly as `Columns(2)` is, and `Columns("D")` is F, outside the
+        // range altogether. A pair takes the span between the two.
+        let (first, last) = match index {
+            Value::String(text) => match parse_band_span(text) {
+                Some(span) => span,
+                None => return Err(format!("invalid {} index: {text}", range_axis_name(axis))),
+            },
+            _ => {
+                let only = positive_index(index, range_axis_name(axis))?;
+                (only, only)
+            }
+        };
+        let (first, last) = (first - 1, last - 1);
         let item = match axis {
             RangeAxis::Rows => {
-                let row = range
+                let start = range
                     .start_row
-                    .checked_add(offset)
+                    .checked_add(first)
+                    .ok_or_else(|| "Range.Rows index is too large".to_string())?;
+                let end = range
+                    .start_row
+                    .checked_add(last)
                     .ok_or_else(|| "Range.Rows index is too large".to_string())?;
                 CellRange {
-                    start_row: row,
-                    end_row: row,
+                    start_row: start,
+                    end_row: end,
                     ..range
                 }
             }
             RangeAxis::Columns => {
-                let column = range
+                let start = range
                     .start_column
-                    .checked_add(offset)
+                    .checked_add(first)
+                    .ok_or_else(|| "Range.Columns index is too large".to_string())?;
+                let end = range
+                    .start_column
+                    .checked_add(last)
                     .ok_or_else(|| "Range.Columns index is too large".to_string())?;
                 CellRange {
-                    start_column: column,
-                    end_column: column,
+                    start_column: start,
+                    end_column: end,
                     ..range
                 }
             }
@@ -8078,6 +8121,77 @@ fn parse_range_reference(reference: &str) -> Result<((u32, u32), (u32, u32)), St
     Ok((start, end))
 }
 
+/// A whole-row or whole-column reference: `2:4`, `A:C`, either with `$`, in
+/// either case, and with the two ends in either order.
+///
+/// Measured in Excel 16.0: `4:2` is rows 2 to 4 and `C:A` is columns A to C,
+/// `a:c` is the same as `A:C`, a mixed pair like `A:2` is refused, and so is
+/// an end past the sheet — `2:1048577` and `A:XFE` both raise. Answers
+/// `(start row, start column, end row, end column)`.
+fn parse_band_reference(text: &str) -> Option<(u32, u32, u32, u32)> {
+    let (left, right) = text.trim().split_once(':')?;
+    fn bare(part: &str) -> &str {
+        let part = part.trim();
+        part.strip_prefix('$').unwrap_or(part)
+    }
+    let (left, right) = (bare(left), bare(right));
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    if left.bytes().all(|byte| byte.is_ascii_digit()) && right.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        let (one, two) = (left.parse::<u32>().ok()?, right.parse::<u32>().ok()?);
+        if one == 0 || two == 0 || one > MAX_WORKSHEET_ROW || two > MAX_WORKSHEET_ROW {
+            return None;
+        }
+        return Some((one.min(two), 0, one.max(two), MAX_WORKSHEET_COLUMN));
+    }
+    let one = column_from_letters(left)?;
+    let two = column_from_letters(right)?;
+    Some((1, one.min(two), MAX_WORKSHEET_ROW, one.max(two)))
+}
+
+/// One index or a pair of them, written out: `2`, `B`, `2:4`, `B:D`. Both
+/// count from one, and a letter counts as its place in the alphabet — the
+/// same number `Columns(2)` would have been handed.
+fn parse_band_span(text: &str) -> Option<(u32, u32)> {
+    let one = |part: &str| -> Option<u32> {
+        let part = part.trim();
+        let part = part.strip_prefix('$').unwrap_or(part);
+        if part.is_empty() {
+            return None;
+        }
+        if part.bytes().all(|byte| byte.is_ascii_digit()) {
+            let number = part.parse::<u32>().ok()?;
+            return (number > 0).then_some(number);
+        }
+        column_from_letters(part).map(|column| column + 1)
+    };
+    match text.trim().split_once(':') {
+        Some((left, right)) => {
+            let (left, right) = (one(left)?, one(right)?);
+            Some((left.min(right), left.max(right)))
+        }
+        None => one(text).map(|only| (only, only)),
+    }
+}
+
+/// A column's letters as its number, counted from nought. `None` when the
+/// text is not letters at all, or names a column past the last one.
+fn column_from_letters(letters: &str) -> Option<u32> {
+    if letters.is_empty() || !letters.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut column = 0_u32;
+    for letter in letters.bytes() {
+        column = column
+            .checked_mul(26)?
+            .checked_add(u32::from(letter.to_ascii_uppercase() - b'A') + 1)?;
+    }
+    let column = column.checked_sub(1)?;
+    (column <= MAX_WORKSHEET_COLUMN).then_some(column)
+}
+
 fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
     let reference = reference.trim().replace('$', "");
     let reference = reference.as_str();
@@ -9337,9 +9451,9 @@ mod tests {
                Ask = Ask & \"|\" & Range(\"A1\").Address(0, 0, -4150)\n\
                Ask = Ask & \"|\" & b.Address(0, 0, -4150, False, Range(\"C3\"))\n\
                Ask = Ask & \"|\" & Range(\"C4\").Address(0, 0, -4150, False, Range(\"C3\"))\n\
-               Ask = Ask & \"|\" & Range(\"A2:XFD4\").Address(1, 1, -4150)\n\
-               Ask = Ask & \"|\" & Range(\"A2:XFD4\").Address(0, 0, -4150)\n\
-               Ask = Ask & \"|\" & Range(\"B1:D1048576\").Address(1, 1, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"2:4\").Address(1, 1, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"2:4\").Address(0, 0, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"B:D\").Address(1, 1, -4150)\n\
                Ask = Ask & \"|\" & b.Address(1, 1, 1, True)\n\
                Ask = Ask & \"|\" & b.Address(0, 0, -4150, True)\n\
              End Function\n",
@@ -9382,6 +9496,94 @@ mod tests {
         assert_eq!(
             quoted,
             Value::String("'[a report.xlsx]A Sheet'!$B$2".to_string())
+        );
+    }
+
+    /// Measured in Excel 16.0. `Range("2:4")` is rows 2 to 4 across every
+    /// column and `Range("A:C")` is columns A to C down every row; the `$` is
+    /// allowed, the case is not read, and the two ends are sorted — `4:2` and
+    /// `C:A` come back the right way round. A mixed pair and an end past the
+    /// sheet are both refused. `A:XFD` covers the whole grid, which is spelled
+    /// in rows.
+    #[test]
+    fn a_band_can_be_written_as_a_reference() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"2:4\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"2:2\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"A:C\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"$A:$C\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"a:c\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"4:2\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"C:A\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"AA:AB\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"A:XFD\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"2:4\").Rows.Count\n\
+               Ask = Ask & \"|\" & Range(\"A:C\").Columns.Count\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "$2:$4|$2:$2|$A:$C|$A:$C|$A:$C|$2:$4|$A:$C|$AA:$AB|\
+                 $1:$1048576|3|3"
+                    .to_string()
+            )
+        );
+
+        for refused in ["A:2", "2:1048577", "A:XFE"] {
+            let module = parse_module(&format!(
+                "Public Function Ask() As String\n\
+                   Ask = Range(\"{refused}\").Address(1, 1)\n\
+                 End Function\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            assert!(
+                execute_with_host(&module, "Ask", vec![], &mut host).is_err(),
+                "{refused} was allowed"
+            );
+        }
+    }
+
+    /// Written out, an index is still an index. Measured in Excel 16.0 on
+    /// `C5:E10`: `Columns("B")` is D and so is `Columns(2)`, `Columns("D")` is
+    /// F — outside the range, which it does not mind — `Columns("B:C")` is
+    /// D:E, and `Rows("2:3")` on `A5:C10` is rows 6 to 7. A sheet's own
+    /// `Rows("2:4")` counts from the top of the grid, so it is $2:$4.
+    #[test]
+    fn rows_and_columns_take_their_index_written_out() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"C5:E10\").Columns(\"B\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"C5:E10\").Columns(2).Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"C5:E10\").Columns(\"D\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"C5:E10\").Columns(\"B:C\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"A5:C10\").Rows(\"2:3\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & Range(\"C5:E10\").Rows(\"2\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & ActiveSheet.Rows(\"2:4\").Address(1, 1)\n\
+               Ask = Ask & \"|\" & ActiveSheet.Columns(\"B:D\").Address(1, 1)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "$D$5:$D$10|$D$5:$D$10|$F$5:$F$10|$D$5:$E$10|\
+                 $A$6:$C$7|$C$6:$E$6|$2:$4|$B:$D"
+                    .to_string()
+            )
         );
     }
 
