@@ -713,7 +713,14 @@ fn break_segment(
     let opts = WrapOpts {
         trim_trailing_space: true,
         char_wrap: true,
-        hyphen_breaks: false,
+        // ★A hyphen IS a break site for PowerPoint, and this said otherwise.
+        // The renderer has had it since the `charwrap` probe, whose
+        // `alpha-beta-gamma-...` in a 165.6pt box came back broken AFTER the
+        // hyphens; the port hardcoded false, so d19 slide 37's
+        // `slidescarnival.com/extra-free-resources-icons-and-maps` could not
+        // start on the line that says `Find more icons at `, and every line
+        // after it fell one line low.
+        hyphen_breaks: true,
     };
     Some(wrap_lines(
         text,
@@ -846,6 +853,36 @@ mod paragraph_tests {
             .is_some(),
             "a curly apostrophe must not sink the paragraph"
         );
+    }
+
+    #[test]
+    fn a_hyphen_opens_a_break_site() {
+        // PowerPoint puts `Find more icons at slidescarnival.com/extra-` on
+        // one line and the rest on the next; breaking only at spaces sends the
+        // whole URL down a line and takes everything after it with it.
+        let text = "Find more icons at slidescarnival.com/extra-free-resources";
+        let got = break_paragraph(
+            &TableMetrics, text, 9.0, "Arial", false, false, 120.0, &[run(text)],
+        )
+        .expect("measurable");
+        assert!(got.iter().any(|l| l.ends_with('-')), "{got:?}");
+        // and the break lands AFTER the hyphen, not at the last character
+        // that would have fitted.
+        for line in &got {
+            if let Some(rest) = line.strip_suffix('-') {
+                assert!(!rest.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn a_word_with_no_hyphen_still_breaks_only_at_spaces() {
+        let text = "alpha beta gamma delta";
+        let got = break_paragraph(
+            &TableMetrics, text, 9.0, "Arial", false, false, 40.0, &[run(text)],
+        )
+        .expect("measurable");
+        assert!(got.iter().all(|l| !l.trim_end().ends_with('-')), "{got:?}");
     }
 }
 
