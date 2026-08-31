@@ -202,15 +202,21 @@ fn palette_choice(value: &Value, clears: i64, what: &str) -> Result<Option<Strin
     Err(format!("unsupported {what}: {asked}"))
 }
 
-/// A colour packed the way VBA writes it, as the IR spells it.
+/// A colour packed the way VBA writes it, as the IR spells it: six hex digits
+/// with nothing in front, which is what the file says and what the page puts a
+/// `#` in front of to draw with.
 fn colour_from_packed(colour: i64) -> String {
     let (red, green, blue) = (colour & 0xff, (colour >> 8) & 0xff, (colour >> 16) & 0xff);
-    format!("#{red:02X}{green:02X}{blue:02X}")
+    format!("{red:02X}{green:02X}{blue:02X}")
 }
 
 /// The same the other way, or nothing where the cell names no colour.
 fn colour_to_packed(colour: Option<&str>) -> Option<i64> {
-    let hex = colour?.strip_prefix('#').filter(|hex| hex.len() == 6)?;
+    let colour = colour?;
+    let hex = colour.strip_prefix('#').unwrap_or(colour);
+    if hex.len() != 6 {
+        return None;
+    }
     let rgb = u32::from_str_radix(hex, 16).ok()?;
     let (red, green, blue) = ((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
     Some(i64::from(red | (green << 8) | (blue << 16)))
@@ -6219,7 +6225,7 @@ impl Host for WorkbookHost<'_> {
                 };
                 match asked {
                     1 => self.set_range_style(range, |_, style| {
-                        style.bg_color.get_or_insert_with(|| "#FFFFFF".to_string());
+                        style.bg_color.get_or_insert_with(|| "FFFFFF".to_string());
                     })?,
                     COLOUR_NONE => self.set_range_style(range, |_, style| style.bg_color = None)?,
                     other => {
@@ -7250,12 +7256,7 @@ fn color_number(value: &Value, property: &str) -> Result<Option<u32>, String> {
 }
 
 fn style_color(value: &Value, property: &str) -> Result<Option<String>, String> {
-    Ok(color_number(value, property)?.map(|color| {
-        let red = color & 0xff;
-        let green = (color >> 8) & 0xff;
-        let blue = (color >> 16) & 0xff;
-        format!("#{red:02x}{green:02x}{blue:02x}")
-    }))
+    Ok(color_number(value, property)?.map(|colour| colour_from_packed(colour as i64)))
 }
 
 /// A colour as VBA counts it, or the one the cell is wearing without saying.
@@ -7270,9 +7271,13 @@ fn style_color_value(value: Option<Option<String>>, bare: i64) -> Value {
     let Some(value) = value else {
         return Value::Integer(bare);
     };
-    let Some(hex) = value.strip_prefix('#').filter(|hex| hex.len() == 6) else {
+    // The file writes a colour as six hex digits with nothing in front, and
+    // that is the form the IR keeps; a `#` in front is taken as well so that
+    // nothing written the other way is read as colourless.
+    let hex = value.strip_prefix('#').unwrap_or(&value);
+    if hex.len() != 6 {
         return Value::Integer(bare);
-    };
+    }
     let Ok(rgb) = u32::from_str_radix(hex, 16) else {
         return Value::Integer(bare);
     };
@@ -9087,8 +9092,10 @@ mod tests {
                 assert!(cell.style.bold);
                 assert!(cell.style.italic);
                 assert_eq!(cell.style.font_size, Some(14.0));
-                assert_eq!(cell.style.font_color.as_deref(), Some("#0a141e"));
-                assert_eq!(cell.style.bg_color.as_deref(), Some("#ffff00"));
+                // Six hex digits with nothing in front, which is how the
+                // file writes a colour and how the page reads one.
+                assert_eq!(cell.style.font_color.as_deref(), Some("0A141E"));
+                assert_eq!(cell.style.bg_color.as_deref(), Some("FFFF00"));
                 assert_eq!(cell.style.number_format.as_deref(), Some("0.00"));
             }
         }
@@ -13681,6 +13688,67 @@ End Sub
                 "colour {index} did not come back"
             );
         }
+    }
+
+    /// A colour the FILE gave a cell is the colour the macro sees.
+    ///
+    /// The file writes six hex digits with nothing in front, and that is what
+    /// the IR keeps. A macro used to see white where the file said red,
+    /// because the host wrote its own colours with a `#` and read only that
+    /// form back.
+    #[test]
+    fn vba_sees_the_colour_the_file_gave_a_cell() {
+        let mut workbook = workbook();
+        workbook.sheets[0].rows.push(Row {
+            index: 1,
+            cells: vec![Cell {
+                col: 0,
+                value: CellValue::Empty,
+                style: CellStyle {
+                    bg_color: Some("FF0000".to_string()),
+                    font_color: Some("00FF00".to_string()),
+                    ..CellStyle::default()
+                },
+                formula: None,
+                runs: Vec::new(),
+            }],
+            height: None,
+            custom_height: false,
+            style_font: None,
+            thick_top: false,
+            thick_bottom: false,
+            hidden: false,
+        });
+        let module = parse_module(
+            "Public Function Seen() As String\n\
+               Seen = Range(\"A1\").Interior.Color & \"|\" & Range(\"A1\").Font.Color & \"|\" & _\n\
+                 Range(\"A1\").Interior.ColorIndex\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Seen", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("255|65280|3".to_string()));
+
+        // And what the macro writes is written the same way, so the file and
+        // the page both read it back.
+        let module = parse_module(
+            "Public Sub Paint()\n  Range(\"B1\").Interior.Color = 255\nEnd Sub\n",
+        )
+        .unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Paint", vec![], &mut host).unwrap();
+        }
+        let painted = workbook.sheets[0]
+            .rows
+            .iter()
+            .find(|row| row.index == 1)
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == 1))
+            .and_then(|cell| cell.style.bg_color.clone());
+        assert_eq!(painted.as_deref(), Some("FF0000"));
     }
 
     /// `ColorIndex` names a colour by the nearest of Excel's 56.
