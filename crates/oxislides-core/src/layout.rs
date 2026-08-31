@@ -2432,17 +2432,19 @@ mod supplied_tests {
 /// left and right edges are each read directly rather than inferred from a
 /// centre. Box 300x200pt, `Wq` at 18pt, no insets:
 ///
-///     preset                 left    right    of a 300pt box
-///     rect                  0.040  300.090   the box itself
-///     ellipse              43.980  256.170   0.1466 .. 0.8539
-///     teardrop             43.980  256.170   same as ellipse
-///     pie                  43.980  256.170   same as ellipse
-///     homePlate            0.040  250.020   right only
-///     homePlate adj=30129   0.040  269.820
-///     homePlate adj=50000   0.040  250.020
-///     roundRect             9.810  290.150   all four sides
-///     chevron             100.050  200.030   left and right
-///     wedgeRectCallout      0.040  300.090   the box itself
+/// ```text
+/// preset                 left    right    of a 300pt box
+/// rect                  0.040  300.090   the box itself
+/// ellipse              43.980  256.170   0.1466 .. 0.8539
+/// teardrop             43.980  256.170   same as ellipse
+/// pie                  43.980  256.170   same as ellipse
+/// homePlate             0.040  250.020   right only
+/// homePlate adj=30129   0.040  269.820
+/// homePlate adj=50000   0.040  250.020
+/// roundRect             9.810  290.150   all four sides
+/// chevron             100.050  200.030   left and right
+/// wedgeRectCallout      0.040  300.090   the box itself
+/// ```
 ///
 /// `ss` is the shorter side, which is what the DrawingML preset formulas
 /// measure their adjustments against; the probe's box is 300x200 so the two
