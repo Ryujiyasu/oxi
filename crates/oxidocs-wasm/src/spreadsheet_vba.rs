@@ -2342,7 +2342,7 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
-    /// Write one string, number or Boolean to every cell of a block.
+    /// Write what was assigned into every cell of a block.
     ///
     /// `.Value`, `.Value2`, `.Formula` and `.Formula2` all arrive here because
     /// Excel reads a string the same way through any of them: asked of it,
@@ -2350,6 +2350,18 @@ impl<'a> WorkbookHost<'a> {
     /// `.Formula = "TRUE"` leaves a Boolean and `.Formula = "'=B1"` keeps its
     /// text — exactly what `.Value` does with the same strings. Only a leading
     /// `=` with something after it makes a formula, and `"="` alone does not.
+    ///
+    /// What was assigned is itself a block: a single value is one cell, and an
+    /// array is its own shape, a one-dimensional one being a single ROW. Excel
+    /// lays that block on the top-left corner and then, asked what fills the
+    /// rest:
+    ///
+    /// - A side the block has only ONE of is free, and repeats by filling —
+    ///   relative references move, so `Array("=A1*7")` down five rows leaves
+    ///   `=A1*7 … =A5*7`, and a number simply repeats.
+    /// - A side the block has SEVERAL of is fixed. Where the block falls
+    ///   short, the cells beyond it are left `#N/A`; where it overruns, the
+    ///   extra entries are dropped.
     fn set_range_input(
         &mut self,
         range: CellRange,
@@ -2357,91 +2369,73 @@ impl<'a> WorkbookHost<'a> {
         operation: &str,
         style: FormulaStyle,
     ) -> Result<(), String> {
-        let count = Self::range_cell_count(range)?;
-        match value {
-            Value::Array(array) => {
-                validate_range_array_shape(range, &array, operation)?;
-                if array.values.len() != count {
-                    return Err(format!(
-                        "{operation} needs {count} values, but the array contains {}",
-                        array.values.len()
-                    ));
-                }
-                // An array names each cell's own content, so nothing moves:
-                // asked of Excel, writing `=A1*7`, `=A1*8`, `=A1*9` down a
-                // column leaves all three pointing at A1.
-                for (address, value) in range.addresses().zip(array.values) {
-                    match cell_input(value)? {
-                        CellInput::Formula(formula) => {
-                            let formula = Self::placed_formula(address, formula, style)?;
-                            self.set_cell_formula(address, formula)?;
-                        }
-                        CellInput::Constant(value) => self.set_cell_value(address, value)?,
-                    }
-                }
-            }
-            value => match cell_input(value)? {
-                // R1C1 needs no filling: the text already says where each cell
-                // should look, so every cell reads it for itself.
-                CellInput::Formula(formula) if style == FormulaStyle::R1C1 => {
-                    for address in range.addresses() {
-                        let placed = Self::placed_formula(address, formula.clone(), style)?;
+        Self::range_cell_count(range)?;
+        let block = InputBlock::of(value, operation)?;
+        for row_step in 0..=(range.end_row - range.start_row) {
+            for column_step in 0..=(range.end_column - range.start_column) {
+                let address = CellAddress {
+                    sheet: range.sheet,
+                    row: range.start_row + row_step,
+                    column: range.start_column + column_step,
+                };
+                let from_row = if block.rows == 1 { 0 } else { row_step as usize };
+                let from_column = if block.columns == 1 {
+                    0
+                } else {
+                    column_step as usize
+                };
+                let Some(value) = block.at(from_row, from_column) else {
+                    self.set_cell_value(address, CellValue::Error("#N/A".to_string()))?;
+                    continue;
+                };
+                match cell_input(value)? {
+                    CellInput::Formula(formula) => {
+                        let placed = self.placed_formula(
+                            address,
+                            formula,
+                            style,
+                            row_step as i64 - from_row as i64,
+                            column_step as i64 - from_column as i64,
+                        )?;
                         self.set_cell_formula(address, placed)?;
                     }
+                    CellInput::Constant(value) => self.set_cell_value(address, value)?,
                 }
-                CellInput::Formula(formula) => self.fill_formula(range, &formula)?,
-                CellInput::Constant(value) => {
-                    for address in range.addresses() {
-                        self.set_cell_value(address, value.clone())?;
-                    }
-                }
-            },
+            }
         }
         Ok(())
     }
 
-    /// Read a formula as it was written, in whichever of the two styles.
-    fn placed_formula(
-        address: CellAddress,
-        formula: String,
-        style: FormulaStyle,
-    ) -> Result<String, String> {
-        match style {
-            FormulaStyle::A1 => Ok(formula),
-            FormulaStyle::R1C1 => formula_from_r1c1(
-                &formula,
-                address.row.saturating_sub(1),
-                address.column,
-            ),
-        }
-    }
-
-    /// Put a formula in every cell of a block the way typing it into the
-    /// corner and filling from there would.
+    /// Read a formula as it was written, and move it as far as the fill did.
     ///
-    /// Relative references move with each cell and absolute ones stay put.
-    /// Asked of Excel, `Range("F1:G2").Formula = "=A1"` leaves F1 `=A1`,
-    /// G1 `=B1`, F2 `=A2` and G2 `=B2`, and `"=$A$1"` leaves all four alone.
-    /// The corner keeps the text it was given, so a formula this build cannot
-    /// read still reaches a single cell unharmed.
+    /// In A1 style a filled cell's relative references move with it and its
+    /// absolute ones stay put — asked of Excel, `Range("F1:G2").Formula =
+    /// "=A1"` leaves F1 `=A1`, G1 `=B1`, F2 `=A2` and G2 `=B2`, while
+    /// `"=$A$1"` leaves all four alone. A cell the block itself named has not
+    /// moved and keeps the text it was given, so a formula this build cannot
+    /// read still reaches its own cell unharmed.
+    ///
+    /// R1C1 needs no moving at all: the text already says where to look from
+    /// wherever it sits, so every cell reads it for itself.
     ///
     /// Where a reference would move off the sheet Excel writes `#REF!` into
     /// the formula; this build refuses the assignment instead, which is what
     /// the paste path already does with the same arithmetic.
-    fn fill_formula(&mut self, range: CellRange, formula: &str) -> Result<(), String> {
-        for address in range.addresses() {
-            let moved = if address.row == range.start_row && address.column == range.start_column {
-                formula.to_string()
-            } else {
-                translate_formula_references(
-                    formula,
-                    i64::from(address.row) - i64::from(range.start_row),
-                    i64::from(address.column) - i64::from(range.start_column),
-                )?
-            };
-            self.set_cell_formula(address, moved)?;
+    fn placed_formula(
+        &self,
+        address: CellAddress,
+        formula: String,
+        style: FormulaStyle,
+        down: i64,
+        across: i64,
+    ) -> Result<String, String> {
+        match style {
+            FormulaStyle::R1C1 => {
+                formula_from_r1c1(&formula, address.row.saturating_sub(1), address.column)
+            }
+            FormulaStyle::A1 if down == 0 && across == 0 => Ok(formula),
+            FormulaStyle::A1 => translate_formula_references(&formula, down, across),
         }
-        Ok(())
     }
 
     fn set_range_style(
@@ -3696,33 +3690,6 @@ impl<'a> WorkbookHost<'a> {
         }
         Ok(Value::Empty)
     }
-}
-
-fn validate_range_array_shape(
-    range: CellRange,
-    array: &ArrayValue,
-    operation: &str,
-) -> Result<(), String> {
-    if array.dimensions.len() == 1 {
-        return Ok(());
-    }
-    let rows = (range.end_row - range.start_row + 1) as usize;
-    let columns = (range.end_column - range.start_column + 1) as usize;
-    if array.dimensions.len() == 2
-        && array.dimensions[0].length == rows
-        && array.dimensions[1].length == columns
-    {
-        return Ok(());
-    }
-    let shape = array
-        .dimensions
-        .iter()
-        .map(|dimension| dimension.length.to_string())
-        .collect::<Vec<_>>()
-        .join(" x ");
-    Err(format!(
-        "{operation} needs a {rows} x {columns} array, but received {shape}"
-    ))
 }
 
 impl Host for WorkbookHost<'_> {
@@ -6204,6 +6171,55 @@ fn typed_from_text(written: &str) -> CellValue {
 enum CellInput {
     Formula(String),
     Constant(CellValue),
+}
+
+/// What was assigned, as the block of cells Excel treats it as.
+///
+/// A single value is one cell. An array is its own shape, and a
+/// one-dimensional array is a single ROW — which is why `Array(1, 2, 3)`
+/// written down a column leaves the FIRST entry filled down it rather than the
+/// three entries stacked.
+struct InputBlock {
+    rows: usize,
+    columns: usize,
+    values: Vec<Value>,
+}
+
+impl InputBlock {
+    fn of(value: Value, operation: &str) -> Result<Self, String> {
+        match value {
+            Value::Array(array) => {
+                let (rows, columns) = match array.dimensions.as_slice() {
+                    [across] => (1, across.length),
+                    [down, across] => (down.length, across.length),
+                    dimensions => {
+                        return Err(format!(
+                            "{operation} cannot take a {}-dimensional array",
+                            dimensions.len()
+                        ))
+                    }
+                };
+                Ok(Self {
+                    rows,
+                    columns,
+                    values: array.values,
+                })
+            }
+            value => Ok(Self {
+                rows: 1,
+                columns: 1,
+                values: vec![value],
+            }),
+        }
+    }
+
+    /// What the block holds there, or nothing where it does not reach.
+    fn at(&self, row: usize, column: usize) -> Option<Value> {
+        if row >= self.rows || column >= self.columns {
+            return None;
+        }
+        self.values.get(row * self.columns + column).cloned()
+    }
 }
 
 /// Read an assigned value the way Excel reads it, whichever door it came
@@ -11020,5 +11036,79 @@ End Sub
             result,
             Value::String("=RC[-1]*2|=RC[-1]*2|=A2*2".to_string())
         );
+    }
+
+    /// An array is a block laid on the corner, and what it does not cover is
+    /// either filled or left `#N/A`.
+    ///
+    /// Asked of Excel with `Array("=A1*7", "=A1*8", "=A1*9")`, which is one
+    /// ROW of three: down five rows only the first entry is used and it fills,
+    /// leaving `=A1*7 … =A5*7`; across five columns the three entries land and
+    /// the last two cells are `#N/A`; over two rows of three, the second row
+    /// is the first filled down. `Array(1, 2, 3)` down three rows leaves 1, 1,
+    /// 1 — a number fills by repeating.
+    #[test]
+    fn vba_lays_an_array_on_the_corner_and_fills_the_free_side() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Spread() As String\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 20\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"A4\").Value = 40\n\
+               Range(\"A5\").Value = 50\n\
+               Range(\"C1:C5\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")\n\
+               Range(\"F1:H1\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")\n\
+               Range(\"F3:J3\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")\n\
+               Range(\"L1:N2\").Value = Array(\"=A1*7\", \"=A1*8\", \"=A1*9\")\n\
+               Range(\"L4:L6\").Value = Array(1, 2, 3)\n\
+               Range(\"U1:V3\").Formula = Range(\"C1:C3\").Formula\n\
+               Range(\"X1:Y3\").Formula = Range(\"C1:C2\").Formula\n\
+               Spread = Range(\"C1\").Formula & \"|\" & Range(\"C5\").Formula & \"|\" & _\n\
+                 Range(\"H1\").Formula & \"|\" & Range(\"N2\").Formula & \"|\" & _\n\
+                 Range(\"L6\").Value & \"|\" & Range(\"V3\").Formula & \"|\" & _\n\
+                 Range(\"Y2\").Formula\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Spread", vec![], &mut host).unwrap()
+        };
+
+        // The last two come from a column of three and a column of two laid
+        // across two columns: the free side fills to the right.
+        assert_eq!(
+            result,
+            Value::String("=A1*7|=A5*7|=A1*9|=A2*9|1|=B3*7|=B2*7".to_string())
+        );
+        // A column of two laid down three rows leaves the third row `#N/A`.
+        let short = |column: u32| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|row| row.index == 3)
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == column))
+                .map(|cell| match &cell.value {
+                    CellValue::Error(text) => text.clone(),
+                    other => format!("{other:?}"),
+                })
+        };
+        assert_eq!(short(23).as_deref(), Some("#N/A"));
+        assert_eq!(short(24).as_deref(), Some("#N/A"));
+        // I3 and J3 are past the far end of a row of three.
+        let beyond = |column: u32| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|row| row.index == 3)
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == column))
+                .map(|cell| match &cell.value {
+                    CellValue::Error(text) => text.clone(),
+                    other => format!("{other:?}"),
+                })
+        };
+        assert_eq!(beyond(8).as_deref(), Some("#N/A"));
+        assert_eq!(beyond(9).as_deref(), Some("#N/A"));
     }
 }
