@@ -86,6 +86,28 @@ pub fn evaluate_workbook_formulas_at(workbook: &mut Workbook, now: f64) {
     recalculate(&mut workbook.sheets, &names, Overwrite::All, Some(now));
 }
 
+/// Work one formula out against the workbook as it stands, without storing it
+/// anywhere. `sheet` is where a bare reference like `A1` is read from.
+///
+/// The whole book has to be handed to the engine before it can look a
+/// reference up, so this costs a pass over every cell — the same pass a
+/// recalculation makes. It is for the odd expression a macro evaluates, not
+/// for a loop over one.
+///
+/// `None` means the text is not a formula at all. A formula that fails comes
+/// back as the error value a cell would show, which is what
+/// `Application.Evaluate` hands a macro.
+pub fn evaluate_expression(
+    workbook: &Workbook,
+    sheet: usize,
+    formula: &str,
+    now: Option<f64>,
+) -> Option<oxicells_calc::Value> {
+    let name = workbook.sheets.get(sheet)?.name.clone();
+    let book = assemble(&workbook.sheets, &workbook.defined_names, now);
+    book.evaluate(&name, formula).ok()
+}
+
 /// Compute only those formula cells the file left without a cached value,
 /// leaving everything Excel already calculated untouched.
 pub fn fill_missing_formula_values(workbook: &mut Workbook) {
@@ -93,42 +115,13 @@ pub fn fill_missing_formula_values(workbook: &mut Workbook) {
     recalculate(&mut workbook.sheets, &names, Overwrite::OnlyMissing, None);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Overwrite {
-    All,
-    OnlyMissing,
-}
-
-fn recalculate(
-    sheets: &mut [Sheet],
+/// Put the workbook to the engine: its names, its sheets, its tables and
+/// every cell, either as the formula it holds or as the value it holds.
+fn assemble(
+    sheets: &[Sheet],
     names: &[(String, String)],
-    mode: Overwrite,
     now: Option<f64>,
-) {
-    // Which formula cells the file left without an answer. A workbook Excel
-    // wrote has none, and then there is nothing to do at all — which is worth
-    // asking BEFORE building anything, since building it is the cost.
-    let missing: Vec<(String, (u32, u32))> = if mode == Overwrite::OnlyMissing {
-        let mut found = Vec::new();
-        for sheet in sheets.iter() {
-            for row in &sheet.rows {
-                for cell in &row.cells {
-                    if formula_text(cell.formula.as_deref()).is_some()
-                        && matches!(cell.value, CellValue::Empty)
-                    {
-                        found.push((sheet.name.clone(), (cell.col, row.index.saturating_sub(1))));
-                    }
-                }
-            }
-        }
-        if found.is_empty() {
-            return;
-        }
-        found
-    } else {
-        Vec::new()
-    };
-
+) -> oxicells_calc::Workbook {
     let mut book = oxicells_calc::Workbook::new();
     if let Some(moment) = now {
         book.set_now(moment);
@@ -186,6 +179,47 @@ fn recalculate(
             }
         }
     }
+
+    book
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Overwrite {
+    All,
+    OnlyMissing,
+}
+
+fn recalculate(
+    sheets: &mut [Sheet],
+    names: &[(String, String)],
+    mode: Overwrite,
+    now: Option<f64>,
+) {
+    // Which formula cells the file left without an answer. A workbook Excel
+    // wrote has none, and then there is nothing to do at all — which is worth
+    // asking BEFORE building anything, since building it is the cost.
+    let missing: Vec<(String, (u32, u32))> = if mode == Overwrite::OnlyMissing {
+        let mut found = Vec::new();
+        for sheet in sheets.iter() {
+            for row in &sheet.rows {
+                for cell in &row.cells {
+                    if formula_text(cell.formula.as_deref()).is_some()
+                        && matches!(cell.value, CellValue::Empty)
+                    {
+                        found.push((sheet.name.clone(), (cell.col, row.index.saturating_sub(1))));
+                    }
+                }
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+        found
+    } else {
+        Vec::new()
+    };
+
+    let mut book = assemble(sheets, names, now);
 
     match mode {
         Overwrite::All => {

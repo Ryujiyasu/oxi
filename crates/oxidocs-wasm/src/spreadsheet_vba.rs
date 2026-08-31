@@ -1669,11 +1669,35 @@ impl<'a> WorkbookHost<'a> {
             }
             None => (sheet, expression),
         };
-        self.range_object(
+        // A reference or a name first, since that is what Excel answers with
+        // a Range: `Evaluate("A1")` hands back the cell, not what is in it.
+        if let Ok(range) = self.range_object(
             sheet,
             &[Value::String(reference.to_string())],
             NameReach::Workbook,
-        )
+        ) {
+            return Ok(range);
+        }
+        // Anything else is a formula, worked out the way the sheet would work
+        // it out. Measured in Excel 16.0: `1+1` and `=1+1` are both 2,
+        // `SUM(B1:B2)` reads the cells, `LEN("abc")` is 3, and a failure comes
+        // back as the value a cell would show — `1/0` is error 2007 and
+        // `NOTAFN()` is 2029 — rather than stopping the macro.
+        match oxicells_core::formula::evaluate_expression(
+            self.workbook,
+            sheet,
+            reference,
+            self.now,
+        ) {
+            Some(oxicells_calc::Value::Number(number)) => Ok(numeric_result(number)),
+            Some(oxicells_calc::Value::Text(text)) => Ok(Value::String(text)),
+            Some(oxicells_calc::Value::Logical(state)) => Ok(Value::Boolean(state)),
+            Some(oxicells_calc::Value::Blank) => Ok(Value::Empty),
+            Some(oxicells_calc::Value::Error(why)) => {
+                Ok(Value::Error(spreadsheet_error_number(why.as_str())))
+            }
+            None => Err(format!("Evaluate cannot work out {reference:?}")),
+        }
     }
 
     /// The rectangle a sheet's written cells fill.
@@ -10024,6 +10048,40 @@ mod tests {
         .unwrap();
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         assert!(execute_with_host(&module, "Ask", vec![], &mut host).is_err());
+    }
+
+    /// Measured in Excel 16.0: `Evaluate` works a formula out and hands back
+    /// the answer, with or without the leading `=`; it reads the sheet's own
+    /// cells; and a formula that fails comes back as the value a cell would
+    /// show rather than stopping the macro — `1/0` is error 2007 and a name
+    /// that is no function at all is 2029. A reference is still a Range, so
+    /// `Evaluate("A1")` is the cell and not what is in it.
+    #[test]
+    fn evaluate_works_out_a_formula_as_well_as_a_reference() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Range(\"B1\").Value = 10\n\
+               Range(\"B2\").Value = 20\n\
+               Ask = Evaluate(\"1+1\")\n\
+               Ask = Ask & \"|\" & Evaluate(\"=1+1\")\n\
+               Ask = Ask & \"|\" & Evaluate(\"SUM(B1:B2)\")\n\
+               Ask = Ask & \"|\" & Evaluate(\"LEN(\"\"abc\"\")\")\n\
+               Ask = Ask & \"|\" & Evaluate(\"A1\").Address(0, 0)\n\
+               Ask = Ask & \"|\" & IsError(Evaluate(\"1/0\"))\n\
+               Ask = Ask & \"|\" & IsError(Evaluate(\"NOTAFN()\"))\n\
+               Ask = Ask & \"|\" & Evaluate(\"IF(B1>5, \"\"big\"\", \"\"small\"\")\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String("2|2|30|3|A1|True|True|big".to_string())
+        );
     }
 
     #[test]
