@@ -2805,9 +2805,7 @@ impl<'a> WorkbookHost<'a> {
             ));
         }
         let match_case = find_boolean_argument(args.get(6), false, "MatchCase")?;
-        if find_boolean_argument(args.get(7), false, "MatchByte")? {
-            return Err("Range.Find MatchByte:=True is not supported in the browser".to_string());
-        }
+        let match_byte = find_boolean_argument(args.get(7), false, "MatchByte")?;
         if find_boolean_argument(args.get(8), false, "SearchFormat")? {
             return Err(
                 "Range.Find SearchFormat:=True is not supported in the browser".to_string(),
@@ -2858,7 +2856,7 @@ impl<'a> WorkbookHost<'a> {
         let needle = find_value_text(what);
         let found = addresses.into_iter().find(|address| {
             let candidate = self.find_cell_text(*address, look_in);
-            find_text_matches(&candidate, &needle, look_at == 1, match_case)
+            find_text_matches(&candidate, &needle, look_at == 1, match_case, match_byte)
         });
         let result = found
             .map(|address| self.object(HostObject::Range(CellRange::single(address))))
@@ -2940,11 +2938,7 @@ impl<'a> WorkbookHost<'a> {
             ));
         }
         let match_case = find_boolean_argument(args.get(4), false, "MatchCase")?;
-        if find_boolean_argument(args.get(5), false, "MatchByte")? {
-            return Err(
-                "Range.Replace MatchByte:=True is not supported in the browser".to_string(),
-            );
-        }
+        let match_byte = find_boolean_argument(args.get(5), false, "MatchByte")?;
         if find_boolean_argument(args.get(6), false, "SearchFormat")? {
             return Err(
                 "Range.Replace SearchFormat:=True is not supported in the browser".to_string(),
@@ -2977,6 +2971,7 @@ impl<'a> WorkbookHost<'a> {
                 &replacement_text,
                 look_at == 1,
                 match_case,
+                match_byte,
             ) else {
                 continue;
             };
@@ -7048,22 +7043,74 @@ fn find_value_text(value: &Value) -> String {
     }
 }
 
-fn find_text_matches(candidate: &str, needle: &str, whole: bool, match_case: bool) -> bool {
+/// A character as the search compares it: one case unless the case matters,
+/// one width unless the width does.
+///
+/// Excel calls the second of those `MatchByte`, and with it off — which is how
+/// it starts — the wide and narrow forms of a letter are the same letter.
+/// Asked of it, `Find("ABC")` lands on a cell holding the wide `ＡＢＣ`, and
+/// half-width `ｱｲ` lands on `アイ`. What does NOT fold is a narrow kana with
+/// its voice mark beside it: `ｶ` + `ﾞ` stays two characters and never meets
+/// the single `ガ`.
+fn compared(one: char, match_case: bool, match_byte: bool) -> char {
+    let one = if match_byte { one } else { one_width(one) };
     if match_case {
-        if whole {
-            candidate == needle
-        } else {
-            candidate.contains(needle)
-        }
+        one
     } else {
-        let candidate = candidate.to_lowercase();
-        let needle = needle.to_lowercase();
-        if whole {
-            candidate == needle
-        } else {
-            candidate.contains(&needle)
-        }
+        one.to_lowercase().next().unwrap_or(one)
     }
+}
+
+/// The full-width kana, in the order the narrow ones run from `FF61`.
+const NARROW_KANA: [char; 63] = [
+    '\u{3002}', '\u{300c}', '\u{300d}', '\u{3001}', '\u{30fb}', '\u{30f2}', '\u{30a1}',
+    '\u{30a3}', '\u{30a5}', '\u{30a7}', '\u{30a9}', '\u{30e3}', '\u{30e5}', '\u{30e7}',
+    '\u{30c3}', '\u{30fc}', '\u{30a2}', '\u{30a4}', '\u{30a6}', '\u{30a8}', '\u{30aa}',
+    '\u{30ab}', '\u{30ad}', '\u{30af}', '\u{30b1}', '\u{30b3}', '\u{30b5}', '\u{30b7}',
+    '\u{30b9}', '\u{30bb}', '\u{30bd}', '\u{30bf}', '\u{30c1}', '\u{30c4}', '\u{30c6}',
+    '\u{30c8}', '\u{30ca}', '\u{30cb}', '\u{30cc}', '\u{30cd}', '\u{30ce}', '\u{30cf}',
+    '\u{30d2}', '\u{30d5}', '\u{30d8}', '\u{30db}', '\u{30de}', '\u{30df}', '\u{30e0}',
+    '\u{30e1}', '\u{30e2}', '\u{30e4}', '\u{30e6}', '\u{30e8}', '\u{30e9}', '\u{30ea}',
+    '\u{30eb}', '\u{30ec}', '\u{30ed}', '\u{30ef}', '\u{30f3}', '\u{309b}', '\u{309c}',
+];
+
+/// One width for a character that has two.
+fn one_width(one: char) -> char {
+    let code = one as u32;
+    // The wide forms of what a keyboard types run from FF01 to FF5E, exactly
+    // 0xFEE0 above the narrow ones.
+    if (0xFF01..=0xFF5E).contains(&code) {
+        return char::from_u32(code - 0xFEE0).unwrap_or(one);
+    }
+    if (0xFF61..=0xFF9F).contains(&code) {
+        return NARROW_KANA[(code - 0xFF61) as usize];
+    }
+    one
+}
+
+/// The characters of a string as they are compared.
+fn compared_chars(text: &str, match_case: bool, match_byte: bool) -> Vec<char> {
+    text.chars()
+        .map(|one| compared(one, match_case, match_byte))
+        .collect()
+}
+
+fn find_text_matches(
+    candidate: &str,
+    needle: &str,
+    whole: bool,
+    match_case: bool,
+    match_byte: bool,
+) -> bool {
+    let candidate = compared_chars(candidate, match_case, match_byte);
+    let needle = compared_chars(needle, match_case, match_byte);
+    if whole {
+        return candidate == needle;
+    }
+    if needle.is_empty() {
+        return true;
+    }
+    candidate.windows(needle.len()).any(|held| held == needle)
 }
 
 fn replace_matching_text(
@@ -7072,8 +7119,9 @@ fn replace_matching_text(
     replacement: &str,
     whole: bool,
     match_case: bool,
+    match_byte: bool,
 ) -> Option<String> {
-    if !find_text_matches(candidate, needle, whole, match_case) {
+    if !find_text_matches(candidate, needle, whole, match_case, match_byte) {
         return None;
     }
     if whole {
@@ -7082,28 +7130,24 @@ fn replace_matching_text(
     if needle.is_empty() {
         return None;
     }
-    if match_case {
-        return Some(candidate.replace(needle, replacement));
-    }
-
+    // Counted in CHARACTERS, not bytes: a letter and its wide twin are one
+    // character each but three bytes apart, so only the character count lines
+    // the two strings up.
+    let held: Vec<char> = candidate.chars().collect();
+    let looking = compared_chars(candidate, match_case, match_byte);
+    let needle = compared_chars(needle, match_case, match_byte);
     let mut result = String::with_capacity(candidate.len());
-    let mut offset = 0;
+    let mut at = 0;
     let mut replaced_any = false;
-    while offset < candidate.len() {
-        let Some(relative) = candidate[offset..].char_indices().find_map(|(index, _)| {
-            let start = offset + index;
-            let end = start.checked_add(needle.len())?;
-            (candidate.is_char_boundary(end) && candidate[start..end].eq_ignore_ascii_case(needle))
-                .then_some(index)
-        }) else {
-            result.push_str(&candidate[offset..]);
-            break;
-        };
-        let start = offset + relative;
-        result.push_str(&candidate[offset..start]);
-        result.push_str(replacement);
-        offset = start + needle.len();
-        replaced_any = true;
+    while at < looking.len() {
+        if at + needle.len() <= looking.len() && looking[at..at + needle.len()] == needle[..] {
+            result.push_str(replacement);
+            at += needle.len();
+            replaced_any = true;
+        } else {
+            result.push(held[at]);
+            at += 1;
+        }
     }
     replaced_any.then_some(result)
 }
@@ -14321,6 +14365,40 @@ End Sub
             ),
             "10,20,30,,"
         );
+    }
+
+    /// Wide and narrow forms of a letter are the same letter, unless asked.
+    ///
+    /// Asked of Excel: `Find("ABC")` lands on a cell holding the wide `ＡＢＣ`
+    /// and only `MatchByte:=True` sends it to the narrow one; half-width `ｱｲ`
+    /// lands on `アイ` the same way. What does NOT fold is a narrow kana with
+    /// its voice mark beside it — `ｶ` + `ﾞ` stays two characters and never
+    /// meets the single `ガ`.
+    #[test]
+    fn vba_reads_a_wide_letter_and_a_narrow_one_as_one() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Found() As String\n\
+               Range(\"A1\").Value = \"ＡＢＣ\"\n\
+               Range(\"A2\").Value = \"ABC\"\n\
+               Range(\"A3\").Value = \"アイ\"\n\
+               Range(\"A4\").Value = \"ｱｲ\"\n\
+               Range(\"A5\").Value = \"ガ\"\n\
+               Range(\"A6\").Value = \"ｶﾞ\"\n\
+               Found = Range(\"A1:A6\").Find(\"ABC\", Range(\"A6\")).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A6\").Find(\"ABC\", Range(\"A6\"), , , , , , True).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A6\").Find(\"ｱｲ\", Range(\"A6\")).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A6\").Find(\"ｱｲ\", Range(\"A6\"), , , , , , True).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A6\").Find(\"ｶﾞ\", Range(\"A6\")).Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Found", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("A1|A2|A3|A4|A6".to_string()));
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
