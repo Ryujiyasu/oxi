@@ -1791,6 +1791,104 @@ impl<'a> WorkbookHost<'a> {
                 Some(format),
             ))));
         }
+        // The ranking family, which reads only the numbers: asked of Excel,
+        // text, blanks and Booleans in the block are passed over, so
+        // `Large` of 10, 30, 20, "text", blank, TRUE, 30 answers 30, 30, 20,
+        // 10 and then refuses.
+        let ranking = ["large", "small"]
+            .iter()
+            .find(|candidate| name.eq_ignore_ascii_case(candidate));
+        if let Some(ranking) = ranking {
+            let [block, wanted] = args else {
+                return Err(format!(
+                    "WorksheetFunction.{name} expects a block and which one to take"
+                ));
+            };
+            let mut numbers = self.worksheet_numbers(block, name)?;
+            // A fraction is cut down, not rounded: Excel answers the same for
+            // 1.7 as for 1.
+            let wanted = worksheet_number(wanted, name)?.trunc();
+            numbers.sort_by(|one, other| one.partial_cmp(other).unwrap_or(Ordering::Equal));
+            if *ranking == "large" {
+                numbers.reverse();
+            }
+            let at = wanted - 1.0;
+            if at < 0.0 || at >= numbers.len() as f64 {
+                return Err(format!(
+                    "WorksheetFunction.{name} has no number {wanted} to take"
+                ));
+            }
+            return Ok(Some(numeric_result(numbers[at as usize])));
+        }
+
+        if name.eq_ignore_ascii_case("rank") {
+            let (value, block, order) = match args {
+                [value, block] => (value, block, None),
+                [value, block, order] => (value, block, Some(order)),
+                _ => return Err("WorksheetFunction.Rank expects a number and a block".to_string()),
+            };
+            let value = worksheet_number(value, name)?;
+            let numbers = self.worksheet_numbers(block, name)?;
+            if !numbers.iter().any(|held| *held == value) {
+                return Err("WorksheetFunction.Rank cannot find that number".to_string());
+            }
+            let ascending = match order {
+                None | Some(Value::Missing) => false,
+                Some(order) => worksheet_number(order, name)? != 0.0,
+            };
+            // Equal numbers share the higher place and the next one is skipped:
+            // asked of Excel, 30, 30, 20, 10 ranks 20 third, not second.
+            let ahead = numbers
+                .iter()
+                .filter(|held| {
+                    if ascending {
+                        **held < value
+                    } else {
+                        **held > value
+                    }
+                })
+                .count();
+            return Ok(Some(Value::Integer(ahead as i64 + 1)));
+        }
+
+        // How far the numbers lie from their own middle. The plain names are
+        // the SAMPLE, dividing by one less than the count; the `_P` ones take
+        // the numbers as the whole population.
+        let spread = [
+            ("stdev", true, false),
+            ("stdev_p", false, false),
+            ("stdevp", false, false),
+            ("var", true, true),
+            ("var_p", false, true),
+            ("varp", false, true),
+        ]
+        .into_iter()
+        .find(|(candidate, _, _)| name.eq_ignore_ascii_case(candidate));
+        if let Some((_, sample, squared)) = spread {
+            let mut numbers = Vec::new();
+            for value in args {
+                numbers.extend(self.worksheet_numbers(value, name)?);
+            }
+            let count = numbers.len();
+            if count == 0 || (sample && count < 2) {
+                return Err(format!(
+                    "WorksheetFunction.{name} needs more numbers than that"
+                ));
+            }
+            let middle = numbers.iter().sum::<f64>() / count as f64;
+            let apart = numbers
+                .iter()
+                .map(|held| (held - middle) * (held - middle))
+                .sum::<f64>();
+            let over = if sample { count - 1 } else { count } as f64;
+            let variance = apart / over;
+            return Ok(Some(numeric_result(if squared {
+                variance
+            } else {
+                variance.sqrt()
+            })));
+        }
+
         if name.eq_ignore_ascii_case("power") {
             let [base, exponent] = args else {
                 return Err("WorksheetFunction.Power expects a number and a power".to_string());
@@ -1985,6 +2083,20 @@ impl<'a> WorkbookHost<'a> {
                 .iter()
                 .filter(|value| {
                     !matches!(
+                        value,
+                        Value::Empty | Value::Missing | Value::Nothing | Value::Null
+                    )
+                })
+                .count();
+            return Ok(Value::Integer(count as i64));
+        }
+        if name.eq_ignore_ascii_case("countblank") {
+            // The other side of CountA, and it counts only what is really
+            // empty: asked of Excel, text and a Boolean are not blank.
+            let count = values
+                .iter()
+                .filter(|value| {
+                    matches!(
                         value,
                         Value::Empty | Value::Missing | Value::Nothing | Value::Null
                     )
@@ -12867,6 +12979,83 @@ End Sub
         };
 
         assert_eq!(result, Value::String("1|2|=K5*10|=L5*10".to_string()));
+    }
+
+    /// The ranking family, on a block holding things that are not numbers.
+    ///
+    /// Every answer was asked of Excel about 10, 30, 20, "text", a blank, TRUE
+    /// and 30: only the numbers are read, so `Large` runs 30, 30, 20, 10 and
+    /// then refuses; equal numbers share a place and the next one is skipped,
+    /// so 20 ranks third; `CountBlank` counts the one cell that is really
+    /// blank; and the plain spread is the SAMPLE one, dividing by one less
+    /// than the count.
+    #[test]
+    fn vba_ranks_and_spreads_the_numbers_in_a_block() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ranked() As String\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = 30\n\
+               Range(\"A3\").Value = 20\n\
+               Range(\"A4\").Value = \"text\"\n\
+               Range(\"A6\").Value = True\n\
+               Range(\"A7\").Value = 30\n\
+               Ranked = WorksheetFunction.Large(Range(\"A1:A7\"), 1) & \"|\" & _\n\
+                 WorksheetFunction.Large(Range(\"A1:A7\"), 3) & \"|\" & _\n\
+                 WorksheetFunction.Large(Range(\"A1:A7\"), 1.7) & \"|\" & _\n\
+                 WorksheetFunction.Small(Range(\"A1:A7\"), 1) & \"|\" & _\n\
+                 WorksheetFunction.Small(Range(\"A1:A7\"), 4) & \"|\" & _\n\
+                 WorksheetFunction.CountBlank(Range(\"A1:A7\")) & \"|\" & _\n\
+                 WorksheetFunction.Rank(30, Range(\"A1:A7\")) & \"|\" & _\n\
+                 WorksheetFunction.Rank(20, Range(\"A1:A7\")) & \"|\" & _\n\
+                 WorksheetFunction.Rank(10, Range(\"A1:A7\")) & \"|\" & _\n\
+                 WorksheetFunction.Rank(30, Range(\"A1:A7\"), 1) & \"|\" & _\n\
+                 WorksheetFunction.Rank(10, Range(\"A1:A7\"), 1) & \"|\" & _\n\
+                 WorksheetFunction.Round(WorksheetFunction.Var(Range(\"A1:A7\")), 4) & \"|\" & _\n\
+                 WorksheetFunction.Var_P(Range(\"A1:A7\")) & \"|\" & _\n\
+                 WorksheetFunction.Large(Array(5, 15, 25), 2)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ranked", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "30|20|30|10|30|1|1|3|4|3|1|91.6667|68.75|15".to_string()
+            )
+        );
+    }
+
+    /// What the ranking family refuses, as Excel refuses it.
+    #[test]
+    fn vba_refuses_a_place_that_is_not_there() {
+        for call in [
+            "WorksheetFunction.Large(Range(\"A1:A3\"), 4)",
+            "WorksheetFunction.Large(Range(\"A1:A3\"), 0)",
+            "WorksheetFunction.Small(Range(\"A1:A3\"), 9)",
+            "WorksheetFunction.Rank(25, Range(\"A1:A3\"))",
+            "WorksheetFunction.StDev(Range(\"A1:A1\"))",
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Ask()\n\
+                   Range(\"A1\").Value = 10\n\
+                   Range(\"A2\").Value = 30\n\
+                   Range(\"A3\").Value = 20\n\
+                   Debug.Print {call}\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            assert!(
+                execute_with_host(&module, "Ask", vec![], &mut host).is_err(),
+                "{call} should have refused"
+            );
+        }
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
