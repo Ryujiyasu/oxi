@@ -12494,12 +12494,49 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             _ => None,
                         })
                         .unwrap_or(0.0);
+                    // S1266 (2026-09-01, default ON, opt-out OXI_S1266_DISABLE):
+                    // a box too short for even ONE line kept NONE of its text.
+                    // floor(inner_h / line_h) == 0 put the cutoff AT the first
+                    // line's own y, so `pe.y >= line_cutoff_y` dropped every text
+                    // element and the box rendered as an empty frame. Census over
+                    // the 200-doc JA corpus: 61 boxes in 17 docs (8.5%) lose ALL
+                    // their text this way, including 12 boxes in the blind-set
+                    // floor doc correspondence__04a3e3e17960b59a (0.459, absolute
+                    // worst) and the single box of policies__04a2204e7119e51d
+                    // (the LO-beats-Oxi #1). Word draws them: probe
+                    // _pb_txbxfit_gen/_word (Word SaveAs2 PDF, 11 face/size/line-
+                    // rule configs, ~90 arms) puts the one-line threshold BELOW a
+                    // line height in every config — at line_h 15.6 with the
+                    // default 3.6pt insets a 10.5pt box drops it and an 11pt box
+                    // keeps it. Every corpus box in the class is >= 22.5pt tall,
+                    // so a floor of one line is the measured answer for all of
+                    // them. Raising the floor can only ADD elements, so every box
+                    // that already keeps >= 1 line stays byte-identical.
+                    // (The same probe also shows Word keeps roughly ONE MORE line
+                    // than this cutoff in taller boxes — n*line_h <= inner_h + X
+                    // with X ~ 0.18..0.28 of a line. X is not pinned across the
+                    // line-spacing rules yet, so that half is NOT implemented
+                    // here; see the archive note for the measurement table.)
                     let line_cutoff_y = if line_h > 0.5 && inner_h > 0.0 {
-                        let avail = (inner_h / line_h).floor();
+                        let mut avail = (inner_h / line_h).floor();
+                        if std::env::var("OXI_S1266_DISABLE").is_err() {
+                            avail = avail.max(1.0);
+                        }
                         abs_y + inset_t + v_corner_inset + avail * line_h
                     } else {
                         clip_bottom
                     };
+                    if std::env::var("OXI_DEBUG_TB").is_ok() {
+                        eprintln!(
+                            "[TBCUT] abs_y={:.2} h={:.2} inner_h={:.2} line_h={:.2} avail={:.0} cutoff={:.2} n_text={} n_drop={} txt={:?}",
+                            abs_y, text_box.height, inner_h, line_h,
+                            if line_h > 0.5 { (inner_h / line_h).floor() } else { -1.0 },
+                            line_cutoff_y,
+                            para_elements.iter().filter(|e| matches!(e.content, LayoutContent::Text { .. })).count(),
+                            para_elements.iter().filter(|e| matches!(e.content, LayoutContent::Text { .. }) && e.y >= line_cutoff_y).count(),
+                            para.runs.iter().flat_map(|r| r.text.chars()).take(12).collect::<String>(),
+                        );
+                    }
                     let accept_and_fix_color = |pe: &mut LayoutElement| -> bool {
                         // Drop elements whose Y is past the last-line-allowed cutoff.
                         // For non-text elements (BoxRect inside textbox), use traditional
