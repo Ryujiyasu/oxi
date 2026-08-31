@@ -5723,6 +5723,9 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
                 return Ok(Some(self.object(HostObject::Worksheets)));
             }
+            if name.eq_ignore_ascii_case("names") {
+                return Ok(Some(self.object(HostObject::Names)));
+            }
             if name.eq_ignore_ascii_case("selection") || name.eq_ignore_ascii_case("activecell") {
                 let range = if name.eq_ignore_ascii_case("activecell") {
                     CellRange::single(CellAddress {
@@ -5747,10 +5750,22 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(None);
         }
-        if self.is_workbook(receiver)
-            && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
-        {
-            return Ok(Some(self.object(HostObject::Worksheets)));
+        if self.is_workbook(receiver) {
+            if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
+                return Ok(Some(self.object(HostObject::Worksheets)));
+            }
+            // Every name the workbook holds. Excel counts a sheet's own names
+            // among these as well, spelling each `Sheet1!total`, and answers
+            // `Worksheet.Names` with just that sheet's — but the parser keeps
+            // no sheet-scoped names, so that member is left to refuse rather
+            // than hand back an empty collection, which would read as a sheet
+            // having none.
+            if name.eq_ignore_ascii_case("names") {
+                return Ok(Some(self.object(HostObject::Names)));
+            }
+            if name.eq_ignore_ascii_case("activesheet") {
+                return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
+            }
         }
         if self.is_worksheets(receiver) {
             if name.eq_ignore_ascii_case("add") {
@@ -5785,6 +5800,19 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::String(
                     self.workbook.sheets[sheet].name.clone(),
                 )));
+            }
+            // `Cells` with nothing after it is the whole grid. Excel cannot
+            // count it — `Cells.Count` overflows a Long and raises — and
+            // neither can this: the count runs into the execution limit and
+            // says so.
+            if name.eq_ignore_ascii_case("cells") {
+                return Ok(Some(self.object(HostObject::Range(CellRange {
+                    sheet,
+                    start_row: 1,
+                    start_column: 0,
+                    end_row: MAX_WORKSHEET_ROW,
+                    end_column: MAX_WORKSHEET_COLUMN,
+                }))));
             }
             if name.eq_ignore_ascii_case("autofiltermode") {
                 let filtering = self
@@ -5982,8 +6010,18 @@ impl Host for WorkbookHost<'_> {
             return Ok(Some(Value::Integer(i64::from(range.start_column) + 1)));
         }
         if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
-            return Self::range_cell_count_large(range)
-                .map(|count| Some(Value::Integer(count as i64)));
+            let count = Self::range_cell_count_large(range)?;
+            // `Count` is a Long, and Excel stops answering it at exactly the
+            // point one overflows: `A1:XFD131071` counts 2,147,467,264 and
+            // comes back, `A1:XFD131072` is 2,147,483,648 and comes back with
+            // nothing at all. `CountLarge` answers either way, and is what
+            // the whole grid's 17,179,869,184 has to be asked for.
+            if name.eq_ignore_ascii_case("count") && count > i64::from(i32::MAX) as u64 {
+                return Err(format!(
+                    "Range.Count cannot hold {count} cells; ask CountLarge"
+                ));
+            }
+            return Ok(Some(Value::Integer(count as i64)));
         }
         if name.eq_ignore_ascii_case("address") {
             return Ok(Some(Value::String(format_range_address(range, true, true))));
@@ -8035,11 +8073,14 @@ fn format_range_address(range: CellRange, row_absolute: bool, column_absolute: b
     // `$A$2:$XFD$2`, and `Columns(2).Address` answers `$B:$B`.
     let whole_rows = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
     let whole_columns = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
-    if whole_rows && !whole_columns {
+    // A range that is both at once is the whole grid, and Excel spells that
+    // in rows: `Cells`, `Rows` and `Columns` alike answer `$1:$1048576`,
+    // never `$A$1:$XFD$1048576` and never `$A:$XFD`.
+    if whole_rows {
         let mark = if row_absolute { "$" } else { "" };
         return format!("{mark}{}:{mark}{}", range.start_row, range.end_row);
     }
-    if whole_columns && !whole_rows {
+    if whole_columns {
         let mark = if column_absolute { "$" } else { "" };
         return format!(
             "{mark}{}:{mark}{}",
@@ -8582,6 +8623,75 @@ mod tests {
             workbook.sheets[0].rows[1].cells[0].value,
             CellValue::Number(value) if value == 2.5
         ));
+    }
+
+    /// A member with nothing in brackets after it is a property read, and a
+    /// getter written only into the call path answers `X.Y(1)` while refusing
+    /// `X.Y`. Excel 16.0 answers all of these on a workbook of two sheets:
+    /// `ActiveWorkbook.Names.Count` 2 against the sheet's own 1,
+    /// `ActiveWorkbook.ActiveSheet` the sheet in front, and `ActiveSheet.Cells`
+    /// the whole grid, which counts 17,179,869,184.
+    #[test]
+    fn reads_workbook_and_sheet_members_with_no_brackets_after_them() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               ActiveWorkbook.Names.Add \"one\", \"=Sheet1!$A$1\"\n\
+               Ask = ActiveWorkbook.Names.Count\n\
+               Ask = Ask & \"|\" & Application.Names.Count\n\
+               Ask = Ask & \"|\" & ActiveWorkbook.ActiveSheet.Name\n\
+               Ask = Ask & \"|\" & ActiveSheet.Cells.CountLarge\n\
+               Ask = Ask & \"|\" & ActiveSheet.Cells.Address(0, 0)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String("1|1|Sheet1|17179869184|1:1048576".to_string())
+        );
+    }
+
+    /// `Count` is a Long. Excel answers `A1:XFD131071` with 2,147,467,264 and
+    /// answers `A1:XFD131072` — one row more, and exactly 2^31 cells — with
+    /// nothing at all, while `CountLarge` gives 2,147,483,648 for the same
+    /// range. So the count that will not fit has to be refused rather than
+    /// handed over as a number Excel never gives.
+    #[test]
+    fn range_count_stops_where_a_long_stops() {
+        let mut workbook = workbook();
+        let under = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"A1:XFD131071\").Count\n\
+             End Function\n",
+        )
+        .unwrap();
+        let over = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"A1:XFD131072\").Count\n\
+             End Function\n",
+        )
+        .unwrap();
+        let large = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"A1:XFD131072\").CountLarge\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        assert_eq!(
+            execute_with_host(&under, "Ask", vec![], &mut host).unwrap(),
+            Value::String("2147467264".to_string())
+        );
+        let refused = execute_with_host(&over, "Ask", vec![], &mut host).unwrap_err();
+        assert!(refused.message.contains("CountLarge"), "{refused:?}");
+        assert_eq!(
+            execute_with_host(&large, "Ask", vec![], &mut host).unwrap(),
+            Value::String("2147483648".to_string())
+        );
     }
 
     #[test]
