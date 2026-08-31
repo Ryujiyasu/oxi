@@ -938,10 +938,15 @@ mod coverage_tests {
     }
 
     #[test]
-    fn a_missing_style_falls_back_to_the_upright_face() {
-        // Fira Sans was installed regular-only; asking bold must still answer.
+    fn a_missing_style_is_refused_rather_than_served_from_the_upright() {
+        // Fira Sans was installed regular-only. Answering its bold request
+        // from the regular face is the kind of quiet wrongness this whole
+        // module exists to avoid: Merriweather Bold is ~1% wider than its
+        // Regular, and serving one for the other put d08's 38pt titles up to
+        // 9pt out while the layout still reported itself complete.
         let m = TableMetrics;
-        assert!(m.advance_em("Fira Sans", true, false, 'a').is_some());
+        assert!(m.advance_em("Fira Sans", false, false, 'a').is_some());
+        assert!(m.advance_em("Fira Sans", true, false, 'a').is_none());
     }
 }
 

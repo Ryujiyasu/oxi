@@ -1857,31 +1857,28 @@ fn extras(family: &str, bold: bool, italic: bool) -> &'static [(u32, f32)] {
 /// The design advance of `ch` for this face, in EM units.
 pub fn local_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
     let cp = ch as u32;
-    // A style the machine did not have falls back to the upright face,
-    // which is what a browser drawing a synthesised bold also does.
+    // ★Only the style that was actually measured answers. Serving a
+    // bold request from the upright face looks harmless and is not:
+    // Merriweather Bold is about 1% wider than its Regular, which put
+    // d08's 38pt titles up to 9pt past where PowerPoint drew them, and
+    // the layout still called itself complete. Six of the seventeen
+    // families here have no bold face on this machine; their bold text
+    // is declined rather than set on the wrong advances. Whether a
+    // SYNTHESISED bold even advances like its upright is unmeasured
+    // (S577c, parked), so there is nothing to fall back ON.
     if (32..127).contains(&cp) {
-        let t = table(family, bold, italic)
-            .or_else(|| table(family, bold, false))
-            .or_else(|| table(family, false, false))?;
+        let t = table(family, bold, italic)?;
         return Some(t[cp as usize - 32]);
     }
     // Beyond ASCII the tables are sparse: a face carries only the
     // characters it actually has, so a miss here is a real answer --
     // the caller declines the run rather than advancing a glyph that
     // is not in the font.
-    for src in [
-        extras(family, bold, italic),
-        extras(family, bold, false),
-        extras(family, false, false),
-    ] {
-        if let Ok(i) = src.binary_search_by_key(&cp, |e| e.0) {
-            return Some(src[i].1);
-        }
-        if !src.is_empty() {
-            break;
-        }
+    let src = extras(family, bold, italic);
+    match src.binary_search_by_key(&cp, |e| e.0) {
+        Ok(i) => Some(src[i].1),
+        Err(_) => None,
     }
-    None
 }
 
 /// Whether any face of `family` was measured.
