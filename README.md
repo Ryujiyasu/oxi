@@ -36,41 +36,62 @@ An accuracy number is only as honest as the corpus it comes from. Oxi's document
 
 | Role | What it is | May be a fix target? |
 |------|------------|----------------------|
-| **dev** | The tuned corpus: 87 Japanese documents under per-paragraph pagination gates + a 238-document pixel-SSIM sentinel + synthetic probes | Yes — this is where bugs are root-caused |
+| **dev** | The tuned corpus: 96 documents under per-paragraph pagination gates + a 369-document (1113-page) pixel-SSIM sentinel + synthetic probes, plus every blind set retired by rotation | Yes — this is where bugs are root-caused |
 | **validation** | Previously blind sets, demoted after rotation | Yes, after demotion |
-| **blind** | 50 documents per language, **frozen before measurement, measured once, never anatomized** | **No** |
+| **blind** | 50 documents per language, **frozen before measurement, never anatomized**; re-measured per binary revision, not tuned against | **No** |
 
 The blind sets are drawn from the public [superdoc-dev/docx-corpus](https://docxcorp.us/) (ODC-BY, 736K real .docx from Common Crawl) by a deterministic rule declared *before* fetching: 10 document types × the next 5 documents in SHA-256-ascending manifest order, with a purely mechanical quarantine (valid zip, has `word/document.xml`, no macros, ≤ 4 MB). No quality-based selection, no post-hoc swaps. When a newer blind set is frozen, the old one is demoted to validation and only then becomes fixable.
 
 Everything below is measured against **Microsoft Word's own render** of the same file (Microsoft 365 16.0.20131.20154, 150 DPI, resize-to-match, structural similarity). Nobody grades their own homework.
 
-### English blind set — 50 never-seen documents
+One measurement note, because it would otherwise flatter a competitor: **OfficeCLI is measured with `--render html`, its own layout engine.** Its default `--render auto` is documented as "native on Windows w/ Word", and on a host with Word installed that path hands the rendering to Word itself — 0.996 SSIM against Word, because it *is* Word. Its own engine scores 0.972 on that same page. Only the second is a comparison.
 
-| Engine | mean SSIM vs Word (per doc) | page count matches Word |
-|--------|-----------------------------|-------------------------|
-| ONLYOFFICE 9.3.1.8 | 0.902 | 41 / 50 |
-| LibreOffice 26.2.1.2 | 0.876 | 43 / 50 |
-| **Oxi** (2026-08-20) | **0.875** | **48 / 50** |
-| SILURUS @silurus/ooxml 0.72.2 | 0.776 | 35 / 50 |
-| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.739 | 33 / 50 |
-| BetterOffice @betteroffice/docx 0.0.4 | 0.734 | 25 / 50 |
-| GenOffice v0.1.0 | 0.731 | 12 / 50 |
+### English blind set — blind-C50, 50 never-seen documents
 
-**Oxi places the page breaks better than any engine measured — 48 of the 50 documents match Word's page count, against ONLYOFFICE's 41 and LibreOffice's 43 — and has now caught LibreOffice on within-page pixels: the paired difference is −0.001 ± 0.011 (|t| = 0.1), a dead statistical tie, with each engine ahead on 25 of the 50 documents.** ONLYOFFICE keeps a real pixel lead (+0.027). On SSIM Oxi is ahead of SILURUS — the closest architectural peer, also a Rust + WebAssembly canvas renderer — on **44 of the 50** documents. This is first-sight generalization on wild English documents, published as-is, and the set is re-measured as the engine improves rather than being fixed against: **0.800** at its first measurement (2026-07-19), 0.807 on 2026-07-20, 0.825 on 2026-07-29, 0.849 on 2026-08-04, **0.875** now, with the page-count match moving 38 → 48 over the same period.
+Frozen 2026-07-29 as manifest ranks 21-25 per type, **before** any measurement; this is its first pixel measurement (2026-08-31). All eight engines render the same 48 documents (Microsoft Word itself fails to export 2 of the 50, so they are outside every engine's denominator).
 
-### Japanese blind set — 50 never-seen documents
+| Engine | mean SSIM (common pages) | penalized | page count matches Word |
+|--------|--------------------------|-----------|-------------------------|
+| ONLYOFFICE 9.3.1.8 | **0.908** | 0.903 | 42 / 48 |
+| **Oxi** | 0.903 | **0.903** | **48 / 48** |
+| LibreOffice 26.2.1.2 | 0.892 | 0.881 | 43 / 48 |
+| SILURUS @silurus/ooxml 0.83.1 | 0.791 | 0.741 | 35 / 48 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.768 | 0.723 | 35 / 48 |
+| BetterOffice @betteroffice/docx 0.1.0 | 0.761 | 0.619 | 26 / 48 |
+| OfficeCLI 1.0.145 | 0.753 | 0.486 | 17 / 48 |
+| GenOffice v0.1.0 | 0.740 | 0.570 | 17 / 48 |
 
-| Engine | mean SSIM vs Word (per doc) | page count matches Word |
-|--------|-----------------------------|-------------------------|
-| **Oxi** (2026-08-20) | **0.842** | 43 / 50 |
-| LibreOffice 26.2.1.2 | 0.816 | 41 / 50 |
-| SILURUS @silurus/ooxml 0.72.2 | 0.804 | 32 / 50 |
-| ONLYOFFICE 9.3.1.8 | 0.772 | 38 / 50 |
-| BetterOffice @betteroffice/docx 0.0.4 | 0.766 | 29 / 49 |
-| GenOffice v0.1.0 | 0.762 | 16 / 50 |
-| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.744 | 36 / 50 |
+**Oxi is the only engine that reproduces Word's pagination on every document — 48 of 48**, against ONLYOFFICE's 42 and LibreOffice's 43. `penalized` divides by `max(word_pages, engine_pages)`, so an engine that drops or invents pages is charged for it; Oxi is the only engine whose two columns are identical, because it never misses a page count. On within-page pixels ONLYOFFICE is ahead by 0.005 and LibreOffice is a near-tie (Oxi ahead on 25 of 48). The gap to the four browser/CLI engines is large in `penalized` precisely because their pagination diverges.
 
-Oxi is top of the table on the same documents — ahead of SILURUS on 38 of 50, of ONLYOFFICE on 41, of BetterOffice on 38 of the 49 both engines open (BetterOffice's parser rejects `nextColumn`, a standard OOXML section-start type), of GenOffice on 42, of eigenpal on 44. The lead over LibreOffice, which the 2026-07-29 measurement honestly called unresolvable at this sample size (+0.012 ± 0.011, |t| = 1.2), **now clears the noise threshold: +0.026 ± 0.012, |t| = 2.2, ahead on 34 of the 50 documents** — a real but still modest margin; every other gap in both tables is separable more decisively. Pagination on the same set: **43 of the 48 measurable documents place every paragraph on Word's page** (mean per-paragraph page-match score 0.923, up from 0.883 on 2026-07-29; 2 of the 50 are poster-style files whose text lives entirely inside images and text boxes, so no paragraph can be matched at all and they are excluded rather than counted as passes). One document's total page count drifted off Word's between measurements (44 → 43 in the table above) while the per-paragraph score rose — the set is re-measured as-is, movements in both directions included.
+### Japanese blind set — blind-C50, 50 never-seen documents
+
+Frozen 2026-08-31 as manifest ranks 16-20 per type, **before** any measurement, when the previous Japanese blind set was rotated into the development corpus. First measurement, same day, same binary.
+
+| Engine | mean SSIM (common pages) | penalized | page count matches Word |
+|--------|--------------------------|-----------|-------------------------|
+| **Oxi** | **0.802** | **0.733** | 35 / 50 |
+| SILURUS @silurus/ooxml 0.83.1 | 0.790 | 0.667 | 32 / 50 |
+| LibreOffice 26.2.1.2 | 0.788 | 0.694 | 33 / 50 |
+| OfficeCLI 1.0.145 | 0.748 | 0.509 | 22 / 50 |
+| ONLYOFFICE 9.3.1.8 | 0.743 | 0.693 | **40 / 50** |
+| GenOffice v0.1.0 | 0.732 | 0.500 | 10 / 50 |
+| eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.705 | 0.637 | 35 / 50 |
+| BetterOffice @betteroffice/docx 0.1.0 | — | — | did not complete |
+
+Oxi leads on pixels, but by 0.012-0.015 over SILURUS and LibreOffice — a modest margin on 50 documents, not a decisive one. ONLYOFFICE places page breaks better here (40 / 50 against Oxi's 35) while scoring lower on pixels: the two properties are separable and Oxi does not lead on both. **Engine rankings do not transfer between languages** — ONLYOFFICE is first in English and fifth in Japanese; SILURUS is fourth in English and second in Japanese — which is the entire reason for keeping a blind set per language.
+
+*BetterOffice: the English pass completed in 552s, but the Japanese pass produced no output at all — its browser and dev server start, then the first document never returns. Recorded as incomplete rather than guessed at.*
+
+### How much does one blind set decide?
+
+Two independently frozen Japanese blind sets were measured on the **same day, same binary, same procedure**:
+
+| Japanese blind set | Oxi mean SSIM | page count matches Word |
+|--------------------|---------------|-------------------------|
+| blind-B50 (ranks 11-15) | 0.842 | 45 / 50 |
+| blind-C50 (ranks 16-20) | 0.802 | 35 / 50 |
+
+The 0.040 spread is set difficulty, not engine change. Roughly a quarter of it is attributable to a known defect — 19 of the 50 blind-C documents contain an anchored floating text box whose text Oxi currently drops, and those documents average 0.06-0.10 lower than the rest — but the remainder is simply that one sample of fifty wild documents is harder than another. **A single blind number carries about ±0.02, and a page-count rate can move 90% → 70% between samples.** Quote it accordingly; the 100-document combination is Oxi 0.822, 80 / 100.
 
 Two honest caveats about the two tables together: (1) the English and Japanese sets are different documents, so the numbers are not directly comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes second-to-last in Japanese), which is exactly why blind sets per language exist.
 
@@ -95,7 +116,7 @@ Two of the 50 sampled files (corrupt zip containers, unopenable by every engine 
 The blind sets are the published claim; the development corpus is how regressions are caught before a change is committed. Every layout change must pass, in order:
 
 - **Pagination oracle** — per-paragraph page match against real Word (COM-measured) on the 96-document development corpus (90 Japanese + 6 English government documents): currently **96/96 = 100%**.
-- **SSIM regression sentinel** — 238 documents pixel-compared against stored Word renders; a change that improves one document by regressing another has to justify the trade.
+- **SSIM regression sentinel** — 369 documents (1113 pages) pixel-compared against stored Word renders; a change that improves one document by regressing another has to justify the trade.
 - **Adversarial probe harness** — 95 synthetic documents stressing under-tested layout paths, each gated against real Word ground truth.
 - **Feature-injection perturbation harness** — individual OOXML features injected one at a time into a clean base document and pixel-verified against Word.
 - **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.957), plus 156 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes). LibreOffice Impress and a browser OOXML viewer render the same decks as independent references, so a slide where they land closer to PowerPoint than Oxi does is a bug with a worked example.
