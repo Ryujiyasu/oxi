@@ -122,6 +122,92 @@ const WHITE: i64 = 16_777_215;
 const UNDERLINE_SINGLE: i64 = 2;
 const UNDERLINE_NONE: i64 = -4142;
 
+/// `xlNone`, which is the fill a cell has when it has none, and
+/// `xlAutomatic`, which is the writing colour a cell has when it names none.
+const COLOUR_NONE: i64 = -4142;
+const COLOUR_AUTOMATIC: i64 = -4105;
+
+/// The 56 colours `ColorIndex` counts, read off Excel one index at a time.
+///
+/// Each is packed the way VBA writes a colour — red, then green, then blue,
+/// least significant first — so it can be compared with what `Color` answers
+/// without turning it round. Eight of them are repeats (25 to 32 say again
+/// what 9, 7, 6, 8, 13, 9, 14 and 5 said), and where two match Excel names
+/// the lower.
+const COLOUR_PALETTE: [i64; 56] = [
+    0, 16777215, 255, 65280, 16711680, 65535, 16711935,
+    16776960, 128, 32768, 8388608, 32896, 8388736, 8421376,
+    12632256, 8421504, 16751001, 6697881, 13434879, 16777164, 6684774,
+    8421631, 13395456, 16764108, 8388608, 16711935, 65535, 16776960,
+    8388736, 128, 8421376, 16711680, 16763904, 16777164, 13434828,
+    10092543, 16764057, 13408767, 16751052, 10079487, 16737843, 13421619,
+    52377, 52479, 39423, 26367, 10053222, 9868950, 6697728,
+    6723891, 13056, 13107, 13209, 6697881, 10040115, 3355443,
+];
+
+/// Which of the 56 Excel would call a colour by.
+///
+/// Not a lookup: a colour that is not one of them is called by the NEAREST,
+/// measured as the squared distance between the two in red, green and blue.
+/// Asked of Excel, 12345 answers 52 and 5592405 answers 56, and 28 colours
+/// agreed with this and with no other reading — a plain sum of differences
+/// gets two of them wrong.
+fn nearest_palette_index(colour: i64) -> i64 {
+    let apart = |one: i64, other: i64| {
+        let (red, green, blue) = (
+            ((one & 0xff) - (other & 0xff)),
+            (((one >> 8) & 0xff) - ((other >> 8) & 0xff)),
+            (((one >> 16) & 0xff) - ((other >> 16) & 0xff)),
+        );
+        red * red + green * green + blue * blue
+    };
+    let mut nearest = 1;
+    let mut best = apart(COLOUR_PALETTE[0], colour);
+    for (step, held) in COLOUR_PALETTE.iter().enumerate().skip(1) {
+        let score = apart(*held, colour);
+        if score < best {
+            nearest = step as i64 + 1;
+            best = score;
+        }
+    }
+    nearest
+}
+
+/// One of the 56, or the constant that clears the colour altogether.
+///
+/// `clears` is `xlNone` for a fill and `xlAutomatic` for writing — the two
+/// names Excel gives to "this cell chooses no colour of its own".
+fn palette_choice(value: &Value, clears: i64, what: &str) -> Result<Option<String>, String> {
+    let asked = match value {
+        Value::Integer(number) => *number,
+        Value::Double(number) if number.fract() == 0.0 => *number as i64,
+        _ => return Err(format!("{what} takes one of the 56 colours by number")),
+    };
+    if asked == clears {
+        return Ok(None);
+    }
+    if (1..=56).contains(&asked) {
+        return Ok(Some(colour_from_packed(
+            COLOUR_PALETTE[(asked - 1) as usize],
+        )));
+    }
+    Err(format!("unsupported {what}: {asked}"))
+}
+
+/// A colour packed the way VBA writes it, as the IR spells it.
+fn colour_from_packed(colour: i64) -> String {
+    let (red, green, blue) = (colour & 0xff, (colour >> 8) & 0xff, (colour >> 16) & 0xff);
+    format!("#{red:02X}{green:02X}{blue:02X}")
+}
+
+/// The same the other way, or nothing where the cell names no colour.
+fn colour_to_packed(colour: Option<&str>) -> Option<i64> {
+    let hex = colour?.strip_prefix('#').filter(|hex| hex.len() == 6)?;
+    let rgb = u32::from_str_radix(hex, 16).ok()?;
+    let (red, green, blue) = ((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
+    Some(i64::from(red | (green << 8) | (blue << 16)))
+}
+
 const MAX_WORKSHEET_ROW: u32 = 1_048_576;
 const MAX_WORKSHEET_COLUMN: u32 = 16_383;
 
@@ -4746,6 +4832,21 @@ impl Host for WorkbookHost<'_> {
                     .uniform_style(range, |style| style.font_color.clone())
                     .map(|value| Some(style_color_value(value, BLACK)));
             }
+            if name.eq_ignore_ascii_case("colorindex") {
+                // Excel names a colour by the nearest of its 56. A cell that
+                // names none answers 1 — the palette's black — rather than
+                // xlAutomatic, which is a state a cell only reaches by being
+                // put there.
+                return self
+                    .uniform_style(range, |style| style.font_color.clone())
+                    .map(|value| {
+                        Some(match value.map(|held| colour_to_packed(held.as_deref())) {
+                            None => Value::Null,
+                            Some(None) => Value::Integer(1),
+                            Some(Some(packed)) => Value::Integer(nearest_palette_index(packed)),
+                        })
+                    });
+            }
             return Ok(None);
         }
         if let Some(range) = self.range_interior(receiver) {
@@ -4759,6 +4860,17 @@ impl Host for WorkbookHost<'_> {
                         Some(match value {
                             None => Value::Integer(BLACK),
                             held => style_color_value(held, WHITE),
+                        })
+                    });
+            }
+            if name.eq_ignore_ascii_case("colorindex") {
+                return self
+                    .uniform_style(range, |style| style.bg_color.clone())
+                    .map(|value| {
+                        Some(match value.map(|held| colour_to_packed(held.as_deref())) {
+                            None => Value::Null,
+                            Some(None) => Value::Integer(COLOUR_NONE),
+                            Some(Some(packed)) => Value::Integer(nearest_palette_index(packed)),
                         })
                     });
             }
@@ -5110,6 +5222,11 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         }
         if let Some(range) = self.range_font(receiver) {
+            if name.eq_ignore_ascii_case("colorindex") {
+                let colour = palette_choice(&value, COLOUR_AUTOMATIC, "Font.ColorIndex")?;
+                self.set_range_style(range, |_, style| style.font_color = colour.clone())?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("underline") {
                 let asked = match &value {
                     Value::Boolean(true) => UNDERLINE_SINGLE,
@@ -5187,6 +5304,11 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("color") {
                 let value = style_color(&value, "Interior.Color")?;
                 self.set_range_style(range, |_, style| style.bg_color = value.clone())?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("colorindex") {
+                let colour = palette_choice(&value, COLOUR_NONE, "Interior.ColorIndex")?;
+                self.set_range_style(range, |_, style| style.bg_color = colour.clone())?;
                 return Ok(true);
             }
             return Ok(false);
@@ -6491,6 +6613,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xljustify" => -4130,
         "xlcenteracrossselection" => 7,
         "xldistributed" => -4117,
+        "xlnone" => -4142,
+        "xlautomatic" => -4105,
+        "xlcolorindexnone" => -4142,
+        "xlcolorindexautomatic" => -4105,
         "xlunderlinestylenone" => -4142,
         "xlunderlinestylesingle" => 2,
         "xlunderlinestyledouble" => -4119,
@@ -12271,6 +12397,110 @@ End Sub
                 .to_string();
             assert!(error.contains("keep apart"), "{asked} said {error:?}");
         }
+    }
+
+    /// The 28 colours Excel was asked to name, and what it called each.
+    ///
+    /// The last eight were chosen because a squared distance and a largest
+    /// single difference disagree about them; Excel agreed with the squared
+    /// distance on all eight, which is what settled the reading.
+    #[test]
+    fn a_colour_is_called_by_the_nearest_of_the_fifty_six() {
+        for (colour, index) in [
+            (255, 3),
+            (16711680, 5),
+            (65535, 6),
+            (0, 1),
+            (16777215, 2),
+            (12345, 52),
+            (8421504, 16),
+            (1193046, 52),
+            (5592405, 56),
+            (11184810, 48),
+            (3355443, 56),
+            (16777214, 2),
+            (1, 1),
+            (128, 9),
+            (4210752, 56),
+            (8388736, 13),
+            (255255, 4),
+            (6710886, 16),
+            (9474192, 48),
+            (2105376, 56),
+            (15790320, 2),
+            (100, 9),
+            (40000, 10),
+            (8000000, 11),
+            (16000000, 5),
+            (7829367, 16),
+            (2430558, 56),
+            (3158480, 53),
+            (2883910, 56),
+            (14031529, 7),
+            (3043823, 46),
+            (4154104, 46),
+            (1663941, 46),
+            (14063972, 17),
+        ] {
+            assert_eq!(
+                nearest_palette_index(colour),
+                index,
+                "Excel calls {colour} colour {index}"
+            );
+        }
+        // And the two directions agree where a colour IS one of the 56.
+        for index in 1..=56 {
+            let hex = colour_from_packed(COLOUR_PALETTE[index - 1]);
+            assert_eq!(
+                colour_to_packed(Some(&hex)),
+                Some(COLOUR_PALETTE[index - 1]),
+                "colour {index} did not come back"
+            );
+        }
+    }
+
+    /// `ColorIndex` names a colour by the nearest of Excel's 56.
+    ///
+    /// Every answer was asked of Excel: index 3 is red (255) and 5 is blue
+    /// (16711680); an off-palette colour is called by the NEAREST entry, so
+    /// 12345 answers 52; a cell with no fill answers `xlNone` and one that
+    /// names no writing colour answers 1; and a block whose cells disagree
+    /// answers Null.
+    #[test]
+    fn vba_names_a_colour_by_the_nearest_of_the_fifty_six() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Named() As String\n\
+               Range(\"A1\").Interior.ColorIndex = 3\n\
+               Range(\"A2\").Interior.Color = 12345\n\
+               Range(\"A3\").Interior.Color = 8421504\n\
+               Range(\"B1\").Interior.ColorIndex = 5\n\
+               Range(\"B1\").Interior.ColorIndex = xlNone\n\
+               Range(\"C1\").Font.ColorIndex = 3\n\
+               Range(\"D1:D2\").Interior.ColorIndex = 3\n\
+               Named = Range(\"A1\").Interior.Color & \"|\" & _\n\
+                 Range(\"A1\").Interior.ColorIndex & \"|\" & _\n\
+                 Range(\"A2\").Interior.ColorIndex & \"|\" & _\n\
+                 Range(\"A3\").Interior.ColorIndex & \"|\" & _\n\
+                 Range(\"B1\").Interior.ColorIndex & \"|\" & _\n\
+                 Range(\"Z9\").Interior.ColorIndex & \"|\" & _\n\
+                 Range(\"C1\").Font.Color & \"|\" & _\n\
+                 Range(\"C1\").Font.ColorIndex & \"|\" & _\n\
+                 Range(\"Z9\").Font.ColorIndex & \"|\" & _\n\
+                 TypeName(Range(\"A1:A2\").Interior.ColorIndex) & \"|\" & _\n\
+                 Range(\"D1:D2\").Interior.ColorIndex\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Named", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("255|3|52|16|-4142|-4142|255|3|1|Null|3".to_string())
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
