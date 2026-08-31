@@ -42,6 +42,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         .map(|(index, cells)| Row { index, cells, height: None, custom_height: false, style_font: None, thick_top: false, thick_bottom: false, hidden: false })
         .collect();
     let mut sheet = Sheet {
+        visibility: Default::default(),
         name: "S".into(),
         rows,
         col_count: 10,

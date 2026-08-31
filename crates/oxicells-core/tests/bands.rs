@@ -17,6 +17,7 @@ use oxicells_core::ir::{Cell, CellValue, MergeCell, Row, Sheet, Table, Workbook}
 fn a_sheet(name: &str) -> Sheet {
     let mut sheet = Sheet {
         name: name.to_string(),
+        visibility: Default::default(),
         rows: Vec::new(),
         col_count: 4,
         col_widths: vec![8.0, 9.0, 10.0, 11.0],

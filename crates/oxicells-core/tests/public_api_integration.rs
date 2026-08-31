@@ -189,6 +189,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         })
         .collect();
     Sheet {
+        visibility: Default::default(),
         name: "TestSheet".to_string(),
         rows,
         col_count: 10,

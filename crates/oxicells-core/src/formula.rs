@@ -290,6 +290,7 @@ mod tests {
             })
             .collect();
         Sheet {
+            visibility: Default::default(),
             name: "Sheet1".to_string(),
             rows,
             col_count: 5,

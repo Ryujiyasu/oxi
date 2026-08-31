@@ -85,8 +85,13 @@ pub struct XlsxEditor {
 /// One sheet of a rearranged workbook: either one the file already holds, or a
 /// new one to be written from scratch.
 enum PlannedSheet {
-    /// The sheet at this position in the original file, under this name.
-    Held { origin: usize, name: String },
+    /// The sheet at this position in the original file, under this name, and
+    /// shown or hidden as the edited workbook says.
+    Held {
+        origin: usize,
+        name: String,
+        visibility: crate::ir::Visibility,
+    },
     /// A sheet the file has never held.
     Added(crate::ir::Sheet),
 }
@@ -201,7 +206,9 @@ impl XlsxEditor {
                 .sheets
                 .iter()
                 .zip(&self.workbook.sheets)
-                .any(|(after, before)| after.name != before.name);
+                .any(|(after, before)| {
+                    after.name != before.name || after.visibility != before.visibility
+                });
         if rearranged {
             self.sheet_plan = Some(
                 edited
@@ -212,6 +219,7 @@ impl XlsxEditor {
                         Some(origin) => PlannedSheet::Held {
                             origin: *origin,
                             name: sheet.name.clone(),
+                            visibility: sheet.visibility,
                         },
                         None => PlannedSheet::Added(sheet.clone()),
                     })
@@ -625,11 +633,15 @@ impl XlsxEditor {
                         .read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     if let Some(plan) = self.sheet_plan.as_ref() {
-                        let names: Vec<String> = plan
+                        let names: Vec<(String, Option<&'static str>)> = plan
                             .iter()
                             .map(|planned| match planned {
-                                PlannedSheet::Held { name, .. } => name.clone(),
-                                PlannedSheet::Added(sheet) => sheet.name.clone(),
+                                PlannedSheet::Held { name, visibility, .. } => {
+                                    (name.clone(), visibility.stated())
+                                }
+                                PlannedSheet::Added(sheet) => {
+                                    (sheet.name.clone(), sheet.visibility.stated())
+                                }
                             })
                             .collect();
                         xml = patch_workbook_sheets(&xml, &names)?;
@@ -1360,7 +1372,10 @@ fn tag_attribute(head: &str, attribute: &str) -> Option<String> {
 ///
 /// Each sheet is named in order and given a relationship id matching its
 /// position, which is what `patch_workbook_rels` writes on the other side.
-fn patch_workbook_sheets(xml: &str, names: &[String]) -> Result<String, XlsxError> {
+fn patch_workbook_sheets(
+    xml: &str,
+    names: &[(String, Option<&'static str>)],
+) -> Result<String, XlsxError> {
     let start = xml.find("<sheets").ok_or_else(|| {
         XlsxError::InvalidData("the workbook does not list its sheets".to_string())
     })?;
@@ -1376,9 +1391,14 @@ fn patch_workbook_sheets(xml: &str, names: &[String]) -> Result<String, XlsxErro
         })?;
 
     let mut listed = String::from("<sheets>");
-    for (position, name) in names.iter().enumerate() {
+    for (position, (name, state)) in names.iter().enumerate() {
+        // A hidden sheet says so here and nowhere else, so writing the list
+        // without its state would quietly bring it back into view.
+        let state = state
+            .map(|state| format!(" state=\"{state}\""))
+            .unwrap_or_default();
         listed.push_str(&format!(
-            "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rIdSheet{}\"/>",
+            "<sheet name=\"{}\"{state} sheetId=\"{}\" r:id=\"rIdSheet{}\"/>",
             escape(name),
             position + 1,
             position + 1
@@ -2607,6 +2627,30 @@ mod tests {
         let patched = patch_workbook_names(with_a_print_area, &[]).unwrap();
         assert!(patched.contains("_xlnm.Print_Area"));
         assert!(!patched.contains("Sales"));
+    }
+
+    /// A hidden sheet stays hidden through a save.
+    ///
+    /// The state lives only in the workbook's sheet list, which is rewritten
+    /// whole whenever a sheet is added, renamed or moved — so without carrying
+    /// it, any of those would quietly bring a hidden sheet back into view.
+    #[test]
+    fn a_hidden_sheet_stays_hidden() {
+        let data = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut edited = parse_xlsx(data).expect("should parse");
+        let mut second = edited.sheets[0].clone();
+        second.name = "Working".to_string();
+        second.visibility = crate::ir::Visibility::Hidden;
+        edited.sheets.push(second);
+
+        let mut editor = XlsxEditor::new(data).expect("should open");
+        editor.apply_workbook(&edited).expect("should apply");
+        let saved = editor.save().expect("should save");
+
+        let read_back = parse_xlsx(&saved).expect("should parse");
+        assert_eq!(read_back.sheets.len(), 2);
+        assert_eq!(read_back.sheets[0].visibility, crate::ir::Visibility::Visible);
+        assert_eq!(read_back.sheets[1].visibility, crate::ir::Visibility::Hidden);
     }
 
     /// A name written and read back comes through the file whole.

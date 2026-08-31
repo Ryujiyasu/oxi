@@ -16,6 +16,7 @@ fn names(workbook: &oxicells_core::ir::Workbook) -> Vec<String> {
 
 fn blank_sheet(name: &str) -> Sheet {
     Sheet {
+        visibility: Default::default(),
         name: name.to_string(),
         rows: Vec::new(),
         col_count: 0,

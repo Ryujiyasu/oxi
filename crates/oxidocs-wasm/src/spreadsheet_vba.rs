@@ -955,6 +955,7 @@ impl<'a> WorkbookHost<'a> {
         let template = &self.workbook.sheets[self.active_sheet];
         let sheet = Sheet {
             name: self.unused_sheet_name(),
+            visibility: oxicells_core::ir::Visibility::Visible,
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -5757,6 +5758,15 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some(sheet) = self.worksheet(receiver) {
+            if name.eq_ignore_ascii_case("visible") {
+                return Ok(Some(Value::Integer(
+                    match self.workbook.sheets[sheet].visibility {
+                        oxicells_core::ir::Visibility::Visible => -1,
+                        oxicells_core::ir::Visibility::Hidden => 0,
+                        oxicells_core::ir::Visibility::VeryHidden => 2,
+                    },
+                )));
+            }
             if name.eq_ignore_ascii_case("name") {
                 return Ok(Some(Value::String(
                     self.workbook.sheets[sheet].name.clone(),
@@ -6020,6 +6030,41 @@ impl Host for WorkbookHost<'_> {
                     return Err("a worksheet name must be a String".to_string());
                 };
                 self.rename_worksheet(sheet, renamed)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("visible") {
+                // Excel takes True and False as well as the three numbers, and
+                // reads 1 as True: asked with it, it answered -1.
+                let asked = match &value {
+                    Value::Boolean(true) => -1,
+                    Value::Boolean(false) => 0,
+                    Value::Integer(number) => *number,
+                    Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                    _ => {
+                        return Err("Worksheet.Visible takes True, False or a number".to_string())
+                    }
+                };
+                let visibility = match asked {
+                    0 => oxicells_core::ir::Visibility::Hidden,
+                    2 => oxicells_core::ir::Visibility::VeryHidden,
+                    -1 | 1 => oxicells_core::ir::Visibility::Visible,
+                    other => return Err(format!("Worksheet.Visible has no setting {other}")),
+                };
+                // A workbook has to show something. Asked to hide its last
+                // showing sheet, Excel refuses.
+                if !visibility.is_shown()
+                    && !self
+                        .workbook
+                        .sheets
+                        .iter()
+                        .enumerate()
+                        .any(|(index, held)| index != sheet && held.visibility.is_shown())
+                {
+                    return Err(
+                        "Worksheet.Visible cannot hide the only sheet still showing".to_string(),
+                    );
+                }
+                self.workbook.sheets[sheet].visibility = visibility;
                 return Ok(true);
             }
         }
@@ -7555,6 +7600,9 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastespecialoperationsubtract" => 3,
         "xlpastespecialoperationmultiply" => 4,
         "xlpastespecialoperationdivide" => 5,
+        "xlsheetvisible" => -1,
+        "xlsheethidden" => 0,
+        "xlsheetveryhidden" => 2,
         "xlfiltervalues" => 7,
         "xlsolid" => 1,
         "xlpatternnone" => -4142,
@@ -8461,6 +8509,7 @@ mod tests {
         Workbook {
             sheets: vec![Sheet {
                 name: "Sheet1".to_string(),
+                visibility: Default::default(),
                 rows: Vec::new(),
                 col_count: 0,
                 col_widths: Vec::new(),
@@ -8683,6 +8732,7 @@ mod tests {
         let mut workbook = workbook();
         workbook.sheets.push(Sheet {
             name: "Data".to_string(),
+            visibility: Default::default(),
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -8742,6 +8792,7 @@ mod tests {
         let mut workbook = workbook();
         workbook.sheets.push(Sheet {
             name: "Data Sheet".to_string(),
+            visibility: Default::default(),
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -12344,6 +12395,7 @@ End Sub
         let mut workbook = workbook();
         workbook.sheets.push(Sheet {
             name: "Data".to_string(),
+            visibility: Default::default(),
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -12594,6 +12646,7 @@ End Sub
         let mut workbook = workbook();
         workbook.sheets.push(Sheet {
             name: "Data".to_string(),
+            visibility: Default::default(),
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -12645,6 +12698,7 @@ End Sub
         let mut workbook = workbook();
         workbook.sheets.push(Sheet {
             name: "Empty".to_string(),
+            visibility: Default::default(),
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -12768,6 +12822,7 @@ End Sub
         let mut workbook = workbook();
         workbook.sheets.push(Sheet {
             name: "Data".to_string(),
+            visibility: Default::default(),
             rows: Vec::new(),
             col_count: 0,
             col_widths: Vec::new(),
@@ -14399,6 +14454,53 @@ End Sub
         };
 
         assert_eq!(result, Value::String("A1|A2|A3|A4|A6".to_string()));
+    }
+
+    /// Hiding a sheet, and the one sheet that cannot be hidden.
+    ///
+    /// Asked of Excel: a fresh sheet answers -1, `Visible = False` leaves 0,
+    /// 2 is the hidden-and-not-offered state, 1 is read as True, 3 is refused,
+    /// and hiding the last sheet still showing raises. A hidden sheet's cells
+    /// still answer.
+    #[test]
+    fn vba_hides_a_sheet_but_not_the_last_one_showing() {
+        let mut workbook = workbook();
+        for name in ["Sheet2", "Sheet3"] {
+            let mut another = workbook.sheets[0].clone();
+            another.name = name.to_string();
+            workbook.sheets.push(another);
+        }
+        let module = parse_module(
+            "Public Function Hidden() As String\n\
+               Hidden = Worksheets(\"Sheet2\").Visible & \"|\"\n\
+               Worksheets(\"Sheet2\").Visible = False\n\
+               Hidden = Hidden & Worksheets(\"Sheet2\").Visible & \"|\"\n\
+               Worksheets(\"Sheet3\").Visible = xlSheetVeryHidden\n\
+               Hidden = Hidden & Worksheets(\"Sheet3\").Visible & \"|\"\n\
+               Worksheets(\"Sheet2\").Range(\"A1\").Value = 5\n\
+               Hidden = Hidden & Worksheets(\"Sheet2\").Range(\"A1\").Value & \"|\"\n\
+               Worksheets(\"Sheet2\").Visible = True\n\
+               Hidden = Hidden & Worksheets(\"Sheet2\").Visible\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Hidden", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("-1|0|2|5|-1".to_string()));
+
+        // The workbook has to show something.
+        let mut alone = super::tests::workbook();
+        let module = parse_module(
+            "Public Sub HideAll()\n  Worksheets(\"Sheet1\").Visible = False\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut alone, 0).unwrap();
+        let error = execute_with_host(&module, "HideAll", vec![], &mut host)
+            .expect_err("a workbook has to show something")
+            .to_string();
+        assert!(error.contains("only sheet still showing"), "{error}");
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.

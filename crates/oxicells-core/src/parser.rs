@@ -289,6 +289,7 @@ fn parse_shared_strings(xml: &str) -> Result<Vec<SharedString>, XlsxError> {
 /// Information about a sheet from workbook.xml
 struct SheetInfo {
     name: String,
+    visibility: crate::ir::Visibility,
     r_id: String,
 }
 
@@ -367,6 +368,9 @@ fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetInfo>, XlsxError> {
 
                     sheets.push(SheetInfo {
                         name: sheet_name,
+                        visibility: crate::ir::Visibility::of(
+                            get_attr(&e, "state").unwrap_or_default().as_str(),
+                        ),
                         r_id,
                     });
                 }
@@ -3056,6 +3060,9 @@ fn parse_worksheet(
         drawings: Vec::new(),
         comments: Vec::new(),
         name: sheet_name.to_string(),
+        // The tab strip's business, which the workbook states rather than the
+        // sheet: the caller fills it in from there.
+        visibility: crate::ir::Visibility::Visible,
         rows,
         col_count,
         col_widths,
@@ -3230,6 +3237,9 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
             Some(sheet_xml) => {
                 let mut sheet =
                     parse_worksheet(&sheet_xml, &info.name, &shared_strings, &stylesheet)?;
+                // Whether the tab is shown is the workbook's business, not the
+                // worksheet part's.
+                sheet.visibility = info.visibility;
                 // A table lives in its own part, named by the sheet's own
                 // relationships. Excel dresses the range from there, so no cell
                 // inside carries the header fill or the banding.

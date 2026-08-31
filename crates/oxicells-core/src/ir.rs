@@ -25,9 +25,49 @@ pub struct Workbook {
     pub defined_names: Vec<(String, String)>,
 }
 
+/// Whether a sheet is shown in the tab strip.
+///
+/// A file says nothing for a sheet that is shown, `state="hidden"` for one a
+/// person can bring back, and `state="veryHidden"` for one only a macro can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Visibility {
+    #[default]
+    Visible,
+    Hidden,
+    VeryHidden,
+}
+
+impl Visibility {
+    pub fn is_shown(&self) -> bool {
+        matches!(self, Visibility::Visible)
+    }
+
+    /// What the file calls it, or nothing where the file says nothing.
+    pub fn stated(&self) -> Option<&'static str> {
+        match self {
+            Visibility::Visible => None,
+            Visibility::Hidden => Some("hidden"),
+            Visibility::VeryHidden => Some("veryHidden"),
+        }
+    }
+
+    /// The other way round, from what the file says.
+    pub fn of(stated: &str) -> Self {
+        match stated {
+            "hidden" => Visibility::Hidden,
+            "veryHidden" => Visibility::VeryHidden,
+            _ => Visibility::Visible,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// Whether the sheet is shown, and how firmly it is hidden when it is not.
+    #[serde(default, skip_serializing_if = "Visibility::is_shown")]
+    pub visibility: Visibility,
     pub rows: Vec<Row>,
     pub col_count: usize,
     pub col_widths: Vec<f32>,
