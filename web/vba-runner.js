@@ -24,7 +24,7 @@ export function parseVbaArguments(text) {
     return args;
 }
 
-export function runVbaInWorker(workbook, source, procedure, args, activeSheet) {
+export function runVbaInWorker(workbook, source, procedure, args, activeSheet, fileName) {
     if (activeExecution) {
         return Promise.reject(new Error('A VBA macro is already running.'));
     }
@@ -48,7 +48,7 @@ export function runVbaInWorker(workbook, source, procedure, args, activeSheet) {
             worker.terminate();
             reject(new Error(event.message || 'VBA worker failed.'));
         });
-        worker.postMessage({ workbook, source, procedure, args, activeSheet });
+        worker.postMessage({ workbook, source, procedure, args, activeSheet, fileName });
     });
 }
 

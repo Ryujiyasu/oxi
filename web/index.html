@@ -1516,6 +1516,7 @@ import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './v
 
 let wasmReady = false;
 let currentFileType = null; // 'docx', 'xlsx', 'pptx', or 'pdf'
+let currentFileName = null; // what the file that was opened is called
 let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
 let currentXlsxSheetIndex = 0;
@@ -2592,6 +2593,7 @@ async function executeVbaFromDialog() {
             procedure,
             args,
             currentXlsxSheetIndex,
+            currentFileName,
         );
         recordVbaWorkbookChanges(before, execution.workbook);
         currentDocIR = execution.workbook;
@@ -4453,6 +4455,7 @@ async function handleFile(file) {
 
     showStatus(t('parsing'), 'info');
     currentFileType = ext;
+    currentFileName = file.name;
     btnDownload.textContent = `${t('download')} .${ext}`;
 
     toolbar.classList.add('visible');

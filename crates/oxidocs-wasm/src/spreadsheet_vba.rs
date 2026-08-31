@@ -345,6 +345,11 @@ struct WorkbookHost<'a> {
     blocks: Vec<Vec<CellRange>>,
     /// The text of every name a `Name` object was handed out for.
     name_handles: Vec<String>,
+    /// What the file this workbook came from is called, when the page says.
+    /// Excel calls a workbook that was never saved `Book1`, and a browser
+    /// never saves one anywhere it can name, so what the page hands over is
+    /// the file's own name and nothing else — no folder in front of it.
+    file_name: Option<String>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
 }
@@ -377,6 +382,7 @@ impl<'a> WorkbookHost<'a> {
             now: None,
             blocks: Vec::new(),
             name_handles: Vec::new(),
+            file_name: None,
             debug_output: Vec::new(),
             messages: Vec::new(),
         })
@@ -5784,6 +5790,20 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("activesheet") {
                 return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
             }
+            // Measured in Excel 16.0: a workbook that has never been saved is
+            // called `Book1`, its `Path` is empty, and its `FullName` is the
+            // name alone. Saved, the three become `a report.xlsx`, the folder
+            // without a separator after it, and the two joined. A workbook
+            // open in a browser is the first of those with a name of its own:
+            // there is a file behind it, but no folder anyone can name.
+            if name.eq_ignore_ascii_case("name") || name.eq_ignore_ascii_case("fullname") {
+                return Ok(Some(Value::String(
+                    self.file_name.clone().unwrap_or_else(|| "Book1".to_string()),
+                )));
+            }
+            if name.eq_ignore_ascii_case("path") {
+                return Ok(Some(Value::String(String::new())));
+            }
         }
         if self.is_worksheets(receiver) {
             if name.eq_ignore_ascii_case("add") {
@@ -8588,6 +8608,7 @@ pub fn run_spreadsheet_vba(
     procedure: &str,
     args: JsValue,
     active_sheet: usize,
+    file_name: Option<String>,
 ) -> Result<JsValue, JsError> {
     let mut workbook: Workbook = serde_wasm_bindgen::from_value(workbook)
         .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
@@ -8596,6 +8617,7 @@ pub fn run_spreadsheet_vba(
     let module = parse_module(source).map_err(|error| JsError::new(&error.to_string()))?;
     let mut host =
         WorkbookHost::new(&mut workbook, active_sheet).map_err(|error| JsError::new(&error))?;
+    host.file_name = file_name.filter(|name| !name.is_empty());
     let random_seed =
         js_sys::Date::now().to_bits() ^ js_sys::Math::random().to_bits().rotate_left(17);
     let browser_now = js_sys::Date::new_0();
@@ -8803,6 +8825,38 @@ mod tests {
             Value::String(
                 "A1 B1 D5 | A1 A2 A2 A3 | A1:B2 D5:E5 | alpha Beta middle zebra ".to_string()
             )
+        );
+    }
+
+    /// Measured in Excel 16.0. A workbook that was never saved answers
+    /// `Book1` for `Name`, an empty `Path`, and `Book1` again for `FullName`;
+    /// saved as `a report.xlsx` it answers the file name, the folder with no
+    /// separator after it, and the two joined. A workbook open in a browser is
+    /// the first of those with a name of its own — a file behind it, and no
+    /// folder anyone can name.
+    #[test]
+    fn a_workbook_says_what_it_is_called() {
+        let ask = "Public Function Ask() As String\n\
+                     Ask = ActiveWorkbook.Name & \"|\" & ActiveWorkbook.Path & \"|\"\n\
+                     Ask = Ask & ThisWorkbook.FullName\n\
+                   End Function\n";
+        let module = parse_module(ask).unwrap();
+
+        let mut workbook = workbook();
+        let unnamed = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(unnamed, Value::String("Book1||Book1".to_string()));
+
+        let named = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            host.file_name = Some("a report.xlsx".to_string());
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            named,
+            Value::String("a report.xlsx||a report.xlsx".to_string())
         );
     }
 
