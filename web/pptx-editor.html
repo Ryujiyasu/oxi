@@ -79,7 +79,7 @@
 <script type="module">
 import init, {
   parse_presentation, layout_slide_shape, slide_family_measurable,
-  edit_pptx_with_splits,
+  edit_pptx_with_splits, slide_face_advance,
 } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent, measureFace } from './face-metrics.js';
 
@@ -163,6 +163,55 @@ function layoutSlide() {
   });
 }
 
+/* ---------- where each character sits ----------------------------------- */
+
+// The x of every character boundary of a line, in POINTS from the line's start.
+//
+// ★This is the renderer's rule, not the browser's. `runtime_dx_px` accumulates
+// the EXACT design advance and rounds the running total once per glyph -- no
+// kerning, no shaping -- because that is what PowerPoint both breaks and
+// centres against. `fillText` on a whole string kerns it, so a line drawn that
+// way drifts from where PowerPoint puts the same glyphs, and the caret drifts
+// with it. Measuring and drawing from one array keeps the three in step.
+//
+// Null when the face cannot be measured; the caller then falls back to the
+// browser's own measuring, which is what an unmeasurable shape already gets.
+function lineOffsets(line) {
+  if (line.__off !== undefined) return line.__off;
+  const cps = [...line.text];
+  // What the page measured, else what the engine's own tables say. The engine
+  // laid the line out on one of those two, so drawing on the other -- or on
+  // whatever face the browser substituted -- would put the glyphs somewhere
+  // the layout never agreed to.
+  const em = measureFace(line.family, line.bold, line.italic, line.text)
+    || cps.map(ch => slide_face_advance(line.family, line.bold, line.italic, ch));
+  if (!em) { line.__off = null; return null; }
+  const off = [0];
+  let x = 0;
+  for (let i = 0; i < cps.length; i++) {
+    if (em[i] === null || em[i] === undefined) { line.__off = null; return null; }
+    x += em[i] * line.font_size;
+    // One entry per CODE UNIT, so the callers can keep indexing with
+    // `slice(0, i)` offsets while the advances are indexed by code point.
+    for (let u = 0; u < cps[i].length; u++) off.push(x);
+  }
+  line.__off = off;
+  return off;
+}
+
+function lineFont(line, k) {
+  return `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
+         `${line.font_size * k}px ${JSON.stringify(String(line.family))}, sans-serif`;
+}
+
+// How far into a line character `n` starts, in device pixels.
+function prefixWidth(line, n, k) {
+  const off = lineOffsets(line);
+  if (off) return off[Math.min(n, off.length - 1)] * k;
+  ctx.font = lineFont(line, k);
+  return ctx.measureText(line.text.slice(0, n)).width;
+}
+
 /* ---------- drawing ----------------------------------------------------- */
 
 function bytesToUrl(data, type) {
@@ -203,10 +252,8 @@ function paintSelection(k) {
     const s0 = Math.max(range.from - line.char_start, 0);
     const s1 = Math.min(range.to - line.char_start, line.text.length);
     if (s1 <= s0) continue;
-    ctx.font = `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
-               `${line.font_size * k}px "${line.family}", sans-serif`;
-    const x0 = (entry.shape.x + line.x) * k + ctx.measureText(line.text.slice(0, s0)).width;
-    const x1 = (entry.shape.x + line.x) * k + ctx.measureText(line.text.slice(0, s1)).width;
+    const x0 = (entry.shape.x + line.x) * k + prefixWidth(line, s0, k);
+    const x1 = (entry.shape.x + line.x) * k + prefixWidth(line, s1, k);
     const y = (entry.shape.y + line.baseline) * k;
     ctx.fillRect(x0, y - line.font_size * k * 0.85, x1 - x0, line.font_size * k * 1.05);
   }
@@ -217,11 +264,20 @@ function paintLines(entry, k) {
   for (const line of layout.lines) {
     const px = (shape.x + line.x) * k;
     const py = (shape.y + line.baseline) * k;
-    ctx.font = `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
-               `${line.font_size * k}px "${line.family}", sans-serif`;
+    ctx.font = lineFont(line, k);
     ctx.fillStyle = '#111';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(line.text, px, py);
+    const off = lineOffsets(line);
+    if (off) {
+      // Character by character, each at its own design position.
+      let u = 0;
+      for (const ch of line.text) {
+        ctx.fillText(ch, px + off[u] * k, py);
+        u += ch.length;
+      }
+    } else {
+      ctx.fillText(line.text, px, py);
+    }
   }
   // Say which layout this was: the engine's, or a fallback.
   ctx.strokeStyle = layout.complete ? 'rgba(74,222,128,.55)' : 'rgba(251,191,36,.75)';
@@ -256,14 +312,12 @@ function hitTest(px, py) {
       const y = (shape.y + line.baseline) * k;
       const h = line.font_size * k;
       if (py < y - h * 0.9 || py > y + h * 0.3) continue;
-      ctx.font = `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
-                 `${line.font_size * k}px "${line.family}", sans-serif`;
-      const w = ctx.measureText(line.text).width;
+      const w = prefixWidth(line, line.text.length, k);
       if (px < x - 2 || px > x + w + 2) continue;
       // Walk the characters to find the closest boundary.
       let best = 0, bestD = Infinity;
       for (let i = 0; i <= line.text.length; i++) {
-        const d = Math.abs(x + ctx.measureText(line.text.slice(0, i)).width - px);
+        const d = Math.abs(x + prefixWidth(line, i, k) - px);
         if (d < bestD) { bestD = d; best = i; }
       }
       return { entry, line, charIndex: line.char_start + best, inLine: best };
@@ -277,9 +331,7 @@ function paintCaret() {
   if (!state.sel) { c.style.display = 'none'; return; }
   const { line, inLine } = state.sel;
   const k = state.scale, shape = state.sel.entry.shape;
-  ctx.font = `${line.italic ? 'italic ' : ''}${line.bold ? '700 ' : ''}` +
-             `${line.font_size * k}px "${line.family}", sans-serif`;
-  const w = ctx.measureText(line.text.slice(0, inLine)).width;
+  const w = prefixWidth(line, inLine, k);
   c.style.display = 'block';
   c.style.left = ((shape.x + line.x) * k + w) + 'px';
   c.style.top = ((shape.y + line.baseline) * k - line.font_size * k * 0.85) + 'px';

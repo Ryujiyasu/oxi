@@ -399,6 +399,55 @@ def run_faces(page, port: int, rep: Report) -> None:
               f"{got[0]['chars']!r}" if got else "nothing collected")
 
 
+def run_glyphs(page, port: int, rep: Report) -> None:
+    """Do the editor's glyphs land where PowerPoint's did?
+
+    The strongest check there is on this page: the truth PDF carries the x of
+    every character PowerPoint drew, and the editor now places characters by
+    the renderer's rule -- exact design advances accumulated, no kerning -- so
+    the two are directly comparable in points.
+
+    ★It caught the defect it was written for on its first run. `layout_text_shape`
+    took a face from the runs or the theme and never from the LEVEL, so d15's
+    title was measured in Arial where the PDF sets it in Barlow Bold: 41pt of
+    drift on a 13-character line, with the shape still reported `complete`.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "glyph_probe", Path(__file__).with_name("pptx_editor_glyph_probe.py"))
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    print("glyphs (editor vs the truth PDF)", flush=True)
+    page.goto(f"http://127.0.0.1:{port}/pptx-editor.html")
+    page.wait_for_function(
+        "() => document.getElementById('status').textContent.includes('ready')",
+        timeout=60000)
+    for deck in ("d15", "d02"):
+        pptx = next(iter(sorted(DECKS.glob(deck + "*.pptx"))), None)
+        pdf = next(iter(sorted((DECKS.parent / "pdf").glob(deck + "*.pdf"))), None)
+        if not pptx or not pdf:
+            rep.check("glyphs", deck, False, "no deck or truth PDF")
+            continue
+        res = page.evaluate(probe.JS, [list(pptx.read_bytes()), 1])
+        chars = probe.pdf_chars(pdf, 1)
+        worst, matched = 0.0, 0
+        for line in res["lines"]:
+            run = probe.match_line(line, chars)
+            if not run:
+                continue
+            matched += 1
+            worst = max(worst, max(
+                abs(line["offs"][k] - (run[k]["x"] - run[0]["x"]))
+                for k in range(len(run))))
+        # A whole line of 48pt type agreeing to under a point means the
+        # advances, the face and the accumulation are all PowerPoint's.
+        rep.check("glyphs", deck, matched > 0 and worst < 1.0,
+                  f"{matched} lines matched, worst character offset {worst:.3f}pt"
+                  if matched else "no line could be matched to the PDF")
+
+
 def run_index_html(page, port: int, pptx: Path, rep: Report) -> None:
     """The suite viewer's own pptx editing path, checked for the same defect."""
     deck = pptx.name.split("__")[0]
@@ -454,6 +503,7 @@ def main() -> None:
         page = browser.new_page(viewport={"width": 1500, "height": 1000},
                                 accept_downloads=True)
         run_faces(page, port, rep)
+        run_glyphs(page, port, rep)
         for pptx in targets:
             run_deck(page, port, pptx, rep)
         run_index_html(page, port, targets[0], rep)
