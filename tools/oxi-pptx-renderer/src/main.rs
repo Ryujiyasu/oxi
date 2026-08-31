@@ -225,6 +225,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                                 &mut counters,
                                                 &mut prev_fs,
                                                 sh.wrap_text,
+                                                sh.spc_first_last_para,
                                             );
                                             // Spec #11: surface the marker text so autonum
                                             // number strings can be verified in the dump.
@@ -358,6 +359,7 @@ fn compute_shape_anchor_off(
             &mut counters,
             &mut prev_fs,
             sh.wrap_text,
+            sh.spc_first_last_para,
         );
     }
     // block_h = the block's advance minus the first paragraph's first_off.
@@ -4759,6 +4761,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 &mut counters,
                                 &mut prev_fs,
                                 sh.wrap_text,
+                                sh.spc_first_last_para,
                             );
                             if let Some(m) = &marker {
                                 let marker_x = left_x
@@ -12312,6 +12315,13 @@ fn phlevel_on() -> bool {
     std::env::var("OXI_PHLEVEL_DISABLE").is_err()
 }
 
+/// The first paragraph's `spcBef` is dropped unless the shape sets
+/// `a:bodyPr/@spcFirstLastPara`, unless this is set -- in which case the old
+/// unconditional behaviour returns. Probe `spcfirst`, 8 arms.
+fn spcfirst_on() -> bool {
+    std::env::var("OXI_SPCFIRST_DISABLE").is_err()
+}
+
 /// A bottom-anchored block taller than its box overflows upward rather than
 /// being clamped to the box top, unless this is set.
 fn anchorb_on() -> bool {
@@ -15130,6 +15140,8 @@ fn layout_paragraph_baselines(
     prev_fs: &mut Option<f32>,
     // `a:bodyPr/@wrap` -- false lets the paragraph run past the box.
     wrap_text: bool,
+    // `a:bodyPr/@spcFirstLastPara` -- keep the first paragraph's space.
+    spc_first_last: bool,
 ) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
@@ -15187,13 +15199,25 @@ fn layout_paragraph_baselines(
         para.bullet.clone()
     };
 
-    if let Some(sb) = para.space_before {
-        *cursor_pt += sb;
-    } else if !is_first {
-        // Master spcBef (a:spcPct) — a fraction of the line advance, applied
-        // between paragraphs only (the first paragraph's first line gets none).
-        if let Some(pct) = m.spc_bef_pct {
-            *cursor_pt += pct * fs * 1.2 * n;
+    // The first paragraph's space is DROPPED unless the shape asks to keep it
+    // with `a:bodyPr/@spcFirstLastPara`.
+    //
+    // ★This was unconditional, and right by coincidence: not one shape in
+    // either corpus declares a first-paragraph `spcBef` without also setting
+    // the flag (279 shapes in 10 decks have both, 0 have the space alone), so
+    // no deck could tell the two rules apart. Probe `spcfirst` can: with the
+    // flag off, 0 / 6 / 10 / 18pt all leave the first baseline where 0pt does;
+    // with it on they move it 0 / 6.000 / 9.960 / 18.000pt down.
+    if !is_first || spc_first_last || !spcfirst_on() {
+        if let Some(sb) = para.space_before {
+            *cursor_pt += sb;
+        } else if !is_first {
+            // Master spcBef (a:spcPct) — a fraction of the line advance,
+            // applied between paragraphs only (the first paragraph's first
+            // line gets none).
+            if let Some(pct) = m.spc_bef_pct {
+                *cursor_pt += pct * fs * 1.2 * n;
+            }
         }
     }
     // Spec #6: vertical anchoring (a:bodyPr/@anchor resolved through the
