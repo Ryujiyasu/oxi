@@ -2465,8 +2465,14 @@ impl<'a> WorkbookHost<'a> {
         let end_row = shift(range.end_row, row_offset, "row")?;
         let start_column = shift(range.start_column, column_offset, "column")?;
         let end_column = shift(range.end_column, column_offset, "column")?;
-        if start_row == 0 {
+        // Both ends have to land ON the sheet. Asked of Excel,
+        // `Range("XFD1").Offset(0, 1)` raises rather than answering with a
+        // column that is not there.
+        if start_row == 0 || end_row > MAX_WORKSHEET_ROW {
             return Err("Range.Offset moves the row outside the worksheet".to_string());
+        }
+        if end_column > MAX_WORKSHEET_COLUMN {
+            return Err("Range.Offset moves the column outside the worksheet".to_string());
         }
         Ok(self.object(HostObject::Range(CellRange {
             sheet: range.sheet,
@@ -2491,13 +2497,17 @@ impl<'a> WorkbookHost<'a> {
             ),
             _ => return Err("Range.Resize expects zero, one, or two sizes".to_string()),
         };
+        // The far end has to land ON the sheet: asked of Excel,
+        // `Range("XFC1").Resize(1, 3)` raises rather than reaching past XFD.
         let end_row = range
             .start_row
             .checked_add(rows - 1)
+            .filter(|row| *row <= MAX_WORKSHEET_ROW)
             .ok_or_else(|| "Range.Resize row size is too large".to_string())?;
         let end_column = range
             .start_column
             .checked_add(columns - 1)
+            .filter(|column| *column <= MAX_WORKSHEET_COLUMN)
             .ok_or_else(|| "Range.Resize column size is too large".to_string())?;
         Ok(self.object(HostObject::Range(CellRange {
             sheet: range.sheet,
@@ -11917,6 +11927,171 @@ End Sub
             "OneCell says {:?}",
             workbook.defined_names[1].1
         );
+    }
+
+    /// Where the edges are, from every cell that has one.
+    ///
+    /// A sheet with a run in A1:A3, a gap, a run in A6:A7, a lone cell at A20,
+    /// a run in C3:D3 and a block in B6:C7 — every answer below was asked of
+    /// Excel. `End` starts from the block's TOP-LEFT cell, and running out of
+    /// the sheet stops at its edge rather than raising.
+    #[test]
+    fn vba_finds_the_edge_from_a_cell_and_from_a_block() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Edges() As String\n\
+               Range(\"A1\").Value = \"a1\"\n\
+               Range(\"A2\").Value = \"a2\"\n\
+               Range(\"A3\").Value = \"a3\"\n\
+               Range(\"A6\").Value = \"a6\"\n\
+               Range(\"A7\").Value = \"a7\"\n\
+               Range(\"A20\").Value = \"a20\"\n\
+               Range(\"C3\").Value = \"c3\"\n\
+               Range(\"D3\").Value = \"d3\"\n\
+               Range(\"B6\").Value = \"b6\"\n\
+               Range(\"C6\").Value = \"c6\"\n\
+               Range(\"B7\").Value = \"b7\"\n\
+               Range(\"C7\").Value = \"c7\"\n\
+               Edges = Range(\"A1\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"A3\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"A4\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"A5\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"A7\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"A20\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1\").End(xlUp).Address(False, False) & \"|\" & _\n\
+                 Range(\"A20\").End(xlUp).Address(False, False) & \"|\" & _\n\
+                 Range(\"A4\").End(xlUp).Address(False, False) & \"|\" & _\n\
+                 Range(\"B3\").End(xlToRight).Address(False, False) & \"|\" & _\n\
+                 Range(\"C3\").End(xlToRight).Address(False, False) & \"|\" & _\n\
+                 Range(\"D3\").End(xlToLeft).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1\").End(xlToLeft).Address(False, False) & \"|\" & _\n\
+                 Range(\"B6:C7\").End(xlDown).Address(False, False) & \"|\" & _\n\
+                 Range(\"B6:C7\").End(xlToRight).Address(False, False) & \"|\" & _\n\
+                 Range(\"B6:C7\").End(xlUp).Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Edges", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "A3|A6|A6|A6|A20|A1048576|A1|A7|A3|C3|D3|C3|A1|B7|C6|B1".to_string()
+            )
+        );
+    }
+
+    /// The block a cell belongs to, which blanks fence in on every side.
+    ///
+    /// Asked of Excel on the same sheet: A1 belongs to `A1:A3`, A6 to the
+    /// joined `A6:C7`, a lone cell to itself, and a BLANK between two blocks
+    /// takes the one above it — A4 answers `A1:A4`.
+    #[test]
+    fn vba_finds_the_block_a_cell_belongs_to() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Blocks() As String\n\
+               Range(\"A1\").Value = \"a1\"\n\
+               Range(\"A2\").Value = \"a2\"\n\
+               Range(\"A3\").Value = \"a3\"\n\
+               Range(\"A6\").Value = \"a6\"\n\
+               Range(\"A7\").Value = \"a7\"\n\
+               Range(\"A20\").Value = \"a20\"\n\
+               Range(\"C3\").Value = \"c3\"\n\
+               Range(\"D3\").Value = \"d3\"\n\
+               Range(\"B6\").Value = \"b6\"\n\
+               Range(\"C6\").Value = \"c6\"\n\
+               Range(\"B7\").Value = \"b7\"\n\
+               Range(\"C7\").Value = \"c7\"\n\
+               Blocks = Range(\"A1\").CurrentRegion.Address(False, False) & \"|\" & _\n\
+                 Range(\"A6\").CurrentRegion.Address(False, False) & \"|\" & _\n\
+                 Range(\"A20\").CurrentRegion.Address(False, False) & \"|\" & _\n\
+                 Range(\"A4\").CurrentRegion.Address(False, False) & \"|\" & _\n\
+                 Range(\"Z50\").CurrentRegion.Address(False, False) & \"|\" & _\n\
+                 Range(\"C3\").CurrentRegion.Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A2\").CurrentRegion.Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Blocks", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("A1:A3|A6:C7|A20|A1:A4|Z50|C3:D3|A1:A3".to_string())
+        );
+    }
+
+    /// Stepping a block about and changing its shape, and how it counts.
+    ///
+    /// Every answer was asked of Excel. An omitted `Offset` argument moves
+    /// nothing and an omitted `Resize` argument keeps that side's size, one
+    /// index into `Cells` counts row-major and MAY leave the block — the 13th
+    /// cell of `B2:D5` is `B6` — and stepping or growing off the sheet raises.
+    #[test]
+    fn vba_steps_a_block_about_and_counts_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Shape() As String\n\
+               Shape = Range(\"B2\").Offset(1).Address(False, False) & \"|\" & _\n\
+                 Range(\"B2\").Offset(, 2).Address(False, False) & \"|\" & _\n\
+                 Range(\"B2:C3\").Offset(1, 1).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1\").Resize(2).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:C1\").Resize(2).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:C1\").Resize(, 1).Address(False, False) & \"|\" & _\n\
+                 Rows.Count & \"|\" & Columns.Count & \"|\" & _\n\
+                 Range(\"B2:D5\").Rows.Count & \"|\" & Range(\"B2:D5\").Columns.Count & \"|\" & _\n\
+                 Range(\"B2:D5\").Count & \"|\" & _\n\
+                 Range(\"A1\").EntireRow.Address & \"|\" & _\n\
+                 Range(\"A1\").EntireColumn.Address & \"|\" & _\n\
+                 Range(\"B2:D5\").Rows(2).Address(False, False) & \"|\" & _\n\
+                 Range(\"B2:D5\").Columns(2).Address(False, False) & \"|\" & _\n\
+                 Range(\"B2:D5\").Cells(2, 2).Address(False, False) & \"|\" & _\n\
+                 Range(\"B2:D5\").Cells(5).Address(False, False) & \"|\" & _\n\
+                 Range(\"B2:D5\").Cells(13).Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Shape", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "B3|D2|C3:D4|A1:A2|A1:C2|A1|1048576|16384|4|3|12|$1:$1|$A:$A|\
+                 B3:D3|C2:C5|C3|C3|B6"
+                    .to_string()
+            )
+        );
+    }
+
+    /// Stepping or growing off the sheet raises, as it does in Excel.
+    #[test]
+    fn vba_refuses_a_step_that_leaves_the_sheet() {
+        for call in [
+            "Range(\"A1\").Offset(-1, 0)",
+            "Range(\"A1\").Offset(0, -1)",
+            "Range(\"XFD1\").Offset(0, 1)",
+            "Range(\"A1\").Resize(0, 1)",
+            "Range(\"A1\").Resize(-1, 1)",
+            "Range(\"XFC1\").Resize(1, 3)",
+        ] {
+            let mut workbook = workbook();
+            let module =
+                parse_module(&format!("Public Sub Step1()\n  {call}.Select\nEnd Sub\n")).unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            assert!(
+                execute_with_host(&module, "Step1", vec![], &mut host).is_err(),
+                "{call} should have refused"
+            );
+        }
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
