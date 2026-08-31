@@ -294,6 +294,10 @@ struct WorkbookHost<'a> {
     workbook: &'a mut Workbook,
     active_sheet: usize,
     clipboard: Option<Clipboard>,
+    /// The block a `Cut` set aside without saying where it goes. Excel holds
+    /// the cells themselves rather than a copy of them, so a Paste MOVES them
+    /// and a second Paste has nothing left to move.
+    pending_cut: Option<CellRange>,
     /// The range a sheet is filtering, and the tests each field is under.
     /// Filtering a second field narrows what the first left showing, so the
     /// tests accumulate and every row is judged against all of them.
@@ -322,6 +326,7 @@ impl<'a> WorkbookHost<'a> {
             workbook,
             active_sheet,
             clipboard: None,
+            pending_cut: None,
             auto_filter: None,
             selection: CellRange::single(CellAddress {
                 sheet: active_sheet,
@@ -4005,16 +4010,48 @@ impl<'a> WorkbookHost<'a> {
     /// cells cut onto a five-cell destination fill the first two and leave the
     /// rest as they were, and one cell cut onto a block fills its corner.
     fn cut_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
-        let [Value::Object(destination)] = args else {
-            return Err(
-                "Range.Cut needs a destination Range: this build has nowhere to hold \
-                 cells between a cut and a paste"
-                    .to_string(),
-            );
+        let destination = match args {
+            [] | [Value::Missing] => {
+                // Nothing said about where: the block waits for a Paste, and
+                // Excel says so through `Application.CutCopyMode`.
+                Self::range_cell_count(source)?;
+                self.clipboard = None;
+                self.pending_cut = Some(source);
+                return Ok(Value::Boolean(true));
+            }
+            [Value::Object(destination)] => self
+                .range(destination)
+                .ok_or_else(|| "Range.Cut destination must be a Range".to_string())?,
+            _ => return Err("Range.Cut takes one destination Range".to_string()),
         };
-        let destination = self
-            .range(destination)
-            .ok_or_else(|| "Range.Cut destination must be a Range".to_string())?;
+        self.move_cells(source, destination)
+    }
+
+    /// Put down whatever Copy or Cut set aside.
+    ///
+    /// Asked of Excel: with no destination it lands on the selection; what a
+    /// COPY set aside can be put down again and again, while what a CUT set
+    /// aside is MOVED, and `CutCopyMode` goes back to nothing afterwards.
+    /// Pasting with nothing held raises.
+    fn paste_held(&mut self, args: &[Value]) -> Result<Value, String> {
+        let target = match args {
+            [] | [Value::Missing] => self.selection,
+            [Value::Object(destination)] => self
+                .range(destination)
+                .ok_or_else(|| "Worksheet.Paste destination must be a Range".to_string())?,
+            _ => return Err("Worksheet.Paste takes one destination Range".to_string()),
+        };
+        if let Some(source) = self.pending_cut.take() {
+            return self.move_cells(source, target);
+        }
+        if self.clipboard.is_none() {
+            return Err("Worksheet.Paste has nothing to put down".to_string());
+        }
+        self.paste_special(target, &[])
+    }
+
+    /// Carry a block to where the destination's corner is, references and all.
+    fn move_cells(&mut self, source: CellRange, destination: CellRange) -> Result<Value, String> {
         Self::range_cell_count(source)?;
         let row_count = source.end_row - source.start_row + 1;
         let column_count = source.end_column - source.start_column + 1;
@@ -4266,6 +4303,14 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::Empty));
             }
             if let Some(sheet) = self.worksheet(receiver) {
+                if name.eq_ignore_ascii_case("paste") {
+                    if sheet != self.active_sheet {
+                        return Err(
+                            "Worksheet.Paste requires its worksheet to be active".to_string()
+                        );
+                    }
+                    return self.paste_held(args).map(Some);
+                }
                 if name.eq_ignore_ascii_case("showalldata") {
                     self.show_all_rows(sheet)?;
                     return Ok(Some(Value::Empty));
@@ -4892,6 +4937,17 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("calculation") {
                 return Ok(Some(Value::Integer(self.calculation)));
             }
+            if name.eq_ignore_ascii_case("cutcopymode") {
+                // 1 is xlCut, 2 is xlCopy, and nothing held answers 0 — which
+                // is False, and is how a macro asks whether anything is.
+                return Ok(Some(Value::Integer(if self.pending_cut.is_some() {
+                    1
+                } else if self.clipboard.is_some() {
+                    2
+                } else {
+                    0
+                })));
+            }
             if name.eq_ignore_ascii_case("activesheet") {
                 return Ok(Some(self.object(HostObject::Worksheet(self.active_sheet))));
             }
@@ -5193,6 +5249,14 @@ impl Host for WorkbookHost<'_> {
             }
         }
         if self.is_application(receiver) {
+            if name.eq_ignore_ascii_case("cutcopymode") {
+                // Excel takes False and lets go of what it held. It takes the
+                // two constants as well, but they mean the same thing here:
+                // there is no way to start holding something by saying so.
+                self.clipboard = None;
+                self.pending_cut = None;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("screenupdating") {
                 self.screen_updating = style_boolean(&value, "Application.ScreenUpdating")?;
                 return Ok(true);
@@ -12501,6 +12565,79 @@ End Sub
             result,
             Value::String("255|3|52|16|-4142|-4142|255|3|1|Null|3".to_string())
         );
+    }
+
+    /// What Copy sets aside can be put down again; what Cut sets aside is
+    /// moved, once.
+    ///
+    /// Asked of Excel: `CutCopyMode` answers 0 at rest, `xlCopy` after a Copy
+    /// and `xlCut` after a Cut; `Paste` with no destination lands on the
+    /// selection; a Copy survives being pasted while a Cut does not; and
+    /// pasting with nothing held raises.
+    #[test]
+    fn vba_puts_down_what_copy_and_cut_set_aside() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Held() As String\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"A2\").Value = 2\n\
+               Range(\"B1\").Formula = \"=A1*10\"\n\
+               Held = Application.CutCopyMode & \"|\"\n\
+               Range(\"A1:B2\").Copy\n\
+               Held = Held & Application.CutCopyMode & \"|\"\n\
+               ActiveSheet.Paste Range(\"D1\")\n\
+               Held = Held & Range(\"D1\").Value & Range(\"E1\").Formula & \"|\" & _\n\
+                 Application.CutCopyMode & \"|\"\n\
+               Range(\"G5\").Select\n\
+               ActiveSheet.Paste\n\
+               Held = Held & Range(\"G5\").Value & Range(\"H5\").Formula & \"|\"\n\
+               Range(\"A1:B2\").Cut\n\
+               Held = Held & Application.CutCopyMode & \"|\"\n\
+               ActiveSheet.Paste Range(\"J1\")\n\
+               Held = Held & Range(\"J1\").Value & Range(\"K1\").Formula & \"|\" & _\n\
+                 Application.CutCopyMode & \"|\" & \"[\" & Range(\"A1\").Value & \"]\"\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Held", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("0|2|1=D1*10|2|1=G5*10|1|1=J1*10|0|[]".to_string())
+        );
+    }
+
+    /// Putting down what nothing set aside raises, and letting go empties the
+    /// hand.
+    #[test]
+    fn vba_refuses_a_paste_with_nothing_held() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Nothing1()\n  ActiveSheet.Paste Range(\"A1\")\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let error = execute_with_host(&module, "Nothing1", vec![], &mut host)
+            .expect_err("there is nothing to put down")
+            .to_string();
+        assert!(error.contains("nothing to put down"), "{error}");
+        drop(host);
+
+        let module = parse_module(
+            "Public Function LetGo() As String\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"A1\").Copy\n\
+               Application.CutCopyMode = False\n\
+               LetGo = Application.CutCopyMode\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let result = execute_with_host(&module, "LetGo", vec![], &mut host).unwrap();
+        assert_eq!(result, Value::String("0".to_string()));
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
