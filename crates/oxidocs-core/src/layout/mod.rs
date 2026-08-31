@@ -23995,6 +23995,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 vec![false; chars_vec.len()]
             };
 
+            // S1251: "nothing follows this tab" needs two scans; both are
+            // per-FRAGMENT, so resolve them once here rather than per tab
+            // character (a tab-heavy paragraph would otherwise be quadratic).
+            let s1251_rest_blank = fragments[frag_outer_idx + 1..]
+                .iter()
+                .all(|f| f.0.chars().all(|c| matches!(c, ' ' | '\t')));
+            let s1251_last_content =
+                chars_vec.iter().rposition(|c| !matches!(c, ' ' | '\t'));
             for (char_index, ch) in chars_vec.iter().copied().enumerate() {
                 // LATINQUOTE (2026-07-07, default ON, opt-out
                 // OXI_LATINQUOTE_DISABLE): a curly
@@ -24704,13 +24712,35 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let mut next_pos = next_pos;
                             let mut next_relative = next_relative;
                             let mut tab_align = tab_align;
+                            // S1251 (default ON, opt-out OXI_S1251_DISABLE): S1044's at-boundary guard
+                            // misses a TRAILING tab. Measured on the parts of
+                            // legal__001a2c7f07cd358f (same styles/numbering/settings,
+                            // only the paragraph tail swept):
+                            //   text + tab          2 lines   (the tab wraps)
+                            //   text + tab + "X"    1 line    (the tab clamps, X follows)
+                            //   text + tab + tab    2 lines
+                            //   text                1 line
+                            // i.e. a tab whose stop is past the boundary wraps when
+                            // NOTHING follows it, and clamps when content does -- the
+                            // line need not already be full. The document's own line is
+                            // then no longer the last, so Word justifies it out to the
+                            // boundary; Oxi kept one line, left it unjustified 20pt
+                            // short, and the tab "fitted" -- a self-consistent but wrong
+                            // fixpoint. Only a space and a tab count as "nothing follows":
+                            // U+00A0 renders, so `char::is_whitespace` is too broad.
+                            let s1251_trailing_tab =
+                                std::env::var("OXI_S1251_DISABLE").is_err()
+                                    && s1251_rest_blank
+                                    && s1251_last_content
+                                        .map_or(true, |i| i <= char_index);
                             if std::env::var("OXI_S1044_DISABLE").is_err()
                                 && !self.doc_body_has_real_cjk
                                 && !s883_nowrap
                                 && tab_align == TabStopAlignment::Left
                                 && !current_line.fragments.is_empty()
                                 && next_relative > available_tw as f32 / 20.0 + 0.01
-                                && current_width >= available_tw as f32 / 20.0 - 0.01
+                                && (current_width >= available_tw as f32 / 20.0 - 0.01
+                                    || s1251_trailing_tab)
                             {
                                 if std::env::var("OXI_DBG1044").is_ok() {
                                     let head: String = current_line
