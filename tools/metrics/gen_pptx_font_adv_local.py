@@ -85,6 +85,9 @@ def local_faces() -> dict:
                 family = names.getDebugName(1) or ""
                 sub = (names.getDebugName(2) or "").strip()
                 mac_style = font["head"].macStyle
+                weight = font["OS/2"].usWeightClass
+                fs_selection = font["OS/2"].fsSelection
+                slant = font["post"].italicAngle
             except Exception:
                 continue
             if not family:
@@ -96,14 +99,33 @@ def local_faces() -> dict:
             # string filed the bold-italic face as the deck's plain italic.
             # Same shape as the embedded parts whose declared typeface is not
             # what they hold -- the name is not the identity.
-            bold = bool(mac_style & 0x01)
-            italic = bool(mac_style & 0x02)
+            #
+            # ★But one set of bits is not enough either: this machine's
+            # `Rubik-Bold.ttf` leaves `macStyle` at 0 while `usWeightClass` says
+            # 700, so reading macStyle alone filed it as Rubik REGULAR -- where
+            # it displaced `Rubik-Regular.ttf` and made every plain Rubik line
+            # measure ~4% wide. Every source that can say so is consulted, and
+            # any of them saying bold is bold.
+            bold = bool(mac_style & 0x01) or weight >= 600
+            italic = (
+                bool(mac_style & 0x02)
+                or bool(fs_selection & 0x01)
+                or slant != 0
+            )
             # The key is the name a pptx asks for: the GDI legacy family, which
             # is ID 1 alone for the four RIBBI styles and ID 1 + ID 2 for the
             # rest -- so Barlow's Light face is asked for as "Barlow Light".
             low = sub.lower()
             asked = family if low in RIBBI else f"{family} {sub}".strip()
-            out.setdefault((asked, bold, italic), path)
+            key = (asked, bold, italic)
+            if key in out and out[key] != path:
+                # Two files claiming one slot means the reading above is still
+                # wrong for one of them. Say so rather than letting whichever
+                # was walked first decide.
+                print(f"// collision: {asked} bold={bold} italic={italic}: "
+                      f"{os.path.basename(out[key])} vs {os.path.basename(path)}",
+                      file=sys.stderr)
+            out.setdefault(key, path)
     return out
 
 
