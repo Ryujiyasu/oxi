@@ -82,15 +82,6 @@ enum LookupOrientation {
     Horizontal,
 }
 
-impl LookupOrientation {
-    fn depth_name(self) -> &'static str {
-        match self {
-            Self::Vertical => "column",
-            Self::Horizontal => "row",
-        }
-    }
-}
-
 /// A rectangular block of values a lookup searches, built either from a cell
 /// range or from a VBA array. Excel treats a one-dimensional VBA array as a
 /// single row, so `Array(5, 15, 25)` has one row and three columns.
@@ -774,8 +765,11 @@ impl<'a> WorkbookHost<'a> {
             oxicells_calc::Value::Error(oxicells_calc::ExcelError::Name) => Err(format!(
                 "WorksheetFunction.{name} is not supported in the browser"
             )),
-            oxicells_calc::Value::Error(other) => Err(format!(
-                "WorksheetFunction.{name} answers {other}"
+            // Every other error is one the sheet would SHOW, so it is handed
+            // back as a value and raised further up if the caller asked
+            // through `WorksheetFunction`.
+            oxicells_calc::Value::Error(other) => Ok(Value::Error(
+                spreadsheet_error_number(other.as_str()),
             )),
             oxicells_calc::Value::Number(number) => Ok(numeric_result(number)),
             oxicells_calc::Value::Text(text) => Ok(Value::String(text)),
@@ -2013,10 +2007,7 @@ impl<'a> WorkbookHost<'a> {
             LookupOrientation::Horizontal => (table.columns, table.rows),
         };
         if index > depth {
-            return Err(format!(
-                "WorksheetFunction.{name} index {index} is outside the {depth}-{} lookup table",
-                orientation.depth_name()
-            ));
+            return Ok(Value::Error(ERROR_REF));
         }
         let key_at = |lane: usize| match orientation {
             LookupOrientation::Vertical => table.get(lane, 0),
@@ -2028,9 +2019,7 @@ impl<'a> WorkbookHost<'a> {
             (0..lanes).find(|lane| lookup_exact_matches(&key_at(*lane), needle))
         };
         let Some(lane) = lane else {
-            return Err(format!(
-                "WorksheetFunction.{name} did not find a matching value"
-            ));
+            return Ok(Value::Error(ERROR_NA));
         };
         Ok(match orientation {
             LookupOrientation::Vertical => table.get(lane, index - 1),
@@ -2408,9 +2397,9 @@ impl<'a> WorkbookHost<'a> {
         } else {
             sorted_lookup_position(count, match_type < 0, value_at, needle)
         };
-        position
+        Ok(position
             .map(|position| Value::Integer(position as i64))
-            .ok_or_else(|| "WorksheetFunction.Match did not find a matching value".to_string())
+            .unwrap_or(Value::Error(ERROR_NA)))
     }
 
     /// The worksheet functions that read their arguments by position rather than
@@ -2484,9 +2473,7 @@ impl<'a> WorkbookHost<'a> {
             }
             let at = wanted - 1.0;
             if at < 0.0 || at >= numbers.len() as f64 {
-                return Err(format!(
-                    "WorksheetFunction.{name} has no number {wanted} to take"
-                ));
+                return Ok(Some(Value::Error(ERROR_NUM)));
             }
             return Ok(Some(numeric_result(numbers[at as usize])));
         }
@@ -2541,9 +2528,7 @@ impl<'a> WorkbookHost<'a> {
             }
             let count = numbers.len();
             if count == 0 || (sample && count < 2) {
-                return Err(format!(
-                    "WorksheetFunction.{name} needs more numbers than that"
-                ));
+                return Ok(Some(Value::Error(ERROR_DIV_ZERO)));
             }
             let middle = numbers.iter().sum::<f64>() / count as f64;
             let apart = numbers
@@ -2631,7 +2616,7 @@ impl<'a> WorkbookHost<'a> {
                 numbers.append(&mut self.worksheet_numbers(value, name)?);
             }
             if numbers.is_empty() {
-                return Err("WorksheetFunction.Median has no numeric values".to_string());
+                return Ok(Some(Value::Error(ERROR_NUM)));
             }
             numbers.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
             let middle = numbers.len() / 2;
@@ -2708,7 +2693,32 @@ impl<'a> WorkbookHost<'a> {
         Ok(values.iter().filter_map(criteria_number).collect())
     }
 
+    /// A worksheet function asked for through `WorksheetFunction`, which
+    /// RAISES where the sheet itself would show an error.
+    ///
+    /// Measured in Excel 16.0, the same eleven failures both ways: a lookup
+    /// that misses, an index past the end of its table, an average of nothing,
+    /// a sum of text. `Application.VLookup` hands each back as an error value
+    /// — 2042, 2023, 2007, 2015 — and `WorksheetFunction.VLookup` raises on
+    /// every one of them. So the work is done once and this is where the
+    /// answer is turned into a raise.
     fn worksheet_function(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        match self.worksheet_function_value(name, args)? {
+            Value::Error(number) => Err(format!(
+                "WorksheetFunction.{name} answers {}",
+                spreadsheet_error_text(number)
+            )),
+            answer => Ok(answer),
+        }
+    }
+
+    /// The same function, answering the way the sheet would: a failure comes
+    /// back as the error value a cell would show.
+    fn worksheet_function_value(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, String> {
         if args.is_empty() {
             return Err(format!(
                 "WorksheetFunction.{name} expects at least one argument"
@@ -2796,7 +2806,7 @@ impl<'a> WorkbookHost<'a> {
             numbers.iter().sum()
         } else if name.eq_ignore_ascii_case("average") {
             if numbers.is_empty() {
-                return Err("WorksheetFunction.Average has no numeric values".to_string());
+                return Ok(Value::Error(ERROR_DIV_ZERO));
             }
             numbers.iter().sum::<f64>() / numbers.len() as f64
         } else if name.eq_ignore_ascii_case("min") {
@@ -5417,6 +5427,21 @@ impl Host for WorkbookHost<'_> {
                     .worksheet_axis_object_or_item(self.active_sheet, RangeAxis::Columns, args)
                     .map(Some);
             }
+            // Every worksheet function is on Application itself as well, and
+            // the difference is what a failure looks like: measured in Excel
+            // 16.0, `Application.VLookup` on a miss hands back error 2042
+            // where `WorksheetFunction.VLookup` raises, which is why
+            // `If IsError(Application.Match(...))` is how a macro asks whether
+            // something is there at all. The names Excel leaves off — the ones
+            // VBA has of its own, `Len` and `Abs` among them — are left off
+            // here too, so they fall through to "no such member".
+            if self.is_application(receiver) && worksheet_function_carries(name) {
+                let answered = self.worksheet_function_value(name, args);
+                if !matches!(&answered, Err(why) if why.ends_with("is not supported in the browser"))
+                {
+                    return answered.map(Some);
+                }
+            }
             if self.is_worksheets(receiver) && name.eq_ignore_ascii_case("add") {
                 return self.add_worksheet(args).map(Some);
             }
@@ -7982,7 +8007,6 @@ fn set_selected_borders(
             .border_top
             .clone()
             .or_else(|| style.border_bottom.clone()),
-        _ => None,
     };
     let drawn = becomes(existing.as_ref()).map(|name| BorderLine {
         style: name.to_string(),
@@ -9083,6 +9107,21 @@ fn engine_value(value: &Value) -> oxicells_calc::Value {
     }
 }
 
+/// The error values a worksheet function answers with, measured on Excel
+/// 16.0 through `Application`: a lookup that misses is 2042, an index past
+/// the end of its table 2023, an average of nothing 2007, a median of nothing
+/// or a ninth-largest of two numbers 2036. `WorksheetFunction` raises on every
+/// one of them instead.
+///
+/// Not yet told apart: an argument of the wrong sort — `Sum("text")`, an
+/// index of nought — which Excel answers 2015 through `Application` and this
+/// build raises on both paths. A raise is loud, where a wrong number would
+/// not be, so it waits.
+const ERROR_DIV_ZERO: i64 = 2007;
+const ERROR_REF: i64 = 2023;
+const ERROR_NUM: i64 = 2036;
+const ERROR_NA: i64 = 2042;
+
 fn spreadsheet_error_number(value: &str) -> i64 {
     match value.to_ascii_uppercase().as_str() {
         "#NULL!" => 2000,
@@ -9919,6 +9958,72 @@ mod tests {
                 .map(|edge| edge.style.clone());
             assert_eq!(drawn.as_deref(), Some(name), "{line}/{weight}");
         }
+    }
+
+    /// Measured in Excel 16.0, the same eleven failures asked both ways:
+    /// `Application.VLookup` on a miss answers error 2042 and
+    /// `WorksheetFunction.VLookup` raises; an index past the end of the table
+    /// is 2023, a median of nothing 2036, an average of nothing 2007, and the
+    /// ninth largest of two numbers 2036. Excel leaves the names VBA already
+    /// has off Application as well, so `Application.Len` is no member at all.
+    #[test]
+    fn a_worksheet_function_asked_of_application_answers_rather_than_raises() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Range(\"A1\").Value = \"one\"\n\
+               Range(\"A2\").Value = \"two\"\n\
+               Range(\"B1\").Value = 10\n\
+               Range(\"B2\").Value = 20\n\
+               Ask = Application.VLookup(\"one\", Range(\"A1:B2\"), 2, False)\n\
+               Ask = Ask & \"|\" & IsError(Application.VLookup(\"zz\", Range(\"A1:B2\"), 2, False))\n\
+               Ask = Ask & \"|\" & IsError(Application.Match(\"zz\", Range(\"A1:A2\"), 0))\n\
+               Ask = Ask & \"|\" & IsError(Application.VLookup(\"one\", Range(\"A1:B2\"), 9, False))\n\
+               Ask = Ask & \"|\" & IsError(Application.Median(Range(\"D1:D2\")))\n\
+               Ask = Ask & \"|\" & IsError(Application.Average(Range(\"D1:D2\")))\n\
+               Ask = Ask & \"|\" & IsError(Application.Large(Range(\"B1:B2\"), 9))\n\
+               Ask = Ask & \"|\" & Application.Sum(1, 2)\n\
+               Ask = Ask & \"|\" & Application.Max(Range(\"D1:D2\"))\n\
+               Ask = Ask & \"|\" & Application.Substitute(\"a-b\", \"-\", \"+\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String("10|True|True|True|True|True|True|3|0|a+b".to_string())
+        );
+
+        // The same misses, asked the other way, stop the macro instead.
+        for raises in [
+            "Application.WorksheetFunction.VLookup(\"zz\", Range(\"A1:B2\"), 2, False)",
+            "Application.WorksheetFunction.Match(\"zz\", Range(\"A1:A2\"), 0)",
+            "Application.WorksheetFunction.Median(Range(\"D1:D2\"))",
+        ] {
+            let module = parse_module(&format!(
+                "Public Function Ask() As String\n\
+                   Range(\"A1\").Value = \"one\"\n\
+                   Ask = {raises}\n\
+                 End Function\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let stopped = execute_with_host(&module, "Ask", vec![], &mut host).unwrap_err();
+            assert!(stopped.message.contains("answers #"), "{raises}: {stopped:?}");
+        }
+
+        // And a name Excel does not carry is no member on either.
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Application.Len(\"abcd\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        assert!(execute_with_host(&module, "Ask", vec![], &mut host).is_err());
     }
 
     #[test]
