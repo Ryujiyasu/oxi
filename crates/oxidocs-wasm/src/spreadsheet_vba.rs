@@ -6239,6 +6239,14 @@ impl Host for WorkbookHost<'_> {
                 .uniform_style(range, |style| style.wrap_text)
                 .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
         }
+        if name.eq_ignore_ascii_case("shrinktofit") {
+            // Measured in Excel: False on a cell nobody has touched, True once
+            // set, and Null across a pair where only one of them shrinks —
+            // the same answer WrapText and Bold give.
+            return self
+                .uniform_style(range, |style| style.shrink_to_fit)
+                .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+        }
         if name.eq_ignore_ascii_case("orientation") {
             // Excel counts a rotation in degrees as well, but of the 774
             // rotations in the 285 conformance workbooks 771 are the stacked
@@ -6681,6 +6689,11 @@ impl Host for WorkbookHost<'_> {
             self.set_range_style(range, |_, style| style.wrap_text = wraps)?;
             return Ok(true);
         }
+        if name.eq_ignore_ascii_case("shrinktofit") {
+            let shrinks = style_boolean(&value, "Range.ShrinkToFit")?;
+            self.set_range_style(range, |_, style| style.shrink_to_fit = shrinks)?;
+            return Ok(true);
+        }
         if name.eq_ignore_ascii_case("orientation") {
             let asked = match &value {
                 Value::Integer(number) => *number,
@@ -6688,7 +6701,10 @@ impl Host for WorkbookHost<'_> {
                 _ => return Err("Range.Orientation takes a direction by number".to_string()),
             };
             let stacked = match asked {
-                -4166 => true,
+                // 255 is how the FILE spells stacked, and Excel takes it as
+                // well as its own name for it: setting 255 and reading the
+                // property back answers -4166.
+                255 | -4166 => true,
                 -4128 => false,
                 other => {
                     return Err(format!(
@@ -9656,6 +9672,40 @@ mod tests {
             result,
             Value::String("B2:C3/B2|B2:C3/C3|E5/E5|A1:B2/A1".to_string())
         );
+    }
+
+    /// Measured in Excel 16.0: a fresh cell answers False, a cell that was
+    /// set answers True, and a pair where only one of them shrinks answers
+    /// Null. Excel also lets `Orientation` be written as 255 — the number the
+    /// file itself uses for stacked writing — and reads it back as -4166.
+    #[test]
+    fn a_cell_can_shrink_its_text_to_fit() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"A1\").ShrinkToFit\n\
+               Range(\"A1\").ShrinkToFit = True\n\
+               Ask = Ask & \"|\" & Range(\"A1\").ShrinkToFit\n\
+               Ask = Ask & \"|\" & IsNull(Range(\"A1:A2\").ShrinkToFit)\n\
+               Range(\"A2\").ShrinkToFit = True\n\
+               Ask = Ask & \"|\" & Range(\"A1:A2\").ShrinkToFit\n\
+               Range(\"B1\").Orientation = 255\n\
+               Ask = Ask & \"|\" & Range(\"B1\").Orientation\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String("False|True|True|True|-4166".to_string())
+        );
+        assert!(workbook.sheets[0].rows.iter().any(|row| row
+            .cells
+            .iter()
+            .any(|cell| cell.style.shrink_to_fit)));
     }
 
     #[test]
