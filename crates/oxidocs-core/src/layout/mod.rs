@@ -1583,22 +1583,26 @@ fn filter_runs_for_show_revisions(doc: &mut Document, final_view: bool) {
 /// origins) with the two paragraphs given different left indents so the merged
 /// line's x names the winner:
 ///
-///     arm     Word                              Oxi
-///     CTRL    HEAD 128.66 / TAIL 200.69         128.70 / 200.70     two paragraphs
-///     MERGE   HEADTAIL    200.69                200.70              successor's indent
-///     CHAIN   ONETWOTHREE 200.69                200.70              chain collapses
+/// ```text
+/// arm     Word                              Oxi
+/// CTRL    HEAD 128.66 / TAIL 200.69         128.70 / 200.70     two paragraphs
+/// MERGE   HEADTAIL    200.69                200.70              successor's indent
+/// CHAIN   ONETWOTHREE 200.69                200.70              chain collapses
+/// ```
 ///
 /// ★NOT IMPLEMENTED, and measured so the gap is known rather than assumed: a
 /// deleted mark on the LAST paragraph of its container. Word merges it with the
 /// container's own closing mark, which this pass has no successor for.
 ///
-///     LAST    body's final mark deleted -- Word drops the indent (TAIL 56.64,
-///             merging into the section's implicit final paragraph); Oxi keeps
-///             it at 200.70.
-///     CELL    the last mark in a one-cell table deleted -- Word merges the cell
-///             text into the body paragraph AFTER the table and the row stops
-///             existing (`HEADTAILAFTER` on one line, no table); Oxi keeps the
-///             table and its paragraph.
+/// ```text
+/// LAST    body's final mark deleted -- Word drops the indent (TAIL 56.64,
+///         merging into the section's implicit final paragraph); Oxi keeps
+///         it at 200.70.
+/// CELL    the last mark in a one-cell table deleted -- Word merges the cell
+///         text into the body paragraph AFTER the table and the row stops
+///         existing (`HEADTAILAFTER` on one line, no table); Oxi keeps the
+///         table and its paragraph.
+/// ```
 ///
 /// Neither corner appears in the corpus (no golden document has a deleted
 /// paragraph mark at all, and 0010437a's 61 are all mid-body), and the CELL one
