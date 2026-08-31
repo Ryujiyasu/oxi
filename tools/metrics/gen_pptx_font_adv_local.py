@@ -147,6 +147,32 @@ EXTRA_CPS = (
 )
 
 
+def baseline_offset_em(font) -> float | None:
+    """Where this face puts its baseline inside one em, as the renderer reads it.
+
+    The same arithmetic `runtime_baseline_offset_em` does through GDI:
+    `1.2 * asc / (asc + desc)`, taking the typographic pair when the face sets
+    USE_TYPO_METRICS and the Windows pair otherwise.
+
+    ★Without it the browser used one number for every face it had no entry for
+    -- 0.9685 -- and the first baseline of a shape was wrong by whatever that
+    face's own figure differs by: Nunito is 0.8894 and its lines sat 0.063 em
+    low, Barlow is 1.0000 and its sat 0.030 em high.
+    """
+    try:
+        os2 = font["OS/2"]
+        if os2.fsSelection & 0x80:
+            asc = os2.sTypoAscender + os2.sTypoLineGap
+            desc = -os2.sTypoDescender
+        else:
+            asc, desc = os2.usWinAscent, os2.usWinDescent
+        if asc + desc <= 0:
+            return None
+        return round(1.2 * asc / (asc + desc), 5)
+    except Exception:
+        return None
+
+
 def table_for(path: str) -> tuple | None:
     """ASCII 32..126 advances in EM plus whatever of EXTRA_CPS the face has.
 
@@ -181,6 +207,7 @@ def main() -> None:
     asked = wanted_families()
     faces = local_faces()
     rows = []
+    baselines: dict[str, float] = {}
     for family, _uses in asked.most_common():
         for bold in (False, True):
             for italic in (False, True):
@@ -192,6 +219,13 @@ def main() -> None:
                     continue
                 row, extra = got
                 rows.append((family, bold, italic, row, extra, os.path.basename(path)))
+                if not bold and not italic:
+                    try:
+                        b = baseline_offset_em(TTFont(path, lazy=True, fontNumber=0))
+                    except Exception:
+                        b = None
+                    if b is not None:
+                        baselines.setdefault(family, b)
 
     ident = {}
     print("// This Source Code Form is subject to the terms of the Mozilla Public")
@@ -283,6 +317,20 @@ def main() -> None:
     print("        Ok(i) => Some(src[i].1),")
     print("        Err(_) => None,")
     print("    }")
+    print("}")
+    print()
+    print("/// Where this family puts its baseline inside one em.")
+    print("///")
+    print("/// `1.2 * asc / (asc + desc)` from the face's own OS/2, which is what")
+    print("/// the renderer asks GDI for. A family with no entry falls back to a")
+    print("/// single number for every face, which is wrong by whatever that face")
+    print("/// differs by -- 0.063 em for Nunito, 0.030 for Barlow.")
+    print("pub fn local_baseline_offset_em(family: &str) -> Option<f32> {")
+    print("    Some(match family.to_ascii_lowercase().as_str() {")
+    for family, value in sorted(baselines.items()):
+        print(f'        "{family.lower()}" => {value:.5f},')
+    print("        _ => return None,")
+    print("    })")
     print("}")
     print()
     print("/// Whether any face of `family` was measured.")

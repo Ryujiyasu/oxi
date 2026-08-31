@@ -1924,6 +1924,35 @@ pub fn local_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Opt
     }
 }
 
+/// Where this family puts its baseline inside one em.
+///
+/// `1.2 * asc / (asc + desc)` from the face's own OS/2, which is what
+/// the renderer asks GDI for. A family with no entry falls back to a
+/// single number for every face, which is wrong by whatever that face
+/// differs by -- 0.063 em for Nunito, 0.030 for Barlow.
+pub fn local_baseline_offset_em(family: &str) -> Option<f32> {
+    Some(match family.to_ascii_lowercase().as_str() {
+        "arial" => 0.97238,
+        "barlow" => 1.00000,
+        "barlow light" => 1.00000,
+        "caladea" => 0.97270,
+        "calibri" => 0.93600,
+        "fira sans" => 0.93500,
+        "ibm plex sans" => 0.94615,
+        "ibm plex sans condensed" => 0.94615,
+        "lobster" => 0.96000,
+        "merriweather" => 0.93938,
+        "montserrat" => 0.95291,
+        "nunito" => 0.88944,
+        "open sans" => 0.94184,
+        "oswald" => 0.96599,
+        "roboto" => 0.95004,
+        "rubik" => 0.94684,
+        "source sans pro" => 0.93938,
+        _ => return None,
+    })
+}
+
 /// Whether any face of `family` was measured.
 pub fn local_family_supported(family: &str) -> bool {
     table(family, false, false).is_some()

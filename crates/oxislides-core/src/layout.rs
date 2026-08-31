@@ -618,6 +618,15 @@ impl FaceMetrics for TableMetrics {
             .all(|c| self.advance_em(family, bold, italic, c).is_some())
     }
 
+    fn baseline_offset_em(&self, family: &str) -> Option<f32> {
+        // ★The face's own figure, not one number for every face. The renderer
+        // asks GDI for `1.2 * asc / (asc + desc)`; this is the same arithmetic
+        // read from the file at build time. Falling back to the six-family
+        // table put Nunito's first baseline 0.063 em low and Barlow's 0.030 em
+        // high, on every shape they set.
+        crate::font_adv_local::local_baseline_offset_em(family)
+    }
+
     // ★`resolves` is deliberately left at its default of `true`.
     //
     // Answering it with `covers` looked right and is wrong: a family the
@@ -984,6 +993,26 @@ mod coverage_tests {
         let m = TableMetrics;
         assert!(m.advance_em("Fira Sans", false, false, 'a').is_some());
         assert!(m.advance_em("Fira Sans", true, false, 'a').is_none());
+    }
+
+    #[test]
+    fn a_measured_family_supplies_its_own_baseline() {
+        let m = TableMetrics;
+        // Nunito sits far from the fallback and Barlow far the other way; both
+        // must come from the face rather than from the six-family table.
+        let nunito = m.baseline_offset_em("Nunito").expect("measured");
+        let barlow = m.baseline_offset_em("Barlow").expect("measured");
+        assert!((nunito - 0.88944).abs() < 1e-4, "{nunito}");
+        assert!((barlow - 1.0).abs() < 1e-4, "{barlow}");
+        assert!(m.baseline_offset_em("Zzyzx Nonexistent").is_none());
+    }
+
+    #[test]
+    fn the_first_baseline_follows_the_face() {
+        let m = TableMetrics;
+        let nunito = first_baseline_off(&m, "Nunito", 36.0, 1.0, true);
+        let barlow = first_baseline_off(&m, "Barlow", 36.0, 1.0, true);
+        assert!(barlow > nunito, "{barlow} vs {nunito}");
     }
 }
 
@@ -2277,6 +2306,14 @@ impl FaceMetrics for SuppliedMetrics {
         text.chars().all(|c| self.advance_em(family, bold, italic, c).is_some())
     }
 
+    fn baseline_offset_em(&self, family: &str) -> Option<f32> {
+        // ★A supplier answers about ADVANCES; it says nothing about where the
+        // face puts its baseline, and leaving this at the trait default sent
+        // every shape back to the six-family fallback -- so a per-face table
+        // added to `TableMetrics` changed nothing at all until this was here.
+        TableMetrics.baseline_offset_em(family)
+    }
+
     // `resolves` keeps its default of `true`, for the reason spelled out on
     // `TableMetrics`: a name this source cannot measure may still be one the
     // deck embeds, and renaming it would be worse than declining the shape.
@@ -2314,5 +2351,15 @@ mod supplied_tests {
     fn the_compiled_tables_still_answer_for_what_they_carry() {
         let m = SuppliedMetrics::new();
         assert!(m.advance_em("Arial", false, false, 'a').is_some());
+    }
+
+    #[test]
+    fn a_supplier_still_answers_with_the_face_s_own_baseline() {
+        let m = SuppliedMetrics::new();
+        assert!(m.baseline_offset_em("Nunito").is_some());
+        assert_eq!(
+            m.baseline_offset_em("Nunito"),
+            TableMetrics.baseline_offset_em("Nunito")
+        );
     }
 }
