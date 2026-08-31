@@ -849,11 +849,13 @@ pub struct IndentGeometry {
 /// Resolve `marL` and `indent` into line offsets and the widths that go with
 /// them (Spec #8, measured).
 ///
-///     para_left = P0 + marL
-///     indent > 0   text_1st = para_left + indent,  marker = para_left
-///     indent <= 0  text_1st = max(para_left, P0 - indent),
-///                  marker   = text_1st + indent
-///     continuation lines = para_left
+/// ```text
+/// para_left = P0 + marL
+/// indent > 0   text_1st = para_left + indent,  marker = para_left
+/// indent <= 0  text_1st = max(para_left, P0 - indent),
+///              marker   = text_1st + indent
+/// continuation lines = para_left
+/// ```
 ///
 /// ★The WIDTH matters as much as the offset. PowerPoint wraps every line
 /// against the same RIGHT EDGE, so a line's usable width is the inner width
@@ -896,7 +898,9 @@ pub fn indent_geometry(
 ///
 /// Probe `mixedpitch` (4 faces x 8 size pairs, 2026-08-18) fits
 ///
-///     step = d * prev_size + a * next_size,   a + d = 1.2004
+/// ```text
+/// step = d * prev_size + a * next_size,   a + d = 1.2004
+/// ```
 ///
 /// with d = 0.2284 (Arial) / 0.2322 (Georgia) / 0.2636 (Calibri) / 0.2088
 /// (Verdana) -- each within 0.0015 of that face's own
@@ -907,7 +911,9 @@ pub fn indent_geometry(
 /// Expressed with the ascent this module already computes, the step from a line
 /// of `prev` to a line of `next` is
 ///
-///     (1.2 * prev * n - ascent(prev)) + ascent(next)
+/// ```text
+/// (1.2 * prev * n - ascent(prev)) + ascent(next)
+/// ```
 ///
 /// which is the previous box's descent plus the next line's ascent.
 pub fn mixed_pitch_step(
@@ -1136,6 +1142,29 @@ mod size_tests {
 /// text is drawn. Resolving it late wrapped d24's title at the master's 18pt
 /// and then drew it at the layout's 60pt, so the line ran off its box instead
 /// of breaking into the three PowerPoint gives it.
+/// The face a paragraph's level chain supplies, if any.
+///
+/// The placeholder's own list first, then the master's -- the same order the
+/// renderer's draw path walks, so the wrap measures the face that will be
+/// drawn.
+///
+/// ★This is deliberately NOT part of `resolve_level`. That function overlays a
+/// placeholder's level onto the master's and never carried the face, which is
+/// how d15 slide 1's title came to be measured in the theme's Arial when the
+/// level says Barlow and the truth PDF sets it in Barlow Bold.
+pub fn level_family(
+    master: &[crate::ir::MasterStyleLevel],
+    ph_levels: &[crate::ir::MasterStyleLevel],
+    lvl: u32,
+) -> Option<String> {
+    let lvl = lvl as usize;
+    [ph_levels, master].into_iter().find_map(|levels| {
+        levels
+            .get(lvl.min(levels.len().saturating_sub(1)))
+            .and_then(|l| l.font_family.clone())
+    })
+}
+
 pub fn resolve_level(
     master: &[crate::ir::MasterStyleLevel],
     ph_levels: &[crate::ir::MasterStyleLevel],
@@ -1531,11 +1560,20 @@ pub fn layout_text_shape(
                 .unwrap_or(0.0);
         }
 
+        // A run's own face, else the LEVEL's, else the theme's.
+        //
+        // ★The level was being skipped, which is where a title's face lives:
+        // d15 slide 1 carries no face on any run and `Barlow` on the level,
+        // and the truth PDF sets that title in Barlow Bold -- the engine was
+        // measuring it in Arial (the theme's minor face) and placing every
+        // glyph of the line accordingly. `bold` and the size already consult
+        // the level; the face did not.
         let family = effective_family(
             metrics,
             para.runs
                 .iter()
                 .find_map(|r| r.font_family.clone())
+                .or_else(|| level_family(master, ph_levels, para.lvl))
                 .unwrap_or_else(|| default_family.to_string())
                 .as_str(),
             true,
@@ -1694,6 +1732,30 @@ mod shape_tests {
         let p = [para("Hello", 12.0)];
         let got = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, Some("b")), &p, &[], &[], "Arial");
         assert!(got.lines[0].baseline > 80.0, "{:?}", got.lines[0]);
+    }
+
+    #[test]
+    fn a_level_supplies_the_face_when_no_run_names_one() {
+        // d15 slide 1's title: every run inherits, and the face lives on the
+        // placeholder's level. Measuring it in the theme's face instead puts
+        // every glyph of the line in the wrong place.
+        let mut p = para("Hello", 12.0);
+        p.runs[0].font_family = None;
+        let mut level = crate::ir::MasterStyleLevel::default();
+        level.font_family = Some("Georgia".to_string());
+        let got = layout_text_shape(
+            &TableMetrics, &shape(400.0, 100.0, None), &[p], &[], &[level], "Arial");
+        assert_eq!(got.lines[0].family, "Georgia");
+    }
+
+    #[test]
+    fn a_run_that_names_a_face_still_beats_the_level() {
+        let p = para("Hello", 12.0);   // its run names Arial
+        let mut level = crate::ir::MasterStyleLevel::default();
+        level.font_family = Some("Georgia".to_string());
+        let got = layout_text_shape(
+            &TableMetrics, &shape(400.0, 100.0, None), &[p], &[], &[level], "Times New Roman");
+        assert_eq!(got.lines[0].family, "Arial");
     }
 
     #[test]
