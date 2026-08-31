@@ -3943,12 +3943,7 @@ impl<'a> WorkbookHost<'a> {
             None => -4104,
             Some(value) => sort_number(value, "PasteSpecial")?,
         };
-        let (values, formats) = match kind {
-            -4104 => (true, true),
-            -4163 => (true, false),
-            -4122 => (false, true),
-            other => return Err(format!("Range.PasteSpecial cannot paste {other}")),
-        };
+        let carries = PasteWhat::of(kind)?;
         let operation = match given(1) {
             None => None,
             Some(value) => match sort_number(value, "PasteSpecial")? {
@@ -3988,6 +3983,35 @@ impl<'a> WorkbookHost<'a> {
             );
         };
 
+        if carries.column_widths {
+            // Nothing about the cells changes: only how wide the columns they
+            // sit in are.
+            let from_sheet = clipboard.origin.sheet;
+            let default = self.workbook.sheets[from_sheet].default_col_width;
+            for block_column in 0..across {
+                for column in 0..columns {
+                    let taken = self.workbook.sheets[from_sheet]
+                        .col_widths
+                        .get((clipboard.origin.column + column) as usize)
+                        .copied()
+                        .unwrap_or(default);
+                    let onto = target.start_column + block_column * columns + column;
+                    self.set_range_column_width(
+                        CellRange {
+                            sheet: target.sheet,
+                            start_row: 1,
+                            start_column: onto,
+                            end_row: 1,
+                            end_column: onto,
+                        },
+                        Value::Double(f64::from(taken)),
+                    )?;
+                }
+            }
+            self.clipboard = Some(clipboard);
+            return Ok(Value::Boolean(true));
+        }
+
         for block_row in 0..down {
             for block_column in 0..across {
                 for row in 0..rows {
@@ -4014,8 +4038,7 @@ impl<'a> WorkbookHost<'a> {
                             address,
                             held.and_then(|cell| cell.as_ref()),
                             came_from,
-                            values,
-                            formats,
+                            carries,
                             transpose,
                             skip_blanks,
                             operation,
@@ -4034,8 +4057,7 @@ impl<'a> WorkbookHost<'a> {
         address: CellAddress,
         held: Option<&Cell>,
         came_from: CellAddress,
-        values: bool,
-        formats: bool,
+        carries: PasteWhat,
         transpose: bool,
         skip_blanks: bool,
         operation: Option<char>,
@@ -4087,10 +4109,31 @@ impl<'a> WorkbookHost<'a> {
             .find(|cell| cell.col == address.column)
             .unwrap();
 
-        if formats {
-            cell.style = held.map(|held| held.style.clone()).unwrap_or_default();
+        if carries.styles {
+            let coming = held.map(|held| held.style.clone()).unwrap_or_default();
+            // The edges are part of the dress, and one kind of paste leaves
+            // them behind: asked of Excel, `xlPasteAllExceptBorders` carries
+            // the fill and the number format but leaves the line under the
+            // cell as it found it.
+            cell.style = if carries.borders {
+                coming
+            } else {
+                CellStyle {
+                    border_top: cell.style.border_top.clone(),
+                    border_bottom: cell.style.border_bottom.clone(),
+                    border_left: cell.style.border_left.clone(),
+                    border_right: cell.style.border_right.clone(),
+                    border_diagonal: cell.style.border_diagonal.clone(),
+                    diagonal_up: cell.style.diagonal_up,
+                    diagonal_down: cell.style.diagonal_down,
+                    ..coming
+                }
+            };
+        } else if carries.number_format {
+            // The one kind that carries a number format and nothing else.
+            cell.style.number_format = held.and_then(|held| held.style.number_format.clone());
         }
-        if !values {
+        if !carries.values {
             return Ok(());
         }
         if let Some(operation) = operation {
@@ -4099,7 +4142,7 @@ impl<'a> WorkbookHost<'a> {
             // 110, and `=A5+1` with `=C5*2` added answers `=(A5+1)+(C5*2)`.
             let held_formula = held
                 .and_then(|held| held.formula.as_ref())
-                .filter(|_| formats)
+                .filter(|_| carries.formulas)
                 .map(|formula| {
                     let row_offset = i64::from(address.row) - i64::from(came_from.row);
                     let column_offset =
@@ -4146,8 +4189,9 @@ impl<'a> WorkbookHost<'a> {
         };
         cell.value = held.value.clone();
         cell.formula = None;
-        // Only a whole paste carries the formula, and it moves with the cell.
-        if formats {
+        // Not every paste carries the formula; the ones that do move it with
+        // the cell.
+        if carries.formulas {
             if let Some(formula) = held.formula.as_ref() {
                 let turned = if transpose {
                     // A relative reference is a distance, and turning the
@@ -7190,6 +7234,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpasteall" => -4104,
         "xlpastevalues" => -4163,
         "xlpasteformats" => -4122,
+        "xlpasteallexceptborders" => 7,
+        "xlpastecolumnwidths" => 8,
+        "xlpastevaluesandnumberformats" => 12,
+        "xlpasteformulas" => -4123,
         "xland" => 1,
         "xlor" => 2,
         "xlascending" => 1,
@@ -7413,6 +7461,73 @@ fn optional_integer_offset(value: &Value, default: i64, label: &str) -> Result<i
         Ok(default)
     } else {
         integer_offset(value, label)
+    }
+}
+
+/// What a kind of paste carries with it.
+///
+/// Measured on Excel by pasting a cell holding a formula, a fill, a number
+/// format and a line under it onto a cell dressed differently, and asking what
+/// changed: `xlPasteAllExceptBorders` carried everything but the line,
+/// `xlPasteColumnWidths` carried nothing but the width of the column, and
+/// `xlPasteValuesAndNumberFormats` carried the VALUE — not the formula — and
+/// the number format, leaving the fill alone.
+#[derive(Debug, Clone, Copy)]
+struct PasteWhat {
+    values: bool,
+    formulas: bool,
+    styles: bool,
+    /// Whether the dress it carries includes the lines round the cell.
+    borders: bool,
+    /// The number format on its own, where the rest of the dress stays.
+    number_format: bool,
+    column_widths: bool,
+}
+
+impl PasteWhat {
+    fn of(kind: i64) -> Result<Self, String> {
+        let nothing = Self {
+            values: false,
+            formulas: false,
+            styles: false,
+            borders: false,
+            number_format: false,
+            column_widths: false,
+        };
+        Ok(match kind {
+            -4104 => Self {
+                values: true,
+                formulas: true,
+                styles: true,
+                borders: true,
+                ..nothing
+            },
+            -4163 => Self {
+                values: true,
+                ..nothing
+            },
+            -4122 => Self {
+                styles: true,
+                borders: true,
+                ..nothing
+            },
+            7 => Self {
+                values: true,
+                formulas: true,
+                styles: true,
+                ..nothing
+            },
+            8 => Self {
+                column_widths: true,
+                ..nothing
+            },
+            12 => Self {
+                values: true,
+                number_format: true,
+                ..nothing
+            },
+            other => return Err(format!("Range.PasteSpecial cannot paste {other}")),
+        })
     }
 }
 
@@ -13616,6 +13731,59 @@ End Sub
         };
 
         assert_eq!(result, Value::String("G1:G2,G4|2".to_string()));
+    }
+
+    /// Each kind of paste carries a different part of what was copied.
+    ///
+    /// Measured on Excel with a source holding a formula, a red fill, a number
+    /// format and a line under it, put down on a cell that was green with its
+    /// own format: `xlPasteAllExceptBorders` carried everything but the line,
+    /// `xlPasteColumnWidths` carried nothing but the width of the column, and
+    /// `xlPasteValuesAndNumberFormats` carried the VALUE — not the formula —
+    /// and the number format, leaving the fill alone.
+    #[test]
+    fn vba_pastes_the_part_of_a_cell_that_was_asked_for() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Parts() As String\n\
+               Range(\"A1\").Value = 5\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"B1\").Interior.Color = 255\n\
+               Range(\"B1\").NumberFormat = \"0.00\"\n\
+               Range(\"B1\").Borders(xlEdgeBottom).LineStyle = xlContinuous\n\
+               Range(\"B1\").ColumnWidth = 25\n\
+               Range(\"H1\").Value = 99\n\
+               Range(\"H1\").Interior.Color = 65280\n\
+               Range(\"H1\").NumberFormat = \"0%\"\n\
+               Range(\"B1\").Copy\n\
+               Range(\"H1\").PasteSpecial xlPasteAllExceptBorders\n\
+               Range(\"I1\").Value = 99\n\
+               Range(\"B1\").Copy\n\
+               Range(\"I1\").PasteSpecial xlPasteColumnWidths\n\
+               Range(\"J1\").Value = 99\n\
+               Range(\"J1\").Interior.Color = 65280\n\
+               Range(\"K1\").Value = 5\n\
+               Range(\"K1\").NumberFormat = \"0.00\"\n\
+               Range(\"K1\").Interior.Color = 255\n\
+               Range(\"K1\").Copy\n\
+               Range(\"J1\").PasteSpecial xlPasteValuesAndNumberFormats\n\
+               Parts = Range(\"H1\").Formula & \"|\" & Range(\"H1\").Interior.Color & \"|\" & _\n\
+                 Range(\"H1\").NumberFormat & \"|\" & Range(\"H1\").Borders(xlEdgeBottom).LineStyle & \"|\" & _\n\
+                 Range(\"I1\").Value & \"|\" & Range(\"I1\").ColumnWidth & \"|\" & _\n\
+                 Range(\"J1\").Formula & \"|\" & Range(\"J1\").NumberFormat & \"|\" & _\n\
+                 Range(\"J1\").Interior.Color\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Parts", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("=G1*2|255|0.00|-4142|99|25|5|0.00|65280".to_string())
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
