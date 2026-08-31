@@ -39,6 +39,17 @@ enum RangeAxis {
     Columns,
 }
 
+/// How far `Range` may look for a name.
+///
+/// Excel makes the receiver decide: a worksheet answers only for the names
+/// pointing at itself, while `Application.Range` and `Evaluate` look through
+/// the whole workbook.
+#[derive(Debug, Clone, Copy)]
+enum NameReach {
+    ThisSheet,
+    Workbook,
+}
+
 /// Which of Excel's two ways of writing a reference a formula is being asked
 /// for or given in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -616,9 +627,22 @@ impl<'a> WorkbookHost<'a> {
             .ok_or_else(|| format!("worksheet index is out of range: {}", index + 1))
     }
 
-    fn range_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+    fn range_object(
+        &mut self,
+        sheet: usize,
+        args: &[Value],
+        reach: NameReach,
+    ) -> Result<Value, String> {
         let (start, end) = match args {
-            [Value::String(reference)] => parse_range_reference(reference)?,
+            [Value::String(reference)] => match parse_range_reference(reference) {
+                Ok(pair) => pair,
+                // Not written as a reference, so it is meant as a name. Excel
+                // will not let a name look like `A1`, so nothing is ambiguous.
+                Err(unreadable) => {
+                    let named = self.named_range(sheet, reference, reach, unreadable)?;
+                    return Ok(self.object(HostObject::Range(named)));
+                }
+            },
             [Value::String(start), Value::String(end)] => {
                 (parse_a1_reference(start)?, parse_a1_reference(end)?)
             }
@@ -633,6 +657,74 @@ impl<'a> WorkbookHost<'a> {
             end_row: start_row.max(end_row),
             end_column: start_column.max(end_column),
         })))
+    }
+
+    /// A block of cells the workbook has given a name to.
+    ///
+    /// Asked of Excel: the lookup ignores case, and a WORKSHEET answers only
+    /// for the names pointing at itself — `Sheets("A").Range("NameOnB")`
+    /// raises rather than reaching across — while `Application.Range` and
+    /// `Evaluate` look through the whole workbook. A name standing for
+    /// something that is not one block of cells, such as two scattered blocks
+    /// or a plain number, is not a Range and raises too.
+    fn named_range(
+        &self,
+        sheet: usize,
+        name: &str,
+        reach: NameReach,
+        unreadable: String,
+    ) -> Result<CellRange, String> {
+        let Some((held, refers_to)) = self
+            .workbook
+            .defined_names
+            .iter()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name.trim()))
+        else {
+            return Err(format!(
+                "{unreadable}, and the workbook has no name {name:?} either"
+            ));
+        };
+        let refers_to = refers_to.trim();
+        let refers_to = refers_to.strip_prefix('=').unwrap_or(refers_to).trim();
+        if refers_to.contains(',') {
+            return Err(format!(
+                "the name {held:?} stands for more than one block of cells, \
+                 which this build cannot hold in one Range"
+            ));
+        }
+        let (named_sheet, reference) = split_sheet_reference(refers_to);
+        let Some(named_sheet) = named_sheet else {
+            return Err(format!(
+                "the name {held:?} stands for {refers_to:?}, which does not say \
+                 which worksheet it means"
+            ));
+        };
+        let target = self
+            .workbook
+            .sheets
+            .iter()
+            .position(|candidate| candidate.name.eq_ignore_ascii_case(&named_sheet))
+            .ok_or_else(|| {
+                format!("the name {held:?} points at a worksheet this workbook does not have: {named_sheet}")
+            })?;
+        if matches!(reach, NameReach::ThisSheet) && target != sheet {
+            return Err(format!(
+                "the name {held:?} belongs to worksheet {named_sheet:?}, and a \
+                 worksheet answers only for its own names"
+            ));
+        }
+        let (start, end) = parse_range_reference(reference).map_err(|_| {
+            format!("the name {held:?} stands for {refers_to:?}, which is not a block of cells")
+        })?;
+        let (start_column, start_row) = start;
+        let (end_column, end_row) = end;
+        Ok(CellRange {
+            sheet: target,
+            start_row: start_row.min(end_row),
+            start_column: start_column.min(end_column),
+            end_row: start_row.max(end_row),
+            end_column: start_column.max(end_column),
+        })
     }
 
     fn evaluate_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
@@ -672,7 +764,11 @@ impl<'a> WorkbookHost<'a> {
             }
             None => (sheet, expression),
         };
-        self.range_object(sheet, &[Value::String(reference.to_string())])
+        self.range_object(
+            sheet,
+            &[Value::String(reference.to_string())],
+            NameReach::Workbook,
+        )
     }
 
     /// The rectangle a sheet's written cells fill.
@@ -3868,7 +3964,7 @@ impl Host for WorkbookHost<'_> {
                     return self.evaluate_object(sheet, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("range") {
-                    return self.range_object(sheet, args).map(Some);
+                    return self.range_object(sheet, args, NameReach::ThisSheet).map(Some);
                 }
                 if name.eq_ignore_ascii_case("cells") {
                     return self.cells_object(sheet, args).map(Some);
@@ -3907,6 +4003,11 @@ impl Host for WorkbookHost<'_> {
                 && (name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets"))
             {
                 return self.worksheets_object_or_item(args).map(Some);
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("range") {
+                return self
+                    .range_object(self.active_sheet, args, NameReach::Workbook)
+                    .map(Some);
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("evaluate") {
                 return self.evaluate_object(self.active_sheet, args).map(Some);
@@ -4113,7 +4214,9 @@ impl Host for WorkbookHost<'_> {
             return rgb_value(args).map(Some);
         }
         if name.eq_ignore_ascii_case("range") {
-            return self.range_object(self.active_sheet, args).map(Some);
+            return self
+                .range_object(self.active_sheet, args, NameReach::ThisSheet)
+                .map(Some);
         }
         if name.eq_ignore_ascii_case("evaluate") {
             return self.evaluate_object(self.active_sheet, args).map(Some);
@@ -6050,6 +6153,30 @@ fn host_constant(name: &str) -> Option<Value> {
         _ => return None,
     };
     Some(Value::Integer(value))
+}
+
+/// Split what a name stands for into the worksheet it says and the rest.
+///
+/// A sheet name cannot hold a `!`, so the last one separates them, and a name
+/// needing quotes carries doubled apostrophes inside them.
+fn split_sheet_reference(refers_to: &str) -> (Option<String>, &str) {
+    let Some(at) = refers_to.rfind('!') else {
+        return (None, refers_to);
+    };
+    let (named, reference) = (refers_to[..at].trim(), refers_to[at + 1..].trim());
+    // A name written from another workbook carries `[1]` or `[Book1]` first.
+    let named = match named.rfind(']') {
+        Some(end) => &named[end + 1..],
+        None => named,
+    };
+    let named = match named
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        Some(quoted) => quoted.replace("''", "'"),
+        None => named.to_string(),
+    };
+    (Some(named), reference)
 }
 
 fn parse_range_reference(reference: &str) -> Result<((u32, u32), (u32, u32)), String> {
@@ -11310,6 +11437,84 @@ End Sub
         assert!(!left(1, 1), "B1 should be bare");
         assert!(!left(2, 0), "A2 should be bare");
         assert!(!left(2, 1), "B2 should be bare");
+    }
+
+    /// A workbook with two sheets and a handful of names, as measured.
+    fn named_workbook() -> Workbook {
+        let mut workbook = workbook();
+        let mut second = workbook.sheets[0].clone();
+        second.name = "Sheet2".to_string();
+        workbook.sheets.push(second);
+        workbook.defined_names = vec![
+            ("Sales".to_string(), "Sheet1!$A$1:$A$5".to_string()),
+            ("OneCell".to_string(), "Sheet1!$A$2".to_string()),
+            ("Away".to_string(), "Sheet2!$B$2".to_string()),
+            (
+                "Scattered".to_string(),
+                "Sheet1!$A$1,Sheet1!$A$3".to_string(),
+            ),
+            ("Number".to_string(), "42".to_string()),
+            ("WholeColumn".to_string(), "Sheet1!$A:$A".to_string()),
+        ];
+        workbook
+    }
+
+    /// A range can be reached by the name the workbook gave it.
+    ///
+    /// Asked of Excel: the lookup ignores case; a worksheet answers only for
+    /// the names pointing at itself, so `Sheets("Sheet1").Range("Away")`
+    /// raises while `Application.Range("Away")` reaches it.
+    #[test]
+    fn vba_reaches_a_range_by_the_name_the_workbook_gave_it() {
+        let mut workbook = named_workbook();
+        let module = parse_module(
+            "Public Function ByName() As String\n\
+               Range(\"A1\").Value = 100\n\
+               Range(\"A2\").Value = 200\n\
+               Worksheets(\"Sheet2\").Range(\"B2\").Value = \"over here\"\n\
+               ByName = Range(\"Sales\").Address(False, False) & \"|\" & _\n\
+                 Range(\"sales\").Count & \"|\" & Range(\"OneCell\").Value & \"|\" & _\n\
+                 Application.Range(\"Away\").Value & \"|\" & _\n\
+                 Worksheets(\"Sheet2\").Range(\"Away\").Address(False, False) & \"|\" & _\n\
+                 Range(\"Sales\").Worksheet.Name\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "ByName", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("A1:A5|5|200|over here|B2|Sheet1".to_string())
+        );
+    }
+
+    /// What a name cannot be asked for, and what it says instead.
+    #[test]
+    fn vba_says_why_a_name_is_not_a_range() {
+        for (call, expected) in [
+            ("Range(\"Away\")", "answers only for its own names"),
+            ("Range(\"Scattered\")", "more than one block of cells"),
+            ("Range(\"Number\")", "which worksheet it means"),
+            ("Range(\"WholeColumn\")", "not a block of cells"),
+            ("Range(\"NoSuchName\")", "no name \"NoSuchName\""),
+        ] {
+            let mut workbook = named_workbook();
+            let module = parse_module(&format!(
+                "Public Sub Ask()\n  {call}.Select\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let error = execute_with_host(&module, "Ask", vec![], &mut host)
+                .expect_err("the name is not a range")
+                .to_string();
+            assert!(
+                error.contains(expected),
+                "{call} said {error:?}, which does not mention {expected:?}"
+            );
+        }
     }
 
     /// A cut onto another sheet carries the sheet name with it.
