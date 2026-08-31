@@ -56,11 +56,29 @@ export function familyPresent(family) {
   // Rubik Medium, about 4% narrower, and the engine reports it as its own
   // layout. So a name that carries a style word must also measure differently
   // from the name without it.
+  //
+  // ★And from every OTHER face of that family, not just its upright. The
+  // upright test catches "Rubik Medium" -- weight 500 resolves to Rubik
+  // Regular -- and misses "Rubik SemiBold", because weight 600 resolves to
+  // Rubik BOLD, which differs from Rubik Regular and so read as present.
+  // Measured 2026-08-31: `100px "Rubik SemiBold"` returns exactly the
+  // advances of `bold 100px "Rubik"` on a machine carrying no SemiBold at
+  // all, and d38's thirteen 35pt titles were laid out on them -- 2.9pt past
+  // where PowerPoint drew them, because PowerPoint used the deck's own
+  // embedded part (PostScript name Rubik-Bold, a different cut: 'P' 676
+  // against this machine's 686). A family the browser has to substitute for
+  // is one the engine must decline, whichever face the substitute comes from.
   if (present) {
     const base = baseFamily(family);
-    if (base && Math.abs(widthIn(`100px ${quoted}`)
-                         - widthIn(`100px ${JSON.stringify(base)}`)) < 0.5) {
-      present = false;
+    if (base) {
+      const asked = widthIn(`100px ${quoted}`);
+      const b = JSON.stringify(base);
+      for (const style of ['', 'bold ', 'italic ', 'italic bold ']) {
+        if (Math.abs(asked - widthIn(`${style}100px ${b}`)) < 0.5) {
+          present = false;
+          break;
+        }
+      }
     }
   }
   presentCache.set(family, present);
