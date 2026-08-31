@@ -6157,6 +6157,42 @@ impl Host for WorkbookHost<'_> {
                     self.workbook.sheets[sheet].name.clone(),
                 )));
             }
+            // A worksheet is the only kind this build holds, and Excel names
+            // that kind -4167.
+            if name.eq_ignore_ascii_case("type") {
+                return Ok(Some(Value::Integer(-4167)));
+            }
+            // What holds the sheet is the workbook, as `Range("A1").Parent`
+            // is the sheet.
+            if name.eq_ignore_ascii_case("parent") {
+                return Ok(Some(self.object(HostObject::Workbook)));
+            }
+            // The default row height, in points. Excel answers 18.75 on a new
+            // sheet and will not let it be written — `StandardHeight = 20`
+            // raises. (`StandardWidth` is left out: Excel answers it in
+            // characters of the standard font, which is a measurement this
+            // build cannot make.)
+            if name.eq_ignore_ascii_case("standardheight") {
+                return Ok(Some(Value::Double(f64::from(
+                    self.workbook.sheets[sheet].default_row_height,
+                ))));
+            }
+            // The sheet beside this one, or Nothing at either end — the same
+            // shape as a range's own Next and Previous.
+            if name.eq_ignore_ascii_case("next") || name.eq_ignore_ascii_case("previous") {
+                let beside = if name.eq_ignore_ascii_case("next") {
+                    if sheet + 1 >= self.workbook.sheets.len() {
+                        return Ok(Some(Value::Nothing));
+                    }
+                    sheet + 1
+                } else {
+                    if sheet == 0 {
+                        return Ok(Some(Value::Nothing));
+                    }
+                    sheet - 1
+                };
+                return Ok(Some(self.object(HostObject::Worksheet(beside))));
+            }
             // `Cells` with nothing after it is the whole grid. Excel cannot
             // count it — `Cells.Count` overflows a Long and raises — and
             // neither can this: the count runs into the execution limit and
@@ -10081,6 +10117,45 @@ mod tests {
         assert_eq!(
             result,
             Value::String("2|2|30|3|A1|True|True|big".to_string())
+        );
+    }
+
+    /// Measured in Excel 16.0 on a book of three sheets: `Type` is -4167 for
+    /// every one of them, `Parent` is the workbook, `StandardHeight` is 18.75
+    /// and cannot be written, and `Next` and `Previous` hand back Nothing at
+    /// either end rather than wrapping round.
+    #[test]
+    fn a_sheet_says_what_it_is_and_what_is_beside_it() {
+        let mut workbook = workbook();
+        workbook.sheets[0].default_row_height = 18.75;
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Worksheets.Add\n\
+               Worksheets.Add\n\
+               Ask = Worksheets(1).Type & \"|\" & Worksheets(1).StandardHeight\n\
+               Ask = Ask & \"|\" & Worksheets(2).Previous.Name\n\
+               Ask = Ask & \"|\" & Worksheets(2).Next.Name\n\
+               Ask = Ask & \"|\" & (Worksheets(1).Previous Is Nothing)\n\
+               Ask = Ask & \"|\" & (Worksheets(3).Next Is Nothing)\n\
+               Ask = Ask & \"|\" & TypeName(Worksheets(1).Parent)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        let sheets = workbook
+            .sheets
+            .iter()
+            .map(|sheet| sheet.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            result,
+            Value::String(format!(
+                "-4167|18.75|{}|{}|True|True|Workbook",
+                sheets[0], sheets[2]
+            ))
         );
     }
 
