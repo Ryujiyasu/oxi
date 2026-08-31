@@ -222,10 +222,29 @@ fn colour_to_packed(colour: Option<&str>) -> Option<i64> {
     Some(i64::from(red | (green << 8) | (blue << 16)))
 }
 
+/// Whether one range lies wholly inside another, on the same sheet.
+fn range_within(inner: CellRange, outer: CellRange) -> bool {
+    inner.sheet == outer.sheet
+        && inner.start_row >= outer.start_row
+        && inner.end_row <= outer.end_row
+        && inner.start_column >= outer.start_column
+        && inner.end_column <= outer.end_column
+}
+
 const MAX_WORKSHEET_ROW: u32 = 1_048_576;
 const MAX_WORKSHEET_COLUMN: u32 = 16_383;
 
 impl CellRange {
+    /// The corner it starts at: top-left, and the cell Excel puts in front
+    /// when the block is selected.
+    fn first(self) -> CellAddress {
+        CellAddress {
+            sheet: self.sheet,
+            row: self.start_row,
+            column: self.start_column,
+        }
+    }
+
     fn single(address: CellAddress) -> Self {
         Self {
             sheet: address.sheet,
@@ -327,6 +346,12 @@ struct WorkbookHost<'a> {
     /// tests accumulate and every row is judged against all of them.
     auto_filter: Option<AutoFilter>,
     selection: CellRange,
+    /// The one cell in front of the selection. Selecting a block puts it on
+    /// the block's top-left, but `Activate` moves it about INSIDE the block
+    /// without disturbing what is selected — measured in Excel: after
+    /// `Range("B2:C3").Select` and then `Range("C3").Activate` the selection
+    /// is still B2:C3 and the active cell is C3.
+    active_cell: CellAddress,
     screen_updating: bool,
     enable_events: bool,
     display_alerts: bool,
@@ -372,6 +397,11 @@ impl<'a> WorkbookHost<'a> {
                 row: 1,
                 column: 0,
             }),
+            active_cell: CellAddress {
+                sheet: active_sheet,
+                row: 1,
+                column: 0,
+            },
             screen_updating: true,
             enable_events: true,
             display_alerts: true,
@@ -5273,6 +5303,7 @@ impl Host for WorkbookHost<'_> {
                         row: 1,
                         column: 0,
                     });
+                    self.active_cell = self.selection.first();
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("usedrange") {
@@ -5360,11 +5391,7 @@ impl Host for WorkbookHost<'_> {
                     return Err(format!("Application.{name} does not accept arguments"));
                 }
                 let range = if name.eq_ignore_ascii_case("activecell") {
-                    CellRange::single(CellAddress {
-                        sheet: self.selection.sheet,
-                        row: self.selection.start_row,
-                        column: self.selection.start_column,
-                    })
+                    CellRange::single(self.active_cell)
                 } else {
                     self.selection
                 };
@@ -5432,6 +5459,27 @@ impl Host for WorkbookHost<'_> {
                         return Err("Range.Select requires its worksheet to be active".to_string());
                     }
                     self.selection = range;
+                    self.active_cell = range.first();
+                    return Ok(Some(Value::Empty));
+                }
+                // Excel moves the cell in front WITHOUT disturbing the
+                // selection when the range is already inside it, and selects
+                // the range outright when it is not: from a selection of
+                // B2:C3, `Range("C3").Activate` leaves B2:C3 selected with C3
+                // in front, while `Range("E5").Activate` selects E5 alone.
+                if name.eq_ignore_ascii_case("activate") {
+                    if !args.is_empty() {
+                        return Err("Range.Activate does not accept arguments".to_string());
+                    }
+                    if range.sheet != self.active_sheet {
+                        return Err(
+                            "Range.Activate requires its worksheet to be active".to_string()
+                        );
+                    }
+                    if !range_within(range, self.selection) {
+                        self.selection = range;
+                    }
+                    self.active_cell = range.first();
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("areas") {
@@ -5619,11 +5667,7 @@ impl Host for WorkbookHost<'_> {
                 return Err(format!("{name} does not accept arguments"));
             }
             let range = if name.eq_ignore_ascii_case("activecell") {
-                CellRange::single(CellAddress {
-                    sheet: self.selection.sheet,
-                    row: self.selection.start_row,
-                    column: self.selection.start_column,
-                })
+                CellRange::single(self.active_cell)
             } else {
                 self.selection
             };
@@ -5979,11 +6023,7 @@ impl Host for WorkbookHost<'_> {
             }
             if name.eq_ignore_ascii_case("selection") || name.eq_ignore_ascii_case("activecell") {
                 let range = if name.eq_ignore_ascii_case("activecell") {
-                    CellRange::single(CellAddress {
-                        sheet: self.selection.sheet,
-                        row: self.selection.start_row,
-                        column: self.selection.start_column,
-                    })
+                    CellRange::single(self.active_cell)
                 } else {
                     self.selection
                 };
@@ -9584,6 +9624,37 @@ mod tests {
                  $A$6:$C$7|$C$6:$E$6|$2:$4|$B:$D"
                     .to_string()
             )
+        );
+    }
+
+    /// Measured in Excel 16.0, watching `Selection` and `ActiveCell` together:
+    /// `B2:C3.Select` selects the block with B2 in front; `C3.Activate` leaves
+    /// the block selected and moves the cell in front to C3; `E5.Activate`,
+    /// which is outside it, selects E5 alone; and activating a block selects
+    /// it with its top-left in front.
+    #[test]
+    fn activate_moves_the_cell_in_front_of_the_selection() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Range(\"B2:C3\").Select\n\
+               Ask = Selection.Address(0, 0) & \"/\" & ActiveCell.Address(0, 0)\n\
+               Range(\"C3\").Activate\n\
+               Ask = Ask & \"|\" & Selection.Address(0, 0) & \"/\" & ActiveCell.Address(0, 0)\n\
+               Range(\"E5\").Activate\n\
+               Ask = Ask & \"|\" & Selection.Address(0, 0) & \"/\" & ActiveCell.Address(0, 0)\n\
+               Range(\"A1:B2\").Activate\n\
+               Ask = Ask & \"|\" & Selection.Address(0, 0) & \"/\" & ActiveCell.Address(0, 0)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String("B2:C3/B2|B2:C3/C3|E5/E5|A1:B2/A1".to_string())
         );
     }
 
