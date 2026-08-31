@@ -559,6 +559,75 @@ impl<'a> WorkbookHost<'a> {
         Ok(self.object(HostObject::Blocks(handle)))
     }
 
+    /// `Address(RowAbsolute, ColumnAbsolute, ReferenceStyle, External, RelativeTo)`.
+    ///
+    /// The last three were measured in Excel 16.0. In R1C1 an absolute part is
+    /// `R2C2` and a relative one counts from `RelativeTo`, which is A1 unless
+    /// something else is handed over: B2 is `R[1]C[1]` from A1 and `R[-1]C[-1]`
+    /// from C3, and an offset of nothing loses its brackets altogether — A1 from
+    /// A1 is `RC`, C4 from C3 is `R[1]C`. A band keeps one axis: rows 2 to 4 are
+    /// `R2:R4` and columns B to D are `C2:C4`. `External` puts the file and the
+    /// sheet in front — `[Book1]Sheet1!$B$2`, and `'[Book1]A Sheet'!$B$2` when
+    /// the name needs quoting.
+    fn range_address_from_args(&self, range: CellRange, args: &[Value]) -> Result<String, String> {
+        let read = |at: usize, default: bool, label: &str| -> Result<bool, String> {
+            match args.get(at) {
+                None => Ok(default),
+                Some(value) => optional_boolean_argument(value, default, label),
+            }
+        };
+        if args.len() > 5 {
+            return Err("Range.Address supports up to five arguments".to_string());
+        }
+        let row_absolute = read(0, true, "row absolute")?;
+        let column_absolute = read(1, true, "column absolute")?;
+        let r1c1 = match args.get(2) {
+            None | Some(Value::Missing) => false,
+            Some(Value::Integer(1)) => false,
+            Some(Value::Integer(-4150)) => true,
+            Some(other) => {
+                return Err(format!(
+                    "unsupported Range.Address ReferenceStyle constant: {other:?}"
+                ))
+            }
+        };
+        let external = read(3, false, "external")?;
+        let relative_to = match args.get(4) {
+            None | Some(Value::Missing) => (1, 0),
+            Some(Value::Object(object)) => match self.range(object) {
+                Some(from) => (from.start_row, from.start_column),
+                None => return Err("Range.Address RelativeTo must be a Range".to_string()),
+            },
+            Some(_) => return Err("Range.Address RelativeTo must be a Range".to_string()),
+        };
+        let written = if r1c1 {
+            format_range_address_r1c1(range, row_absolute, column_absolute, relative_to)
+        } else {
+            format_range_address(range, row_absolute, column_absolute)
+        };
+        if !external {
+            return Ok(written);
+        }
+        let sheet = self
+            .workbook
+            .sheets
+            .get(range.sheet)
+            .map(|sheet| sheet.name.as_str())
+            .unwrap_or_default();
+        let book = self.file_name.as_deref().unwrap_or("Book1");
+        // The quoting is decided by the two names, not by the brackets around
+        // one of them: `[Book1]Sheet1!$B$2` stands bare where
+        // `'[Book1]A Sheet'!$B$2` is quoted whole, brackets and all.
+        let front = format!("[{book}]{sheet}");
+        if oxicells_calc::reference::needs_quoting(sheet)
+            || oxicells_calc::reference::needs_quoting(book)
+        {
+            Ok(format!("'{}'!{written}", front.replace('\'', "''")))
+        } else {
+            Ok(format!("{front}!{written}"))
+        }
+    }
+
     /// The `Areas` of a range that is one block: a collection of one, which
     /// is what Excel hands back for any ordinary range.
     fn areas_of(&mut self, range: CellRange) -> Value {
@@ -789,7 +858,7 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("address") {
             let mut written = Vec::with_capacity(areas.len());
             for block in &areas {
-                written.push(range_address_from_args(*block, args)?);
+                written.push(self.range_address_from_args(*block, args)?);
             }
             return Ok(Some(Value::String(written.join(","))));
         }
@@ -5370,7 +5439,8 @@ impl Host for WorkbookHost<'_> {
                     return self.current_region_object(range).map(Some);
                 }
                 if name.eq_ignore_ascii_case("address") {
-                    return range_address_from_args(range, args)
+                    return self
+                        .range_address_from_args(range, args)
                         .map(Value::String)
                         .map(Some);
                 }
@@ -8261,22 +8331,6 @@ fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn range_address_from_args(range: CellRange, args: &[Value]) -> Result<String, String> {
-    let (row_absolute, column_absolute) = match args {
-        [] => (true, true),
-        [row_absolute] => (
-            optional_boolean_argument(row_absolute, true, "row absolute")?,
-            true,
-        ),
-        [row_absolute, column_absolute] => (
-            optional_boolean_argument(row_absolute, true, "row absolute")?,
-            optional_boolean_argument(column_absolute, true, "column absolute")?,
-        ),
-        _ => return Err("Range.Address supports up to two arguments".to_string()),
-    };
-    Ok(format_range_address(range, row_absolute, column_absolute))
-}
-
 fn optional_boolean_argument(value: &Value, default: bool, label: &str) -> Result<bool, String> {
     if matches!(value, Value::Missing) {
         Ok(default)
@@ -8329,6 +8383,59 @@ fn format_range_address(range: CellRange, row_absolute: bool, column_absolute: b
         start
     } else {
         format!("{start}:{}", format_cell(range.end_row, range.end_column))
+    }
+}
+
+/// A range written the other way round: the row first, and each part either
+/// where it is or how far from somewhere else.
+fn format_range_address_r1c1(
+    range: CellRange,
+    row_absolute: bool,
+    column_absolute: bool,
+    relative_to: (u32, u32),
+) -> String {
+    let part = |letter: char, value: u32, absolute: bool, from: u32| -> String {
+        if absolute {
+            format!("{letter}{value}")
+        } else {
+            let offset = i64::from(value) - i64::from(from);
+            if offset == 0 {
+                letter.to_string()
+            } else {
+                format!("{letter}[{offset}]")
+            }
+        }
+    };
+    let row = |value: u32| part('R', value, row_absolute, relative_to.0);
+    let column =
+        |value: u32| part('C', value + 1, column_absolute, relative_to.1 + 1);
+    let whole_rows = range.start_column == 0 && range.end_column == MAX_WORKSHEET_COLUMN;
+    let whole_columns = range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW;
+    if whole_rows {
+        let (start, end) = (row(range.start_row), row(range.end_row));
+        return if start == end {
+            start
+        } else {
+            format!("{start}:{end}")
+        };
+    }
+    if whole_columns {
+        let (start, end) = (column(range.start_column), column(range.end_column));
+        return if start == end {
+            start
+        } else {
+            format!("{start}:{end}")
+        };
+    }
+    let start = format!("{}{}", row(range.start_row), column(range.start_column));
+    if range.is_single() {
+        start
+    } else {
+        format!(
+            "{start}:{}{}",
+            row(range.end_row),
+            column(range.end_column)
+        )
     }
 }
 
@@ -9208,6 +9315,73 @@ mod tests {
             Value::String(
                 "1|A1|A1|4|B2:C3|B1|A2|True|True|B1048576".to_string()
             )
+        );
+    }
+
+    /// Every form below came from Excel 16.0. The four corners of
+    /// absolute-and-relative in both notations, a block, a band, an offset of
+    /// nothing, a `RelativeTo` somewhere else, and the file in front.
+    #[test]
+    fn an_address_can_be_written_the_other_way_round() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim b\n\
+               Set b = Range(\"B2\")\n\
+               Ask = b.Address(True, True) & \"|\" & b.Address(True, True, -4150)\n\
+               Ask = Ask & \"|\" & b.Address(True, False) & \"|\" & b.Address(True, False, -4150)\n\
+               Ask = Ask & \"|\" & b.Address(False, True) & \"|\" & b.Address(False, True, -4150)\n\
+               Ask = Ask & \"|\" & b.Address(False, False) & \"|\" & b.Address(False, False, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"B2:D4\").Address(0, 0, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"B2:D4\").Address(1, 1, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"A1\").Address(0, 0, -4150)\n\
+               Ask = Ask & \"|\" & b.Address(0, 0, -4150, False, Range(\"C3\"))\n\
+               Ask = Ask & \"|\" & Range(\"C4\").Address(0, 0, -4150, False, Range(\"C3\"))\n\
+               Ask = Ask & \"|\" & Range(\"A2:XFD4\").Address(1, 1, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"A2:XFD4\").Address(0, 0, -4150)\n\
+               Ask = Ask & \"|\" & Range(\"B1:D1048576\").Address(1, 1, -4150)\n\
+               Ask = Ask & \"|\" & b.Address(1, 1, 1, True)\n\
+               Ask = Ask & \"|\" & b.Address(0, 0, -4150, True)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "$B$2|R2C2|B$2|R2C[1]|$B2|R[1]C2|B2|R[1]C[1]|\
+                 R[1]C[1]:R[3]C[3]|R2C2:R4C4|RC|R[-1]C[-1]|R[1]C|\
+                 R2:R4|R[1]:R[3]|C2:C4|\
+                 [Book1]Sheet1!$B$2|[Book1]Sheet1!R[1]C[1]"
+                    .to_string()
+            )
+        );
+    }
+
+    /// The name in front is the file's, and it is quoted when either name
+    /// needs it: Excel answers `'[Book1]A Sheet'!$B$2` for a sheet with a
+    /// space in its name and `[Book1]Sheet1!$B$2` for one without.
+    #[test]
+    fn an_external_address_names_the_file_it_is_in() {
+        let mut workbook = workbook();
+        workbook.sheets[0].name = "A Sheet".to_string();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Range(\"B2\").Address(1, 1, 1, True)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let quoted = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            host.file_name = Some("a report.xlsx".to_string());
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            quoted,
+            Value::String("'[a report.xlsx]A Sheet'!$B$2".to_string())
         );
     }
 

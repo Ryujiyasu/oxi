@@ -161,7 +161,9 @@ impl fmt::Display for Reference {
     }
 }
 
-fn needs_quoting(name: &str) -> bool {
+/// Whether a sheet's name has to be wrapped in apostrophes to be written in
+/// a reference: anything but letters, digits, `_` and `.`, or a leading digit.
+pub fn needs_quoting(name: &str) -> bool {
     name.is_empty()
         || name
             .chars()
