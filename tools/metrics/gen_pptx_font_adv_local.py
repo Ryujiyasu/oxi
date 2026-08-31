@@ -107,8 +107,32 @@ def local_faces() -> dict:
     return out
 
 
-def table_for(path: str) -> list | None:
-    """ASCII 32..126 advances in EM, or None if the face cannot serve them."""
+# Beyond ASCII, the characters Western text is actually set with: the Latin-1
+# Supplement, and the punctuation and symbols a word processor inserts.
+#
+# ★Deliberately NOT the set our own corpora happen to use. A table shaped to
+# this corpus would raise our own numbers and do nothing for somebody else's
+# deck; this range is the one that generalises. What the corpora DO show is
+# that the gap is real and small: 82 distinct non-ASCII characters in 1761
+# occurrences, led by U+2019 (21 decks), U+2039/U+203A, U+2714, U+00AE, U+2014
+# and the accented Latin letters -- every one of them inside this set except
+# the emoji, which need a different face anyway.
+EXTRA_CPS = (
+    list(range(0x00A0, 0x0100))
+    + [0x2013, 0x2014, 0x2018, 0x2019, 0x201A, 0x201C, 0x201D, 0x201E,
+       0x2020, 0x2021, 0x2022, 0x2026, 0x2030, 0x2039, 0x203A,
+       0x20AC, 0x2122, 0x2212, 0x25A0, 0x25AA, 0x25C6, 0x25CF, 0x2713, 0x2714]
+)
+
+
+def table_for(path: str) -> tuple | None:
+    """ASCII 32..126 advances in EM plus whatever of EXTRA_CPS the face has.
+
+    None when the face cannot serve the ASCII range -- a face that cannot set
+    plain text is no use to anyone. The extras are per-face and may be empty:
+    a character the face lacks is left out so the engine declines the run
+    instead of advancing it by a glyph that is not there.
+    """
     try:
         font = TTFont(path, lazy=True, fontNumber=0)
         upm = font["head"].unitsPerEm
@@ -122,7 +146,13 @@ def table_for(path: str) -> list | None:
         if glyph is None or glyph not in hmtx.metrics:
             return None
         row.append(round(hmtx[glyph][0] / upm, 5))
-    return row
+    extra = []
+    for cp in EXTRA_CPS:
+        glyph = cmap.get(cp)
+        if glyph is None or glyph not in hmtx.metrics:
+            continue
+        extra.append((cp, round(hmtx[glyph][0] / upm, 5)))
+    return row, extra
 
 
 def main() -> None:
@@ -135,10 +165,11 @@ def main() -> None:
                 path = faces.get((family, bold, italic))
                 if path is None:
                     continue
-                row = table_for(path)
-                if row is None:
+                got = table_for(path)
+                if got is None:
                     continue
-                rows.append((family, bold, italic, row, os.path.basename(path)))
+                row, extra = got
+                rows.append((family, bold, italic, row, extra, os.path.basename(path)))
 
     ident = {}
     print("// This Source Code Form is subject to the terms of the Mozilla Public")
@@ -156,9 +187,13 @@ def main() -> None:
     print("//! (d15 files a Barlow Regular in \"Barlow Light\"'s bold slot). This is")
     print("//! what a build with no font system has instead, not a better answer.")
     print("//!")
-    print("//! Each table is ASCII 32..=126 in code-point order, in EM units.")
+    print("//! Each dense table is ASCII 32..=126 in code-point order, in EM units.")
+    print("//! A `_X` table beside it carries what that face has beyond ASCII -- the")
+    print("//! Latin-1 Supplement and the punctuation Western text is set with --")
+    print("//! sparse, sorted by code point, and holding only the characters the face")
+    print("//! really contains.")
     print()
-    for family, bold, italic, row, src in rows:
+    for family, bold, italic, row, extra, src in rows:
         const = re.sub(r"[^A-Z0-9]", "_", family.upper())
         const += ("_B" if bold else "") + ("_I" if italic else "")
         while const in ident:
@@ -171,28 +206,64 @@ def main() -> None:
             print(f"    {chunk},")
         print("];")
         print()
+        if extra:
+            print(f"/// {family} beyond ASCII, sorted by code point.")
+            print(f"static {const}_X: &[(u32, f32)] = &[")
+            for i in range(0, len(extra), 5):
+                chunk = ", ".join(f"({cp}, {v:.5f})" for cp, v in extra[i:i + 5])
+                print(f"    {chunk},")
+            print("];")
+            print()
     print("/// The measured face for one request, or None when nothing was measured.")
     print("fn table(family: &str, bold: bool, italic: bool) -> Option<&'static [f32; 95]> {")
     print("    let key = family.to_ascii_lowercase();")
     print("    Some(match (key.as_str(), bold, italic) {")
-    for (family, bold, italic, _row, _src), const in zip(rows, ident.keys()):
+    for (family, bold, italic, _row, _extra, _src), const in zip(rows, ident.keys()):
         print(f'        ("{family.lower()}", {str(bold).lower()}, {str(italic).lower()}) => &{const},')
     print("        _ => return None,")
     print("    })")
     print("}")
     print()
+    print("/// The same face's advances beyond ASCII, or an empty slice.")
+    print("fn extras(family: &str, bold: bool, italic: bool) -> &'static [(u32, f32)] {")
+    print("    let key = family.to_ascii_lowercase();")
+    print("    match (key.as_str(), bold, italic) {")
+    for (family, bold, italic, _row, extra, _src), const in zip(rows, ident.keys()):
+        if extra:
+            print(f'        ("{family.lower()}", {str(bold).lower()}, '
+                  f'{str(italic).lower()}) => {const}_X,')
+    print("        _ => &[],")
+    print("    }")
+    print("}")
+    print()
     print("/// The design advance of `ch` for this face, in EM units.")
     print("pub fn local_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {")
-    print("    let idx = ch as u32 as usize;")
-    print("    if !(32..127).contains(&idx) {")
-    print("        return None;")
-    print("    }")
+    print("    let cp = ch as u32;")
     print("    // A style the machine did not have falls back to the upright face,")
     print("    // which is what a browser drawing a synthesised bold also does.")
-    print("    let t = table(family, bold, italic)")
-    print("        .or_else(|| table(family, bold, false))")
-    print("        .or_else(|| table(family, false, false))?;")
-    print("    Some(t[idx - 32])")
+    print("    if (32..127).contains(&cp) {")
+    print("        let t = table(family, bold, italic)")
+    print("            .or_else(|| table(family, bold, false))")
+    print("            .or_else(|| table(family, false, false))?;")
+    print("        return Some(t[cp as usize - 32]);")
+    print("    }")
+    print("    // Beyond ASCII the tables are sparse: a face carries only the")
+    print("    // characters it actually has, so a miss here is a real answer --")
+    print("    // the caller declines the run rather than advancing a glyph that")
+    print("    // is not in the font.")
+    print("    for src in [")
+    print("        extras(family, bold, italic),")
+    print("        extras(family, bold, false),")
+    print("        extras(family, false, false),")
+    print("    ] {")
+    print("        if let Ok(i) = src.binary_search_by_key(&cp, |e| e.0) {")
+    print("            return Some(src[i].1);")
+    print("        }")
+    print("        if !src.is_empty() {")
+    print("            break;")
+    print("        }")
+    print("    }")
+    print("    None")
     print("}")
     print()
     print("/// Whether any face of `family` was measured.")
@@ -200,7 +271,8 @@ def main() -> None:
     print("    table(family, false, false).is_some()")
     print("        || table(family, true, false).is_some()")
     print("}")
-    print(f"\n// {len(rows)} faces measured, from {len({r[0] for r in rows})} families.", file=sys.stderr)
+    print(f"\n// {len(rows)} faces measured, from {len({r[0] for r in rows})} families;"
+          f" {sum(len(r[4]) for r in rows)} advances beyond ASCII.", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -812,6 +812,41 @@ mod paragraph_tests {
         .expect("measurable");
         assert_eq!(got, vec!["Alone\n".to_string(), String::new()]);
     }
+
+    #[test]
+    fn the_tables_reach_past_ascii_now() {
+        // The one character a Western deck cannot avoid: U+2019, in 21 of the
+        // corpora's decks. A face that lacked it made the whole shape decline.
+        for ch in ['\u{2019}', '\u{00AE}', '\u{2014}', '\u{00E1}'] {
+            assert!(
+                TableMetrics.advance_em("Arial", false, false, ch).is_some(),
+                "Arial should carry U+{:04X}",
+                ch as u32
+            );
+        }
+    }
+
+    #[test]
+    fn a_character_no_face_has_is_still_refused() {
+        // An emoji is a different face's job; answering here would advance a
+        // glyph that is not in the font.
+        assert_eq!(
+            TableMetrics.advance_em("Arial", false, false, '\u{1F600}'),
+            None
+        );
+    }
+
+    #[test]
+    fn a_paragraph_with_a_curly_quote_can_be_broken() {
+        let text = "That\u{2019}s a lot of money";
+        assert!(
+            break_paragraph(
+                &TableMetrics, text, 12.0, "Arial", false, false, 400.0, &[run(text)]
+            )
+            .is_some(),
+            "a curly apostrophe must not sink the paragraph"
+        );
+    }
 }
 
 #[cfg(test)]
