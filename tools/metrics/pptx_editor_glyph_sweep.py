@@ -137,7 +137,8 @@ def pdf_pages(pdf: Path) -> dict[int, list]:
                 for span in line.get("spans", []):
                     for ch in span.get("chars", []):
                         chars.append({"c": ch["c"], "x": ch["bbox"][0],
-                                      "y": span["origin"][1]})
+                                      "y": span["origin"][1],
+                                      "size": span["size"]})
         out[pno + 1] = chars
     doc.close()
     return out
@@ -158,8 +159,15 @@ def match_line(line, chars, near=6.0):
     """
     on_baseline, anywhere, seen = None, None, 0
     want_y = line.get("y")
+    want_size = line.get("size")
     for i, c in enumerate(chars):
         if c["c"] != line["text"][0]:
+            continue
+        # ★Size is part of the identity. d32 slide 21 has a 284pt '!' in a
+        # decorative shape and a 20pt '!' in body text; the deck draws only the
+        # small one, the text was "unique" on the page, and pairing them
+        # reported 123pt of vertical "defect" that was the instrument's.
+        if want_size and abs(c.get("size", want_size) - want_size) > 0.1 * want_size:
             continue
         run = [c]
         j = i + 1
