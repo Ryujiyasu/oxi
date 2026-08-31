@@ -124,6 +124,36 @@ impl NumberingDefinitions {
     }
 
     /// Resolve marker with full info (suff, tab_stop).
+    /// S1250: what a PARENT level contributes to a child's marker.
+    ///
+    /// A level that has never been used still has a value: its declared start.
+    /// Word renders ilvl 2 of a list whose ilvl 0/1 start at 7/8 -- and which no
+    /// paragraph ever uses -- as `7.8.1`, not `0.0.1` (probe `_pb_numstart`, 5
+    /// arms: starts 7/8/1 -> 7.8.1, 1/1/1 -> 1.1.1, 3/5/4 -> 3.5.4, and a used
+    /// parent keeps its running count). `legal__001a2c7f07cd358f` is the corpus
+    /// case. `OXI_S1250_DISABLE` restores the old zero.
+    fn other_level_count(
+        &self,
+        num_id: &str,
+        lvl_i: u8,
+        other_level: &NumberingLevel,
+        counters: &HashMap<(String, u8), u32>,
+    ) -> u32 {
+        if let Some(c) = counters.get(&(num_id.to_string(), lvl_i)) {
+            return *c;
+        }
+        if std::env::var("OXI_S1250_DISABLE").is_ok() {
+            return 0;
+        }
+        // A startOverride outranks the abstract level's own start, exactly as
+        // it does when the level's own counter is seeded.
+        self.level_overrides
+            .get(num_id)
+            .and_then(|m| m.get(&lvl_i))
+            .and_then(|ov| ov.start)
+            .unwrap_or(other_level.start)
+    }
+
     pub fn resolve_marker_full(
         &self,
         num_id: &str,
@@ -239,7 +269,8 @@ impl NumberingDefinitions {
                     } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
                         if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
                             let other_key = (num_id.to_string(), lvl_i);
-                            let other_count = counters.get(&other_key).copied().unwrap_or(0);
+                            let other_count = self.other_level_count(
+                                num_id, lvl_i, other_level, counters);
                             let other_fmt = if other_level.num_fmt == "none" {
                                 String::new()
                             } else {
@@ -267,8 +298,8 @@ impl NumberingDefinitions {
                     text = text.replace(&placeholder, &formatted_num);
                 } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
                     if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
-                        let other_key = (num_id.to_string(), lvl_i);
-                        let other_count = counters.get(&other_key).copied().unwrap_or(0);
+                        let other_count = self.other_level_count(
+                            num_id, lvl_i, other_level, counters);
                         let other_fmt = format_number(other_count, &other_level.num_fmt);
                         text = text.replace(&placeholder, &other_fmt);
                     }
