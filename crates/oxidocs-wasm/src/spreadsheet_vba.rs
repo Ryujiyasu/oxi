@@ -5572,6 +5572,21 @@ impl Host for WorkbookHost<'_> {
                         })
                     });
             }
+            if name.eq_ignore_ascii_case("pattern") {
+                // A cell either has a fill or has none. Asked of Excel, a bare
+                // cell answers `xlPatternNone` and a coloured one `xlSolid`,
+                // and the corpus bears that out: of 744 fills in the 285
+                // conformance workbooks, 741 are one of those two.
+                return self
+                    .uniform_style(range, |style| style.bg_color.is_some())
+                    .map(|value| {
+                        Some(match value {
+                            Some(true) => Value::Integer(1),
+                            Some(false) => Value::Integer(COLOUR_NONE),
+                            None => Value::Null,
+                        })
+                    });
+            }
             if name.eq_ignore_ascii_case("colorindex") {
                 return self
                     .uniform_style(range, |style| style.bg_color.clone())
@@ -5796,6 +5811,21 @@ impl Host for WorkbookHost<'_> {
             return self
                 .uniform_style(range, |style| style.wrap_text)
                 .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
+        }
+        if name.eq_ignore_ascii_case("orientation") {
+            // Excel counts a rotation in degrees as well, but of the 774
+            // rotations in the 285 conformance workbooks 771 are the stacked
+            // one, so that is the pair this build keeps apart: writing set in
+            // a line, and writing stacked one letter above the next.
+            return self
+                .uniform_style(range, |style| style.stacked_text)
+                .map(|value| {
+                    Some(match value {
+                        Some(true) => Value::Integer(-4166),
+                        Some(false) => Value::Integer(-4128),
+                        None => Value::Null,
+                    })
+                });
         }
         if name.eq_ignore_ascii_case("indentlevel") {
             return self
@@ -6050,6 +6080,28 @@ impl Host for WorkbookHost<'_> {
                 self.set_range_style(range, |_, style| style.bg_color = colour.clone())?;
                 return Ok(true);
             }
+            if name.eq_ignore_ascii_case("pattern") {
+                // Asked of Excel, `Pattern = xlSolid` on a cell with no fill
+                // leaves it filled WHITE — the fill is there, it just cannot
+                // be told from the paper — and `xlNone` takes the fill away.
+                let asked = match &value {
+                    Value::Integer(number) => *number,
+                    Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                    _ => return Err("Interior.Pattern takes a pattern by number".to_string()),
+                };
+                match asked {
+                    1 => self.set_range_style(range, |_, style| {
+                        style.bg_color.get_or_insert_with(|| "#FFFFFF".to_string());
+                    })?,
+                    COLOUR_NONE => self.set_range_style(range, |_, style| style.bg_color = None)?,
+                    other => {
+                        return Err(format!(
+                            "Interior.Pattern {other} is a hatching this build cannot keep"
+                        ))
+                    }
+                }
+                return Ok(true);
+            }
             return Ok(false);
         }
         let Some(range) = self.range(receiver) else {
@@ -6113,6 +6165,24 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("wraptext") {
             let wraps = style_boolean(&value, "Range.WrapText")?;
             self.set_range_style(range, |_, style| style.wrap_text = wraps)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("orientation") {
+            let asked = match &value {
+                Value::Integer(number) => *number,
+                Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                _ => return Err("Range.Orientation takes a direction by number".to_string()),
+            };
+            let stacked = match asked {
+                -4166 => true,
+                -4128 => false,
+                other => {
+                    return Err(format!(
+                        "Range.Orientation {other} is a turn this build cannot keep"
+                    ))
+                }
+            };
+            self.set_range_style(range, |_, style| style.stacked_text = stacked)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("indentlevel") {
@@ -7361,6 +7431,11 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlpastespecialoperationsubtract" => 3,
         "xlpastespecialoperationmultiply" => 4,
         "xlpastespecialoperationdivide" => 5,
+        "xlsolid" => 1,
+        "xlpatternnone" => -4142,
+        "xlpatternsolid" => 1,
+        "xlhorizontal" => -4128,
+        "xlvertical" => -4166,
         "xlcelltypeconstants" => 2,
         "xlcelltypeformulas" => -4123,
         "xlcelltypeblanks" => 4,
@@ -13957,6 +14032,47 @@ End Sub
         assert_eq!(
             result,
             Value::String("255|True|General|5|0|Null|Null|3|2".to_string())
+        );
+    }
+
+    /// Whether a cell is filled at all, and which way its writing runs.
+    ///
+    /// Asked of Excel: a bare cell answers `xlPatternNone` and a coloured one
+    /// `xlSolid`; setting `xlSolid` on a bare cell fills it WHITE, so the fill
+    /// is there though it cannot be told from the paper, and `xlNone` takes it
+    /// away again. Writing runs in a line — `xlHorizontal` — until it is set
+    /// stacked, when it answers `xlVertical`.
+    #[test]
+    fn vba_says_whether_a_cell_is_filled_and_which_way_it_reads() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Dressed() As String\n\
+               Range(\"A1\").Interior.Color = 255\n\
+               Range(\"B1\").Interior.Pattern = xlSolid\n\
+               Range(\"C1\").Interior.Color = 255\n\
+               Range(\"C1\").Interior.Pattern = xlPatternNone\n\
+               Range(\"D1\").Orientation = xlVertical\n\
+               Range(\"E1\").Orientation = xlVertical\n\
+               Range(\"E1\").Orientation = xlHorizontal\n\
+               Dressed = Range(\"Z9\").Interior.Pattern & \"|\" & _\n\
+                 Range(\"A1\").Interior.Pattern & \"|\" & _\n\
+                 Range(\"B1\").Interior.Pattern & \"|\" & _\n\
+                 Range(\"B1\").Interior.Color & \"|\" & _\n\
+                 Range(\"C1\").Interior.Pattern & \"|\" & _\n\
+                 TypeName(Range(\"A1:B2\").Interior.Pattern) & \"|\" & _\n\
+                 Range(\"Z9\").Orientation & \"|\" & Range(\"D1\").Orientation & \"|\" & _\n\
+                 Range(\"E1\").Orientation\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Dressed", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("-4142|1|1|16777215|-4142|Null|-4128|-4166|-4128".to_string())
         );
     }
 
