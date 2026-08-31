@@ -269,7 +269,12 @@ fn style_at(
         if at < seen + n {
             return (
                 run.font_size.unwrap_or(fs),
-                run.bold,
+                // The run's OWN declaration, not `is_bold(bold)`: the `bold`
+                // here is the PARAGRAPH's resolved weight, so inheriting it
+                // would make a silent run bold merely because a sibling run
+                // is. What a silent run inherits is the LEVEL, and the level
+                // does not reach this far down.
+                run.bold.unwrap_or(false),
                 run.italic,
                 if letter_spacing { run.spacing.unwrap_or(0.0) } else { 0.0 },
             );
@@ -358,7 +363,7 @@ mod wrap_tests {
         crate::ir::SlideRun {
             text: text.to_string(),
             font_size: size,
-            bold,
+            bold: if bold { Some(true) } else { None },
             italic: false,
             underline: false,
             color: None,
@@ -758,7 +763,7 @@ mod paragraph_tests {
         crate::ir::SlideRun {
             text: text.to_string(),
             font_size: None,
-            bold: false,
+            bold: None,
             italic: false,
             underline: false,
             color: None,
@@ -1265,7 +1270,7 @@ mod size_tests {
         SlideRun {
             text: text.to_string(),
             font_size: size,
-            bold: false,
+            bold: None,
             italic: false,
             underline: false,
             color: None,
@@ -1716,7 +1721,7 @@ pub fn line_segments(
                 style = (
                     run.font_size.unwrap_or(fs),
                     run.font_family.clone().unwrap_or_else(|| family.to_string()),
-                    run.bold || level_bold,
+                    run.is_bold(level_bold),
                     run.italic || level_italic,
                 );
                 break;
@@ -1874,7 +1879,15 @@ pub fn layout_text_shape(
                 .as_str(),
             true,
         );
-        let bold = para.runs.iter().any(|r| r.bold) || level.bold.unwrap_or(false);
+        let lvl_bold = level.bold.unwrap_or(false);
+        // An empty paragraph has only the level to go on; one with runs is
+        // bold if any of its runs RESOLVES bold, which a `b="0"` run does not
+        // even inside a bold level.
+        let bold = if para.runs.is_empty() {
+            lvl_bold
+        } else {
+            para.runs.iter().any(|r| r.is_bold(lvl_bold))
+        };
         let italic =
             para.runs.iter().any(|r| r.italic) || level_italic(master, ph_levels, para.lvl);
         let geom = indent_geometry(
@@ -1970,7 +1983,7 @@ mod shape_tests {
         SlideRun {
             text: text.to_string(),
             font_size: size,
-            bold: false,
+            bold: None,
             italic: false,
             underline: false,
             color: None,
@@ -2090,7 +2103,7 @@ mod shape_tests {
     #[test]
     fn a_line_that_crosses_runs_is_split_where_they_do() {
         let runs = vec![
-            crate::ir::SlideRun { bold: true, ..run("Alternative: ", None) },
+            crate::ir::SlideRun { bold: Some(true), ..run("Alternative: ", None) },
             run("click the button", None),
         ];
         let segs = line_segments(&runs, 0, "Alternative: click the button",
@@ -2104,9 +2117,24 @@ mod shape_tests {
     }
 
     #[test]
+    fn a_run_that_says_b_zero_is_not_bold_inside_a_bold_level() {
+        // PowerPoint's own answer (`bzero` probe, 4/4 arms; d15 s11, d11 s11
+        // and corpus 04 s11 in one shape each): `b="0"` turns the level's bold
+        // OFF, and a run that says nothing takes it.
+        let runs = vec![
+            crate::ir::SlideRun { bold: Some(false), ..run("ZERO ", None) },
+            run("SILENT", None),
+        ];
+        let segs = line_segments(&runs, 0, "ZERO SILENT", 18.0, "Arial", true, false);
+        assert_eq!(segs.len(), 2, "{segs:?}");
+        assert!(!segs[0].bold, "b=0 must beat a bold level");
+        assert!(segs[1].bold, "a run that says nothing takes the level's bold");
+    }
+
+    #[test]
     fn a_later_line_takes_the_styles_it_actually_covers() {
         let runs = vec![
-            crate::ir::SlideRun { bold: true, ..run("HEAD", None) },
+            crate::ir::SlideRun { bold: Some(true), ..run("HEAD", None) },
             run("tail text", None),
         ];
         // The second line starts four characters in, past the bold run.

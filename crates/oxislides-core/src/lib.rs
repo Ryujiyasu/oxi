@@ -33,7 +33,7 @@ mod tests {
             assert!(!paragraphs.is_empty());
             let text: String = paragraphs[0].runs.iter().map(|r| r.text.as_str()).collect();
             assert_eq!(text, "Welcome to Oxi");
-            assert!(paragraphs[0].runs[0].bold);
+            assert_eq!(paragraphs[0].runs[0].bold, Some(true));
         } else {
             panic!("Expected TextBox for title");
         }

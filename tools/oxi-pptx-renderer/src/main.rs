@@ -517,6 +517,19 @@ fn alignment_str(a: Option<SlideAlignment>) -> &'static str {
     }
 }
 
+/// Whether a paragraph is drawn bold, once its level has had its say.
+///
+/// Not `any(|r| r.bold) || level_bold`: a run that says `b="0"` turns the
+/// level's bold OFF, so the level only speaks for runs that say nothing -- and
+/// for a paragraph that has no runs at all.
+fn para_is_bold(runs: &[oxislides_core::ir::SlideRun], level_bold: bool) -> bool {
+    if runs.is_empty() {
+        level_bold
+    } else {
+        runs.iter().any(|r| r.is_bold(level_bold))
+    }
+}
+
 fn run_json(text: &str, font_size: Option<f32>, bold: bool, italic: bool, color: &Option<String>, font_family: &Option<String>) -> Value {
     json!({
         "text": text,
@@ -540,7 +553,7 @@ fn paragraphs_json(paragraphs: &[oxislides_core::ir::SlideParagraph]) -> Value {
                 "runs": p
                     .runs
                     .iter()
-                    .map(|r| run_json(&r.text, r.font_size, r.bold, r.italic, &r.color, &r.font_family))
+                    .map(|r| run_json(&r.text, r.font_size, r.is_bold(false), r.italic, &r.color, &r.font_family))
                     .collect::<Vec<_>>(),
             })
         })
@@ -4828,7 +4841,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let lvl_bold =
                                 lvlbold_on() && phl.and_then(|l| l.bold).unwrap_or(false);
                             let para_weight =
-                                if (p.runs.iter().any(|r| r.bold) || lvl_bold) && parabold_on() {
+                                if para_is_bold(&p.runs, lvl_bold) && parabold_on() {
                                     700
                                 } else {
                                     400
@@ -4851,7 +4864,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let styled = runstyle_on()
                                 && (has_highlight
                                     || (p.runs.len() > 1
-                                        && (p.runs.iter().any(|r| r.bold != p.runs[0].bold)
+                                        && (p.runs.iter().any(|r| {
+                                            r.is_bold(lvl_bold) != p.runs[0].is_bold(lvl_bold)
+                                        })
                                             || p.runs.iter().any(|r| r.color != p.runs[0].color)
                                             || p.runs
                                                 .iter()
@@ -5033,7 +5048,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                             ),
                                                         );
                                                         let bold =
-                                                            p.runs.iter().any(|r| r.bold);
+                                                            para_is_bold(&p.runs, false);
                                                         n = gdi_wrap_lines(
                                                             mem_dc, &body, inner, inner,
                                                             scale, fs, &family, bold, false,
@@ -5263,7 +5278,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         pres, sh, p, &sh.ph_levels[..], &[],
                                                     ),
                                                 );
-                                                let bold = p.runs.iter().any(|r| r.bold);
+                                                let bold = para_is_bold(&p.runs, false);
                                                 n = gdi_wrap_lines(
                                                     mem_dc,
                                                     &body,
@@ -5360,7 +5375,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         ),
                                     );
                                     let color = p.runs.iter().find_map(|r| r.color.clone());
-                                    let bold = p.runs.iter().any(|r| r.bold);
+                                    let bold = para_is_bold(&p.runs, false);
                                     if cellwrap_on() {
                                         // A cell wraps its text like any other
                                         // text frame; this path used to draw the
@@ -12253,7 +12268,7 @@ unsafe fn draw_line_runs(
         let fs = run.font_size.unwrap_or(default_fs);
         let family = &effective_family(dc, run.font_family.as_deref().unwrap_or(default_family));
         let color = run.color.as_deref().or(default_color);
-        let bold = run.bold || default_bold;
+        let bold = run.is_bold(default_bold);
         let weight = if bold { 700 } else { 400 };
         let spc = run_spc(run);
         let w = runtime_width_px(dc, &seg, fs, family, bold, run.italic, scale, spc)
@@ -13603,7 +13618,12 @@ fn line_width_pt_runs(
                 let size = run.font_size.unwrap_or(fs);
                 return (
                     (size * 100.0).round() as u32,
-                    run.bold,
+                    // The run's OWN declaration: `bold` here is the
+                    // PARAGRAPH's resolved weight, so inheriting it would
+                    // make a silent run bold because a sibling is. What a
+                    // silent run inherits is the level, which is not in
+                    // scope this far down.
+                    run.bold.unwrap_or(false),
                     run.italic || italic,
                     (run_spc(run) * 100.0).round() as i32,
                 );
@@ -13835,7 +13855,7 @@ fn draw_warped_text(
         dc,
         &paragraph_family(pres, sh, para, &sh.ph_levels[..], &pres.master_styles.other),
     );
-    let bold = para.runs.iter().any(|r| r.bold);
+    let bold = para_is_bold(&para.runs, false);
     let italic = para.runs.iter().any(|r| r.italic);
     let Some((ix0, ix1, iy0, iy1)) = text_ink_box_em(&family, bold, italic, text) else {
         return false;
@@ -15237,7 +15257,7 @@ fn layout_paragraph_baselines(
     // The WRAP has to measure at the weight the line is drawn at, level bold
     // included -- measuring d11's titles at 400 and drawing them at 700 would
     // break them a word later than PowerPoint.
-    let bold = para.runs.iter().any(|r| r.bold) || (lvlbold_on() && m.bold.unwrap_or(false));
+    let bold = para_is_bold(&para.runs, lvlbold_on() && m.bold.unwrap_or(false));
     // S-ITALADV (2026-08-24): and at the SLANT it is drawn at, level italic
     // included -- the same argument as the bold line above, which this one was
     // missing. The draw loop resolves italic as

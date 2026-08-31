@@ -1167,7 +1167,7 @@ fn parse_slide(
     let mut fld_type: Option<String> = None;
     let s_slidenum = std::env::var("OXI_SLIDENUM_DISABLE").is_err();
     let mut run_text = String::new();
-    let mut run_bold = false;
+    let mut run_bold: Option<bool> = None;
     let mut run_italic = false;
     let mut run_underline = false;
     let mut run_font_size: Option<f32> = None;
@@ -1892,7 +1892,7 @@ fn parse_slide(
                             None
                         };
                         run_text.clear();
-                        run_bold = false;
+                        run_bold = None;
                         run_italic = false;
                         run_underline = false;
                         run_font_size = None;
@@ -1909,7 +1909,7 @@ fn parse_slide(
                     }
                     "rPr" if in_run => {
                         if let Some(b) = get_attr(&e, "b") {
-                            run_bold = b == "1" || b == "true";
+                            run_bold = Some(b == "1" || b == "true");
                         }
                         if let Some(i) = get_attr(&e, "i") {
                             run_italic = i == "1" || i == "true";
@@ -1986,7 +1986,7 @@ fn parse_slide(
                             text: "
 ".to_string(),
                             font_size: run_font_size,
-                            bold: false,
+                            bold: None,
                             italic: false,
                             underline: false,
                             color: None,
@@ -2065,7 +2065,7 @@ fn parse_slide(
                             para_runs.push(SlideRun {
                                 text: (slide_index as u32 + first_slide_num - 1).to_string(),
                                 font_size: run_font_size,
-                                bold: false,
+                                bold: None,
                                 italic: false,
                                 underline: false,
                                 color: None,
@@ -2402,7 +2402,7 @@ fn parse_slide(
                     }
                     "rPr" if in_run => {
                         if let Some(b) = get_attr(&e, "b") {
-                            run_bold = b == "1" || b == "true";
+                            run_bold = Some(b == "1" || b == "true");
                         }
                         if let Some(i) = get_attr(&e, "i") {
                             run_italic = i == "1" || i == "true";

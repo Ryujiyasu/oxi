@@ -58,7 +58,7 @@ fn title_run_is_bold() {
     if let ShapeContent::TextBox { paragraphs } = &p.slides[0].shapes[0].content {
         let run = &paragraphs[0].runs[0];
         assert_eq!(run.text, "Welcome to Oxi");
-        assert!(run.bold, "title run must be bold");
+        assert_eq!(run.bold, Some(true), "title run must be bold");
     } else {
         panic!("title must be a TextBox");
     }

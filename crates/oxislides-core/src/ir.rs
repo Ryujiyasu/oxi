@@ -939,7 +939,20 @@ pub enum SlideAlignment {
 pub struct SlideRun {
     pub text: String,
     pub font_size: Option<f32>,    // in points
-    pub bold: bool,
+    /// `a:rPr/@b`, and `None` when the run does not say.
+    ///
+    /// `Option` rather than `bool` for the reason the LEVEL's `bold` is one:
+    /// `b="0"` has to be able to turn a bold level OFF, and a plain `bool`
+    /// makes "explicitly not bold" and "said nothing" the same value.
+    ///
+    /// Confirmed by the `bzero` probe (4/4 arms) and by three decks that show
+    /// it inside ONE shape, so the level cannot differ between the two runs:
+    /// d15 s11, d11 s11 and corpus `04` s11 each hold `<a:rPr b="0"/>`
+    /// beside a run that says nothing, and PowerPoint draws the first in
+    /// Barlow and the second in Barlow,Bold. 69 shapes across both corpora
+    /// carry such a pair and not one is drawn the other way.
+    #[serde(default)]
+    pub bold: Option<bool>,
     pub italic: bool,
     /// `a:rPr/@u` -- any value but `none` underlines the run. PowerPoint draws
     /// the rule; 86 runs across 12 dev decks ask for one, most of them the
@@ -969,4 +982,25 @@ pub struct SlideRun {
     /// the last deck in the blind set that LibreOffice rendered better.
     #[serde(default)]
     pub spacing: Option<f32>,
+}
+
+static BZERO_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+impl SlideRun {
+    /// The run's weight once the level it sits in has had its say.
+    ///
+    /// A run that says nothing takes the level's weight; one that says
+    /// anything wins, `b="0"` included. `OXI_BZERO_DISABLE` restores the old
+    /// `run.bold || level_bold`, which could only ever turn bold ON.
+    pub fn is_bold(&self, level_bold: bool) -> bool {
+        match self.bold {
+            // Read once: this is asked per CHARACTER when a line is split into
+            // its runs, and the environment does not change mid-render.
+            Some(false) if *BZERO_OFF.get_or_init(|| std::env::var("OXI_BZERO_DISABLE").is_ok()) => {
+                level_bold
+            }
+            Some(b) => b,
+            None => level_bold,
+        }
+    }
 }
