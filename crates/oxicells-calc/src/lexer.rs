@@ -444,6 +444,164 @@ pub fn shift_formula_references(
     Ok(output)
 }
 
+/// A block of cells a cut moved, for rewriting the references that pointed at
+/// them.
+///
+/// A cut is not a copy. The references FOLLOW the cells, absolute ones
+/// included: asked of Excel, cutting `A2:B3` onto `D2` leaves `=SUM(A2:B3)`
+/// reading `=SUM(D2:E3)` and `=$A$2` reading `=$D$2`, from any sheet. Only a
+/// reference lying WHOLLY inside the block follows it, so `=SUM(A1:B4)`, which
+/// reaches past the block, is left where it is, and so is `=SUM(A:A)`.
+#[derive(Debug, Clone, Copy)]
+pub struct CellMove<'a> {
+    /// The block that moved, zero-based and inclusive.
+    pub first_row: u32,
+    pub first_column: u32,
+    pub last_row: u32,
+    pub last_column: u32,
+    /// How far it went.
+    pub down: i64,
+    pub across: i64,
+    /// The sheet the cells moved on. A reference naming another sheet is left
+    /// alone; see [`ReferenceShift::sheet`].
+    pub sheet: Option<&'a str>,
+    /// The sheet the formula being rewritten is written on; see
+    /// [`ReferenceShift::on_sheet`].
+    pub on_sheet: Option<&'a str>,
+}
+
+impl CellMove<'_> {
+    fn covers(&self, span: (u32, u32, u32, u32)) -> bool {
+        let (low_row, low_column, high_row, high_column) = span;
+        low_row >= self.first_row
+            && high_row <= self.last_row
+            && low_column >= self.first_column
+            && high_column <= self.last_column
+    }
+
+    /// Where the block came to rest — the cells it overwrote on the way.
+    fn landing(&self) -> Option<(u32, u32, u32, u32)> {
+        let moved = |value: u32| u32::try_from(i64::from(value) + self.down).ok();
+        let across = |value: u32| u32::try_from(i64::from(value) + self.across).ok();
+        Some((
+            moved(self.first_row)?,
+            across(self.first_column)?,
+            moved(self.last_row)?,
+            across(self.last_column)?,
+        ))
+    }
+}
+
+/// Move the A1 references that pointed at cells a cut took away, the way Excel
+/// rewrites formulas after a cut-and-paste.
+///
+/// A reference wholly inside the moved block follows it. A reference wholly
+/// inside the cells the block LANDED on becomes `#REF!`, since what it named
+/// was overwritten. Everything else — a range only partly overlapping either,
+/// a whole column, another sheet's cells — is left exactly as it was.
+///
+/// One case Excel answers differently: a range whose FAR end alone is
+/// overwritten closes up to the last cell that survived (`SUM(D1:D2)` becomes
+/// `SUM(D1:D1)`), while a range whose near end alone is overwritten is left
+/// untouched. Neither is done here; a partly overwritten range keeps its
+/// text.
+pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<String, String> {
+    crate::parser::parse(input).map_err(|error| error.to_string())?;
+    let had_equals = input.trim_start().starts_with('=');
+    let tokens = tokenize(input).map_err(|error| error.to_string())?;
+    let landing = moved.landing();
+
+    let travelled = |reference: CellRef| -> Result<CellRef, String> {
+        Ok(CellRef {
+            row: shifted_coordinate(reference.row, moved.down, MAX_ROW)?,
+            col: shifted_coordinate(reference.col, moved.across, MAX_COL)?,
+            ..reference
+        })
+    };
+
+    let mut written = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        let is_function = matches!(tokens.get(index + 1), Some(Token::LParen));
+        let Token::Name { sheet, name } = &tokens[index] else {
+            written.push(tokens[index].clone());
+            index += 1;
+            continue;
+        };
+        if is_function {
+            written.push(tokens[index].clone());
+            index += 1;
+            continue;
+        }
+        let names_moved_sheet = match (sheet.as_deref(), moved.sheet) {
+            (None, Some(cut)) => {
+                moved.on_sheet.is_none_or(|own| own.eq_ignore_ascii_case(cut))
+            }
+            (None, None) => true,
+            (Some(named), Some(cut)) => named.eq_ignore_ascii_case(cut),
+            (Some(_), None) => false,
+        };
+        let Some(start) = parse_a1(name).filter(|_| names_moved_sheet) else {
+            written.push(tokens[index].clone());
+            index += 1;
+            continue;
+        };
+        // A range is judged as one thing, since it follows the cut as one.
+        let end = match (tokens.get(index + 1), tokens.get(index + 2)) {
+            (Some(Token::Colon), Some(Token::Name { name, .. })) => parse_a1(name),
+            _ => None,
+        };
+        let width = if end.is_some() { 3 } else { 1 };
+        let far = end.unwrap_or(start);
+        let span = (
+            start.row.min(far.row),
+            start.col.min(far.col),
+            start.row.max(far.row),
+            start.col.max(far.col),
+        );
+
+        if moved.covers(span) {
+            written.push(Token::Name {
+                sheet: sheet.clone(),
+                name: travelled(start)?.to_a1(),
+            });
+            if end.is_some() {
+                let end_sheet = match &tokens[index + 2] {
+                    Token::Name { sheet, .. } => sheet.clone(),
+                    _ => None,
+                };
+                written.push(Token::Colon);
+                written.push(Token::Name {
+                    sheet: end_sheet,
+                    name: travelled(far)?.to_a1(),
+                });
+            }
+        } else if landing.is_some_and(|landing| {
+            let (first_row, first_column, last_row, last_column) = landing;
+            span.0 >= first_row
+                && span.2 <= last_row
+                && span.1 >= first_column
+                && span.3 <= last_column
+        }) {
+            written.push(Token::ErrorLit(ExcelError::Ref));
+        } else {
+            for step in 0..width {
+                written.push(tokens[index + step].clone());
+            }
+        }
+        index += width;
+    }
+
+    let mut output = String::new();
+    if had_equals {
+        output.push('=');
+    }
+    for token in written {
+        render_token(&mut output, token);
+    }
+    Ok(output)
+}
+
 /// Where one coordinate lands, or `None` once it has been taken out.
 fn shifted_cell(value: u32, at: u32, count: i64, maximum: u32) -> Result<Option<u32>, String> {
     if value < at {
@@ -904,7 +1062,9 @@ mod tests {
 
 #[cfg(test)]
 mod shift_tests {
-    use super::{shift_formula_references, ReferenceShift, ShiftAxis};
+    use super::{
+        move_formula_references, shift_formula_references, CellMove, ReferenceShift, ShiftAxis,
+    };
     use crate::reference::{MAX_COL, MAX_ROW};
 
     /// Every case here is what Excel 16 left in the cell after the operation.
@@ -1148,5 +1308,62 @@ mod shift_tests {
             shift_formula_references("=LOG10(A2)", &whole_rows(1, 1, None)).unwrap(),
             "=LOG10(A3)"
         );
+    }
+
+    /// `A2:B3` cut onto `D2`, which is where every answer below was measured.
+    fn cut_a2b3_onto_d2(on_sheet: Option<&'static str>) -> CellMove<'static> {
+        CellMove {
+            first_row: 1,
+            first_column: 0,
+            last_row: 2,
+            last_column: 1,
+            down: 0,
+            across: 3,
+            sheet: Some("Sheet1"),
+            on_sheet,
+        }
+    }
+
+    /// A reference follows the cells a cut took, and one aimed at what the cut
+    /// landed on is left with nothing to name. Asked of Excel.
+    #[test]
+    fn references_follow_the_cells_a_cut_moved() {
+        let moved = cut_a2b3_onto_d2(Some("Sheet1"));
+        let said = |formula: &str| move_formula_references(formula, &moved).unwrap();
+
+        // Wholly inside the block: it follows, absolute halves included.
+        assert_eq!(said("=SUM(A2:B3)"), "=SUM(D2:E3)");
+        assert_eq!(said("=SUM(A2:A3)"), "=SUM(D2:D3)");
+        assert_eq!(said("=A2+B3"), "=D2+E3");
+        assert_eq!(said("=$A$2"), "=$D$2");
+        assert_eq!(said("=A2*10"), "=D2*10");
+        // Reaching past the block, or naming a whole line: left alone.
+        assert_eq!(said("=SUM(A1:B4)"), "=SUM(A1:B4)");
+        assert_eq!(said("=SUM(A2:B5)"), "=SUM(A2:B5)");
+        assert_eq!(said("=SUM(A:A)"), "=SUM(A:A)");
+        assert_eq!(said("=G9"), "=G9");
+        // Aimed at what the block landed on.
+        assert_eq!(said("=D2"), "=#REF!");
+        assert_eq!(said("=SUM(D2:E3)"), "=SUM(#REF!)");
+        assert_eq!(said("=D2+D4"), "=#REF!+D4");
+        assert_eq!(said("=$D$3"), "=#REF!");
+        assert_eq!(said("=SUM(D4:D6)"), "=SUM(D4:D6)");
+    }
+
+    /// The cut reaches another sheet's formulas, but only where they name the
+    /// sheet the cells moved on.
+    #[test]
+    fn a_cut_reaches_the_formulas_on_other_sheets() {
+        let elsewhere = cut_a2b3_onto_d2(Some("Second"));
+        assert_eq!(
+            move_formula_references("=Sheet1!A2", &elsewhere).unwrap(),
+            "=Sheet1!D2"
+        );
+        assert_eq!(
+            move_formula_references("=SUM(Sheet1!A2:B3)", &elsewhere).unwrap(),
+            "=SUM(Sheet1!D2:E3)"
+        );
+        // Unqualified on another sheet means that sheet's own A2, untouched.
+        assert_eq!(move_formula_references("=A2", &elsewhere).unwrap(), "=A2");
     }
 }

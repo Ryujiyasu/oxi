@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use oxicells_core::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
 use oxicells_core::{
-    formula_from_r1c1, formula_to_r1c1, translate_formula_references, ReferenceShift, ShiftAxis,
+    formula_from_r1c1, formula_to_r1c1, move_formula_references, translate_formula_references,
+    CellMove, ReferenceShift, ShiftAxis,
 };
 use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
@@ -3603,6 +3604,138 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    /// Move a block of cells, taking the references that named them along.
+    ///
+    /// A cut is not a copy. The cells LEAVE — value, formula and format — and
+    /// every reference that named one of them follows it, absolute halves and
+    /// other sheets included: asked of Excel, cutting `A2:B3` onto `D2` leaves
+    /// `=SUM(A2:B3)` reading `=SUM(D2:E3)` and `=$A$2` reading `=$D$2`, while
+    /// `=SUM(A1:B4)`, which reaches past the block, is left alone. A reference
+    /// to a cell the block LANDS on has nothing left to name and becomes
+    /// `#REF!`.
+    ///
+    /// Only the destination's top-left corner is used. Asked of Excel, two
+    /// cells cut onto a five-cell destination fill the first two and leave the
+    /// rest as they were, and one cell cut onto a block fills its corner.
+    fn cut_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
+        let [Value::Object(destination)] = args else {
+            return Err(
+                "Range.Cut needs a destination Range: this build has nowhere to hold \
+                 cells between a cut and a paste"
+                    .to_string(),
+            );
+        };
+        let destination = self
+            .range(destination)
+            .ok_or_else(|| "Range.Cut destination must be a Range".to_string())?;
+        if destination.sheet != source.sheet {
+            // Measured but not built: a cut onto another sheet also QUALIFIES
+            // the references it moves, and the formulas that travelled have to
+            // be read against the sheet they came from rather than the one
+            // they landed on. That is a second rule, and it belongs to its own
+            // round of work.
+            return Err(
+                "Range.Cut can only move cells within one worksheet in this build".to_string(),
+            );
+        }
+        Self::range_cell_count(source)?;
+        let row_count = source.end_row - source.start_row + 1;
+        let column_count = source.end_column - source.start_column + 1;
+        destination
+            .start_row
+            .checked_add(row_count - 1)
+            .filter(|row| *row <= MAX_WORKSHEET_ROW)
+            .ok_or_else(|| "Range.Cut destination extends beyond the worksheet rows".to_string())?;
+        destination
+            .start_column
+            .checked_add(column_count - 1)
+            .filter(|column| *column <= MAX_WORKSHEET_COLUMN)
+            .ok_or_else(|| {
+                "Range.Cut destination extends beyond the worksheet columns".to_string()
+            })?;
+        let down = i64::from(destination.start_row) - i64::from(source.start_row);
+        let across = i64::from(destination.start_column) - i64::from(source.start_column);
+        if down == 0 && across == 0 {
+            return Ok(Value::Empty);
+        }
+
+        // Lift the whole block before putting any of it down, so that a move
+        // onto its own cells does not eat what it has not carried yet.
+        let carried = source
+            .addresses()
+            .map(|address| self.take_cell(address))
+            .collect::<Vec<_>>();
+        for (address, cell) in source.addresses().zip(carried) {
+            self.put_cell(
+                CellAddress {
+                    sheet: destination.sheet,
+                    row: (i64::from(address.row) + down) as u32,
+                    column: (i64::from(address.column) + across) as u32,
+                },
+                cell,
+            )?;
+        }
+
+        let moved_on = self.workbook.sheets[source.sheet].name.clone();
+        for worksheet in &mut self.workbook.sheets {
+            let written_on = worksheet.name.clone();
+            let moved = CellMove {
+                first_row: source.start_row.saturating_sub(1),
+                first_column: source.start_column,
+                last_row: source.end_row.saturating_sub(1),
+                last_column: source.end_column,
+                down,
+                across,
+                sheet: Some(moved_on.as_str()),
+                on_sheet: Some(written_on.as_str()),
+            };
+            for row in &mut worksheet.rows {
+                for cell in &mut row.cells {
+                    let Some(formula) = cell.formula.as_deref() else {
+                        continue;
+                    };
+                    // A formula this build cannot read is left exactly as it
+                    // was: half a rewrite would move some of its references
+                    // and not the others.
+                    if let Ok(rewritten) = move_formula_references(formula, &moved) {
+                        cell.formula = Some(rewritten);
+                    }
+                }
+            }
+        }
+        Ok(Value::Empty)
+    }
+
+    /// Lift a cell off the sheet, leaving nothing behind — not its value, not
+    /// its formula, and not the face it was wearing.
+    fn take_cell(&mut self, address: CellAddress) -> Option<Cell> {
+        let sheet = self.workbook.sheets.get_mut(address.sheet)?;
+        let row = sheet.rows.iter_mut().find(|row| row.index == address.row)?;
+        let at = row.cells.iter().position(|cell| cell.col == address.column)?;
+        Some(row.cells.remove(at))
+    }
+
+    /// Put one down, or clear what is there when the block carried a blank.
+    fn put_cell(&mut self, address: CellAddress, cell: Option<Cell>) -> Result<(), String> {
+        self.take_cell(address);
+        let Some(cell) = cell else {
+            return Ok(());
+        };
+        self.set_cell_value(address, CellValue::Empty)?;
+        let sheet = &mut self.workbook.sheets[address.sheet];
+        let landed = sheet
+            .rows
+            .iter_mut()
+            .find(|row| row.index == address.row)
+            .and_then(|row| row.cells.iter_mut().find(|held| held.col == address.column))
+            .expect("set_cell_value creates the cell");
+        *landed = Cell {
+            col: address.column,
+            ..cell
+        };
+        Ok(())
+    }
+
     fn copy_range(&mut self, source: CellRange, args: &[Value]) -> Result<Value, String> {
         if args.is_empty() || matches!(args, [Value::Missing]) {
             self.fill_clipboard(source)?;
@@ -3830,6 +3963,9 @@ impl Host for WorkbookHost<'_> {
                 }
                 if name.eq_ignore_ascii_case("copy") {
                     return self.copy_range(range, args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("cut") {
+                    return self.cut_range(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("select") {
                     if !args.is_empty() {
@@ -11110,5 +11246,63 @@ End Sub
         };
         assert_eq!(beyond(8).as_deref(), Some("#N/A"));
         assert_eq!(beyond(9).as_deref(), Some("#N/A"));
+    }
+
+    /// A cut moves the cells and the references that named them.
+    ///
+    /// Asked of Excel, cutting `A1:B2` onto `D5`: the block arrives whole with
+    /// its fill, the source is left bare, `=A1*10` written inside the block
+    /// now reads `=D5*10` while `=G9` written inside it is untouched, and the
+    /// watchers outside follow — `=A1` to `=D5`, `=SUM(A1:B2)` to
+    /// `=SUM(D5:E6)`, `=$A$1` to `=$D$5`. A watcher of `D5`, which the block
+    /// landed on, is left with `#REF!`.
+    #[test]
+    fn vba_cut_takes_the_references_that_named_the_cells_with_it() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function MoveBlock() As String\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"A2\").Value = 2\n\
+               Range(\"B1\").Formula = \"=A1*10\"\n\
+               Range(\"B2\").Formula = \"=G9\"\n\
+               Range(\"F1\").Formula = \"=A1\"\n\
+               Range(\"F2\").Formula = \"=SUM(A1:B2)\"\n\
+               Range(\"F3\").Formula = \"=$A$1\"\n\
+               Range(\"F4\").Formula = \"=D5\"\n\
+               Range(\"F5\").Formula = \"=SUM(A1:B4)\"\n\
+               Range(\"A1:B2\").Interior.Color = 255\n\
+               Range(\"A1:B2\").Cut Range(\"D5\")\n\
+               MoveBlock = Range(\"D5\").Value & \"|\" & Range(\"D6\").Value & \"|\" & _\n\
+                 Range(\"E5\").Formula & \"|\" & Range(\"E6\").Formula & \"|\" & _\n\
+                 Range(\"F1\").Formula & \"|\" & Range(\"F2\").Formula & \"|\" & _\n\
+                 Range(\"F3\").Formula & \"|\" & Range(\"F4\").Formula & \"|\" & _\n\
+                 Range(\"F5\").Formula & \"|\" & Range(\"D5\").Interior.Color\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "MoveBlock", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "1|2|=D5*10|=G9|=D5|=SUM(D5:E6)|=$D$5|=#REF!|=SUM(A1:B4)|255".to_string()
+            )
+        );
+        // The block left nothing behind, not even the face it was wearing.
+        let left = |row: u32, column: u32| {
+            workbook.sheets[0]
+                .rows
+                .iter()
+                .find(|held| held.index == row)
+                .and_then(|held| held.cells.iter().find(|cell| cell.col == column))
+                .is_some()
+        };
+        assert!(!left(1, 0), "A1 should be bare");
+        assert!(!left(1, 1), "B1 should be bare");
+        assert!(!left(2, 0), "A2 should be bare");
+        assert!(!left(2, 1), "B2 should be bare");
     }
 }
