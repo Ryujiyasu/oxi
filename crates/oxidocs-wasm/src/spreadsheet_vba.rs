@@ -324,6 +324,10 @@ struct WorkbookHost<'a> {
     calculation: i64,
     last_find: Option<FindState>,
     objects: Vec<HostObject>,
+    /// What moment the page says it is, as a serial. `TODAY()` and `NOW()`
+    /// are answered from it when a macro asks for a recalculation; a browser
+    /// has no clock of its own to ask.
+    now: Option<f64>,
     /// The blocks of every many-block range handed out.
     blocks: Vec<Vec<CellRange>>,
     /// The text of every name a `Name` object was handed out for.
@@ -356,6 +360,7 @@ impl<'a> WorkbookHost<'a> {
             calculation: -4105,
             last_find: None,
             objects: Vec::new(),
+            now: None,
             blocks: Vec::new(),
             name_handles: Vec::new(),
             debug_output: Vec::new(),
@@ -456,6 +461,23 @@ impl<'a> WorkbookHost<'a> {
             self.objects.get(object.handle as usize),
             Some(HostObject::Worksheets)
         )
+    }
+
+    /// Work out every formula in the workbook again.
+    ///
+    /// A macro has to ASK for this. Excel does it by itself after every
+    /// change, but the engine here rebuilds the whole dependency graph each
+    /// time, so the cost goes with how many cells the workbook has rather than
+    /// how many formulas: measured over the conformance corpus, a small book
+    /// takes under 3ms, one of 300,000 cells takes 270ms, and the largest —
+    /// 936,000 cells — takes 15 seconds. Doing that after every assignment
+    /// would make a loop that writes a hundred cells unusable, so this build
+    /// waits to be told.
+    fn recalculate(&mut self) {
+        match self.now {
+            Some(now) => oxicells_core::formula::evaluate_workbook_formulas_at(self.workbook, now),
+            None => oxicells_core::formula::evaluate_workbook_formulas(self.workbook),
+        }
     }
 
     /// The blocks a many-block range is made of.
@@ -4843,6 +4865,10 @@ impl Host for WorkbookHost<'_> {
                     }
                     return self.paste_held(args).map(Some);
                 }
+                if name.eq_ignore_ascii_case("calculate") {
+                    self.recalculate();
+                    return Ok(Some(Value::Empty));
+                }
                 if name.eq_ignore_ascii_case("showalldata") {
                     self.show_all_rows(sheet)?;
                     return Ok(Some(Value::Empty));
@@ -4971,6 +4997,10 @@ impl Host for WorkbookHost<'_> {
                     self.selection
                 };
                 return Ok(Some(self.object(HostObject::Range(range))));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("calculate") {
+                self.recalculate();
+                return Ok(Some(Value::Empty));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("union") {
                 return self.union_ranges(args).map(Some);
@@ -8135,6 +8165,9 @@ pub fn run_spreadsheet_vba(
     let browser_now = js_sys::Date::new_0();
     let local_millis = browser_now.get_time() - browser_now.get_timezone_offset() * 60_000.0;
     let current_time = local_millis / 86_400_000.0 + 25_569.0;
+    // The host answers `TODAY()` from the same moment the runtime does, so a
+    // macro that recalculates and then reads a date sees one story.
+    host.now = Some(current_time);
     let result = Runtime::new(&module)
         .with_host(&mut host)
         .with_random_seed(random_seed)
@@ -13784,6 +13817,38 @@ End Sub
             result,
             Value::String("=G1*2|255|0.00|-4142|99|25|5|0.00|65280".to_string())
         );
+    }
+
+    /// A macro can ask for the formulas to be worked out.
+    ///
+    /// Until it asks, a formula this build has just been given has no answer
+    /// yet — which is why `Calculate` exists here at all. Excel works them out
+    /// after every change; this one rebuilds the whole dependency graph each
+    /// time, so it waits to be told.
+    #[test]
+    fn vba_works_out_the_formulas_when_it_is_asked_to() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Worked() As String\n\
+               Range(\"A1\").Value = 5\n\
+               Range(\"A2\").Value = 7\n\
+               Range(\"B1\").Formula = \"=A1*2\"\n\
+               Range(\"B2\").Formula = \"=SUM(A1:A2)\"\n\
+               Worked = \"[\" & Range(\"B1\").Value & \"]\"\n\
+               Application.Calculate\n\
+               Worked = Worked & Range(\"B1\").Value & \"|\" & Range(\"B2\").Value\n\
+               Range(\"A1\").Value = 50\n\
+               ActiveSheet.Calculate\n\
+               Worked = Worked & \"|\" & Range(\"B1\").Value & \"|\" & Range(\"B2\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Worked", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("[]10|12|100|57".to_string()));
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
