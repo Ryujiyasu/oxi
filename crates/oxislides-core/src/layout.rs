@@ -657,6 +657,56 @@ pub fn break_paragraph(
     width_pt: f32,
     runs: &[crate::ir::SlideRun],
 ) -> Option<Vec<String>> {
+    // `<a:br/>` arrives as a newline in the run stream and ends the line where
+    // it stands. Each segment wraps on its own, and the newline is kept on the
+    // END of the line it closed so the caller's character accounting -- which
+    // maps lines back to runs -- still lines up.
+    //
+    // ★It has to be handled before anything measures the text: a newline has
+    // no advance, so the probe below refuses the whole paragraph on account of
+    // it. That is what made d06 decline shapes whose face it could measure
+    // perfectly well.
+    if text.contains('\n') {
+        let mut out: Vec<String> = Vec::new();
+        let mut base = 0usize;
+        for (si, seg) in text.split('\n').enumerate() {
+            if si > 0 {
+                match out.last_mut() {
+                    Some(last) => last.push('\n'),
+                    None => out.push("\n".to_string()),
+                }
+            }
+            let mut part =
+                break_segment(metrics, seg, fs, family, bold, italic, width_pt, runs, base)?;
+            base += seg.chars().count() + 1;
+            if part.is_empty() {
+                // An empty segment is a blank line, not nothing.
+                out.push(String::new());
+            } else {
+                out.append(&mut part);
+            }
+        }
+        return Some(out);
+    }
+    break_segment(metrics, text, fs, family, bold, italic, width_pt, runs, 0)
+}
+
+/// One run of text with no hard break in it (see [`break_paragraph`]).
+///
+/// `base` is how many characters of the paragraph came before this segment, so
+/// the run styles a candidate line is measured with are the right ones.
+#[allow(clippy::too_many_arguments)]
+fn break_segment(
+    metrics: &dyn FaceMetrics,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    width_pt: f32,
+    runs: &[crate::ir::SlideRun],
+    base: usize,
+) -> Option<Vec<String>> {
     // One probe first: if the source cannot measure the paragraph at all,
     // say so rather than returning a wrap built out of fallbacks.
     master_units(metrics, text, fs, family, bold, italic, 0.0)?;
@@ -672,7 +722,7 @@ pub fn break_paragraph(
         1.0,
         &opts,
         |candidate, w_pt, _px, emitted| {
-            let styles = RunStyles { runs, line_start: emitted };
+            let styles = RunStyles { runs, line_start: base + emitted };
             let mu = if runs.len() > 1 {
                 master_units_runs(metrics, candidate, fs, family, bold, italic, &styles, true)
             } else {
@@ -729,6 +779,38 @@ mod paragraph_tests {
         let got = break_paragraph(&TableMetrics, text, 12.0, "Arial", false, false, 400.0, &runs)
             .unwrap();
         assert_eq!(got, vec![text]);
+    }
+
+    #[test]
+    fn a_hard_break_ends_the_line_it_stands_on() {
+        // `<a:br/>` reaches the IR as a newline in the run stream.
+        let got = break_paragraph(
+            &TableMetrics, "Imani Jackson\nJOB TITLE", 12.0, "Arial", false, false, 400.0,
+            &[run("Imani Jackson\nJOB TITLE")],
+        )
+        .expect("a newline must not make the paragraph unmeasurable");
+        assert_eq!(got, vec!["Imani Jackson\n".to_string(), "JOB TITLE".to_string()]);
+    }
+
+    #[test]
+    fn each_side_of_a_hard_break_still_wraps() {
+        let text = "The quick brown fox jumps\nover the lazy dog again and again";
+        let got = break_paragraph(
+            &TableMetrics, text, 12.0, "Arial", false, false, 90.0, &[run(text)],
+        )
+        .expect("measurable");
+        assert!(got.len() > 2, "{got:?}");
+        // Exactly one line carries the break, and it is the one it closed.
+        assert_eq!(got.iter().filter(|l| l.ends_with('\n')).count(), 1);
+    }
+
+    #[test]
+    fn a_break_with_nothing_after_it_leaves_a_blank_line() {
+        let got = break_paragraph(
+            &TableMetrics, "Alone\n", 12.0, "Arial", false, false, 400.0, &[run("Alone\n")],
+        )
+        .expect("measurable");
+        assert_eq!(got, vec!["Alone\n".to_string(), String::new()]);
     }
 }
 
