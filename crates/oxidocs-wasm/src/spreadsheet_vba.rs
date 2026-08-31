@@ -150,6 +150,11 @@ enum HostObject {
     RangeCollection(CellRange, RangeAxis),
     Worksheet(usize),
     Worksheets,
+    /// The names a workbook keeps.
+    Names,
+    /// One of them, held by its text rather than its place in the list, since
+    /// adding and deleting shuffle the list about.
+    DefinedName(usize),
     Workbook,
     Application,
     WorksheetFunction,
@@ -204,6 +209,8 @@ struct WorkbookHost<'a> {
     calculation: i64,
     last_find: Option<FindState>,
     objects: Vec<HostObject>,
+    /// The text of every name a `Name` object was handed out for.
+    name_handles: Vec<String>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
 }
@@ -231,6 +238,7 @@ impl<'a> WorkbookHost<'a> {
             calculation: -4105,
             last_find: None,
             objects: Vec::new(),
+            name_handles: Vec::new(),
             debug_output: Vec::new(),
             messages: Vec::new(),
         })
@@ -250,6 +258,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::RangeCollection(_, RangeAxis::Columns) => "Columns",
                 HostObject::Worksheet(_) => "Worksheet",
                 HostObject::Worksheets => "Worksheets",
+                HostObject::Names => "Names",
+                HostObject::DefinedName(_) => "Name",
                 HostObject::Workbook => "Workbook",
                 HostObject::Application => "Application",
                 HostObject::WorksheetFunction => "WorksheetFunction",
@@ -322,6 +332,34 @@ impl<'a> WorkbookHost<'a> {
             self.objects.get(object.handle as usize),
             Some(HostObject::Worksheets)
         )
+    }
+
+    fn is_names(&self, object: &ObjectRef) -> bool {
+        matches!(self.objects.get(object.handle as usize), Some(HostObject::Names))
+    }
+
+    /// The text of the name a `Name` object was handed out for.
+    fn held_name(&self, object: &ObjectRef) -> Option<&str> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::DefinedName(handle)) => {
+                self.name_handles.get(*handle).map(String::as_str)
+            }
+            _ => None,
+        }
+    }
+
+    fn name_object(&mut self, name: &str) -> Value {
+        let handle = self.name_handles.len();
+        self.name_handles.push(name.to_string());
+        self.object(HostObject::DefinedName(handle))
+    }
+
+    /// Where the workbook keeps that name, whatever case it was asked in.
+    fn name_at(&self, name: &str) -> Option<usize> {
+        self.workbook
+            .defined_names
+            .iter()
+            .position(|(held, _)| held.eq_ignore_ascii_case(name))
     }
 
     fn is_application(&self, object: &ObjectRef) -> bool {
@@ -657,6 +695,134 @@ impl<'a> WorkbookHost<'a> {
             end_row: start_row.max(end_row),
             end_column: start_column.max(end_column),
         })))
+    }
+
+    /// The names a workbook keeps, or one of them.
+    ///
+    /// Excel hands them out in ALPHABETICAL order, not the order they were
+    /// made in: with `Sales`, `Bare`, `Loose` and `FromRange` in the workbook,
+    /// `Names(1)` is `Bare`.
+    fn names_object_or_item(&mut self, args: &[Value]) -> Result<Value, String> {
+        match args {
+            [] | [Value::Missing] => Ok(self.object(HostObject::Names)),
+            [value] => self.name_item(value),
+            _ => Err("Names takes one name or one number".to_string()),
+        }
+    }
+
+    fn name_item(&mut self, value: &Value) -> Result<Value, String> {
+        let wanted = match value {
+            Value::String(text) => text.clone(),
+            Value::Integer(_) | Value::Double(_) => {
+                let index = positive_index(value, "index")? as usize;
+                let mut held = self
+                    .workbook
+                    .defined_names
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>();
+                held.sort_by(|one, other| compare_text_by_case(one, other));
+                held.get(index - 1)
+                    .cloned()
+                    .ok_or_else(|| format!("the workbook has no name number {index}"))?
+            }
+            _ => return Err("a name is asked for by its text or its number".to_string()),
+        };
+        let Some(at) = self.name_at(&wanted) else {
+            return Err(format!("the workbook has no name {wanted:?}"));
+        };
+        let held = self.workbook.defined_names[at].0.clone();
+        Ok(self.name_object(&held))
+    }
+
+    /// Give a name to something, or write over a name already given.
+    ///
+    /// Asked of Excel: `RefersTo` is read as a formula, so a string WITHOUT a
+    /// leading `=` is stored as text — `Names.Add "Bare", "Sheet1!$A$2"`
+    /// leaves `="Sheet1!$A$2"`, which names no cells at all. A Range hands
+    /// over its own address, written absolute.
+    fn add_name(&mut self, args: &[Value]) -> Result<Value, String> {
+        let (name, refers_to) = match args {
+            [Value::String(name), refers_to] => (name.clone(), refers_to),
+            _ => return Err("Names.Add needs a Name and what it RefersTo".to_string()),
+        };
+        check_name(&name)?;
+        let refers_to = match refers_to {
+            Value::String(written) => {
+                let written = written.trim();
+                match written.strip_prefix('=') {
+                    Some(rest) => rest.trim().to_string(),
+                    None => format!("\"{}\"", written.replace('"', "\"\"")),
+                }
+            }
+            Value::Object(object) => {
+                let range = self
+                    .range(object)
+                    .ok_or_else(|| "Names.Add RefersTo must be a Range".to_string())?;
+                let sheet = self.workbook.sheets[range.sheet].name.clone();
+                format!(
+                    "{}!{}",
+                    quoted_sheet(&sheet),
+                    format_range_address(range, true, true)
+                )
+            }
+            Value::Missing | Value::Empty => {
+                return Err("Names.Add needs to say what the name RefersTo".to_string())
+            }
+            other => shown_text(other, None),
+        };
+        match self.name_at(&name) {
+            Some(at) => self.workbook.defined_names[at] = (name.clone(), refers_to),
+            None => self.workbook.defined_names.push((name.clone(), refers_to)),
+        }
+        Ok(self.name_object(&name))
+    }
+
+    /// How a name writes down the block it stands for: the sheet, then the
+    /// address with every half absolute, which is what Excel stores.
+    fn address_of(&self, range: CellRange) -> String {
+        format!(
+            "{}!{}",
+            quoted_sheet(&self.workbook.sheets[range.sheet].name),
+            format_range_address(range, true, true)
+        )
+    }
+
+    /// What one of the workbook's names answers to.
+    ///
+    /// `Value` is the same as `RefersTo`, as Excel answers it, and
+    /// `RefersToRange` is the block it stands for. A name that has since been
+    /// deleted raises rather than answering with what it used to say.
+    fn name_member(&mut self, held: &str, name: &str, args: &[Value]) -> Result<Value, String> {
+        let Some(at) = self.name_at(held) else {
+            return Err(format!("the name {held:?} is no longer in the workbook"));
+        };
+        if name.eq_ignore_ascii_case("name") {
+            return Ok(Value::String(self.workbook.defined_names[at].0.clone()));
+        }
+        if name.eq_ignore_ascii_case("refersto") || name.eq_ignore_ascii_case("value") {
+            return Ok(Value::String(format!(
+                "={}",
+                self.workbook.defined_names[at].1
+            )));
+        }
+        if name.eq_ignore_ascii_case("referstorange") {
+            let range = self.named_range(
+                0,
+                held,
+                NameReach::Workbook,
+                format!("the name {held:?} stands for no cells"),
+            )?;
+            return Ok(self.object(HostObject::Range(range)));
+        }
+        if name.eq_ignore_ascii_case("delete") {
+            if !args.is_empty() {
+                return Err("Name.Delete does not accept arguments".to_string());
+            }
+            self.workbook.defined_names.remove(at);
+            return Ok(Value::Empty);
+        }
+        Err(format!("Name.{name} is not available in the browser"))
     }
 
     /// A block of cells the workbook has given a name to.
@@ -4051,6 +4217,31 @@ impl Host for WorkbookHost<'_> {
             {
                 return self.worksheets_object_or_item(args).map(Some);
             }
+            if (self.is_workbook(receiver) || self.is_application(receiver))
+                && name.eq_ignore_ascii_case("names")
+            {
+                return self.names_object_or_item(args).map(Some);
+            }
+            if self.is_names(receiver) {
+                if name.eq_ignore_ascii_case("add") {
+                    return self.add_name(args).map(Some);
+                }
+                if name.eq_ignore_ascii_case("item") {
+                    let [wanted] = args else {
+                        return Err("Names.Item takes one name or one number".to_string());
+                    };
+                    return self.name_item(wanted).map(Some);
+                }
+                if name.eq_ignore_ascii_case("count") {
+                    return Ok(Some(Value::Integer(
+                        self.workbook.defined_names.len() as i64
+                    )));
+                }
+                return Ok(None);
+            }
+            if let Some(held) = self.held_name(receiver).map(str::to_string) {
+                return self.name_member(&held, name, args).map(Some);
+            }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("range") {
                 return self
                     .range_object(self.active_sheet, args, NameReach::Workbook)
@@ -4271,6 +4462,9 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("cells") {
             return self.cells_object(self.active_sheet, args).map(Some);
         }
+        if name.eq_ignore_ascii_case("names") {
+            return self.names_object_or_item(args).map(Some);
+        }
         if name.eq_ignore_ascii_case("worksheets") || name.eq_ignore_ascii_case("sheets") {
             return self.worksheets_object_or_item(args).map(Some);
         }
@@ -4382,7 +4576,13 @@ impl Host for WorkbookHost<'_> {
                 ][..],
             )
         } else if name.eq_ignore_ascii_case("add") {
-            Some(&["Before", "After", "Count"][..])
+            // Two collections answer to Add, and they name their arguments
+            // differently.
+            if receiver.is_some_and(|receiver| self.is_names(receiver)) {
+                Some(&["Name", "RefersTo"][..])
+            } else {
+                Some(&["Before", "After", "Count"][..])
+            }
         } else if name.eq_ignore_ascii_case("autofilter") {
             Some(&["Field", "Criteria1", "Operator", "Criteria2", "VisibleDropDown"][..])
         } else if name.eq_ignore_ascii_case("sort") {
@@ -4437,6 +4637,17 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if self.is_names(receiver) {
+            if name.eq_ignore_ascii_case("count") {
+                return Ok(Some(Value::Integer(
+                    self.workbook.defined_names.len() as i64
+                )));
+            }
+            return Ok(None);
+        }
+        if let Some(held) = self.held_name(receiver).map(str::to_string) {
+            return self.name_member(&held, name, &[]).map(Some);
+        }
         if let Some((range, selection)) = self.range_borders(receiver) {
             if name.eq_ignore_ascii_case("linestyle") {
                 return self.uniform_border(range, selection).map(|value| {
@@ -4633,6 +4844,21 @@ impl Host for WorkbookHost<'_> {
         if name.eq_ignore_ascii_case("parent") || name.eq_ignore_ascii_case("worksheet") {
             return Ok(Some(self.object(HostObject::Worksheet(range.sheet))));
         }
+        if name.eq_ignore_ascii_case("name") {
+            // Excel answers with the Name itself, and with Nothing where the
+            // block has not been given one.
+            let stands_for = self.address_of(range);
+            let held = self
+                .workbook
+                .defined_names
+                .iter()
+                .find(|(_, refers_to)| refers_to.eq_ignore_ascii_case(&stands_for))
+                .map(|(held, _)| held.clone());
+            return Ok(Some(match held {
+                Some(held) => self.name_object(&held),
+                None => Value::Nothing,
+            }));
+        }
         if name.eq_ignore_ascii_case("entirerow") {
             return Ok(Some(self.object(HostObject::Range(CellRange {
                 start_column: 0,
@@ -4779,6 +5005,28 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(held) = self.held_name(receiver).map(str::to_string) {
+            let Some(at) = self.name_at(&held) else {
+                return Err(format!("the name {held:?} is no longer in the workbook"));
+            };
+            let Value::String(written) = &value else {
+                return Err(format!("Name.{name} must be given a String"));
+            };
+            if name.eq_ignore_ascii_case("name") {
+                check_name(written)?;
+                self.workbook.defined_names[at].0 = written.clone();
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("refersto") || name.eq_ignore_ascii_case("value") {
+                let written = written.trim();
+                self.workbook.defined_names[at].1 = match written.strip_prefix('=') {
+                    Some(rest) => rest.trim().to_string(),
+                    None => format!("\"{}\"", written.replace('"', "\"\"")),
+                };
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if let Some(sheet) = self.worksheet(receiver) {
             if name.eq_ignore_ascii_case("name") {
                 let Value::String(renamed) = &value else {
@@ -4875,6 +5123,21 @@ impl Host for WorkbookHost<'_> {
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
             self.set_range_input(range, value, "range assignment", FormulaStyle::A1)?;
+            return Ok(true);
+        }
+        if name.eq_ignore_ascii_case("name") {
+            let Value::String(called) = &value else {
+                return Err("a range is given a name as a String".to_string());
+            };
+            check_name(called)?;
+            let stands_for = self.address_of(range);
+            match self.name_at(called) {
+                Some(at) => self.workbook.defined_names[at] = (called.clone(), stands_for),
+                None => self
+                    .workbook
+                    .defined_names
+                    .push((called.clone(), stands_for)),
+            }
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
@@ -6329,6 +6592,45 @@ fn optional_integer_offset(value: &Value, default: i64, label: &str) -> Result<i
     } else {
         integer_offset(value, label)
     }
+}
+
+/// A sheet's name as a formula has to write it, in quotes where it needs them.
+fn quoted_sheet(name: &str) -> String {
+    let plain = !name.is_empty()
+        && !name.chars().next().is_some_and(|first| first.is_ascii_digit())
+        && name
+            .chars()
+            .all(|character| character.is_alphanumeric() || character == '_' || character == '.');
+    if plain {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
+}
+
+/// What Excel allows a name to be called.
+///
+/// Asked of it, `1Bad`, `Two Words` and `B7` are all refused: a name has to
+/// start with a letter or an underscore, hold no spaces, and not be shaped
+/// like a cell reference — otherwise it could not be told from one.
+fn check_name(name: &str) -> Result<(), String> {
+    let refuse = |why: &str| Err(format!("{name:?} cannot be a name: {why}"));
+    let Some(first) = name.chars().next() else {
+        return refuse("it is empty");
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return refuse("a name starts with a letter or an underscore");
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|character| !(character.is_alphanumeric() || *character == '_' || *character == '.'))
+    {
+        return refuse(&format!("a name cannot hold {bad:?}"));
+    }
+    if parse_a1_reference(name).is_ok() {
+        return refuse("it is shaped like a cell reference");
+    }
+    Ok(())
 }
 
 fn range_address_from_args(range: CellRange, args: &[Value]) -> Result<String, String> {
@@ -11615,6 +11917,105 @@ End Sub
             "OneCell says {:?}",
             workbook.defined_names[1].1
         );
+    }
+
+    /// The names a workbook keeps: making them, asking for them, dropping one.
+    ///
+    /// Every answer was asked of Excel. `RefersTo` is read as a formula, so a
+    /// string without a leading `=` is stored as TEXT — `"Sheet1!$A$2"` comes
+    /// back as `="Sheet1!$A$2"` and names no cells. A Range hands over its own
+    /// address written absolute. The collection is handed out in alphabetical
+    /// order, and the case a name was made with is the case it keeps.
+    #[test]
+    fn vba_keeps_the_names_a_workbook_is_given() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Named() As String\n\
+               Range(\"A1\").Value = 100\n\
+               Names.Add \"Sales\", \"=Sheet1!$A$1:$A$5\"\n\
+               Names.Add Name:=\"Bare\", RefersTo:=\"Sheet1!$A$2\"\n\
+               Names.Add \"FromRange\", Range(\"A1:A2\")\n\
+               Range(\"A4:A5\").Name = \"Tail\"\n\
+               Named = Names(\"Sales\").RefersTo & \"|\" & Names(\"Bare\").RefersTo & \"|\" & _\n\
+                 Names(\"FromRange\").RefersTo & \"|\" & Names(\"Tail\").RefersTo & \"|\" & _\n\
+                 Names.Count & \"|\" & Names(1).Name & \"|\" & Names(\"sales\").Name & \"|\" & _\n\
+                 Range(\"Sales\").Address(False, False) & \"|\" & _\n\
+                 Range(\"A4:A5\").Name.Name & \"|\" & _\n\
+                 Names(\"Sales\").RefersToRange.Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Named", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "=Sheet1!$A$1:$A$5|=\"Sheet1!$A$2\"|=Sheet1!$A$1:$A$2|=Sheet1!$A$4:$A$5|\
+                 4|Bare|Sales|A1:A5|Tail|A1:A5"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A name can be dropped, and writing one again writes over it.
+    #[test]
+    fn vba_writes_over_a_name_and_drops_one() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Rework() As String\n\
+               Names.Add \"Sales\", \"=Sheet1!$A$1:$A$5\"\n\
+               Names.Add \"Spare\", \"=Sheet1!$B$1\"\n\
+               Names.Add \"Sales\", \"=Sheet1!$A$1\"\n\
+               Names(\"Spare\").Delete\n\
+               Rework = Names(\"Sales\").RefersTo & \"|\" & Names.Count\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Rework", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("=Sheet1!$A$1|1".to_string()));
+    }
+
+    /// What Excel refuses to call a name.
+    #[test]
+    fn vba_refuses_a_name_excel_would_refuse() {
+        for (called, why) in [
+            ("1Bad", "starts with a letter"),
+            ("Two Words", "cannot hold"),
+            ("B7", "shaped like a cell reference"),
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Try()\n  Names.Add \"{called}\", \"=Sheet1!$A$1\"\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let error = execute_with_host(&module, "Try", vec![], &mut host)
+                .expect_err("Excel refuses this name")
+                .to_string();
+            assert!(
+                error.contains(why),
+                "{called} said {error:?}, which does not mention {why:?}"
+            );
+        }
+        // And one Excel allows.
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Fine() As String\n\
+               Names.Add \"_Fine\", \"=Sheet1!$A$1\"\n\
+               Fine = Names(\"_Fine\").Name\n\
+             End Function\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let result = execute_with_host(&module, "Fine", vec![], &mut host).unwrap();
+        assert_eq!(result, Value::String("_Fine".to_string()));
     }
 
     /// What a name cannot be asked for, and what it says instead.
