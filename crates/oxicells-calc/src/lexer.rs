@@ -462,12 +462,22 @@ pub struct CellMove<'a> {
     /// How far it went.
     pub down: i64,
     pub across: i64,
-    /// The sheet the cells moved on. A reference naming another sheet is left
-    /// alone; see [`ReferenceShift::sheet`].
-    pub sheet: Option<&'a str>,
-    /// The sheet the formula being rewritten is written on; see
-    /// [`ReferenceShift::on_sheet`].
-    pub on_sheet: Option<&'a str>,
+    /// The sheet the cells moved OFF. A reference naming another sheet points
+    /// at cells this cut never touched.
+    pub from_sheet: Option<&'a str>,
+    /// The sheet they landed ON. `None` says they stayed where they were.
+    pub to_sheet: Option<&'a str>,
+    /// What an unqualified reference in this formula means.
+    ///
+    /// For a formula that TRAVELLED with the block this is the sheet it came
+    /// from, not the one it now sits on: its references were written against
+    /// the old home and have to be read there.
+    pub read_as: Option<&'a str>,
+    /// The sheet the formula now sits on, which decides whether a rewritten
+    /// reference has to name its sheet. Asked of Excel, a formula carried to
+    /// another sheet keeps `=D2*10` for a cell that came with it and gains
+    /// `=Sheet3!G9` for one that stayed behind.
+    pub written_on: Option<&'a str>,
 }
 
 impl CellMove<'_> {
@@ -480,7 +490,7 @@ impl CellMove<'_> {
     }
 
     /// Where the block came to rest — the cells it overwrote on the way.
-    fn landing(&self) -> Option<(u32, u32, u32, u32)> {
+    pub(crate) fn landing(&self) -> Option<(u32, u32, u32, u32)> {
         let moved = |value: u32| u32::try_from(i64::from(value) + self.down).ok();
         let across = |value: u32| u32::try_from(i64::from(value) + self.across).ok();
         Some((
@@ -498,7 +508,12 @@ impl CellMove<'_> {
 /// A reference wholly inside the moved block follows it. A reference wholly
 /// inside the cells the block LANDED on becomes `#REF!`, since what it named
 /// was overwritten. Everything else — a range only partly overlapping either,
-/// a whole column, another sheet's cells — is left exactly as it was.
+/// a whole column, another sheet's cells — keeps pointing where it did.
+///
+/// Where the block changed sheet, so does everything that followed it, and a
+/// reference then has to say which sheet it means whenever that is no longer
+/// the one the formula sits on. That is why a formula carried across says
+/// `=Sheet3!G9` about a neighbour it left behind.
 ///
 /// One case Excel answers differently: a range whose FAR end alone is
 /// overwritten closes up to the last cell that survived (`SUM(D1:D2)` becomes
@@ -510,7 +525,13 @@ pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<Stri
     let had_equals = input.trim_start().starts_with('=');
     let tokens = tokenize(input).map_err(|error| error.to_string())?;
     let landing = moved.landing();
+    let landed_on = moved.to_sheet.or(moved.from_sheet);
 
+    let same = |one: Option<&str>, other: Option<&str>| match (one, other) {
+        (Some(one), Some(other)) => one.eq_ignore_ascii_case(other),
+        (None, None) => true,
+        _ => false,
+    };
     let travelled = |reference: CellRef| -> Result<CellRef, String> {
         Ok(CellRef {
             row: shifted_coordinate(reference.row, moved.down, MAX_ROW)?,
@@ -533,15 +554,7 @@ pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<Stri
             index += 1;
             continue;
         }
-        let names_moved_sheet = match (sheet.as_deref(), moved.sheet) {
-            (None, Some(cut)) => {
-                moved.on_sheet.is_none_or(|own| own.eq_ignore_ascii_case(cut))
-            }
-            (None, None) => true,
-            (Some(named), Some(cut)) => named.eq_ignore_ascii_case(cut),
-            (Some(_), None) => false,
-        };
-        let Some(start) = parse_a1(name).filter(|_| names_moved_sheet) else {
+        let Some(start) = parse_a1(name) else {
             written.push(tokens[index].clone());
             index += 1;
             continue;
@@ -559,35 +572,63 @@ pub fn move_formula_references(input: &str, moved: &CellMove<'_>) -> Result<Stri
             start.row.max(far.row),
             start.col.max(far.col),
         );
+        // An unqualified reference means whichever sheet this formula's
+        // references were written against.
+        let points_at = sheet.as_deref().or(moved.read_as);
 
-        if moved.covers(span) {
-            written.push(Token::Name {
-                sheet: sheet.clone(),
-                name: travelled(start)?.to_a1(),
+        let follows = same(points_at, moved.from_sheet) && moved.covers(span);
+        // What the block landed on it also overwrote, leaving nothing there to
+        // name — unless the block itself brought it.
+        let overwritten = !follows
+            && same(points_at, landed_on)
+            && landing.is_some_and(|(first_row, first_column, last_row, last_column)| {
+                span.0 >= first_row
+                    && span.2 <= last_row
+                    && span.1 >= first_column
+                    && span.3 <= last_column
             });
-            if end.is_some() {
-                let end_sheet = match &tokens[index + 2] {
-                    Token::Name { sheet, .. } => sheet.clone(),
-                    _ => None,
-                };
-                written.push(Token::Colon);
-                written.push(Token::Name {
-                    sheet: end_sheet,
-                    name: travelled(far)?.to_a1(),
-                });
-            }
-        } else if landing.is_some_and(|landing| {
-            let (first_row, first_column, last_row, last_column) = landing;
-            span.0 >= first_row
-                && span.2 <= last_row
-                && span.1 >= first_column
-                && span.3 <= last_column
-        }) {
+        if overwritten {
             written.push(Token::ErrorLit(ExcelError::Ref));
+            index += width;
+            continue;
+        }
+
+        let now_at = if follows { landed_on } else { points_at };
+        // It has to name its sheet when that is not the one it sits on, and
+        // one that already named a sheet goes on naming it.
+        let named = if sheet.is_some() || !same(now_at, moved.written_on) {
+            now_at.map(str::to_string)
         } else {
+            None
+        };
+        if !follows && (sheet.is_some() || named.is_none()) {
+            // Nothing to say about it that it does not already say.
             for step in 0..width {
                 written.push(tokens[index + step].clone());
             }
+            index += width;
+            continue;
+        }
+
+        let (near, far) = if follows {
+            (travelled(start)?, travelled(far)?)
+        } else {
+            (start, far)
+        };
+        written.push(Token::Name {
+            sheet: named,
+            name: near.to_a1(),
+        });
+        if end.is_some() {
+            let end_sheet = match &tokens[index + 2] {
+                Token::Name { sheet, .. } => sheet.clone(),
+                _ => None,
+            };
+            written.push(Token::Colon);
+            written.push(Token::Name {
+                sheet: end_sheet,
+                name: far.to_a1(),
+            });
         }
         index += width;
     }
@@ -1311,7 +1352,7 @@ mod shift_tests {
     }
 
     /// `A2:B3` cut onto `D2`, which is where every answer below was measured.
-    fn cut_a2b3_onto_d2(on_sheet: Option<&'static str>) -> CellMove<'static> {
+    fn cut_a2b3_onto_d2(written_on: Option<&'static str>) -> CellMove<'static> {
         CellMove {
             first_row: 1,
             first_column: 0,
@@ -1319,8 +1360,10 @@ mod shift_tests {
             last_column: 1,
             down: 0,
             across: 3,
-            sheet: Some("Sheet1"),
-            on_sheet,
+            from_sheet: Some("Sheet1"),
+            to_sheet: Some("Sheet1"),
+            read_as: written_on,
+            written_on,
         }
     }
 
@@ -1365,5 +1408,74 @@ mod shift_tests {
         );
         // Unqualified on another sheet means that sheet's own A2, untouched.
         assert_eq!(move_formula_references("=A2", &elsewhere).unwrap(), "=A2");
+    }
+
+    /// A cut onto another sheet takes the references there too, and they have
+    /// to say so wherever that is no longer the sheet they sit on.
+    ///
+    /// Measured with `Sheet3!A2:B3` cut onto `Sheet2!D2`: the watcher on
+    /// Sheet3 reads `=Sheet2!D2`, a third sheet's `=Sheet3!A2` reads
+    /// `=Sheet2!D2`, and of the formulas that travelled, one naming a cell
+    /// that came with them reads `=D2*10` while one naming a neighbour left
+    /// behind reads `=Sheet3!G9`.
+    #[test]
+    fn a_cut_onto_another_sheet_carries_the_sheet_name_too() {
+        let across_sheets = |read_as, written_on| CellMove {
+            first_row: 1,
+            first_column: 0,
+            last_row: 2,
+            last_column: 1,
+            down: 0,
+            across: 3,
+            from_sheet: Some("Sheet3"),
+            to_sheet: Some("Sheet2"),
+            read_as: Some(read_as),
+            written_on: Some(written_on),
+        };
+
+        // Watching from the sheet the cells left.
+        let watcher = across_sheets("Sheet3", "Sheet3");
+        assert_eq!(
+            move_formula_references("=A2", &watcher).unwrap(),
+            "=Sheet2!D2"
+        );
+        assert_eq!(
+            move_formula_references("=$A$2", &watcher).unwrap(),
+            "=Sheet2!$D$2"
+        );
+        assert_eq!(
+            move_formula_references("=SUM(A2:B3)", &watcher).unwrap(),
+            "=SUM(Sheet2!D2:E3)"
+        );
+
+        // Watching from a third sheet, and from the sheet they landed on.
+        let bystander = across_sheets("Sheet1", "Sheet1");
+        assert_eq!(
+            move_formula_references("=Sheet3!A2", &bystander).unwrap(),
+            "=Sheet2!D2"
+        );
+        let landed = across_sheets("Sheet2", "Sheet2");
+        assert_eq!(
+            move_formula_references("=Sheet3!A2", &landed).unwrap(),
+            "=Sheet2!D2"
+        );
+        // A cell the block landed on has nothing left to name.
+        assert_eq!(move_formula_references("=D2", &landed).unwrap(), "=#REF!");
+
+        // The formulas that travelled: read against the sheet they came from,
+        // written against the one they sit on now.
+        let carried = across_sheets("Sheet3", "Sheet2");
+        assert_eq!(
+            move_formula_references("=A2*10", &carried).unwrap(),
+            "=D2*10"
+        );
+        assert_eq!(
+            move_formula_references("=G9", &carried).unwrap(),
+            "=Sheet3!G9"
+        );
+        assert_eq!(
+            move_formula_references("=Sheet1!A1", &carried).unwrap(),
+            "=Sheet1!A1"
+        );
     }
 }

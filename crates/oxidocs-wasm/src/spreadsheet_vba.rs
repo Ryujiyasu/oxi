@@ -3628,16 +3628,6 @@ impl<'a> WorkbookHost<'a> {
         let destination = self
             .range(destination)
             .ok_or_else(|| "Range.Cut destination must be a Range".to_string())?;
-        if destination.sheet != source.sheet {
-            // Measured but not built: a cut onto another sheet also QUALIFIES
-            // the references it moves, and the formulas that travelled have to
-            // be read against the sheet they came from rather than the one
-            // they landed on. That is a second rule, and it belongs to its own
-            // round of work.
-            return Err(
-                "Range.Cut can only move cells within one worksheet in this build".to_string(),
-            );
-        }
         Self::range_cell_count(source)?;
         let row_count = source.end_row - source.start_row + 1;
         let column_count = source.end_column - source.start_column + 1;
@@ -3655,7 +3645,7 @@ impl<'a> WorkbookHost<'a> {
             })?;
         let down = i64::from(destination.start_row) - i64::from(source.start_row);
         let across = i64::from(destination.start_column) - i64::from(source.start_column);
-        if down == 0 && across == 0 {
+        if down == 0 && across == 0 && destination.sheet == source.sheet {
             return Ok(Value::Empty);
         }
 
@@ -3676,23 +3666,39 @@ impl<'a> WorkbookHost<'a> {
             )?;
         }
 
-        let moved_on = self.workbook.sheets[source.sheet].name.clone();
-        for worksheet in &mut self.workbook.sheets {
+        let from_sheet = self.workbook.sheets[source.sheet].name.clone();
+        let to_sheet = self.workbook.sheets[destination.sheet].name.clone();
+        let landed_rows = (source.start_row as i64 + down)..=(source.end_row as i64 + down);
+        let landed_columns =
+            (source.start_column as i64 + across)..=(source.end_column as i64 + across);
+        for (index, worksheet) in self.workbook.sheets.iter_mut().enumerate() {
             let written_on = worksheet.name.clone();
-            let moved = CellMove {
-                first_row: source.start_row.saturating_sub(1),
-                first_column: source.start_column,
-                last_row: source.end_row.saturating_sub(1),
-                last_column: source.end_column,
-                down,
-                across,
-                sheet: Some(moved_on.as_str()),
-                on_sheet: Some(written_on.as_str()),
-            };
             for row in &mut worksheet.rows {
                 for cell in &mut row.cells {
                     let Some(formula) = cell.formula.as_deref() else {
                         continue;
+                    };
+                    // A formula that TRAVELLED still says what it said on the
+                    // sheet it came from, so that is where its unqualified
+                    // references have to be read.
+                    let carried = index == destination.sheet
+                        && landed_rows.contains(&i64::from(row.index))
+                        && landed_columns.contains(&i64::from(cell.col));
+                    let moved = CellMove {
+                        first_row: source.start_row.saturating_sub(1),
+                        first_column: source.start_column,
+                        last_row: source.end_row.saturating_sub(1),
+                        last_column: source.end_column,
+                        down,
+                        across,
+                        from_sheet: Some(from_sheet.as_str()),
+                        to_sheet: Some(to_sheet.as_str()),
+                        read_as: Some(if carried {
+                            from_sheet.as_str()
+                        } else {
+                            written_on.as_str()
+                        }),
+                        written_on: Some(written_on.as_str()),
                     };
                     // A formula this build cannot read is left exactly as it
                     // was: half a rewrite would move some of its references
@@ -11304,5 +11310,55 @@ End Sub
         assert!(!left(1, 1), "B1 should be bare");
         assert!(!left(2, 0), "A2 should be bare");
         assert!(!left(2, 1), "B2 should be bare");
+    }
+
+    /// A cut onto another sheet carries the sheet name with it.
+    ///
+    /// Asked of Excel, cutting `Sheet1!A2:B3` onto `Sheet2!D2`: the watcher
+    /// left on Sheet1 reads `=Sheet2!D2`, a third sheet's `=Sheet1!A2` reads
+    /// `=Sheet2!D2`, a watcher of the cell the block landed on reads `#REF!`,
+    /// and of the formulas that travelled the one naming a cell that came
+    /// along reads `=D2*10` while the one naming a neighbour left behind reads
+    /// `=Sheet1!G9`.
+    #[test]
+    fn vba_cut_onto_another_sheet_says_which_sheet_it_means() {
+        let mut workbook = workbook();
+        for name in ["Sheet2", "Sheet3"] {
+            let mut another = workbook.sheets[0].clone();
+            another.name = name.to_string();
+            workbook.sheets.push(another);
+        }
+        let module = parse_module(
+            "Public Function Across() As String\n\
+               Worksheets(\"Sheet1\").Range(\"A2\").Value = 42\n\
+               Worksheets(\"Sheet1\").Range(\"G9\").Value = 7\n\
+               Worksheets(\"Sheet1\").Range(\"B2\").Formula = \"=A2*10\"\n\
+               Worksheets(\"Sheet1\").Range(\"B3\").Formula = \"=G9\"\n\
+               Worksheets(\"Sheet1\").Range(\"F1\").Formula = \"=A2\"\n\
+               Worksheets(\"Sheet1\").Range(\"F2\").Formula = \"=SUM(A2:B3)\"\n\
+               Worksheets(\"Sheet3\").Range(\"C1\").Formula = \"=Sheet1!A2\"\n\
+               Worksheets(\"Sheet2\").Range(\"H2\").Formula = \"=D2\"\n\
+               Worksheets(\"Sheet1\").Range(\"A2:B3\").Cut Worksheets(\"Sheet2\").Range(\"D2\")\n\
+               Across = Worksheets(\"Sheet2\").Range(\"E2\").Formula & \"|\" & _\n\
+                 Worksheets(\"Sheet2\").Range(\"E3\").Formula & \"|\" & _\n\
+                 Worksheets(\"Sheet1\").Range(\"F1\").Formula & \"|\" & _\n\
+                 Worksheets(\"Sheet1\").Range(\"F2\").Formula & \"|\" & _\n\
+                 Worksheets(\"Sheet3\").Range(\"C1\").Formula & \"|\" & _\n\
+                 Worksheets(\"Sheet2\").Range(\"H2\").Formula & \"|\" & _\n\
+                 Worksheets(\"Sheet2\").Range(\"D2\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Across", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String(
+                "=D2*10|=Sheet1!G9|=Sheet2!D2|=SUM(Sheet2!D2:E3)|=Sheet2!D2|=#REF!|42".to_string()
+            )
+        );
     }
 }
