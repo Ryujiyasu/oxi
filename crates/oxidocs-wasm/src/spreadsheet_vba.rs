@@ -3529,12 +3529,20 @@ impl<'a> WorkbookHost<'a> {
             -4122 => (false, true),
             other => return Err(format!("Range.PasteSpecial cannot paste {other}")),
         };
-        if given(1).is_some() {
-            return Err("Range.PasteSpecial cannot combine what it pastes".to_string());
-        }
-        if given(2).is_some_and(|value| matches!(value, Value::Boolean(true))) {
-            return Err("Range.PasteSpecial cannot skip blanks in the browser".to_string());
-        }
+        let operation = match given(1) {
+            None => None,
+            Some(value) => match sort_number(value, "PasteSpecial")? {
+                -4142 => None,
+                2 => Some('+'),
+                3 => Some('-'),
+                4 => Some('*'),
+                5 => Some('/'),
+                other => {
+                    return Err(format!("Range.PasteSpecial cannot combine with {other}"))
+                }
+            },
+        };
+        let skip_blanks = given(2).is_some_and(|value| matches!(value, Value::Boolean(true)));
         let transpose = given(3).is_some_and(|value| matches!(value, Value::Boolean(true)));
 
         let Some(clipboard) = self.clipboard.take() else {
@@ -3589,6 +3597,8 @@ impl<'a> WorkbookHost<'a> {
                             values,
                             formats,
                             transpose,
+                            skip_blanks,
+                            operation,
                         )?;
                     }
                 }
@@ -3598,6 +3608,7 @@ impl<'a> WorkbookHost<'a> {
         Ok(Value::Boolean(true))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paste_cell(
         &mut self,
         address: CellAddress,
@@ -3606,7 +3617,17 @@ impl<'a> WorkbookHost<'a> {
         values: bool,
         formats: bool,
         transpose: bool,
+        skip_blanks: bool,
+        operation: Option<char>,
     ) -> Result<(), String> {
+        // A blank in the copied block is not put down at all when asked to be
+        // skipped: asked of Excel, the cell under it keeps what it had.
+        let blank = held.is_none_or(|held| {
+            held.formula.is_none() && matches!(held.value, CellValue::Empty)
+        });
+        if skip_blanks && blank {
+            return Ok(());
+        }
         let sheet = &mut self.workbook.sheets[address.sheet];
         sheet.col_count = sheet.col_count.max(address.column as usize + 1);
         let row = match sheet.rows.iter().position(|row| row.index == address.row) {
@@ -3650,6 +3671,52 @@ impl<'a> WorkbookHost<'a> {
             cell.style = held.map(|held| held.style.clone()).unwrap_or_default();
         }
         if !values {
+            return Ok(());
+        }
+        if let Some(operation) = operation {
+            // The destination is the LEFT side of the sum and what is being
+            // put down is the right: asked of Excel, 100 with 10 added answers
+            // 110, and `=A5+1` with `=C5*2` added answers `=(A5+1)+(C5*2)`.
+            let held_formula = held
+                .and_then(|held| held.formula.as_ref())
+                .filter(|_| formats)
+                .map(|formula| {
+                    let row_offset = i64::from(address.row) - i64::from(came_from.row);
+                    let column_offset =
+                        i64::from(address.column) - i64::from(came_from.column);
+                    oxicells_core::translate_formula_references(
+                        formula,
+                        row_offset,
+                        column_offset,
+                    )
+                    .unwrap_or_else(|_| formula.clone())
+                });
+            let source = match held_formula {
+                Some(formula) => Operand::Formula(formula),
+                // A blank carries nothing, and nothing is worth zero.
+                None => match held {
+                    Some(held) => Operand::of(&held.value),
+                    None => Operand::Number(0.0),
+                },
+            };
+            let destination = match cell.formula.as_ref() {
+                Some(formula) => Operand::Formula(formula.clone()),
+                None => Operand::of(&cell.value),
+            };
+            if let Some(combined) = destination.combined(operation, &source) {
+                match combined {
+                    Combined::Value(value) => {
+                        cell.value = value;
+                        cell.formula = None;
+                    }
+                    Combined::Formula(formula) => {
+                        cell.value = CellValue::Empty;
+                        cell.formula = Some(formula);
+                    }
+                }
+            }
+            // Anything the sum cannot take part in — text, a Boolean, an
+            // error, on either side — leaves the cell's own content alone.
             return Ok(());
         }
         let Some(held) = held else {
@@ -6677,6 +6744,11 @@ fn host_constant(name: &str) -> Option<Value> {
         "xljustify" => -4130,
         "xlcenteracrossselection" => 7,
         "xldistributed" => -4117,
+        "xlpastespecialoperationnone" => -4142,
+        "xlpastespecialoperationadd" => 2,
+        "xlpastespecialoperationsubtract" => 3,
+        "xlpastespecialoperationmultiply" => 4,
+        "xlpastespecialoperationdivide" => 5,
         "xlnone" => -4142,
         "xlautomatic" => -4105,
         "xlcolorindexnone" => -4142,
@@ -7056,6 +7128,71 @@ fn typed_from_text(written: &str) -> CellValue {
         }
     }
     CellValue::String(written.to_string())
+}
+
+/// One side of a paste that combines rather than replaces.
+enum Operand {
+    /// A number. A blank cell is one of these, worth nothing: asked of Excel,
+    /// multiplying 100 by a blank answers 0 and dividing by one answers
+    /// `#DIV/0!`.
+    Number(f64),
+    /// A formula, which goes into the answer in brackets.
+    Formula(String),
+    /// Text, a Boolean, an error — anything the sum cannot take. Excel leaves
+    /// the destination exactly as it was rather than making something of it.
+    Other,
+}
+
+/// What the two sides came to.
+enum Combined {
+    Value(CellValue),
+    Formula(String),
+}
+
+impl Operand {
+    fn of(value: &CellValue) -> Self {
+        match value {
+            CellValue::Empty => Self::Number(0.0),
+            CellValue::Number(number) => Self::Number(*number),
+            _ => Self::Other,
+        }
+    }
+
+    /// How it is written into a formula: a formula in brackets, a number bare.
+    fn written(&self) -> Option<String> {
+        match self {
+            Self::Number(number) => Some(format_number_plainly(*number)),
+            Self::Formula(formula) => Some(format!("({})", formula.trim_start_matches('='))),
+            Self::Other => None,
+        }
+    }
+
+    fn combined(&self, operation: char, source: &Self) -> Option<Combined> {
+        if let (Self::Number(left), Self::Number(right)) = (self, source) {
+            let answer = match operation {
+                '+' => left + right,
+                '-' => left - right,
+                '*' => left * right,
+                '/' if *right == 0.0 => {
+                    return Some(Combined::Value(CellValue::Error("#DIV/0!".to_string())))
+                }
+                '/' => left / right,
+                _ => return None,
+            };
+            return Some(Combined::Value(CellValue::Number(answer)));
+        }
+        let (left, right) = (self.written()?, source.written()?);
+        Some(Combined::Formula(format!("{left}{operation}{right}")))
+    }
+}
+
+/// A number as a formula spells it, with no trailing nothing.
+fn format_number_plainly(number: f64) -> String {
+    if number.fract() == 0.0 && number.abs() < 1e15 {
+        format!("{number:.0}")
+    } else {
+        number.to_string()
+    }
 }
 
 /// What one cell is left holding by an assignment.
@@ -12638,6 +12775,68 @@ End Sub
         let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
         let result = execute_with_host(&module, "LetGo", vec![], &mut host).unwrap();
         assert_eq!(result, Value::String("0".to_string()));
+    }
+
+    /// A paste can skip the blanks it carries, and can combine rather than
+    /// replace.
+    ///
+    /// Every answer was asked of Excel: with `SkipBlanks` the cell under a
+    /// blank keeps what it had; an operation makes the DESTINATION the left
+    /// side and what is being put down the right, so 100 with 10 added answers
+    /// 110 and `=A5+1` with 3 subtracted answers `=(A5+1)-3`; a blank counts
+    /// as nothing, so multiplying by one answers 0; and text on either side
+    /// leaves the cell exactly as it was.
+    #[test]
+    fn vba_pastes_over_blanks_or_combines_with_what_is_there() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Combined() As String\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A3\").Value = 30\n\
+               Range(\"D1\").Value = \"keep\"\n\
+               Range(\"D2\").Value = \"keep too\"\n\
+               Range(\"D3\").Value = \"and this\"\n\
+               Range(\"F1\").Value = \"keep\"\n\
+               Range(\"F2\").Value = \"keep too\"\n\
+               Range(\"F3\").Value = \"and this\"\n\
+               Range(\"A1:A3\").Copy\n\
+               Range(\"D1\").PasteSpecial xlPasteAll, xlPasteSpecialOperationNone, False\n\
+               Range(\"A1:A3\").Copy\n\
+               Range(\"F1\").PasteSpecial xlPasteAll, xlPasteSpecialOperationNone, True\n\
+               Range(\"H1\").Value = 100\n\
+               Range(\"A1\").Copy\n\
+               Range(\"H1\").PasteSpecial xlPasteAll, xlPasteSpecialOperationAdd\n\
+               Range(\"H2\").Value = 100\n\
+               Range(\"A1\").Copy\n\
+               Range(\"H2\").PasteSpecial xlPasteAll, xlPasteSpecialOperationDivide\n\
+               Range(\"H3\").Formula = \"=A5+1\"\n\
+               Range(\"A5\").Value = 7\n\
+               Range(\"B1\").Value = 3\n\
+               Range(\"B1\").Copy\n\
+               Range(\"H3\").PasteSpecial xlPasteAll, xlPasteSpecialOperationSubtract\n\
+               Range(\"H4\").Value = 100\n\
+               Range(\"B2\").Value = \"abc\"\n\
+               Range(\"B2\").Copy\n\
+               Range(\"H4\").PasteSpecial xlPasteAll, xlPasteSpecialOperationMultiply\n\
+               Range(\"H5\").Value = 100\n\
+               Range(\"B3\").Copy\n\
+               Range(\"H5\").PasteSpecial xlPasteAll, xlPasteSpecialOperationMultiply\n\
+               Combined = Range(\"D2\").Value & \"|\" & Range(\"F2\").Value & \"|\" & _\n\
+                 Range(\"H1\").Value & \"|\" & Range(\"H2\").Value & \"|\" & _\n\
+                 Range(\"H3\").Formula & \"|\" & Range(\"H4\").Value & \"|\" & _\n\
+                 Range(\"H5\").Value\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Combined", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("|keep too|110|10|=(A5+1)-3|100|0".to_string())
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
