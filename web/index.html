@@ -1510,7 +1510,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
 import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
 
@@ -1520,6 +1520,11 @@ let currentFileBytes = null; // original file bytes for editing
 let currentDocIR = null; // parsed IR for edit mode
 let currentXlsxSheetIndex = 0;
 const xlsxVbaEdits = new Map();
+// True once something has changed that a list of cell values cannot
+// carry: a macro's fill, a merge, a hidden row, a filter, a name. The
+// cheap save writes cell values only, so those go by the whole
+// workbook instead.
+let xlsxWorkbookChanged = false;
 
 const HIGHLIGHT_COLORS = {
     yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF',
@@ -2356,10 +2361,13 @@ function defaultCellStyle() {
         bg_color: null,
         number_format: null,
         horizontal_align: null,
-        border_top: false,
-        border_bottom: false,
-        border_left: false,
-        border_right: false,
+        // Each edge is the line drawn along it, or nothing. It was a
+        // yes-or-no once, and the false left behind is not a line the engine
+        // can read: a cell built here would refuse to save.
+        border_top: null,
+        border_bottom: null,
+        border_left: null,
+        border_right: null,
     };
 }
 
@@ -2587,6 +2595,7 @@ async function executeVbaFromDialog() {
         );
         recordVbaWorkbookChanges(before, execution.workbook);
         currentDocIR = execution.workbook;
+        xlsxWorkbookChanged = true;
         renderEditableXlsx(currentDocIR);
         resultElement.textContent = formatVbaExecution(execution);
         showStatus('VBA macro completed.', 'info');
@@ -2654,13 +2663,18 @@ const MIME_TYPES = {
 function downloadEdited() {
     if (!currentFileBytes || !currentFileType) return;
 
+    // A typed cell lives in the page until something asks for it; the
+    // workbook has to hold it before the workbook is what gets written.
+    if (currentFileType === 'xlsx') syncPendingXlsxEditsToIr();
+
     let edits;
     if (currentFileType === 'docx') edits = collectDocxEdits();
     else if (currentFileType === 'xlsx') edits = collectXlsxEdits();
     else if (currentFileType === 'pptx') edits = collectPptxEdits();
     else return;
 
-    if (edits.length === 0) {
+    const wholeWorkbook = currentFileType === 'xlsx' && xlsxWorkbookChanged;
+    if (edits.length === 0 && !wholeWorkbook) {
         showStatus(t('noChanges'), 'info');
         return;
     }
@@ -2669,6 +2683,7 @@ function downloadEdited() {
         const data = new Uint8Array(currentFileBytes);
         let editedBytes;
         if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
+        else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(data, currentDocIR);
         else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
         else if (currentFileType === 'pptx') editedBytes = edit_pptx(data, edits);
 
@@ -2679,7 +2694,10 @@ function downloadEdited() {
         a.download = `edited.${currentFileType}`;
         a.click();
         URL.revokeObjectURL(url);
-        showStatus(I18N[currentLang].downloaded(edits.length), 'info');
+        showStatus(
+            I18N[currentLang].downloaded(wholeWorkbook ? edits.length || 1 : edits.length),
+            'info',
+        );
     } catch(e) {
         showStatus('Save error: ' + e.message, 'error');
         console.error(e);
@@ -4466,6 +4484,7 @@ async function handleFile(file) {
         } else if (ext === 'xlsx') {
             currentXlsxSheetIndex = 0;
             xlsxVbaEdits.clear();
+            xlsxWorkbookChanged = false;
             currentDocIR = parse_spreadsheet(data);
             const elapsed = (performance.now() - t0).toFixed(1);
             let totalRows = 0;

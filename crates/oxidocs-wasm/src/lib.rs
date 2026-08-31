@@ -609,8 +609,9 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
 ///
 /// `run_spreadsheet_vba` hands back the whole workbook rather than a list of
 /// edits, so the difference against the original file is worked out here.
-/// Styling and merged cells ride along in the original XML untouched, and a
-/// change to those is not written back.
+/// Everything the difference covers is written: values and formulas, but also
+/// fills and fonts, merges, row heights and column widths, what is hidden,
+/// frozen panes, the filter, the defined names and which sheets are shown.
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>, JsError> {
