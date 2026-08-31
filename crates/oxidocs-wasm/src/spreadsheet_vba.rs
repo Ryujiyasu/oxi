@@ -559,6 +559,14 @@ impl<'a> WorkbookHost<'a> {
         Ok(self.object(HostObject::Blocks(handle)))
     }
 
+    /// The `Areas` of a range that is one block: a collection of one, which
+    /// is what Excel hands back for any ordinary range.
+    fn areas_of(&mut self, range: CellRange) -> Value {
+        let handle = self.blocks.len();
+        self.blocks.push(vec![range]);
+        self.object(HostObject::Areas(handle))
+    }
+
     /// The cells of a block that answer to a description.
     ///
     /// Asked of Excel about a column holding 10, "text", a blank, `=A1*2`, 30,
@@ -1623,6 +1631,10 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn range_cells_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
+        // Nothing in the brackets means the range itself.
+        if matches!(args, [] | [Value::Missing]) {
+            return Ok(self.object(HostObject::Range(range)));
+        }
         // One index counts across the range by rows and does not stop at its
         // edge: asked of Excel, the fifth cell of the two-wide `B2:C3` is
         // `B4`, a row below the block, and the noughth cell of `B2:D5` is
@@ -5310,6 +5322,19 @@ impl Host for WorkbookHost<'_> {
                     self.selection = range;
                     return Ok(Some(Value::Empty));
                 }
+                if name.eq_ignore_ascii_case("areas") {
+                    return match args {
+                        [] | [Value::Missing] => Ok(Some(self.areas_of(range))),
+                        [wanted] => {
+                            let at = positive_index(wanted, "index")? as usize;
+                            if at != 1 {
+                                return Err(format!("this range has no area number {at}"));
+                            }
+                            Ok(Some(self.object(HostObject::Range(range))))
+                        }
+                        _ => Err("Areas takes one number".to_string()),
+                    };
+                }
                 // `Item` is what a range answers to when it is indexed with
                 // nothing named — `Cells(1, 1)(2)` — and it counts the same
                 // way `Cells` does: asked of Excel, `Range("B2:C3").Item(5)`
@@ -6149,6 +6174,43 @@ impl Host for WorkbookHost<'_> {
                 ));
             }
             return Ok(Some(Value::Integer(count as i64)));
+        }
+        // Every range has these, not only one made of several blocks: asked
+        // of Excel, `Range("A1").Areas.Count` is 1 and its one area is A1.
+        // A macro that walks `Selection.Areas` has to keep working when the
+        // selection happens to be in one piece.
+        if name.eq_ignore_ascii_case("areas") {
+            return Ok(Some(self.areas_of(range)));
+        }
+        // `Cells` with nothing in brackets after it is the range itself:
+        // `Range("B2:C3").Cells` counts 4 and spells itself B2:C3.
+        if name.eq_ignore_ascii_case("cells") {
+            return Ok(Some(self.object(HostObject::Range(range))));
+        }
+        // A step sideways from the top-left cell, and only ever one cell
+        // however big the range is: asked of Excel, `Range("A1:B2").Next` is
+        // B1 and `Range("B2:C3").Previous` is A2. Neither wraps to another
+        // row — `A2.Previous` and `XFD1.Next` are both Nothing.
+        if name.eq_ignore_ascii_case("next") || name.eq_ignore_ascii_case("previous") {
+            let forward = name.eq_ignore_ascii_case("next");
+            let column = if forward {
+                if range.start_column >= MAX_WORKSHEET_COLUMN {
+                    return Ok(Some(Value::Nothing));
+                }
+                range.start_column + 1
+            } else {
+                if range.start_column == 0 {
+                    return Ok(Some(Value::Nothing));
+                }
+                range.start_column - 1
+            };
+            return Ok(Some(self.object(HostObject::Range(CellRange::single(
+                CellAddress {
+                    sheet: range.sheet,
+                    row: range.start_row,
+                    column,
+                },
+            )))));
         }
         if name.eq_ignore_ascii_case("address") {
             return Ok(Some(Value::String(format_range_address(range, true, true))));
@@ -9107,6 +9169,46 @@ mod tests {
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
         assert_eq!(result, Value::String("A2|A3|C2|B4|B1".to_string()));
+    }
+
+    /// All measured in Excel 16.0. A range in one piece still has an `Areas`
+    /// of one and a `Cells` of itself, so a macro written for a selection of
+    /// several blocks keeps working on a selection of one. `Next` and
+    /// `Previous` step one column from the top-left cell whatever the size of
+    /// the range — `A1:B2.Next` is B1, not C1 — and hand back Nothing rather
+    /// than wrapping into another row: `A2.Previous` and `XFD1.Next` are both
+    /// Nothing where `A1048576.Next` is B1048576.
+    #[test]
+    fn every_range_has_its_areas_its_cells_and_its_neighbours() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim a, out\n\
+               Ask = Range(\"A1\").Areas.Count & \"|\" & Range(\"A1\").Areas(1).Address(0, 0)\n\
+               For Each a In Range(\"A1\").Areas\n\
+                 out = out & a.Address(0, 0)\n\
+               Next\n\
+               Ask = Ask & \"|\" & out\n\
+               Ask = Ask & \"|\" & Range(\"B2:C3\").Cells.Count\n\
+               Ask = Ask & \"|\" & Range(\"B2:C3\").Cells.Address(0, 0)\n\
+               Ask = Ask & \"|\" & Range(\"A1:B2\").Next.Address(0, 0)\n\
+               Ask = Ask & \"|\" & Range(\"B2:C3\").Previous.Address(0, 0)\n\
+               Ask = Ask & \"|\" & (Range(\"A2\").Previous Is Nothing)\n\
+               Ask = Ask & \"|\" & (Range(\"XFD1\").Next Is Nothing)\n\
+               Ask = Ask & \"|\" & Range(\"A1048576\").Next.Address(0, 0)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "1|A1|A1|4|B2:C3|B1|A2|True|True|B1048576".to_string()
+            )
+        );
     }
 
     #[test]
