@@ -3670,7 +3670,7 @@ impl<'a> WorkbookHost<'a> {
         &self,
         range: CellRange,
         selection: BorderSelection,
-    ) -> Result<Option<bool>, String> {
+    ) -> Result<Option<(i64, i64)>, String> {
         Self::range_cell_count(range)?;
         let default_style = CellStyle::default();
         let mut first = None;
@@ -3690,7 +3690,7 @@ impl<'a> WorkbookHost<'a> {
                 first = Some(value);
             }
         }
-        Ok(Some(first.unwrap_or(false)))
+        Ok(Some(first.unwrap_or((LINE_NONE, WEIGHT_THIN))))
     }
 
     fn range_column_width(&self, range: CellRange) -> Result<Value, String> {
@@ -5838,11 +5838,13 @@ impl Host for WorkbookHost<'_> {
             return self.name_member(&held, name, &[]).map(Some);
         }
         if let Some((range, selection)) = self.range_borders(receiver) {
-            if name.eq_ignore_ascii_case("linestyle") {
+            if name.eq_ignore_ascii_case("linestyle") || name.eq_ignore_ascii_case("weight") {
+                let line = name.eq_ignore_ascii_case("linestyle");
                 return self.uniform_border(range, selection).map(|value| {
                     Some(match value {
-                        Some(true) => Value::Integer(1),
-                        Some(false) => Value::Integer(-4142),
+                        Some((kind, weight)) => {
+                            Value::Integer(if line { kind } else { weight })
+                        }
                         None => Value::Null,
                     })
                 });
@@ -6499,9 +6501,24 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some((range, selection)) = self.range_borders(receiver) {
             if name.eq_ignore_ascii_case("linestyle") {
-                let enabled = border_line_style(&value)?;
+                let asked = border_line_style(&value)?;
                 self.set_range_style(range, |address, style| {
-                    set_selected_borders(style, address, range, selection, enabled);
+                    set_selected_borders(style, address, range, selection, &|held| {
+                        border_after_line(asked, border_kind(held).1)
+                    });
+                })?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("weight") {
+                let asked = border_weight(&value)?;
+                self.set_range_style(range, |address, style| {
+                    set_selected_borders(style, address, range, selection, &|held| {
+                        let line = match border_kind(held).0 {
+                            LINE_NONE => LINE_CONTINUOUS,
+                            line => line,
+                        };
+                        border_after_weight(line, asked)
+                    });
                 })?;
                 return Ok(true);
             }
@@ -7791,17 +7808,109 @@ fn border_selection(value: &Value) -> Result<BorderSelection, String> {
     }
 }
 
-fn border_line_style(value: &Value) -> Result<bool, String> {
+const LINE_NONE: i64 = -4142;
+const LINE_CONTINUOUS: i64 = 1;
+const WEIGHT_THIN: i64 = 2;
+
+/// The thirteen rules Excel can draw along an edge: the name the file gives
+/// each, and the pair the object model splits it into.
+///
+/// Swept in Excel 16.0 — every line style crossed with every weight, written
+/// into a workbook and read back out of its `styles.xml`. The pairs missing
+/// from this table cannot be had: asking for one snaps to a neighbour, and
+/// which neighbour depends on which of the two was asked for last (see
+/// `border_after_line` and `border_after_weight`).
+const BORDER_KINDS: &[(&str, i64, i64)] = &[
+    ("hair", LINE_CONTINUOUS, 1),
+    ("thin", LINE_CONTINUOUS, WEIGHT_THIN),
+    ("medium", LINE_CONTINUOUS, -4138),
+    ("thick", LINE_CONTINUOUS, 4),
+    ("dashed", -4115, WEIGHT_THIN),
+    ("mediumDashed", -4115, -4138),
+    ("dotted", -4118, WEIGHT_THIN),
+    ("dashDot", 4, WEIGHT_THIN),
+    ("mediumDashDot", 4, -4138),
+    ("dashDotDot", 5, WEIGHT_THIN),
+    ("mediumDashDotDot", 5, -4138),
+    ("slantDashDot", 13, -4138),
+    ("double", -4119, 4),
+];
+
+/// What the file calls this edge, read as a line style and a weight. An edge
+/// with nothing drawn along it answers `LineStyle` None and `Weight` Thin,
+/// which is what Excel answers for a cell nobody has touched.
+fn border_kind(drawn: Option<&BorderLine>) -> (i64, i64) {
+    let Some(drawn) = drawn else {
+        return (LINE_NONE, WEIGHT_THIN);
+    };
+    BORDER_KINDS
+        .iter()
+        .find(|(name, _, _)| name.eq_ignore_ascii_case(&drawn.style))
+        .map(|(_, line, weight)| (*line, *weight))
+        .unwrap_or((LINE_CONTINUOUS, WEIGHT_THIN))
+}
+
+/// The edge after `LineStyle` is written: the style is kept and the weight
+/// gives way. Measured — from Thick, asking for Dash gives `dashed`, which is
+/// thin, because there is no thick dash; Medium keeps its weight because
+/// `mediumDashed` exists; Double is always thick and SlantDashDot always
+/// medium, whatever the edge was before.
+fn border_after_line(line: i64, weight: i64) -> Option<&'static str> {
+    if line == LINE_NONE {
+        return None;
+    }
+    if let Some((name, _, _)) = BORDER_KINDS
+        .iter()
+        .find(|(_, kind, held)| *kind == line && *held == weight)
+    {
+        return Some(name);
+    }
+    BORDER_KINDS
+        .iter()
+        .find(|(_, kind, held)| *kind == line && *held == WEIGHT_THIN)
+        .or_else(|| BORDER_KINDS.iter().find(|(_, kind, _)| *kind == line))
+        .map(|(name, _, _)| *name)
+}
+
+/// The edge after `Weight` is written: the weight is kept and the LINE gives
+/// way, all the way back to a plain rule. Measured — a dashed edge asked for
+/// Hairline becomes `hair`, a double edge asked for Thin becomes `thin`.
+fn border_after_weight(line: i64, weight: i64) -> Option<&'static str> {
+    BORDER_KINDS
+        .iter()
+        .find(|(_, kind, held)| *kind == line && *held == weight)
+        .or_else(|| {
+            BORDER_KINDS
+                .iter()
+                .find(|(_, kind, held)| *kind == LINE_CONTINUOUS && *held == weight)
+        })
+        .map(|(name, _, _)| *name)
+}
+
+fn border_line_style(value: &Value) -> Result<i64, String> {
     let value = match value {
-        Value::Empty => return Ok(false),
+        Value::Empty => return Ok(LINE_NONE),
         Value::Integer(value) => *value,
         Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
         _ => return Err("Borders.LineStyle must be an Excel line-style constant".to_string()),
     };
-    match value {
-        1 => Ok(true),
-        -4142 => Ok(false),
-        _ => Err(format!("unsupported Borders.LineStyle constant: {value}")),
+    if value == LINE_NONE || BORDER_KINDS.iter().any(|(_, line, _)| *line == value) {
+        Ok(value)
+    } else {
+        Err(format!("unsupported Borders.LineStyle constant: {value}"))
+    }
+}
+
+fn border_weight(value: &Value) -> Result<i64, String> {
+    let value = match value {
+        Value::Integer(value) => *value,
+        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        _ => return Err("Borders.Weight must be an Excel weight constant".to_string()),
+    };
+    if BORDER_KINDS.iter().any(|(_, _, weight)| *weight == value) {
+        Ok(value)
+    } else {
+        Err(format!("unsupported Borders.Weight constant: {value}"))
     }
 }
 
@@ -7810,39 +7919,44 @@ fn selected_borders(
     address: CellAddress,
     range: CellRange,
     selection: BorderSelection,
-) -> Vec<bool> {
+) -> Vec<(i64, i64)> {
+    let kind = border_kind;
     match selection {
         BorderSelection::All => vec![
-            style.border_top.is_some(),
-            style.border_bottom.is_some(),
-            style.border_left.is_some(),
-            style.border_right.is_some(),
+            kind(style.border_top.as_ref()),
+            kind(style.border_bottom.as_ref()),
+            kind(style.border_left.as_ref()),
+            kind(style.border_right.as_ref()),
         ],
         BorderSelection::EdgeLeft if address.column == range.start_column => {
-            vec![style.border_left.is_some()]
+            vec![kind(style.border_left.as_ref())]
         }
-        BorderSelection::EdgeTop if address.row == range.start_row => vec![style.border_top.is_some()],
-        BorderSelection::EdgeBottom if address.row == range.end_row => vec![style.border_bottom.is_some()],
+        BorderSelection::EdgeTop if address.row == range.start_row => {
+            vec![kind(style.border_top.as_ref())]
+        }
+        BorderSelection::EdgeBottom if address.row == range.end_row => {
+            vec![kind(style.border_bottom.as_ref())]
+        }
         BorderSelection::EdgeRight if address.column == range.end_column => {
-            vec![style.border_right.is_some()]
+            vec![kind(style.border_right.as_ref())]
         }
         BorderSelection::InsideVertical => {
             let mut values = Vec::with_capacity(2);
             if address.column > range.start_column {
-                values.push(style.border_left.is_some());
+                values.push(kind(style.border_left.as_ref()));
             }
             if address.column < range.end_column {
-                values.push(style.border_right.is_some());
+                values.push(kind(style.border_right.as_ref()));
             }
             values
         }
         BorderSelection::InsideHorizontal => {
             let mut values = Vec::with_capacity(2);
             if address.row > range.start_row {
-                values.push(style.border_top.is_some());
+                values.push(kind(style.border_top.as_ref()));
             }
             if address.row < range.end_row {
-                values.push(style.border_bottom.is_some());
+                values.push(kind(style.border_bottom.as_ref()));
             }
             values
         }
@@ -7855,12 +7969,24 @@ fn set_selected_borders(
     address: CellAddress,
     range: CellRange,
     selection: BorderSelection,
-    enabled: bool,
+    // What each edge becomes, worked out from what it already was: the two
+    // halves of a border snap differently, so the edge has to be seen first.
+    becomes: &dyn Fn(Option<&BorderLine>) -> Option<&'static str>,
 ) {
-    // VBA turns an edge on or off; the kind it draws is Excel's own default.
-    let drawn = enabled.then(|| BorderLine {
-        style: "thin".to_string(),
-        color: None,
+    let existing = match selection {
+        BorderSelection::EdgeLeft | BorderSelection::InsideVertical => style.border_left.clone(),
+        BorderSelection::EdgeTop | BorderSelection::InsideHorizontal => style.border_top.clone(),
+        BorderSelection::EdgeBottom => style.border_bottom.clone(),
+        BorderSelection::EdgeRight => style.border_right.clone(),
+        BorderSelection::All => style
+            .border_top
+            .clone()
+            .or_else(|| style.border_bottom.clone()),
+        _ => None,
+    };
+    let drawn = becomes(existing.as_ref()).map(|name| BorderLine {
+        style: name.to_string(),
+        color: existing.as_ref().and_then(|held| held.color.clone()),
     });
     match selection {
         BorderSelection::All => {
@@ -9706,6 +9832,93 @@ mod tests {
             .cells
             .iter()
             .any(|cell| cell.style.shrink_to_fit)));
+    }
+
+    /// Swept in Excel 16.0: every line style crossed with every weight, in
+    /// both orders, written into a workbook and read back out of its
+    /// `styles.xml`. Only thirteen pairs exist, and asking for one that does
+    /// not gives way on a different axis depending on which half was asked
+    /// for last — writing `LineStyle` keeps the style and moves the weight
+    /// (Dash from Thick becomes thin `dashed`, but keeps Medium because
+    /// `mediumDashed` exists), while writing `Weight` keeps the weight and
+    /// drops the style back to a plain rule (a dashed edge asked for Hairline
+    /// becomes `hair`). An edge with nothing along it reads None and Thin.
+    #[test]
+    fn a_border_is_a_line_and_a_weight_together() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim e\n\
+               Set e = Range(\"A1\").Borders(9)\n\
+               Ask = e.LineStyle & \"/\" & e.Weight\n\
+               e.LineStyle = -4115\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+               e.Weight = -4138\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+               e.Weight = 1\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+               e.LineStyle = -4119\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+               e.Weight = 2\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+               e.LineStyle = 13\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+               e.LineStyle = -4142\n\
+               Ask = Ask & \"|\" & e.LineStyle & \"/\" & e.Weight\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "-4142/2|-4115/2|-4115/-4138|1/1|-4119/4|1/2|13/-4138|-4142/2".to_string()
+            )
+        );
+    }
+
+    /// The file's own name for each of the thirteen, which is what a saved
+    /// workbook has to hold: `dashed` where the object model says Dash and
+    /// Thin, `mediumDashDotDot` where it says DashDotDot and Medium.
+    #[test]
+    fn a_border_is_written_by_the_name_the_file_uses() {
+        for (name, line, weight) in [
+            ("hair", 1_i64, 1_i64),
+            ("thin", 1, 2),
+            ("medium", 1, -4138),
+            ("thick", 1, 4),
+            ("dashed", -4115, 2),
+            ("mediumDashed", -4115, -4138),
+            ("dotted", -4118, 2),
+            ("dashDot", 4, 2),
+            ("mediumDashDot", 4, -4138),
+            ("dashDotDot", 5, 2),
+            ("mediumDashDotDot", 5, -4138),
+            ("slantDashDot", 13, -4138),
+            ("double", -4119, 4),
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Draw()\n\
+                   Range(\"A1\").Borders(9).LineStyle = {line}\n\
+                   Range(\"A1\").Borders(9).Weight = {weight}\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            {
+                let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+                execute_with_host(&module, "Draw", vec![], &mut host).unwrap();
+            }
+            let drawn = workbook.sheets[0].rows[0].cells[0]
+                .style
+                .border_bottom
+                .as_ref()
+                .map(|edge| edge.style.clone());
+            assert_eq!(drawn.as_deref(), Some(name), "{line}/{weight}");
+        }
     }
 
     #[test]
