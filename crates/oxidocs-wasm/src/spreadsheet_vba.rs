@@ -5310,7 +5310,11 @@ impl Host for WorkbookHost<'_> {
                     self.selection = range;
                     return Ok(Some(Value::Empty));
                 }
-                if name.eq_ignore_ascii_case("cells") {
+                // `Item` is what a range answers to when it is indexed with
+                // nothing named — `Cells(1, 1)(2)` — and it counts the same
+                // way `Cells` does: asked of Excel, `Range("B2:C3").Item(5)`
+                // is B4 and `Range("A1").Item(2)` is the cell below.
+                if name.eq_ignore_ascii_case("cells") || name.eq_ignore_ascii_case("item") {
                     return self.range_cells_object(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("offset") {
@@ -9077,6 +9081,32 @@ mod tests {
             execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
         };
         assert_eq!(result, Value::String("5|2|2.5|6".to_string()));
+    }
+
+    /// Measured in Excel 16.0: `Range("A1").Item(2)` is A2 and `.Item(3)` is
+    /// A3, `Range("B2:C3").Item(2)` is C2 and `.Item(5)` is B4 — a row below
+    /// the block, since the count runs across the block's width and does not
+    /// stop at its edge — and `Range("A1:C1").Item(2)` is B1. Indexing a range
+    /// with nothing named means that same Item, which is what makes
+    /// `Cells(1, 1)(2)` the cell below.
+    #[test]
+    fn a_range_indexed_with_no_name_counts_its_cells() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Ask = Cells(1, 1)(2).Address(0, 0)\n\
+               Ask = Ask & \"|\" & Cells(1, 1).Item(3).Address(0, 0)\n\
+               Ask = Ask & \"|\" & Range(\"B2:C3\")(2).Address(0, 0)\n\
+               Ask = Ask & \"|\" & Range(\"B2:C3\")(5).Address(0, 0)\n\
+               Ask = Ask & \"|\" & Range(\"A1:C1\")(2).Address(0, 0)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("A2|A3|C2|B4|B1".to_string()));
     }
 
     #[test]

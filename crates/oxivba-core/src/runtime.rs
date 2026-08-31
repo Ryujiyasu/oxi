@@ -2171,11 +2171,40 @@ impl<'a> Runtime<'a> {
                             )
                         })
                     }
-                    _ => Err(error(
-                        RuntimeErrorKind::Unsupported,
-                        "call target is not executable yet",
-                        Some(span.line),
-                    )),
+                    // `Split(text, ",")(1)` — what a call handed back,
+                    // indexed there and then, with no variable in between to
+                    // hold it first. An array is subscripted; anything with an
+                    // Item of its own is asked for that, which is what makes
+                    // `Cells(1, 1)(2)` the cell below.
+                    held => {
+                        let held = self.eval_expr(held, frame)?;
+                        match held {
+                            Value::Array(array) => {
+                                let mut indices = Vec::with_capacity(values.len());
+                                for value in &values {
+                                    indices.push(index_from(value, span.line)?);
+                                }
+                                Ok(array.values[array_offset(&array, &indices, span.line)?].clone())
+                            }
+                            Value::Object(receiver) => self
+                                .host_call(Some(&receiver), "Item", &values, span.line)?
+                                .ok_or_else(|| {
+                                    error(
+                                        RuntimeErrorKind::Unsupported,
+                                        format!(
+                                            "default member is not available: {}.Item",
+                                            receiver.kind
+                                        ),
+                                        Some(span.line),
+                                    )
+                                }),
+                            _ => Err(error(
+                                RuntimeErrorKind::Unsupported,
+                                "call target is not executable yet",
+                                Some(span.line),
+                            )),
+                        }
+                    }
                 }
             }
             Expr::Ident(name, span) | Expr::TypedIdent { name, span, .. } => {
@@ -3193,18 +3222,7 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<i64, RuntimeError> {
         let value = self.eval_expr(expr, frame)?;
-        let number = number(&value)
-            .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?;
-        let rounded = number.round_ties_even();
-        if !rounded.is_finite() || rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
-            Err(error(
-                RuntimeErrorKind::Overflow,
-                "VBA array index is outside the supported integer range",
-                Some(line),
-            ))
-        } else {
-            Ok(rounded as i64)
-        }
+        index_from(&value, line)
     }
 
     fn tick(&mut self, line: Option<u32>) -> Result<(), RuntimeError> {
@@ -3599,6 +3617,22 @@ fn collection_index(
             line,
         )
     })
+}
+
+/// What one index means: a number, rounded the way VBA rounds a subscript.
+fn index_from(value: &Value, line: u32) -> Result<i64, RuntimeError> {
+    let number = number(value)
+        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?;
+    let rounded = number.round_ties_even();
+    if !rounded.is_finite() || rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+        Err(error(
+            RuntimeErrorKind::Overflow,
+            "VBA array index is outside the supported integer range",
+            Some(line),
+        ))
+    } else {
+        Ok(rounded as i64)
+    }
 }
 
 fn array_offset(array: &ArrayValue, indices: &[i64], line: u32) -> Result<usize, RuntimeError> {
@@ -10036,6 +10070,44 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
         assert_eq!(failure.line, Some(2));
+    }
+
+    #[test]
+    fn indexes_what_a_call_handed_back_without_a_variable_between() {
+        // `Split(text, ",")(1)` is how the second field of a line is written
+        // when nothing else needs the rest of it. It parses as an index whose
+        // target is another call, which had nowhere to go.
+        let value = run(
+            "Public Function Second() As String\n\
+               Second = Split(\"a,b,c\", \",\")(1)\n\
+             End Function\n",
+            "Second",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("b".to_string()));
+
+        let literal = run(
+            "Public Function Second() As String\n\
+               Second = Array(\"one\", \"two\")(1)\n\
+             End Function\n",
+            "Second",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(literal, Value::String("two".to_string()));
+
+        // Two axes at once, and an index that is not whole: a subscript is
+        // rounded, and 1.5 goes to the even neighbour as everywhere else.
+        let rounded = run(
+            "Public Function Picked() As String\n\
+               Picked = Split(\"a,b,c\", \",\")(1.5)\n\
+             End Function\n",
+            "Picked",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(rounded, Value::String("c".to_string()));
     }
 
     #[test]
