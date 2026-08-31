@@ -111,6 +111,15 @@ fn parse_hex_rgb(s: &str) -> (u8, u8, u8) {
     (r, g, b)
 }
 
+#[cfg(windows)]
+/// S1264: the ascent Word puts above a baseline, for the glyph-origin fix in
+/// the text branch. Loaded once — the layout keeps its own copy privately.
+fn font_registry() -> &'static oxidocs_core::font::FontMetricsRegistry {
+    static REG: std::sync::OnceLock<oxidocs_core::font::FontMetricsRegistry> =
+        std::sync::OnceLock::new();
+    REG.get_or_init(oxidocs_core::font::FontMetricsRegistry::load)
+}
+
 fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, dpi: u32, supersample: u32, exclude: &[String], dump_glyphs: Option<&str>) {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::*;
@@ -187,7 +196,7 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         // strikethrough/highlight should draw to preserve pre-Phase-D
                         // pixel positions. See memory/session71_y_convention_refactor_design.md.
                         let text_y_off_px = (elem.text_y_off as f64 * scale).round() as i32;
-                        let glyph_y = y + text_y_off_px;
+                        let mut glyph_y = y + text_y_off_px;
                         let fs = (*font_size as f64 * scale).round() as i32;
                         // 2026-04-19: Apply horizontal text scale (OOXML w:w).
                         // CreateFontW lfWidth=0 → default aspect; positive value → specified glyph width.
@@ -196,42 +205,6 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                         } else { 0 };
                         let family = oxidocs_core::font::render_family_name(
                             font_family.as_deref().unwrap_or("Calibri"));
-
-                        // Parse color
-                        let rgb = color.as_deref()
-                            .and_then(|c| {
-                                let c = c.strip_prefix('#').unwrap_or(c);
-                                if c.len() == 6 {
-                                    let r = u8::from_str_radix(&c[0..2], 16).ok()?;
-                                    let g = u8::from_str_radix(&c[2..4], 16).ok()?;
-                                    let b = u8::from_str_radix(&c[4..6], 16).ok()?;
-                                    Some(COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16)))
-                                } else { None }
-                            })
-                            .unwrap_or(COLORREF(0x00000000));
-
-                        // Draw highlight background before text
-                        if let Some(ref hl) = highlight {
-                            let hl_rgb = {
-                                let c = hl.strip_prefix('#').unwrap_or(hl);
-                                if c.len() == 6 {
-                                    let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(255);
-                                    let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(255);
-                                    let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(0);
-                                    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
-                                } else {
-                                    COLORREF(0x0000FFFF) // default yellow
-                                }
-                            };
-                            let hl_brush = CreateSolidBrush(hl_rgb);
-                            // Phase D: highlight tracks glyph (not line box) to preserve pre-Phase-D pixels.
-                            let r = RECT { left: x, top: glyph_y, right: x + ew, bottom: glyph_y + eh };
-                            FillRect(mem_dc, &r, hl_brush);
-                            let _ = DeleteObject(hl_brush);
-                        }
-
-                        SetTextColor(mem_dc, rgb);
-
                         // Create font
                         // Session 132 (2026-05-20): vertical writing — set
                         // lfEscapement = lfOrientation = -900 (tenths of CCW
@@ -268,6 +241,67 @@ fn render_pages_gdi(result: &oxidocs_core::layout::LayoutResult, prefix: &str, d
                             PCWSTR(family_wide.as_ptr()),
                         );
                         let old_font = SelectObject(mem_dc, font);
+
+                        // S1264 (2026-08-31, opt-out OXI_S1264_DISABLE): GDI draws top-
+                        // aligned and puts the baseline at glyph_top + tmAscent, which is
+                        // GDI's OWN integer ascent -- NOT the ascent Word uses. Measured
+                        // against Word's PDF at 600 DPI (_pb_inktop.py) the GDI leg landed
+                        // 0..9 device pixels (0 .. 1.08pt) below Word's own first ink row
+                        // on 9 arms while the DWrite leg landed ON it for 7 of them, so a
+                        // GDI render was never comparable to Word by the pixel and an ink
+                        // probe run through it read the renderer, not the layout. Place the
+                        // baseline where the layout means it (`baseline_ascent`, 69/69 arms
+                        // within one 600-DPI quantum of Word) and let GDI keep its own
+                        // tmAscent for the glyph_top it wants: shift the origin so the two
+                        // agree. Everything hung off glyph_y downstream (highlight box,
+                        // underline, strikethrough, the shadow/outline passes) follows.
+                        // Vertical (S489 upright CJK) text stacks by the em, not off a
+                        // baseline, so it keeps the raw origin.
+                        if !*is_vertical && std::env::var("OXI_S1264_DISABLE").is_err() {
+                            let mut tm = TEXTMETRICW::default();
+                            if GetTextMetricsW(mem_dc, &mut tm).as_bool() {
+                                let asc = font_registry().get(&family).baseline_ascent();
+                                let baseline_pt =
+                                    elem.y + elem.text_y_off - 1.0 + asc * *font_size;
+                                glyph_y = (baseline_pt as f64 * scale).round() as i32
+                                    - tm.tmAscent;
+                            }
+                        }
+
+                        // Parse color
+                        let rgb = color.as_deref()
+                            .and_then(|c| {
+                                let c = c.strip_prefix('#').unwrap_or(c);
+                                if c.len() == 6 {
+                                    let r = u8::from_str_radix(&c[0..2], 16).ok()?;
+                                    let g = u8::from_str_radix(&c[2..4], 16).ok()?;
+                                    let b = u8::from_str_radix(&c[4..6], 16).ok()?;
+                                    Some(COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16)))
+                                } else { None }
+                            })
+                            .unwrap_or(COLORREF(0x00000000));
+
+                        // Draw highlight background before text
+                        if let Some(ref hl) = highlight {
+                            let hl_rgb = {
+                                let c = hl.strip_prefix('#').unwrap_or(hl);
+                                if c.len() == 6 {
+                                    let r = u8::from_str_radix(&c[0..2], 16).unwrap_or(255);
+                                    let g = u8::from_str_radix(&c[2..4], 16).unwrap_or(255);
+                                    let b = u8::from_str_radix(&c[4..6], 16).unwrap_or(0);
+                                    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
+                                } else {
+                                    COLORREF(0x0000FFFF) // default yellow
+                                }
+                            };
+                            let hl_brush = CreateSolidBrush(hl_rgb);
+                            // Phase D: highlight tracks glyph (not line box) to preserve pre-Phase-D pixels.
+                            let r = RECT { left: x, top: glyph_y, right: x + ew, bottom: glyph_y + eh };
+                            FillRect(mem_dc, &r, hl_brush);
+                            let _ = DeleteObject(hl_brush);
+                        }
+
+                        SetTextColor(mem_dc, rgb);
 
                         // Apply character spacing (justify gap, explicit cs from XML)
                         let cs_px = (*character_spacing as f64 * scale).round() as i32;

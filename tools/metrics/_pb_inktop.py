@@ -8,14 +8,19 @@ needs none: rasterise both at the same DPI and find the first row that has any
 dark pixel. S1097 says Oxi's 0.5pt top-margin round is compensating ~0.25pt of
 vertical error somewhere; this measures that number directly.
 
-    python tools/metrics/_pb_inktop.py <docx> [<docx> ...]
+    INKTOP_DPI=600 python tools/metrics/_pb_inktop.py <docx> [<docx> ...]
 """
 import os, subprocess, sys, glob
 import fitz
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REND = os.path.abspath("tools/oxi-gdi-renderer/target/release/oxi-gdi-renderer.exe")
-DPI = 300
+# Which renderer? The SSIM gate uses DWrite; GDI is the pagination/fallback
+# leg and places its glyphs with GDI's OWN integer tmAscent, so the two do
+# NOT agree on where a baseline sits. Say which one you are asking.
+ENGINE = os.environ.get("INKTOP_ENGINE", "gdi")
+REND = os.path.abspath("tools/oxi-%s-renderer/target/release/oxi-%s-renderer.exe"
+                       % (ENGINE, ENGINE))
+DPI = int(os.environ.get("INKTOP_DPI", "300"))
 THRESH = 160          # a pixel darker than this counts as ink
 
 
@@ -51,7 +56,7 @@ def word_ink_top(docx):
 
 
 def oxi_ink_top(docx):
-    prefix = docx[:-5] + "_ink"
+    prefix = docx[:-5] + "_ink_" + ENGINE
     for old in glob.glob(prefix + "*.png"):
         os.remove(old)
     subprocess.run([REND, docx, prefix, str(DPI)], capture_output=True)

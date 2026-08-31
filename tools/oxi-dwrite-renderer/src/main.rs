@@ -1127,6 +1127,51 @@ unsafe fn render_line(
 // layout-rect top. Used to align a Symbol-font list marker (whose ascent is ~2pt
 // smaller than the body at fs11) to its line's BODY baseline. Returns fs*0.8 on any
 // DWrite error (harmless fallback; the caller only uses the DIFFERENCE of two ascents).
+/// S1265: can `CreateTextFormat` match this family at all? When it cannot, the
+/// text layout still maps glyphs through fallback but its LINE metrics — the
+/// ascent DrawTextLayout puts the baseline at — come from the fallback face.
+/// Cached per family: the answer costs a system-font-collection lookup and the
+/// question is asked once per drawn run.
+unsafe fn dwrite_knows_family(
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    font_family: &str,
+) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Graphics::DirectWrite::*;
+    thread_local! {
+        static KNOWN: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(hit) = KNOWN.with(|k| k.borrow().get(font_family).copied()) {
+        return hit;
+    }
+    let mut coll: Option<IDWriteFontCollection> = None;
+    let ans = if dwrite_factory.GetSystemFontCollection(&mut coll, BOOL(0)).is_err() {
+        true // cannot tell — leave the placement alone
+    } else if let Some(c) = coll {
+        let fw: Vec<u16> = font_family.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut idx = 0u32;
+        let mut exists = BOOL(0);
+        match c.FindFamilyName(PCWSTR(fw.as_ptr()), &mut idx, &mut exists) {
+            Ok(()) => exists.as_bool(),
+            Err(_) => true,
+        }
+    } else {
+        true
+    };
+    KNOWN.with(|k| k.borrow_mut().insert(font_family.to_string(), ans));
+    ans
+}
+
+/// S1265: the ascent Word puts above a baseline, for the glyph-origin fix in
+/// `render_text`. Loaded once — the layout keeps its own copy privately.
+fn font_registry() -> &'static oxidocs_core::font::FontMetricsRegistry {
+    static REG: std::sync::OnceLock<oxidocs_core::font::FontMetricsRegistry> =
+        std::sync::OnceLock::new();
+    REG.get_or_init(oxidocs_core::font::FontMetricsRegistry::load)
+}
+
 unsafe fn font_ascent_pt(
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     font_family: &str, font_size_pt: f32, bold: bool, italic: bool,
@@ -1230,6 +1275,49 @@ unsafe fn render_text(
     if text.is_empty() {
         return Ok(());
     }
+
+    // S1265 (2026-08-31, opt-out OXI_S1265_DISABLE): put the baseline where the
+    // face the LAYOUT used wants it, not where whatever DirectWrite resolved
+    // wants it. DrawTextLayout places the line at origin.y + the TEXT FORMAT's
+    // own ascent, and when CreateTextFormat cannot match the family (Arial
+    // Narrow — a stretch variant, not a WSS family; Aptos — an Office CLOUD
+    // font outside the system collection; Franklin Gothic Medium) the glyphs
+    // still map through fallback but that ascent comes from the fallback face.
+    // Measured against Word's own PDF span origins on 23 faces x {11,12,20}pt
+    // (`tools/metrics/_pb_baseasc.py`): DWrite's ascent is off by 1.55..3.20pt
+    // on those three and within one 600-DPI quantum on the other twenty, while
+    // `baseline_ascent` (S1264) is within a quantum on all 69 arms — the two
+    // are statistically identical where DWrite CAN resolve (mean |Δ| 0.0386 vs
+    // 0.0373pt, both max ≤ 0.12), so this is a repair of the fallback case, not
+    // a new placement law. Shifting y_pt carries the glyph dump's `top` and
+    // `baseline_pt` with it, so the S494 gate keeps reporting where the glyphs
+    // actually land. Vertical (S489 upright CJK) stacks by the em, not off a
+    // baseline, and keeps the raw origin.
+    // SCOPE: only a family DirectWrite CANNOT match. Where it can, `want` and
+    // `have` are the same font tables read twice and the shift is exactly 0 (13
+    // corpus docs: 0 changed bytes). Where the table and DWrite genuinely
+    // DISAGREE the disagreement is not a fallback bug and must not be "fixed"
+    // here: Yu Gothic's DWrite ascent is 0.315em above this rule's, and the CJK
+    // vertical stack (S455/S457/S614/S629) is calibrated ON TOP of the DWrite
+    // number — moving it regressed bunkacontract_93901101 by −0.0999 over 9
+    // pages. So the trigger is "DWrite does not know this family", not "the two
+    // numbers differ", and the registry must know the face itself (otherwise we
+    // would swap DWrite's fallback for the table's fallback, no better).
+    let y_pt = if is_vertical
+        || std::env::var("OXI_S1265_DISABLE").is_ok()
+        || dwrite_knows_family(dwrite_factory, font_family)
+    {
+        y_pt
+    } else {
+        let m = font_registry().get(font_family);
+        if m.family.eq_ignore_ascii_case(font_family) {
+            let want = m.baseline_ascent() * font_size_pt;
+            let have = font_ascent_pt(dwrite_factory, font_family, font_size_pt, bold, italic);
+            y_pt + (want - have)
+        } else {
+            y_pt
+        }
+    };
 
     // Highlight background covers the element rect before glyphs are drawn.
     if let Some(hl) = highlight {

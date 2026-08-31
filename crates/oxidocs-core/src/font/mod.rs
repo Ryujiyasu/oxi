@@ -424,6 +424,47 @@ impl FontMetrics {
         hhea * font_size
     }
 
+    /// S1264 (2026-08-31): how far below a line box's top Word puts the glyph
+    /// BASELINE, as an em fraction. The sibling of `natural_line_height_hhea`:
+    /// that one says which vertical box governs the line, this one says where
+    /// inside that box the baseline sits — the box's own ascent, with the line
+    /// gap sitting ABOVE the baseline rather than below it.
+    ///
+    /// DERIVED from Word's own PDF span origins: 23 installed faces × {11, 12,
+    /// 20}pt, one short line each at a 72pt top margin, `A = (first_baseline −
+    /// 72) / size` (`tools/metrics/_pb_baseasc.py`). Word snaps the em to a
+    /// whole 600-DPI pixel first (11pt renders at 11.04, 20pt at 20.04) and the
+    /// ascent to a whole pixel after, so the prediction is compared as
+    /// `72 + round(A × em_px) × 0.12`: 69/69 arms within ONE 600-DPI quantum,
+    /// mean |Δ| 0.036pt, max 0.120pt.
+    ///
+    /// The three branches are each carried by a discriminating specimen, so
+    /// this is one rule and not a stack of carve-outs:
+    ///   * Aptos (USE_TYPO_METRICS, typo 1923 vs win 2068) — Word takes the
+    ///     TYPO ascent; the win branch would sit 0.84pt low at 12pt. Same bit
+    ///     that governs the line height in S950.
+    ///   * Arial / Times / Ebrima (hhea == win, non-zero gap) — the gap is
+    ///     ADDED above the baseline: Arial 1854+67 = 1921, not 1854.
+    ///   * Calibri / Candara / Constantia / Corbel / Consolas / Book Antiqua
+    ///     (hhea ascent < win ascent) — the WIN ascent alone, with no gap:
+    ///     Calibri 1950, though hhea+gap (1988) is the taller box and governs
+    ///     the line HEIGHT. Constantia is the sharpest of these (1990 vs 1950).
+    /// So "which box is taller" decides the line height and "which ascent" is a
+    /// separate question — the two rules disagree on 6 of the 23 faces.
+    pub fn baseline_ascent(&self) -> f32 {
+        if self.use_typo_metrics {
+            let typo = self.typo_ascent + self.typo_line_gap;
+            if typo > 0.0 {
+                return typo;
+            }
+        }
+        if self.ascent >= self.win_ascent {
+            self.ascent + self.line_gap
+        } else {
+            self.win_ascent
+        }
+    }
+
     /// Standard line height WITHOUT CJK 83/64 multiplier.
     /// Used when adjustLineHeightInTable=true (compat65).
     pub fn word_line_height_standard(&self, font_size: f32) -> f32 {
