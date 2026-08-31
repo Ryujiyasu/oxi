@@ -535,6 +535,24 @@ impl<'a> WorkbookHost<'a> {
         Ok(self.object(HostObject::Blocks(handle)))
     }
 
+    /// Name several blocks as one range, keeping each as it was written.
+    ///
+    /// A comma-written address does not join anything, where `Union` does:
+    /// asked of Excel, `Range("A1:A3,A2:A4")` has two areas against
+    /// `Union(A1:A3, A2:A4)`'s one, `Range("A1:A2,A3:A4")` — blocks that only
+    /// touch — has two against Union's one, and even `Range("A1,A1")` has two.
+    fn written_blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
+        for block in &given {
+            Self::range_cell_count(*block)?;
+        }
+        if given.len() == 1 {
+            return Ok(self.object(HostObject::Range(given[0])));
+        }
+        let handle = self.blocks.len();
+        self.blocks.push(given);
+        Ok(self.object(HostObject::Blocks(handle)))
+    }
+
     /// The cells of a block that answer to a description.
     ///
     /// Asked of Excel about a column holding 10, "text", a blank, `=A1*2`, 30,
@@ -1174,7 +1192,7 @@ impl<'a> WorkbookHost<'a> {
                         end_column: start.0.max(end.0),
                     });
                 }
-                return self.blocks_object(given);
+                return self.written_blocks_object(given);
             }
         }
         let (start, end) = match args {
@@ -6427,6 +6445,53 @@ impl Host for WorkbookHost<'_> {
             }
             return Ok(Some(worksheets));
         }
+        // A range of several blocks is walked block by block in the order they
+        // were written, and each block's cells row by row. Excel repeats a
+        // cell that two blocks both name: `For Each` over `A1:A2,A2:A3` gives
+        // A1 A2 A2 A3. `Areas` hands over the blocks themselves instead, in
+        // the same order.
+        if let Some(areas) = self.blocks(receiver).map(<[CellRange]>::to_vec) {
+            let holding_areas =
+                matches!(self.objects.get(receiver.handle as usize), Some(HostObject::Areas(_)));
+            if holding_areas {
+                let mut items = Vec::with_capacity(areas.len());
+                for block in areas {
+                    items.push(self.object(HostObject::Range(block)));
+                }
+                return Ok(Some(items));
+            }
+            let mut total = 0u64;
+            for block in &areas {
+                total += Self::range_cell_count_large(*block)?;
+            }
+            if total > 1_000_000 {
+                return Err("cell range exceeds the 1,000,000-cell execution limit".to_string());
+            }
+            let mut cells = Vec::with_capacity(total as usize);
+            for block in areas {
+                for address in block.addresses() {
+                    cells.push(self.object(HostObject::Range(CellRange::single(address))));
+                }
+            }
+            return Ok(Some(cells));
+        }
+        // The names come out in the order `Names.Item(1)` counts them, which
+        // Excel sorts by the name itself rather than by when it was given:
+        // adding zebra, alpha, middle and Beta walks alpha Beta middle zebra.
+        if self.is_names(receiver) {
+            let mut held = self
+                .workbook
+                .defined_names
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            held.sort_by(|one, other| compare_text_by_case(one, other));
+            let mut items = Vec::with_capacity(held.len());
+            for name in held {
+                items.push(self.name_object(&name));
+            }
+            return Ok(Some(items));
+        }
         if let Some((range, axis)) = self.range_collection(receiver) {
             Self::range_cell_count(range)?;
             let count = match axis {
@@ -8691,6 +8756,53 @@ mod tests {
         assert_eq!(
             execute_with_host(&large, "Ask", vec![], &mut host).unwrap(),
             Value::String("2147483648".to_string())
+        );
+    }
+
+    /// All four walks were taken in Excel 16.0. A range of several blocks
+    /// gives its cells block by block in the order written and row by row
+    /// inside each, repeating a cell two blocks both name — `A1:A2,A2:A3`
+    /// walks A1 A2 A2 A3. `Areas` gives the blocks themselves. `Names` comes
+    /// out sorted by the name rather than by when it was given: zebra, alpha,
+    /// middle and Beta, added in that order, walk alpha Beta middle zebra.
+    #[test]
+    fn for_each_walks_blocks_areas_and_names() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim c, a, n, out\n\
+               For Each c In Range(\"A1:B1,D5\")\n\
+                 out = out & c.Address(0, 0) & \" \"\n\
+               Next\n\
+               out = out & \"| \"\n\
+               For Each c In Range(\"A1:A2,A2:A3\")\n\
+                 out = out & c.Address(0, 0) & \" \"\n\
+               Next\n\
+               out = out & \"| \"\n\
+               For Each a In Range(\"A1:B2,D5:E5\").Areas\n\
+                 out = out & a.Address(0, 0) & \" \"\n\
+               Next\n\
+               out = out & \"| \"\n\
+               ActiveWorkbook.Names.Add \"zebra\", \"=Sheet1!$A$1\"\n\
+               ActiveWorkbook.Names.Add \"alpha\", \"=Sheet1!$A$1\"\n\
+               ActiveWorkbook.Names.Add \"middle\", \"=Sheet1!$A$1\"\n\
+               ActiveWorkbook.Names.Add \"Beta\", \"=Sheet1!$A$1\"\n\
+               For Each n In ActiveWorkbook.Names\n\
+                 out = out & n.Name & \" \"\n\
+               Next\n\
+               Ask = out\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "A1 B1 D5 | A1 A2 A2 A3 | A1:B2 D5:E5 | alpha Beta middle zebra ".to_string()
+            )
         );
     }
 
@@ -14156,6 +14268,11 @@ End Sub
     /// `A1:A4` with one area.
     #[test]
     fn vba_names_several_blocks_as_one_range() {
+        // The last arm is the one that separates the two rules: `Union` joins
+        // blocks that touch, and a comma-written address never joins anything.
+        // Measured in Excel 16.0 — `Union(A1:A2, A3:A4)` is `A1:A4` with one
+        // area, `Range("A1:A2,A3:A4")` is `A1:A2,A3:A4` with two.
+
         let mut workbook = workbook();
         let module = parse_module(
             "Public Function Joined() As String\n\
@@ -14180,7 +14297,9 @@ End Sub
 
         assert_eq!(
             result,
-            Value::String("A1:A2,C1:C2|2|4|C1:C2|1|1|2|1|A1:A4|A1:A4|2|A1:A4".to_string())
+            Value::String(
+                "A1:A2,C1:C2|2|4|C1:C2|1|1|2|1|A1:A4|A1:A4|2|A1:A2,A3:A4".to_string()
+            )
         );
     }
 
