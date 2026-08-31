@@ -60,6 +60,8 @@ def scan(setname, did, want=None):
             if j >= len(orecs):
                 continue
             oi = j + 1
+            if orecs[j].get("y") is None or x.get("y") is None:
+                continue          # a record without a position says nothing here
             d = orecs[j]["y"] - x["y"]
             if prev is not None:
                 step = d - prev
