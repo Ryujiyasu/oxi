@@ -1626,9 +1626,10 @@ pub struct LineSegment {
 /// (`master_units_runs`); it was the placing that was not.
 ///
 /// `line_start` is how many characters of the paragraph precede this line.
-/// `level_bold` is what the paragraph's level says, which a run that does not
-/// mention weight still inherits. The paragraph's own values fill in past the
-/// last run, which is what a line ending in generated text hits.
+/// `level_bold` and `level_italic` are what the paragraph's level says, which a
+/// run that does not mention weight or slant still inherits. The paragraph's
+/// own values fill in past the last run, which is what a line ending in
+/// generated text hits.
 pub fn line_segments(
     runs: &[crate::ir::SlideRun],
     line_start: usize,
@@ -1636,13 +1637,13 @@ pub fn line_segments(
     fs: f32,
     family: &str,
     level_bold: bool,
-    italic: bool,
+    level_italic: bool,
 ) -> Vec<LineSegment> {
     let mut out: Vec<LineSegment> = Vec::new();
     for (i, ch) in text.chars().enumerate() {
         let at = line_start + i;
         let mut seen = 0usize;
-        let mut style = (fs, family.to_string(), level_bold, italic);
+        let mut style = (fs, family.to_string(), level_bold, level_italic);
         for run in runs {
             let n = run.text.chars().count();
             if at < seen + n {
@@ -1650,7 +1651,7 @@ pub fn line_segments(
                     run.font_size.unwrap_or(fs),
                     run.font_family.clone().unwrap_or_else(|| family.to_string()),
                     run.bold || level_bold,
-                    run.italic,
+                    run.italic || level_italic,
                 );
                 break;
             }
@@ -1676,6 +1677,28 @@ pub fn line_segments(
         }
     }
     out
+}
+
+/// Whether the level chain asks for italic.
+///
+/// ★A LEVEL can ask for slant just as it asks for weight, and the layout was
+/// only consulting the runs. d15 slide 5's quotation carries `i="1"` on its
+/// layout's `lvl1pPr/defRPr` and nothing on any run, and PowerPoint sets it in
+/// Barlow BOLD ITALIC -- whose advances are about 3% narrower than Barlow
+/// Bold's, so the engine's lines ran up to 9.8pt long and broke a word early.
+/// `italic` is a plain bool with no "unset", so the chain reads as "the first
+/// level that says yes".
+pub fn level_italic(
+    master: &[crate::ir::MasterStyleLevel],
+    ph_levels: &[crate::ir::MasterStyleLevel],
+    lvl: u32,
+) -> bool {
+    let lvl = lvl as usize;
+    [ph_levels, master].into_iter().any(|levels| {
+        levels
+            .get(lvl.min(levels.len().saturating_sub(1)))
+            .is_some_and(|l| l.italic)
+    })
 }
 
 /// One line of a shape's text, placed.
@@ -1776,7 +1799,8 @@ pub fn layout_text_shape(
             true,
         );
         let bold = para.runs.iter().any(|r| r.bold) || level.bold.unwrap_or(false);
-        let italic = para.runs.iter().any(|r| r.italic);
+        let italic =
+            para.runs.iter().any(|r| r.italic) || level_italic(master, ph_levels, para.lvl);
         let geom = indent_geometry(
             inner_w,
             para.mar_l.unwrap_or(level.mar_l),
@@ -1814,7 +1838,11 @@ pub fn layout_text_shape(
                     fs,
                     &family,
                     level.bold.unwrap_or(false),
-                    italic,
+                    // The LEVEL's slant, not the paragraph's resolved one:
+                    // passing the OR would make one italic run turn the whole
+                    // line italic, which is the collapse the segments exist to
+                    // undo.
+                    level_italic(master, ph_levels, para.lvl),
                 ),
                 x: shape.l_ins + x + align_offset(align, width, line_w),
                 baseline: cursor + first_off + li as f32 * adv,
@@ -2063,6 +2091,39 @@ mod shape_tests {
             &TableMetrics, &shape(400.0, 64.6, None), &p, &[], &[], "Arial");
         let shift = 64.6 - got.height;
         assert!((got.lines[0].baseline - flat.lines[0].baseline - shift).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_level_that_says_italic_reaches_a_run_that_does_not_mention_it() {
+        let segs = line_segments(&[run("Quote", None)], 0, "Quote", 30.0, "Barlow",
+                                 true, true);
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].bold && segs[0].italic);
+    }
+
+    #[test]
+    fn the_level_supplies_the_slant_for_the_whole_shape() {
+        // d15 slide 5: `i="1"` on the layout's level, nothing on any run, and
+        // PowerPoint sets it in Barlow Bold Italic.
+        let p = para("Quotations are commonly printed", 30.0);
+        let mut level = crate::ir::MasterStyleLevel::default();
+        level.italic = true;
+        let got = layout_text_shape(
+            &TableMetrics, &shape(400.0, 200.0, None), &[p], &[], &[level], "Arial");
+        assert!(got.lines[0].italic, "the level's slant must reach the line");
+        assert!(got.lines[0].segments.iter().all(|s| s.italic));
+    }
+
+    #[test]
+    fn one_italic_run_does_not_turn_the_whole_line_italic() {
+        let runs = vec![
+            crate::ir::SlideRun { italic: true, ..run("Slanted ", None) },
+            run("upright", None),
+        ];
+        let segs = line_segments(&runs, 0, "Slanted upright", 18.0, "Arial", false, false);
+        assert_eq!(segs.len(), 2, "{segs:?}");
+        assert!(segs[0].italic);
+        assert!(!segs[1].italic);
     }
 }
 
