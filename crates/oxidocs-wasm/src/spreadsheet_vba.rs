@@ -246,6 +246,11 @@ enum HostObject {
     RangeCollection(CellRange, RangeAxis),
     Worksheet(usize),
     Worksheets,
+    /// Several blocks named as one range, which `Union` and `Range("A1,C3")`
+    /// make. Held by their place in a side list so this stays `Copy`.
+    Blocks(usize),
+    /// The blocks one of those is made of.
+    Areas(usize),
     /// The names a workbook keeps.
     Names,
     /// One of them, held by its text rather than its place in the list, since
@@ -309,6 +314,8 @@ struct WorkbookHost<'a> {
     calculation: i64,
     last_find: Option<FindState>,
     objects: Vec<HostObject>,
+    /// The blocks of every many-block range handed out.
+    blocks: Vec<Vec<CellRange>>,
     /// The text of every name a `Name` object was handed out for.
     name_handles: Vec<String>,
     debug_output: Vec<String>,
@@ -339,6 +346,7 @@ impl<'a> WorkbookHost<'a> {
             calculation: -4105,
             last_find: None,
             objects: Vec::new(),
+            blocks: Vec::new(),
             name_handles: Vec::new(),
             debug_output: Vec::new(),
             messages: Vec::new(),
@@ -359,6 +367,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::RangeCollection(_, RangeAxis::Columns) => "Columns",
                 HostObject::Worksheet(_) => "Worksheet",
                 HostObject::Worksheets => "Worksheets",
+                HostObject::Blocks(_) => "Range",
+                HostObject::Areas(_) => "Areas",
                 HostObject::Names => "Names",
                 HostObject::DefinedName(_) => "Name",
                 HostObject::Workbook => "Workbook",
@@ -433,6 +443,138 @@ impl<'a> WorkbookHost<'a> {
             self.objects.get(object.handle as usize),
             Some(HostObject::Worksheets)
         )
+    }
+
+    /// The blocks a many-block range is made of.
+    fn blocks(&self, object: &ObjectRef) -> Option<&[CellRange]> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Blocks(handle)) | Some(HostObject::Areas(handle)) => {
+                self.blocks.get(*handle).map(Vec::as_slice)
+            }
+            _ => None,
+        }
+    }
+
+    /// Name several blocks as one range.
+    ///
+    /// Blocks that JOIN are one block: asked of Excel, `Union` of A1:A3 and
+    /// A2:A4 answers `A1:A4` with one area, and so does `Union` of A1:A2 and
+    /// A3:A4, which only touch. What is left is a range with as many areas as
+    /// there are blocks — or, where they all came to one, an ordinary range.
+    fn blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
+        let mut areas: Vec<CellRange> = Vec::with_capacity(given.len());
+        for block in given {
+            Self::range_cell_count(block)?;
+            let mut block = block;
+            // Joining one may let it join another, so go round until nothing
+            // more comes together.
+            loop {
+                match areas.iter().position(|held| joined(*held, block).is_some()) {
+                    Some(at) => {
+                        block = joined(areas.remove(at), block).expect("just found");
+                    }
+                    None => break,
+                }
+            }
+            areas.push(block);
+        }
+        if areas.len() == 1 {
+            return Ok(self.object(HostObject::Range(areas[0])));
+        }
+        let handle = self.blocks.len();
+        self.blocks.push(areas);
+        Ok(self.object(HostObject::Blocks(handle)))
+    }
+
+    /// What `Application.Union` was handed.
+    fn union_ranges(&mut self, args: &[Value]) -> Result<Value, String> {
+        let mut given = Vec::new();
+        for value in args {
+            if matches!(value, Value::Missing) {
+                continue;
+            }
+            let Value::Object(object) = value else {
+                return Err("Application.Union takes Ranges".to_string());
+            };
+            match self.range(object) {
+                Some(range) => given.push(range),
+                None => match self.blocks(object) {
+                    Some(blocks) => given.extend_from_slice(blocks),
+                    None => return Err("Application.Union takes Ranges".to_string()),
+                },
+            }
+        }
+        if given.len() < 2 {
+            return Err("Application.Union needs two Ranges or more".to_string());
+        }
+        if given.iter().any(|block| block.sheet != given[0].sheet) {
+            return Err("Application.Union cannot join ranges on different worksheets".to_string());
+        }
+        self.blocks_object(given)
+    }
+
+    /// What one of these answers to. Anything else says it is not available,
+    /// rather than answering for the first block alone.
+    fn blocks_member(
+        &mut self,
+        handle: usize,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, String> {
+        let areas = self.blocks[handle].clone();
+        if name.eq_ignore_ascii_case("areas") {
+            return match args {
+                [] | [Value::Missing] => Ok(Some(self.object(HostObject::Areas(handle)))),
+                [wanted] => {
+                    let at = positive_index(wanted, "index")? as usize;
+                    let block = areas
+                        .get(at - 1)
+                        .ok_or_else(|| format!("this range has no area number {at}"))?;
+                    Ok(Some(self.object(HostObject::Range(*block))))
+                }
+                _ => Err("Areas takes one number".to_string()),
+            };
+        }
+        if name.eq_ignore_ascii_case("address") {
+            let mut written = Vec::with_capacity(areas.len());
+            for block in &areas {
+                written.push(range_address_from_args(*block, args)?);
+            }
+            return Ok(Some(Value::String(written.join(","))));
+        }
+        if name.eq_ignore_ascii_case("count") {
+            let mut total = 0u64;
+            for block in &areas {
+                total += Self::range_cell_count_large(*block)?;
+            }
+            return Ok(Some(Value::Integer(total as i64)));
+        }
+        // Excel answers for the FIRST block where a many-block range has to
+        // give one answer: `Union(A1:A2, C1:C2).Rows.Count` is 2, and `.Row`
+        // and `.Column` are the first block's corner.
+        if name.eq_ignore_ascii_case("row") {
+            return Ok(Some(Value::Integer(i64::from(areas[0].start_row))));
+        }
+        if name.eq_ignore_ascii_case("column") {
+            return Ok(Some(Value::Integer(i64::from(areas[0].start_column) + 1)));
+        }
+        if name.eq_ignore_ascii_case("rows") || name.eq_ignore_ascii_case("columns") {
+            let axis = if name.eq_ignore_ascii_case("rows") {
+                RangeAxis::Rows
+            } else {
+                RangeAxis::Columns
+            };
+            return self
+                .range_collection_object_or_item(areas[0], axis, args)
+                .map(Some);
+        }
+        if name.eq_ignore_ascii_case("cells") {
+            return self.range_cells_object(areas[0], args).map(Some);
+        }
+        if name.eq_ignore_ascii_case("worksheet") || name.eq_ignore_ascii_case("parent") {
+            return Ok(Some(self.object(HostObject::Worksheet(areas[0].sheet))));
+        }
+        Ok(None)
     }
 
     fn is_names(&self, object: &ObjectRef) -> bool {
@@ -772,6 +914,24 @@ impl<'a> WorkbookHost<'a> {
         args: &[Value],
         reach: NameReach,
     ) -> Result<Value, String> {
+        if let [Value::String(reference)] = args {
+            // Blocks named together, which Excel writes with commas between
+            // them: `Range("A1:A2,C1:C2")` is one range of two areas.
+            if reference.contains(',') {
+                let mut given = Vec::new();
+                for part in reference.split(',') {
+                    let (start, end) = parse_range_reference(part.trim())?;
+                    given.push(CellRange {
+                        sheet,
+                        start_row: start.1.min(end.1),
+                        start_column: start.0.min(end.0),
+                        end_row: start.1.max(end.1),
+                        end_column: start.0.max(end.0),
+                    });
+                }
+                return self.blocks_object(given);
+            }
+        }
         let (start, end) = match args {
             [Value::String(reference)] => match parse_range_reference(reference) {
                 Ok(pair) => pair,
@@ -4570,6 +4730,27 @@ impl Host for WorkbookHost<'_> {
                 }
                 return Ok(None);
             }
+            if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
+                return self.blocks_member(*handle, name, args);
+            }
+            if let Some(HostObject::Areas(handle)) = self.objects.get(receiver.handle as usize) {
+                let handle = *handle;
+                let areas = self.blocks[handle].clone();
+                if name.eq_ignore_ascii_case("count") {
+                    return Ok(Some(Value::Integer(areas.len() as i64)));
+                }
+                if name.eq_ignore_ascii_case("item") {
+                    let [wanted] = args else {
+                        return Err("Areas.Item takes one number".to_string());
+                    };
+                    let at = positive_index(wanted, "index")? as usize;
+                    let block = areas
+                        .get(at - 1)
+                        .ok_or_else(|| format!("this range has no area number {at}"))?;
+                    return Ok(Some(self.object(HostObject::Range(*block))));
+                }
+                return Ok(None);
+            }
             if let Some(held) = self.held_name(receiver).map(str::to_string) {
                 return self.name_member(&held, name, args).map(Some);
             }
@@ -4598,6 +4779,9 @@ impl Host for WorkbookHost<'_> {
                     self.selection
                 };
                 return Ok(Some(self.object(HostObject::Range(range))));
+            }
+            if self.is_application(receiver) && name.eq_ignore_ascii_case("union") {
+                return self.union_ranges(args).map(Some);
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("intersect") {
                 return self.intersect_ranges(args).map(Some);
@@ -4968,6 +5152,15 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+        if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
+            return self.blocks_member(*handle, name, &[]);
+        }
+        if let Some(HostObject::Areas(handle)) = self.objects.get(receiver.handle as usize) {
+            if name.eq_ignore_ascii_case("count") {
+                return Ok(Some(Value::Integer(self.blocks[*handle].len() as i64)));
+            }
+            return Ok(None);
+        }
         if self.is_names(receiver) {
             if name.eq_ignore_ascii_case("count") {
                 return Ok(Some(Value::Integer(
@@ -7050,6 +7243,43 @@ fn optional_integer_offset(value: &Value, default: i64, label: &str) -> Result<i
     } else {
         integer_offset(value, label)
     }
+}
+
+/// The one block two make, where two make one.
+///
+/// Two blocks come together only when what they cover is itself a block: one
+/// inside the other, or two that line up along a side and touch or overlap.
+/// A1:A2 and A3:A4 make A1:A4; A1:A2 and C1:C2 make nothing.
+fn joined(one: CellRange, other: CellRange) -> Option<CellRange> {
+    if one.sheet != other.sheet {
+        return None;
+    }
+    let covers = |outer: CellRange, inner: CellRange| {
+        outer.start_row <= inner.start_row
+            && outer.end_row >= inner.end_row
+            && outer.start_column <= inner.start_column
+            && outer.end_column >= inner.end_column
+    };
+    if covers(one, other) {
+        return Some(one);
+    }
+    if covers(other, one) {
+        return Some(other);
+    }
+    let all_of = CellRange {
+        sheet: one.sheet,
+        start_row: one.start_row.min(other.start_row),
+        start_column: one.start_column.min(other.start_column),
+        end_row: one.end_row.max(other.end_row),
+        end_column: one.end_column.max(other.end_column),
+    };
+    let side_by_side = one.start_row == other.start_row
+        && one.end_row == other.end_row
+        && one.start_column.max(other.start_column) <= one.end_column.min(other.end_column) + 1;
+    let one_above_the_other = one.start_column == other.start_column
+        && one.end_column == other.end_column
+        && one.start_row.max(other.start_row) <= one.end_row.min(other.end_row) + 1;
+    (side_by_side || one_above_the_other).then_some(all_of)
 }
 
 /// A sheet's name as a formula has to write it, in quotes where it needs them.
@@ -13056,6 +13286,44 @@ End Sub
                 "{call} should have refused"
             );
         }
+    }
+
+    /// Several blocks named as one range.
+    ///
+    /// Every answer was asked of Excel: `Union(A1:A2, C1:C2)` says its address
+    /// with a comma between the blocks, counts 4 cells over 2 areas, and
+    /// answers for the FIRST block where it has to give one answer — `.Row` 1,
+    /// `.Rows.Count` 2. Blocks that JOIN are one block, whether they overlap
+    /// (A1:A3 with A2:A4) or merely touch (A1:A2 with A3:A4): both answer
+    /// `A1:A4` with one area.
+    #[test]
+    fn vba_names_several_blocks_as_one_range() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Joined() As String\n\
+               Dim broken\n\
+               Set broken = Application.Union(Range(\"A1:A2\"), Range(\"C1:C2\"))\n\
+               Joined = broken.Address(False, False) & \"|\" & _\n\
+                 broken.Areas.Count & \"|\" & broken.Count & \"|\" & _\n\
+                 broken.Areas(2).Address(False, False) & \"|\" & _\n\
+                 broken.Row & \"|\" & broken.Column & \"|\" & _\n\
+                 broken.Rows.Count & \"|\" & broken.Columns.Count & \"|\" & _\n\
+                 Application.Union(Range(\"A1:A3\"), Range(\"A2:A4\")).Address(False, False) & \"|\" & _\n\
+                 Application.Union(Range(\"A1:A2\"), Range(\"A3:A4\")).Address(False, False) & \"|\" & _\n\
+                 Range(\"A1:A2,C1:C2\").Areas.Count & \"|\" & _\n\
+                 Range(\"A1:A2,A3:A4\").Address(False, False)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Joined", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("A1:A2,C1:C2|2|4|C1:C2|1|1|2|1|A1:A4|A1:A4|2|A1:A4".to_string())
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
