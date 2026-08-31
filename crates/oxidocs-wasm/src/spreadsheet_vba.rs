@@ -33,6 +33,14 @@ struct CellRange {
     end_column: u32,
 }
 
+/// Which part of a cell's dress a style object speaks for.
+#[derive(Debug, Clone, Copy)]
+enum StyleFace {
+    Font,
+    Interior,
+    Borders(BorderSelection),
+}
+
 #[derive(Debug, Clone, Copy)]
 enum RangeAxis {
     Rows,
@@ -251,6 +259,8 @@ enum HostObject {
     Blocks(usize),
     /// The blocks one of those is made of.
     Areas(usize),
+    /// The face, the fill or the edges of every block of one of those.
+    BlocksStyle(usize, StyleFace),
     /// The names a workbook keeps.
     Names,
     /// One of them, held by its text rather than its place in the list, since
@@ -369,6 +379,9 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::Worksheets => "Worksheets",
                 HostObject::Blocks(_) => "Range",
                 HostObject::Areas(_) => "Areas",
+                HostObject::BlocksStyle(_, StyleFace::Font) => "Font",
+                HostObject::BlocksStyle(_, StyleFace::Interior) => "Interior",
+                HostObject::BlocksStyle(_, StyleFace::Borders(_)) => "Borders",
                 HostObject::Names => "Names",
                 HostObject::DefinedName(_) => "Name",
                 HostObject::Workbook => "Workbook",
@@ -574,7 +587,59 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("worksheet") || name.eq_ignore_ascii_case("parent") {
             return Ok(Some(self.object(HostObject::Worksheet(areas[0].sheet))));
         }
+        // A dress worn by every block, not by the first alone: asked of Excel,
+        // colouring `Union(A1:A2, C1:C2)` colours C2 as well as A1.
+        if name.eq_ignore_ascii_case("font") {
+            return Ok(Some(
+                self.object(HostObject::BlocksStyle(handle, StyleFace::Font)),
+            ));
+        }
+        if name.eq_ignore_ascii_case("interior") {
+            return Ok(Some(
+                self.object(HostObject::BlocksStyle(handle, StyleFace::Interior)),
+            ));
+        }
+        if name.eq_ignore_ascii_case("borders") {
+            let selection = match args {
+                [] | [Value::Missing] => BorderSelection::All,
+                [wanted] => border_selection(wanted)?,
+                _ => return Err("Range.Borders takes one index".to_string()),
+            };
+            return Ok(Some(
+                self.object(HostObject::BlocksStyle(handle, StyleFace::Borders(selection))),
+            ));
+        }
         Ok(None)
+    }
+
+    /// Do to every block what would be done to one.
+    ///
+    /// The single-block path is the one that knows each member; this hands it
+    /// the blocks one at a time so that the two cannot drift apart.
+    fn set_on_every_block(
+        &mut self,
+        handle: usize,
+        face: Option<StyleFace>,
+        name: &str,
+        value: Value,
+    ) -> Result<bool, String> {
+        let areas = self.blocks[handle].clone();
+        let mut answered = false;
+        for block in areas {
+            let one = match face {
+                None => self.object(HostObject::Range(block)),
+                Some(StyleFace::Font) => self.object(HostObject::RangeFont(block)),
+                Some(StyleFace::Interior) => self.object(HostObject::RangeInterior(block)),
+                Some(StyleFace::Borders(selection)) => {
+                    self.object(HostObject::RangeBorders(block, selection))
+                }
+            };
+            let Value::Object(one) = one else {
+                return Err("a block could not be spoken to".to_string());
+            };
+            answered = self.set(&one, name, value.clone())?;
+        }
+        Ok(answered)
     }
 
     fn is_names(&self, object: &ObjectRef) -> bool {
@@ -5590,6 +5655,17 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        match self.objects.get(receiver.handle as usize) {
+            Some(HostObject::Blocks(handle)) => {
+                let handle = *handle;
+                return self.set_on_every_block(handle, None, name, value);
+            }
+            Some(HostObject::BlocksStyle(handle, face)) => {
+                let (handle, face) = (*handle, *face);
+                return self.set_on_every_block(handle, Some(face), name, value);
+            }
+            _ => {}
+        }
         if let Some(held) = self.held_name(receiver).map(str::to_string) {
             let Some(at) = self.name_at(&held) else {
                 return Err(format!("the name {held:?} is no longer in the workbook"));
@@ -13323,6 +13399,41 @@ End Sub
         assert_eq!(
             result,
             Value::String("A1:A2,C1:C2|2|4|C1:C2|1|1|2|1|A1:A4|A1:A4|2|A1:A4".to_string())
+        );
+    }
+
+    /// What is done to a many-block range is done to every block of it.
+    ///
+    /// Asked of Excel, colouring `Union(A1:A2, C1:C2)` leaves A1 and C2 red
+    /// and B1 — which is between them and in neither block — as it was, and
+    /// writing 7 to it writes 7 to both blocks.
+    #[test]
+    fn vba_dresses_every_block_of_a_many_block_range() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Dressed() As String\n\
+               Dim broken\n\
+               Set broken = Application.Union(Range(\"A1:A2\"), Range(\"C1:C2\"))\n\
+               broken.Interior.Color = 255\n\
+               broken.Font.Bold = True\n\
+               broken.Value = 7\n\
+               Dressed = Range(\"A1\").Interior.Color & \"|\" & _\n\
+                 Range(\"C2\").Interior.Color & \"|\" & _\n\
+                 Range(\"B1\").Interior.Color & \"|\" & _\n\
+                 Range(\"C1\").Font.Bold & \"|\" & _\n\
+                 Range(\"A1\").Value & \"|\" & Range(\"C2\").Value & \"|\" & _\n\
+                 \"[\" & Range(\"B2\").Value & \"]\"\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Dressed", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("255|255|16777215|True|7|7|[]".to_string())
         );
     }
 
