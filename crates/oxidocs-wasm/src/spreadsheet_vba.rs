@@ -117,6 +117,11 @@ enum BorderSelection {
 const BLACK: i64 = 0;
 const WHITE: i64 = 16_777_215;
 
+/// `xlUnderlineStyleSingle` and `xlUnderlineStyleNone`, which is what
+/// `Font.Underline` answers rather than True and False.
+const UNDERLINE_SINGLE: i64 = 2;
+const UNDERLINE_NONE: i64 = -4142;
+
 const MAX_WORKSHEET_ROW: u32 = 1_048_576;
 const MAX_WORKSHEET_COLUMN: u32 = 16_383;
 
@@ -4686,6 +4691,22 @@ impl Host for WorkbookHost<'_> {
                     .uniform_style(range, |style| style.italic)
                     .map(|value| Some(value.map(Value::Boolean).unwrap_or(Value::Null)));
             }
+            if name.eq_ignore_ascii_case("underline") {
+                // Not a Boolean: Excel answers with the STYLE of rule under
+                // the writing. A cell nobody has underlined answers
+                // `xlUnderlineStyleNone`, and one that has answers
+                // `xlUnderlineStyleSingle` — which is also what it answers
+                // after `Font.Underline = True`.
+                return self
+                    .uniform_style(range, |style| style.underline)
+                    .map(|value| {
+                        Some(match value {
+                            Some(true) => Value::Integer(UNDERLINE_SINGLE),
+                            Some(false) => Value::Integer(UNDERLINE_NONE),
+                            None => Value::Null,
+                        })
+                    });
+            }
             if name.eq_ignore_ascii_case("name") {
                 // As with the alignment, what comes back is what the cells
                 // EFFECTIVELY wear: a cell that names no face of its own
@@ -5089,6 +5110,35 @@ impl Host for WorkbookHost<'_> {
             return Ok(false);
         }
         if let Some(range) = self.range_font(receiver) {
+            if name.eq_ignore_ascii_case("underline") {
+                let asked = match &value {
+                    Value::Boolean(true) => UNDERLINE_SINGLE,
+                    Value::Boolean(false) => UNDERLINE_NONE,
+                    Value::Integer(number) => *number,
+                    Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                    _ => {
+                        return Err(
+                            "Font.Underline takes True, False, or an underline style".to_string()
+                        )
+                    }
+                };
+                let underline = match asked {
+                    UNDERLINE_SINGLE => true,
+                    UNDERLINE_NONE => false,
+                    // A double rule and the two accounting ones are styles
+                    // Excel keeps apart. This build carries only whether a
+                    // cell is underlined, and writing one of them down as a
+                    // single rule would be a quieter kind of wrong.
+                    -4119 | 4 | 5 => {
+                        return Err(format!(
+                            "Font.Underline {asked} is a style this build cannot                              keep apart from a single rule"
+                        ))
+                    }
+                    _ => return Err(format!("unsupported Font.Underline constant: {asked}")),
+                };
+                self.set_range_style(range, |_, style| style.underline = underline)?;
+                return Ok(true);
+            }
             if name.eq_ignore_ascii_case("name") {
                 // Excel keeps whatever it is given — a face this machine has
                 // never heard of is stored verbatim — and a number is taken as
@@ -6441,6 +6491,11 @@ fn host_constant(name: &str) -> Option<Value> {
         "xljustify" => -4130,
         "xlcenteracrossselection" => 7,
         "xldistributed" => -4117,
+        "xlunderlinestylenone" => -4142,
+        "xlunderlinestylesingle" => 2,
+        "xlunderlinestyledouble" => -4119,
+        "xlunderlinestylesingleaccounting" => 4,
+        "xlunderlinestyledoubleaccounting" => 5,
         "xlcontinuous" => 1,
         "xllinestylenone" => -4142,
         "xledgeleft" => 7,
@@ -12169,6 +12224,53 @@ End Sub
                     .to_string()
             )
         );
+    }
+
+    /// `Font.Underline` answers with a STYLE, not with True or False.
+    ///
+    /// Asked of Excel: a cell nobody has underlined answers
+    /// `xlUnderlineStyleNone` (-4142), and one set with either `True` or
+    /// `xlUnderlineStyleSingle` answers `2`. A block whose cells disagree
+    /// answers Null. The double and accounting rules are refused, since this
+    /// build carries only whether a cell is underlined.
+    #[test]
+    fn vba_says_which_rule_runs_under_a_cell() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ruled() As String\n\
+               Range(\"A1\").Font.Underline = True\n\
+               Range(\"A2\").Font.Underline = xlUnderlineStyleSingle\n\
+               Range(\"A3\").Font.Underline = False\n\
+               Range(\"B1\").Font.Underline = True\n\
+               Ruled = Range(\"A1\").Font.Underline & \"|\" & _\n\
+                 Range(\"A2\").Font.Underline & \"|\" & _\n\
+                 Range(\"A3\").Font.Underline & \"|\" & _\n\
+                 Range(\"C9\").Font.Underline & \"|\" & _\n\
+                 TypeName(Range(\"B1:B2\").Font.Underline) & \"|\" & _\n\
+                 Range(\"A1:A2\").Font.Underline\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ruled", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(result, Value::String("2|2|-4142|-4142|Null|2".to_string()));
+
+        // And the rules it cannot tell apart are refused rather than flattened.
+        for asked in ["xlUnderlineStyleDouble", "4", "5"] {
+            let mut bare = super::tests::workbook();
+            let module = parse_module(&format!(
+                "Public Sub Rule()\n  Range(\"A1\").Font.Underline = {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let error = execute_with_host(&module, "Rule", vec![], &mut host)
+                .expect_err("this build cannot keep that rule apart")
+                .to_string();
+            assert!(error.contains("keep apart"), "{asked} said {error:?}");
+        }
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
