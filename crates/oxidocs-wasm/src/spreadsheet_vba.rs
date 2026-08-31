@@ -692,6 +692,24 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("worksheet") || name.eq_ignore_ascii_case("parent") {
             return Ok(Some(self.object(HostObject::Worksheet(areas[0].sheet))));
         }
+        // What a many-block range holds is its FIRST block's: asked of Excel,
+        // `.Value` answers for that block alone. What it SHOWS is the uniform
+        // answer over all of them, the same rule one block follows about its
+        // own cells.
+        if name.eq_ignore_ascii_case("value")
+            || name.eq_ignore_ascii_case("value2")
+            || name.eq_ignore_ascii_case("formula")
+            || name.eq_ignore_ascii_case("formula2")
+        {
+            let first = self.object(HostObject::Range(areas[0]));
+            let Value::Object(first) = first else {
+                return Err("a block could not be spoken to".to_string());
+            };
+            return self.get(&first, name);
+        }
+        if name.eq_ignore_ascii_case("text") || name.eq_ignore_ascii_case("numberformat") {
+            return self.get_from_every_block(handle, None, name);
+        }
         // A dress worn by every block, not by the first alone: asked of Excel,
         // colouring `Union(A1:A2, C1:C2)` colours C2 as well as A1.
         if name.eq_ignore_ascii_case("font") {
@@ -715,6 +733,48 @@ impl<'a> WorkbookHost<'a> {
             ));
         }
         Ok(None)
+    }
+
+    /// Ask every block what would be asked of one, and see whether they agree.
+    ///
+    /// Asked of Excel, `Union(A1:A2, C1:C2)` where both blocks are red answers
+    /// 255, and where one is red and the other green it answers Null — save
+    /// for a fill, which answers 0, the same one-off it makes about cells that
+    /// disagree within one block.
+    fn get_from_every_block(
+        &mut self,
+        handle: usize,
+        face: Option<StyleFace>,
+        name: &str,
+    ) -> Result<Option<Value>, String> {
+        let areas = self.blocks[handle].clone();
+        let mut agreed: Option<Value> = None;
+        for block in areas {
+            let one = match face {
+                None => self.object(HostObject::Range(block)),
+                Some(StyleFace::Font) => self.object(HostObject::RangeFont(block)),
+                Some(StyleFace::Interior) => self.object(HostObject::RangeInterior(block)),
+                Some(StyleFace::Borders(selection)) => {
+                    self.object(HostObject::RangeBorders(block, selection))
+                }
+            };
+            let Value::Object(one) = one else {
+                return Err("a block could not be spoken to".to_string());
+            };
+            let Some(said) = self.get(&one, name)? else {
+                return Ok(None);
+            };
+            match &agreed {
+                None => agreed = Some(said),
+                Some(held) if *held == said => {}
+                Some(_) => {
+                    let fill = matches!(face, Some(StyleFace::Interior))
+                        && name.eq_ignore_ascii_case("color");
+                    return Ok(Some(if fill { Value::Integer(BLACK) } else { Value::Null }));
+                }
+            }
+        }
+        Ok(agreed)
     }
 
     /// Do to every block what would be done to one.
@@ -5379,6 +5439,12 @@ impl Host for WorkbookHost<'_> {
     fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
         if let Some(HostObject::Blocks(handle)) = self.objects.get(receiver.handle as usize) {
             return self.blocks_member(*handle, name, &[]);
+        }
+        if let Some(HostObject::BlocksStyle(handle, face)) =
+            self.objects.get(receiver.handle as usize)
+        {
+            let (handle, face) = (*handle, *face);
+            return self.get_from_every_block(handle, Some(face), name);
         }
         if let Some(HostObject::Areas(handle)) = self.objects.get(receiver.handle as usize) {
             if name.eq_ignore_ascii_case("count") {
@@ -13849,6 +13915,49 @@ End Sub
         };
 
         assert_eq!(result, Value::String("[]10|12|100|57".to_string()));
+    }
+
+    /// A many-block range answers for all its blocks, or for the first alone.
+    ///
+    /// Asked of Excel: where the blocks agree it says what they say — 255,
+    /// True, "5" — and where they disagree it says Null, save for a fill,
+    /// which says 0. What it HOLDS is the first block's, so `.Value` of two
+    /// single cells is the first one's.
+    #[test]
+    fn vba_asks_every_block_and_answers_when_they_agree() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Asked() As String\n\
+               Range(\"A1:A2,C1:C2\").Interior.Color = 255\n\
+               Range(\"A1:A2,C1:C2\").Font.Bold = True\n\
+               Range(\"A1:A2,C1:C2\").Value = 5\n\
+               Range(\"E1:E2\").Interior.Color = 255\n\
+               Range(\"G1:G2\").Interior.Color = 65280\n\
+               Range(\"E1:E2\").Font.Bold = True\n\
+               Range(\"E1:E2\").Value = 5\n\
+               Range(\"G1:G2\").Value = 9\n\
+               Range(\"I1\").Value = 3\n\
+               Range(\"K1\").Value = 3\n\
+               Asked = Range(\"A1:A2,C1:C2\").Interior.Color & \"|\" & _\n\
+                 Range(\"A1:A2,C1:C2\").Font.Bold & \"|\" & _\n\
+                 Range(\"A1:A2,C1:C2\").NumberFormat & \"|\" & _\n\
+                 Range(\"A1:A2,C1:C2\").Text & \"|\" & _\n\
+                 Range(\"E1:E2,G1:G2\").Interior.Color & \"|\" & _\n\
+                 TypeName(Range(\"E1:E2,G1:G2\").Font.Bold) & \"|\" & _\n\
+                 TypeName(Range(\"E1:E2,G1:G2\").Text) & \"|\" & _\n\
+                 Range(\"I1,K1\").Value & \"|\" & Range(\"I1,K1\").Count\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Asked", vec![], &mut host).unwrap()
+        };
+
+        assert_eq!(
+            result,
+            Value::String("255|True|General|5|0|Null|Null|3|2".to_string())
+        );
     }
 
     /// The names a workbook keeps: making them, asking for them, dropping one.
