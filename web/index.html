@@ -1511,6 +1511,7 @@ document.addEventListener('keydown', (e) => {
 
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, format_cell_number } from './oxidocs_wasm.js';
+import { collectAdvances, familyPresent } from './face-metrics.js';
 import { cancelActiveVbaExecution, parseVbaArguments, runVbaInWorker } from './vba-runner.js';
 
 let wasmReady = false;
@@ -4197,7 +4198,10 @@ function markEngineWrap(p, shape, para, lvl) {
     const text = runs.map(r => r.text).join('');
     if (!text.trim()) return;
     const family = (runs[0] && runs[0].font_family) || (lvl && lvl.font_family);
-    if (!family || !slide_family_measurable(family)) {
+    // The engine measures with its tables, or with what this browser can
+    // measure for a face the tables lack -- but never with a substitute, so a
+    // family the browser does not have is still left to the browser's own wrap.
+    if (!family || !(slide_family_measurable(family) || familyPresent(family))) {
         p.dataset.wrap = 'browser';
         return;
     }
@@ -4208,7 +4212,11 @@ function markEngineWrap(p, shape, para, lvl) {
     const width = shape.width - (shape.l_ins || 0) - (shape.r_ins || 0);
     let lines = null;
     try {
-        lines = break_slide_paragraph(text, fs, family, bold, italic, width, runs);
+        const advances = collectAdvances(
+            runs.map(r => ({ text: r.text, font_family: r.font_family || family,
+                             bold: r.bold, italic: r.italic })), family);
+        lines = break_slide_paragraph(text, fs, family, bold, italic, width, runs,
+                                      advances);
     } catch (e) {
         console.warn('engine wrap refused', e);
     }

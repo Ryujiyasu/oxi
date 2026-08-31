@@ -81,6 +81,7 @@ import init, {
   parse_presentation, layout_slide_shape, slide_family_measurable,
   edit_pptx_with_splits,
 } from './oxidocs_wasm.js';
+import { collectAdvances, familyPresent, measureFace } from './face-metrics.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('slide'), ctx = cv.getContext('2d');
@@ -108,6 +109,16 @@ function masterLevels(shape) {
   return st.other || [];
 }
 
+// The family a paragraph inherits when its runs do not name one, so the page
+// measures the face the engine is about to use rather than a default it isn't.
+function familyOfLevel(shape, para) {
+  const levels = (shape.ph_levels && shape.ph_levels.length)
+    ? shape.ph_levels : masterLevels(shape);
+  if (!levels.length) return null;
+  const lv = levels[Math.min(para.lvl || 0, levels.length - 1)];
+  return (lv && lv.font_family) || null;
+}
+
 function paragraphsOf(shape) {
   const c = shape.content;
   if (!c) return null;
@@ -123,11 +134,22 @@ function layoutSlide() {
   slide.shapes.forEach((shape, shapeIndex) => {
     const paragraphs = paragraphsOf(shape);
     if (!paragraphs || !paragraphs.length) return;
+    // What this browser can measure for the faces this shape names. The
+    // engine's tables answer for what the build machine had; these answer for
+    // everything else the browser can actually draw.
+    const fallback = state.pres.minor_font || 'Calibri';
+    const advances = collectAdvances(
+      paragraphs.flatMap(p => p.runs.map(r => ({
+        text: r.text,
+        font_family: r.font_family || familyOfLevel(shape, p) || fallback,
+        bold: r.bold, italic: r.italic,
+      }))),
+      fallback);
     let layout = null;
     try {
       layout = layout_slide_shape(
         shape, paragraphs, masterLevels(shape), shape.ph_levels || [],
-        state.pres.minor_font || 'Calibri');
+        fallback, advances);
     } catch (e) {
       console.warn('layout refused', e);
     }
@@ -658,22 +680,37 @@ function say(msg) { $('status').textContent = msg; }
 
 function coverage() {
   const missing = new Set();
-  let engine = 0, total = 0;
+  let engine = 0, total = 0, byBrowser = 0;
   for (const entry of state.laid) {
     total++;
-    if (entry.layout.complete) engine++;
-    else for (const p of entry.paragraphs) {
-      const fam = p.runs.find(r => r.font_family)?.font_family;
-      if (fam && !slide_family_measurable(fam)) missing.add(fam);
+    const fams = new Set();
+    for (const p of entry.paragraphs) {
+      const fam = p.runs.find(r => r.font_family)?.font_family
+        || familyOfLevel(entry.shape, p);
+      if (fam) fams.add(fam);
+    }
+    if (entry.layout.complete) {
+      engine++;
+      // A face the build machine never measured, that this browser had.
+      if ([...fams].some(f => !slide_family_measurable(f) && familyPresent(f))) {
+        byBrowser++;
+      }
+    } else {
+      for (const f of fams) {
+        if (!slide_family_measurable(f) && !familyPresent(f)) missing.add(f);
+      }
     }
   }
+  state.byBrowser = byBrowser;
   $('s-cover').innerHTML = total
     ? `<span class="tag ${engine === total ? 'engine' : 'browser'}">` +
-      `${engine} / ${total} shapes</span>`
+      `${engine} / ${total} shapes</span>` +
+      (byBrowser ? ` <span class="hint">${byBrowser} on faces this browser measured</span>` : '')
     : '—';
   $('s-fams').innerHTML = missing.size
     ? [...missing].map(f => `<li>${f}</li>`).join('')
     : '<li class="hint">none — every shape is the engine’s</li>';
+  $('s-fams').dataset.byBrowser = byBrowser;
 }
 
 function showSlide(i) {

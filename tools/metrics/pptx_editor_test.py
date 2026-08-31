@@ -328,6 +328,77 @@ def run_deck(page, port: int, pptx: Path, rep: Report) -> None:
     rep.check(deck, "console", not errors, "; ".join(errors[:2]) or "no page errors")
 
 
+FACE_JS = r"""
+async (text) => {
+  const m = await import('./face-metrics.js');
+  const w = await import('./oxidocs_wasm.js');
+  await w.default();
+  const out = { ghost: m.familyPresent('Zzyzx Nonesuch Ghost'), faces: [] };
+  for (const [family, bold] of [['Arial', false], ['Arial', true], ['Calibri', false]]) {
+    const em = m.measureFace(family, bold, false, text);
+    if (!em) { out.faces.push({ family, bold, absent: true }); continue; }
+    let worst = 0, n = 0;
+    for (let i = 0; i < text.length; i++) {
+      const table = w.slide_face_advance(family, bold, false, text[i]);
+      if (table === undefined || table === null) continue;
+      worst = Math.max(worst, Math.abs(em[i] - table));
+      n++;
+    }
+    out.faces.push({ family, bold, n, worst });
+  }
+  // A face nobody has must still be refused rather than guessed at.
+  out.ghostAdvances = m.measureFace('Zzyzx Nonesuch Ghost', false, false, 'abc');
+  // And a glyph the face itself lacks must be refused too: the browser
+  // substitutes for that ONE character without complaining.
+  out.kanjiInArial = m.measureFace('Arial', false, false, '漢');
+  out.latinInArial = m.measureFace('Arial', false, false, 'Wa');
+  out.collected = m.collectAdvances(
+    [{ text: 'A漢', font_family: 'Arial' }], 'Arial');
+  return out;
+}
+"""
+
+
+def run_faces(page, port: int, rep: Report) -> None:
+    """What the PAGE measures must agree with what the tables say.
+
+    The engine now lays out with advances the browser supplied, so a deck
+    naming a face the build machine never had is still the engine's layout
+    rather than the browser's wrap. That is only sound if the two sources
+    agree where both know the same face -- and if a face the browser does NOT
+    have is refused, because a browser asked for a missing font substitutes
+    silently instead of failing.
+    """
+    print("faces (browser vs tables)", flush=True)
+    page.goto(f"http://127.0.0.1:{port}/pptx-editor.html")
+    page.wait_for_function(
+        "() => document.getElementById('status').textContent.includes('ready')",
+        timeout=60000)
+    ascii_text = "".join(chr(c) for c in range(32, 127))
+    res = page.evaluate(FACE_JS, ascii_text)
+    for f in res["faces"]:
+        name = f["family"] + (" bold" if f["bold"] else "")
+        if f.get("absent"):
+            rep.check("faces", name, False, "this browser does not have it")
+            continue
+        # The engine quantises to 1/8pt; at 12pt that is 0.0104 em, so an
+        # agreement two orders below it cannot move a break.
+        rep.check("faces", name, f["n"] >= 90 and f["worst"] < 0.0005,
+                  f"{f['n']} chars, worst {f['worst']:.6f} em")
+    rep.check("faces", "ghost", res["ghost"] is False,
+              "a family nobody has is reported absent")
+    rep.check("faces", "ghost refused", res["ghostAdvances"] is None,
+              "and is not measured through a substitute")
+    rep.check("faces", "missing glyph", res["kanjiInArial"] == [None],
+              "a kanji is refused in a Latin face")
+    rep.check("faces", "present glyph", all(x is not None for x in res["latinInArial"]),
+              "while its own letters are measured")
+    got = res["collected"]
+    rep.check("faces", "collected", len(got) == 1 and got[0]["chars"] == "A",
+              f"only the characters the face has are handed over: "
+              f"{got[0]['chars']!r}" if got else "nothing collected")
+
+
 def run_index_html(page, port: int, pptx: Path, rep: Report) -> None:
     """The suite viewer's own pptx editing path, checked for the same defect."""
     deck = pptx.name.split("__")[0]
@@ -382,6 +453,7 @@ def main() -> None:
         browser = p.chromium.launch(headless=not args.headed)
         page = browser.new_page(viewport={"width": 1500, "height": 1000},
                                 accept_downloads=True)
+        run_faces(page, port, rep)
         for pptx in targets:
             run_deck(page, port, pptx, rep)
         run_index_html(page, port, targets[0], rep)

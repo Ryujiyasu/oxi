@@ -1767,3 +1767,104 @@ mod shape_tests {
         assert_eq!(got.lines[1].para_index, 1);
     }
 }
+
+/// A [`FaceMetrics`] whose answers were supplied from outside.
+///
+/// The compiled tables carry the faces this machine could measure; a browser
+/// can measure any face it is able to DRAW, which is a far larger set and the
+/// only one that helps somebody else's deck. So the page measures the
+/// characters a shape needs and hands them over, and the engine's rules run on
+/// those -- the break law, the per-run measure, the indent geometry, all of it
+/// unchanged.
+///
+/// Advances are in EM units, keyed by `(family, bold, italic)` and character.
+/// A character the supplier did not measure is refused rather than guessed, so
+/// a shape it cannot cover is reported incomplete exactly as before.
+pub struct SuppliedMetrics {
+    faces: std::collections::HashMap<(String, bool, bool), std::collections::HashMap<char, f32>>,
+}
+
+impl SuppliedMetrics {
+    pub fn new() -> Self {
+        Self { faces: std::collections::HashMap::new() }
+    }
+
+    /// Record what one face advances for one character.
+    pub fn insert(&mut self, family: &str, bold: bool, italic: bool, ch: char, em: f32) {
+        self.faces
+            .entry((family.to_ascii_lowercase(), bold, italic))
+            .or_default()
+            .insert(ch, em);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+}
+
+impl Default for SuppliedMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FaceMetrics for SuppliedMetrics {
+    fn advance_em(&self, family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+        let key = (family.to_ascii_lowercase(), bold, italic);
+        self.faces
+            .get(&key)
+            .and_then(|m| m.get(&ch).copied())
+            // The compiled tables remain the last word for the faces they do
+            // carry, so a supplier that misses one is no worse off.
+            //
+            // ★Nothing else is invented. A style the supplier did not measure
+            // is NOT served from the upright face: a bullet or a marker can
+            // ask for a combination no run named, and answering it with the
+            // wrong face's advances would lay the line out confidently wrong.
+            // Unanswered means the shape is declined, which is the honest end.
+            .or_else(|| TableMetrics.advance_em(family, bold, italic, ch))
+    }
+
+    fn has_all_glyphs(&self, family: &str, bold: bool, italic: bool, text: &str) -> bool {
+        text.chars().all(|c| self.advance_em(family, bold, italic, c).is_some())
+    }
+
+    // `resolves` keeps its default of `true`, for the reason spelled out on
+    // `TableMetrics`: a name this source cannot measure may still be one the
+    // deck embeds, and renaming it would be worse than declining the shape.
+}
+
+#[cfg(test)]
+mod supplied_tests {
+    use super::*;
+
+    #[test]
+    fn a_supplied_face_is_measured_by_what_was_given() {
+        let mut m = SuppliedMetrics::new();
+        for c in "ab".chars() {
+            m.insert("Zzyzx", false, false, c, 0.5);
+        }
+        assert_eq!(m.advance_em("Zzyzx", false, false, 'a'), Some(0.5));
+        assert_eq!(master_units(&m, "ab", 12.0, "Zzyzx", false, false, 0.0), Some(96));
+    }
+
+    #[test]
+    fn a_character_nobody_measured_is_still_refused() {
+        let mut m = SuppliedMetrics::new();
+        m.insert("Zzyzx", false, false, 'a', 0.5);
+        assert_eq!(m.advance_em("Zzyzx", false, false, 'q'), None);
+    }
+
+    #[test]
+    fn a_style_that_was_not_measured_is_refused_not_borrowed() {
+        let mut m = SuppliedMetrics::new();
+        m.insert("Zzyzx", false, false, 'a', 0.5);
+        assert_eq!(m.advance_em("Zzyzx", true, false, 'a'), None);
+    }
+
+    #[test]
+    fn the_compiled_tables_still_answer_for_what_they_carry() {
+        let m = SuppliedMetrics::new();
+        assert!(m.advance_em("Arial", false, false, 'a').is_some());
+    }
+}

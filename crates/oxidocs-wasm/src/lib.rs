@@ -882,14 +882,16 @@ pub fn break_slide_paragraph(
     italic: bool,
     width_pt: f32,
     runs: JsValue,
+    advances: JsValue,
 ) -> Result<JsValue, JsError> {
     let runs: Vec<oxislides_core::ir::SlideRun> = if runs.is_undefined() || runs.is_null() {
         Vec::new()
     } else {
         serde_wasm_bindgen::from_value(runs).map_err(|e| JsError::new(&e.to_string()))?
     };
+    let supplied = supplied_metrics(advances)?;
     let lines = oxislides_core::layout::break_paragraph(
-        &oxislides_core::layout::TableMetrics,
+        &supplied,
         text,
         font_size,
         family,
@@ -904,6 +906,43 @@ pub fn break_slide_paragraph(
         }
         None => Ok(JsValue::NULL),
     }
+}
+
+/// What the page measured for one face.
+///
+/// `chars` and `em` are parallel: the Nth character of `chars` advances `em[N]`
+/// EM units in this face. A string and an array keep the crossing small -- one
+/// entry per face, not per character.
+#[cfg(feature = "suite")]
+#[derive(Deserialize)]
+struct SuppliedFaceJs {
+    family: String,
+    #[serde(default)]
+    bold: bool,
+    #[serde(default)]
+    italic: bool,
+    chars: String,
+    em: Vec<f32>,
+}
+
+/// Turn what the page measured into a [`FaceMetrics`] the engine can use.
+///
+/// An empty or absent list gives the compiled tables alone, which is exactly
+/// what every existing caller gets.
+#[cfg(feature = "suite")]
+fn supplied_metrics(v: JsValue) -> Result<oxislides_core::layout::SuppliedMetrics, JsError> {
+    let mut m = oxislides_core::layout::SuppliedMetrics::new();
+    if v.is_undefined() || v.is_null() {
+        return Ok(m);
+    }
+    let faces: Vec<SuppliedFaceJs> =
+        serde_wasm_bindgen::from_value(v).map_err(|e| JsError::new(&e.to_string()))?;
+    for f in faces {
+        for (ch, em) in f.chars.chars().zip(f.em.iter()) {
+            m.insert(&f.family, f.bold, f.italic, ch, *em);
+        }
+    }
+    Ok(m)
 }
 
 /// Lay out one text shape the way the engine does, for the browser to draw.
@@ -926,6 +965,7 @@ pub fn layout_slide_shape(
     master: JsValue,
     ph_levels: JsValue,
     default_family: &str,
+    advances: JsValue,
 ) -> Result<JsValue, JsError> {
     let shape: oxislides_core::ir::Shape =
         serde_wasm_bindgen::from_value(shape).map_err(|e| JsError::new(&e.to_string()))?;
@@ -942,8 +982,9 @@ pub fn layout_slide_shape(
         } else {
             serde_wasm_bindgen::from_value(ph_levels).map_err(|e| JsError::new(&e.to_string()))?
         };
+    let supplied = supplied_metrics(advances)?;
     let out = oxislides_core::layout::layout_text_shape(
-        &oxislides_core::layout::TableMetrics,
+        &supplied,
         &shape,
         &paragraphs,
         &master,
@@ -951,6 +992,18 @@ pub fn layout_slide_shape(
         default_family,
     );
     serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// What the compiled tables say one character advances, in EM units.
+///
+/// The page measures faces itself; this lets it check that measuring against a
+/// face the tables also carry, instead of trusting a canvas it never verified.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn slide_face_advance(family: &str, bold: bool, italic: bool, ch: &str) -> Option<f32> {
+    use oxislides_core::layout::FaceMetrics;
+    let c = ch.chars().next()?;
+    oxislides_core::layout::TableMetrics.advance_em(family, bold, italic, c)
 }
 
 /// Whether the engine can measure this family at all, so a caller can tell a
