@@ -627,6 +627,93 @@ impl<'a> WorkbookHost<'a> {
         self.blocks_object(found)
     }
 
+    /// Work a function out the way the sheet would.
+    ///
+    /// Everything above is written out here because Excel answers it
+    /// differently from the sheet. What is left is the same function the sheet
+    /// has, so it is asked of the same engine the sheet is worked out with
+    /// rather than written a second time.
+    ///
+    /// Two things are not the sheet's behaviour and are done here:
+    /// `WorksheetFunction` RAISES where the sheet would show an error value —
+    /// `Search("z", "abc")` raises in Excel where `=SEARCH("z","abc")` shows
+    /// `#VALUE!` — and a name Excel does not carry is refused before the
+    /// engine ever sees it.
+    fn worksheet_function_from_engine(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, String> {
+        if !worksheet_function_carries(name) {
+            return Err(format!(
+                "WorksheetFunction has no {name}; VBA has one of its own"
+            ));
+        }
+        // A trailing argument nobody passed is not an empty one: it is not
+        // there at all, which is what the engine's own arity checks read.
+        let mut given = args;
+        while matches!(given.last(), Some(Value::Missing)) {
+            given = &given[..given.len() - 1];
+        }
+        let mut asked = Vec::with_capacity(given.len());
+        for value in given {
+            asked.push(self.engine_argument(value)?);
+        }
+        // The engine's own dispatch is written in capitals, as the parser
+        // hands names to it; a macro writes `Substitute` and would find
+        // nothing at all.
+        let asked_for = name.to_ascii_uppercase();
+        match oxicells_calc::functions::call(&asked_for, &asked) {
+            oxicells_calc::Value::Error(oxicells_calc::ExcelError::Name) => Err(format!(
+                "WorksheetFunction.{name} is not supported in the browser"
+            )),
+            oxicells_calc::Value::Error(other) => Err(format!(
+                "WorksheetFunction.{name} answers {other}"
+            )),
+            oxicells_calc::Value::Number(number) => Ok(numeric_result(number)),
+            oxicells_calc::Value::Text(text) => Ok(Value::String(text)),
+            oxicells_calc::Value::Logical(state) => Ok(Value::Boolean(state)),
+            oxicells_calc::Value::Blank => Ok(Value::Empty),
+        }
+    }
+
+    /// One argument, put the way the engine takes it. A range goes over as the
+    /// block it is, so that a function reading down a column sees a column.
+    fn engine_argument(&mut self, value: &Value) -> Result<oxicells_calc::functions::Arg, String> {
+        use oxicells_calc::functions::{Arg, RangeData};
+        if let Value::Object(object) = value {
+            if let Some(range) = self.range(object) {
+                Self::range_cell_count(range)?;
+                let width = (range.end_column - range.start_column + 1) as usize;
+                let height = (range.end_row - range.start_row + 1) as usize;
+                let mut cells = Vec::with_capacity(width * height);
+                for address in range.addresses() {
+                    cells.push(engine_value(&self.cell_value(address)));
+                }
+                return Ok(Arg::Range(RangeData {
+                    width,
+                    height,
+                    cells,
+                }));
+            }
+            return Err("WorksheetFunction was handed something that is not a Range".to_string());
+        }
+        if let Value::Array(array) = value {
+            let (width, height) = match array.dimensions.as_slice() {
+                [rows] => (1, rows.length),
+                [rows, columns] => (columns.length, rows.length),
+                _ => return Err("WorksheetFunction takes an array of one or two axes".to_string()),
+            };
+            let cells = array.values.iter().map(engine_value).collect();
+            return Ok(Arg::Range(RangeData {
+                width,
+                height,
+                cells,
+            }));
+        }
+        Ok(Arg::Value(engine_value(value)))
+    }
+
     /// Whether a cell is out of sight, by its row or by its column.
     fn is_cell_hidden(&self, address: CellAddress) -> bool {
         let Some(sheet) = self.workbook.sheets.get(address.sheet) else {
@@ -2563,9 +2650,7 @@ impl<'a> WorkbookHost<'a> {
         } else if name.eq_ignore_ascii_case("max") {
             numbers.into_iter().reduce(f64::max).unwrap_or(0.0)
         } else {
-            return Err(format!(
-                "WorksheetFunction.{name} is not supported in the browser"
-            ));
+            return self.worksheet_function_from_engine(name, args);
         };
         Ok(numeric_result(result))
     }
@@ -8484,6 +8569,51 @@ impl From<Value> for OutputValue {
     }
 }
 
+/// Whether Excel's `WorksheetFunction` carries this name at all.
+///
+/// It leaves off the worksheet functions VBA already has of its own, so a
+/// macro calls `Len(text)` rather than `WorksheetFunction.Len(text)` — asking
+/// for the second raises "object doesn't support this property or method".
+/// Measured by asking Excel 16.0 for each name the engine knows: 82 answered
+/// and these 30 were not there. `NOTAFUNCTION` was asked alongside them as a
+/// control and was reported absent, which is what says the question was being
+/// answered rather than deflected.
+fn worksheet_function_carries(name: &str) -> bool {
+    const ABSENT: &[&str] = &[
+        // each of these is a VBA function of its own
+        "ABS", "CHAR", "CODE", "DATE", "DAY", "HOUR", "INT", "LEFT", "LEN", "LOWER", "MID",
+        "MINUTE", "MOD", "MONTH", "NOT", "RIGHT", "SECOND", "SQRT", "TIME", "UPPER", "VALUE",
+        "YEAR",
+        // and each of these is said another way in VBA: `&` for CONCATENATE,
+        // `=` for EXACT, `IsEmpty` for ISBLANK, `Range.Rows.Count` for ROWS
+        "COLUMNS", "CONCATENATE", "DATEDIF", "EXACT", "HYPERLINK", "ISBLANK", "ISREF", "ROWS",
+    ];
+    !ABSENT
+        .iter()
+        .any(|absent| absent.eq_ignore_ascii_case(name))
+}
+
+/// One value, put the way the engine holds one.
+fn engine_value(value: &Value) -> oxicells_calc::Value {
+    use oxicells_calc::{ExcelError, Value as Sheet};
+    match value {
+        Value::Integer(number) => Sheet::Number(*number as f64),
+        Value::Double(number) => Sheet::Number(*number),
+        Value::String(text) => Sheet::Text(text.clone()),
+        Value::Boolean(state) => Sheet::Logical(*state),
+        Value::Error(number) => Sheet::Error(match spreadsheet_error_text(*number) {
+            "#NULL!" => ExcelError::Null,
+            "#DIV/0!" => ExcelError::DivZero,
+            "#REF!" => ExcelError::Ref,
+            "#NAME?" => ExcelError::Name,
+            "#NUM!" => ExcelError::Num,
+            "#N/A" => ExcelError::NA,
+            _ => ExcelError::Value,
+        }),
+        _ => Sheet::Blank,
+    }
+}
+
 fn spreadsheet_error_number(value: &str) -> i64 {
     match value.to_ascii_uppercase().as_str() {
         "#NULL!" => 2000,
@@ -8858,6 +8988,95 @@ mod tests {
             named,
             Value::String("a report.xlsx||a report.xlsx".to_string())
         );
+    }
+
+    /// Every answer below was taken from Excel 16.0 through
+    /// `Application.WorksheetFunction`, and the last three are the shape of
+    /// the thing rather than one more answer: `Search` for text that is not
+    /// there RAISES where the sheet would show `#VALUE!`, and `Len` and `Abs`
+    /// are not members at all — Excel leaves off the functions VBA already
+    /// has, so a macro calls `Len(text)` instead.
+    #[test]
+    fn worksheet_function_asks_the_engine_the_sheet_uses() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim f\n\
+               Set f = Application.WorksheetFunction\n\
+               Ask = f.Substitute(\"a-b\", \"-\", \"+\")\n\
+               Ask = Ask & \"|\" & f.Rept(\"ab\", 2)\n\
+               Ask = Ask & \"|\" & f.Find(\"b\", \"abc\")\n\
+               Ask = Ask & \"|\" & f.Search(\"B\", \"abc\")\n\
+               Ask = Ask & \"|\" & f.Unicode(\"A\")\n\
+               Ask = Ask & \"|\" & f.Weekday(45000)\n\
+               Ask = Ask & \"|\" & f.EoMonth(45000, 1)\n\
+               Ask = Ask & \"|\" & f.Days(45001, 45000)\n\
+               Ask = Ask & \"|\" & f.Ceiling(2.1, 1)\n\
+               Ask = Ask & \"|\" & f.Floor(2.9, 1)\n\
+               Ask = Ask & \"|\" & f.Product(2, 3)\n\
+               Ask = Ask & \"|\" & f.IfError(1, 2)\n\
+               Ask = Ask & \"|\" & f.Choose(2, \"a\", \"b\")\n\
+               Ask = Ask & \"|\" & f.Replace(\"abcd\", 2, 2, \"X\")\n\
+               Ask = Ask & \"|\" & f.Concat(\"a\", \"b\")\n\
+               Ask = Ask & \"|\" & f.TextJoin(\"-\", True, \"a\", \"b\")\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            result,
+            Value::String(
+                "a+b|abab|2|2|65|4|45046|1|3|2|6|1|b|aXd|ab|a-b".to_string()
+            )
+        );
+
+        for (call, expected) in [
+            ("f.Search(\"z\", \"abc\")", "#VALUE!"),
+            ("f.Len(\"abcd\")", "VBA has one of its own"),
+            ("f.Abs(-3)", "VBA has one of its own"),
+        ] {
+            let module = parse_module(&format!(
+                "Public Function Ask() As String\n\
+                   Dim f\n\
+                   Set f = Application.WorksheetFunction\n\
+                   Ask = {call}\n\
+                 End Function\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Ask", vec![], &mut host).unwrap_err();
+            assert!(refused.message.contains(expected), "{call}: {refused:?}");
+        }
+    }
+
+    /// A range goes over to the engine as the block it is, so a function that
+    /// reads down a column sees a column. Excel answers these on 1, 2, 3 in
+    /// A1:A3: SumIfs 5, CountIfs 2, AverageIfs 2.5 and Product 6.
+    #[test]
+    fn worksheet_function_hands_the_engine_a_whole_block() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Dim f\n\
+               Range(\"A1\").Value = 1\n\
+               Range(\"A2\").Value = 2\n\
+               Range(\"A3\").Value = 3\n\
+               Set f = Application.WorksheetFunction\n\
+               Ask = f.SumIfs(Range(\"A1:A3\"), Range(\"A1:A3\"), \">1\")\n\
+               Ask = Ask & \"|\" & f.CountIfs(Range(\"A1:A3\"), \">1\")\n\
+               Ask = Ask & \"|\" & f.AverageIfs(Range(\"A1:A3\"), Range(\"A1:A3\"), \">1\")\n\
+               Ask = Ask & \"|\" & f.Product(Range(\"A1:A3\"))\n\
+             End Function\n",
+        )
+        .unwrap();
+        let result = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(result, Value::String("5|2|2.5|6".to_string()));
     }
 
     #[test]
