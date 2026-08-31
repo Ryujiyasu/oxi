@@ -42,9 +42,16 @@ async ([bytes, slideNo]) => {
     return st.other || [];
   };
   const out = [];
+  let skipped = 0;
   for (const sh of slide.shapes) {
     const paras = sh.content?.TextBox?.paragraphs ?? sh.content?.AutoShape?.paragraphs;
     if (!paras || !paras.length) continue;
+    // ★A rotated shape's lines run along an axis this layout does not turn:
+    // the engine answers in the shape's own frame, so comparing its offsets
+    // against the PDF's x measures the rotation, not the advances. d06 slide
+    // 34's 'HIGH VALUE 1' sits in a shape at +90 and read as 48pt of
+    // horizontal "defect" and 29pt of vertical.
+    if (sh.rotation) { skipped++; continue; }
     const lv = levelsOf(sh);
     const runs = [];
     paras.forEach(p => {
@@ -82,7 +89,8 @@ async ([bytes, slideNo]) => {
                  size: line.font_size, family: line.family, offs });
     }
   }
-  return { width: pres.slide_width, height: pres.slide_height, lines: out };
+  return { width: pres.slide_width, height: pres.slide_height,
+           lines: out, skipped };
 }
 """
 

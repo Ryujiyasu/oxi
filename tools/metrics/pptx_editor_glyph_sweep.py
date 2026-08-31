@@ -31,14 +31,32 @@ if hasattr(sys.stdout, "reconfigure"):
 
 REPO = Path(__file__).resolve().parents[2]
 
-# One call per deck: lay out every slide and hand back the lines with the x of
-# each character boundary, in points from the line's start.
-JS = r"""
-async (bytes) => {
+# Parse once per deck, then ask for ONE SLIDE at a time.
+#
+# ★The whole deck in one message killed the page on d12 -- and a page that dies
+# takes the driver connection with it, so every deck after it could not even
+# launch a browser. One slide per call bounds what crosses the boundary, and a
+# failure costs one slide.
+PARSE_JS = r"""
+async (url) => {
   const m = await import('./face-metrics.js');
   const w = await import('./oxidocs_wasm.js');
   await w.default();
-  const pres = w.parse_presentation(new Uint8Array(bytes));
+  window.__m = m;
+  window.__w = w;
+  // ★Fetched, not passed in. Handing the file to `page.evaluate` marshals it
+  // as a JSON array of numbers, and d12 is 40MB -- forty million of them,
+  // which closed the driver connection and looked exactly like a parser crash.
+  const res = await fetch(url);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  window.__pres = w.parse_presentation(buf);
+  return window.__pres.slides.length;
+}
+"""
+
+SLIDE_JS = r"""
+(si) => {
+  const m = window.__m, w = window.__w, pres = window.__pres;
   const st = pres.master_styles || {};
   const fallback = pres.minor_font || 'Calibri';
   const levelsOf = (sh) => {
@@ -49,52 +67,63 @@ async (bytes) => {
     return st.other || [];
   };
   const out = [];
-  pres.slides.forEach((slide, si) => {
-    for (const sh of slide.shapes) {
-      const paras = sh.content?.TextBox?.paragraphs ?? sh.content?.AutoShape?.paragraphs;
-      if (!paras || !paras.length) continue;
-      const lv = levelsOf(sh);
-      const runs = [];
-      paras.forEach(p => {
-        const inherited = lv.length
-          ? (lv[Math.min(p.lvl || 0, lv.length - 1)] || {}).font_family : null;
-        p.runs.forEach(r => runs.push({
-          text: r.text, font_family: r.font_family || inherited || fallback,
-          bold: r.bold, italic: r.italic }));
-      });
-      const adv = m.collectAdvances(runs, fallback);
-      let lay = null;
-      try {
-        lay = w.layout_slide_shape(sh, paras, lv, sh.ph_levels || [], fallback, adv);
-      } catch (e) { continue; }
-      if (!lay || !lay.complete) continue;
-      for (const line of lay.lines) {
-        if (!line.text.trim()) continue;
-        // Per RUN, not per line: a paragraph that opens bold and continues
-        // regular is two faces, and one of them is wrong for the other's half.
-        const parts = (line.segments && line.segments.length) ? line.segments
-          : [{ text: line.text, family: line.family, font_size: line.font_size,
-               bold: line.bold, italic: line.italic }];
-        const offs = [0];
-        let x = 0, ok = true;
-        for (const sg of parts) {
-          const cps = [...sg.text];
-          const em = m.measureFace(sg.family, sg.bold, sg.italic, sg.text)
-            || cps.map(c => w.slide_face_advance(sg.family, sg.bold, sg.italic, c));
-          if (!em || em.some(v => v === null || v === undefined)) { ok = false; break; }
-          cps.forEach((c, i) => { x += em[i] * sg.font_size; offs.push(x); });
-        }
-        if (!ok) continue;
-        out.push({ slide: si + 1, text: line.text, x: sh.x + line.x,
-                   y: sh.y + line.baseline,
-                   size: line.font_size, family: line.family,
-                   bold: !!line.bold, offs });
+  let skipped = 0;
+  for (const sh of pres.slides[si].shapes) {
+    const paras = sh.content?.TextBox?.paragraphs ?? sh.content?.AutoShape?.paragraphs;
+    if (!paras || !paras.length) continue;
+    // ★A rotated shape's lines run along an axis this layout does not turn:
+    // the engine answers in the shape's own frame, so comparing its offsets
+    // against the PDF's x measures the rotation, not the advances. d06 slide
+    // 34's 'HIGH VALUE 1' sits in a shape at +90 and read as 48pt of
+    // horizontal "defect" and 29pt of vertical.
+    if (sh.rotation) { skipped++; continue; }
+    const lv = levelsOf(sh);
+    const runs = [];
+    paras.forEach(p => {
+      const inherited = lv.length
+        ? (lv[Math.min(p.lvl || 0, lv.length - 1)] || {}).font_family : null;
+      p.runs.forEach(r => runs.push({
+        text: r.text, font_family: r.font_family || inherited || fallback,
+        bold: r.bold, italic: r.italic }));
+    });
+    const adv = m.collectAdvances(runs, fallback);
+    let lay = null;
+    try {
+      lay = w.layout_slide_shape(sh, paras, lv, sh.ph_levels || [], fallback, adv);
+    } catch (e) { continue; }
+    if (!lay || !lay.complete) continue;
+    for (const line of lay.lines) {
+      if (!line.text.trim()) continue;
+      // Per RUN, not per line: a paragraph that opens bold and continues
+      // regular is two faces, and one of them is wrong for the other's half.
+      const parts = (line.segments && line.segments.length) ? line.segments
+        : [{ text: line.text, family: line.family, font_size: line.font_size,
+             bold: line.bold, italic: line.italic }];
+      const offs = [0];
+      let x = 0, ok = true;
+      for (const sg of parts) {
+        const cps = [...sg.text];
+        const em = m.measureFace(sg.family, sg.bold, sg.italic, sg.text)
+          || cps.map(c => w.slide_face_advance(sg.family, sg.bold, sg.italic, c));
+        if (!em || em.some(v => v === null || v === undefined)) { ok = false; break; }
+        cps.forEach((c, i) => { x += em[i] * sg.font_size; offs.push(x); });
       }
+      if (!ok) continue;
+      out.push({ slide: si + 1, text: line.text, x: sh.x + line.x,
+                 y: sh.y + line.baseline,
+                 size: line.font_size, family: line.family,
+                 bold: !!line.bold, offs });
     }
-  });
-  return out;
+  }
+  return { lines: out, skipped };
 }
 """
+
+
+def deck_url(port: int, pptx: Path) -> str:
+    """The deck's URL under the repo-rooted server."""
+    rel = pptx.resolve().relative_to(REPO).as_posix()
+    return f"http://127.0.0.1:{port}/{rel}"
 
 
 def pdf_pages(pdf: Path) -> dict[int, list]:
@@ -127,7 +156,7 @@ def match_line(line, chars, near=6.0):
     Returns (run, loose) where `loose` says no candidate was on the baseline
     and the answer is a guess -- those are counted apart from real defects.
     """
-    on_baseline, anywhere = None, None
+    on_baseline, anywhere, seen = None, None, 0
     want_y = line.get("y")
     for i, c in enumerate(chars):
         if c["c"] != line["text"][0]:
@@ -144,15 +173,37 @@ def match_line(line, chars, near=6.0):
             j += 1
         if not run:
             continue
+        seen += 1
         if anywhere is None or abs(run[0]["x"] - line["x"]) < abs(anywhere[0]["x"] - line["x"]):
             anywhere = run
         if want_y is not None and abs(c["y"] - want_y) <= near:
             if on_baseline is None or (abs(run[0]["x"] - line["x"])
                                        < abs(on_baseline[0]["x"] - line["x"])):
                 on_baseline = run
+    # ★One candidate means the identity is certain, wherever it sits -- which
+    # is the only case where a BASELINE difference can be read as a defect
+    # rather than as the instrument having paired the wrong two lines. That is
+    # what d06's "194pt vertical error" was: 34 lines whose text repeats across
+    # the deck, paired with each other's characters.
+    if seen == 1:
+        return anywhere, False, True
     if on_baseline is not None:
-        return on_baseline, False
-    return anywhere, True
+        return on_baseline, False, False
+    return anywhere, True, False
+
+
+def vertical_error(line, run):
+    """How far the engine's baseline is from the one PowerPoint drew on.
+
+    ★Only asked of a line whose text appears ONCE on the page. A line that
+    misses the baseline window drops out of the horizontal measurement as
+    "unsure", which looks like instrument noise and is not -- but reading a
+    baseline difference off an ambiguous match measures the pairing, not the
+    layout. Uniqueness is the identity that makes the number mean something.
+    """
+    if not run or line.get("y") is None:
+        return None
+    return run[0]["y"] - line["y"]
 
 
 def main() -> None:
@@ -160,6 +211,7 @@ def main() -> None:
     ap.add_argument("--decks", default="dev", choices=["dev", "all"])
     ap.add_argument("--limit", type=int, default=0, help="stop after N decks")
     ap.add_argument("--report", type=int, default=25, help="offending lines to list")
+    ap.add_argument("--fresh", action="store_true", help="ignore what was already measured")
     args = ap.parse_args()
 
     bench = REPO / "pipeline_data" / "pptx_benchmark"
@@ -176,7 +228,18 @@ def main() -> None:
     if args.limit:
         pairs = pairs[: args.limit]
 
-    os.chdir(REPO / "web")
+    # Resumable: one JSON line per deck, so a run that is interrupted (or a
+    # machine that is busy) picks up where it stopped instead of starting over.
+    store = REPO / "pipeline_data" / "pptx_editor_glyph_sweep.jsonl"
+    done: dict[str, dict] = {}
+    if store.exists() and not args.fresh:
+        for row in store.read_text(encoding="utf-8").splitlines():
+            if row.strip():
+                r = json.loads(row)
+                done[r["deck"]] = r
+
+    # Served from the repo root so the page can fetch a deck by URL.
+    os.chdir(REPO)
     httpd = socketserver.TCPServer(("127.0.0.1", 0),
                                    http.server.SimpleHTTPRequestHandler)
     httpd.RequestHandlerClass.log_message = lambda *a, **k: None
@@ -184,29 +247,98 @@ def main() -> None:
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
     offenders = []
+    vertical = []
     totals = {"lines": 0, "matched": 0, "unsure": 0}
+    # ★A deck can take the page down with it -- d12 closed the driver
+    # connection mid-evaluate, and every deck after it then "refused" against a
+    # browser that was no longer there. A failure has to cost one deck, not the
+    # rest of the run, so the page is rebuilt and the deck retried once.
+
+    for r in done.values():
+        for k in totals:
+            totals[k] += r["totals"][k]
+        offenders += r["offenders"]
+        vertical += r.get("vertical", [])
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        page.goto(f"http://127.0.0.1:{port}/pptx-editor.html")
-        page.wait_for_function(
-            "() => document.getElementById('status').textContent.includes('ready')",
-            timeout=60000)
+        state = {"browser": None, "page": None}
+
+        def fresh_page():
+            if state["browser"] is not None:
+                try:
+                    state["browser"].close()
+                except Exception:
+                    pass
+            state["browser"] = p.chromium.launch()
+            state["page"] = state["browser"].new_page()
+            state["page"].goto(f"http://127.0.0.1:{port}/web/pptx-editor.html")
+            state["page"].wait_for_function(
+                "() => document.getElementById('status').textContent.includes('ready')",
+                timeout=60000)
+
+        fresh_page()
         for stem, pptx, pdf in pairs:
+            if stem in done:
+                d = done[stem]
+                print(f"{stem:6} {d['totals']['lines']:5} lines  "
+                      f"{d['totals']['matched']:5} matched  "
+                      f"{d['totals']['unsure']:4} unsure  "
+                      f"worst dx {d['worst']:7.3f}pt  "
+                      f"dy {d.get('worst_dy', 0.0):7.3f}pt   (stored)", flush=True)
+                continue
+            lines, turned, n_slides = [], 0, None
+            for attempt in (1, 2):
+                try:
+                    n_slides = state["page"].evaluate(PARSE_JS, deck_url(port, pptx))
+                    break
+                except Exception as e:
+                    print(f"{stem:6} attempt {attempt} refused: {str(e)[:52]}",
+                          flush=True)
+                    try:
+                        fresh_page()
+                    except Exception as e2:
+                        print(f"       could not restart the browser: {str(e2)[:50]}",
+                              flush=True)
+                        break
+            if n_slides is None:
+                continue
+            lost = 0
+            for si in range(n_slides):
+                try:
+                    got = state["page"].evaluate(SLIDE_JS, si)
+                except Exception:
+                    lost += 1
+                    try:
+                        fresh_page()
+                        state["page"].evaluate(PARSE_JS, deck_url(port, pptx))
+                    except Exception:
+                        break
+                    continue
+                lines += got["lines"]
+                turned += got["skipped"]
+            if lost:
+                print(f"{stem:6} {lost} slides could not be laid out", flush=True)
             try:
-                lines = page.evaluate(JS, list(pptx.read_bytes()))
                 pages = pdf_pages(pdf)
             except Exception as e:
-                print(f"{stem:6} refused: {str(e)[:60]}", flush=True)
+                print(f"{stem:6} no truth PDF: {str(e)[:50]}", flush=True)
                 continue
             worst, matched, unsure = 0.0, 0, 0
+            dys = []
             for line in lines:
                 chars = pages.get(line["slide"])
                 if not chars:
                     continue
-                run, loose = match_line(line, chars)
+                run, loose, certain = match_line(line, chars)
                 if not run:
                     continue
+                dy = vertical_error(line, run) if certain else None
+                if dy is not None:
+                    dys.append(abs(dy))
+                    if abs(dy) > 1.0:
+                        vertical.append({
+                            "deck": stem, "slide": line["slide"],
+                            "dy": round(dy, 3), "size": line["size"],
+                            "family": line["family"], "text": line["text"][:38]})
                 if loose:
                     unsure += 1
                     continue
@@ -223,9 +355,27 @@ def main() -> None:
             totals["lines"] += len(lines)
             totals["matched"] += matched
             totals["unsure"] += unsure
+            worst_dy = max(dys) if dys else 0.0
+            mine = [o for o in offenders if o["deck"] == stem]
+            with store.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "deck": stem, "worst": round(worst, 3),
+                    "worst_dy": round(worst_dy, 3),
+                    "totals": {"lines": len(lines), "matched": matched,
+                               "unsure": unsure},
+                    "offenders": mine,
+                    "vertical": [v for v in vertical if v["deck"] == stem]})
+                    + chr(10))
             print(f"{stem:6} {len(lines):5} lines  {matched:5} matched  "
-                  f"{unsure:4} unsure  worst {worst:7.3f}pt", flush=True)
-        browser.close()
+                  f"{unsure:4} unsure  {turned:3} turned  "
+                  f"worst dx {worst:7.3f}pt  dy {worst_dy:7.3f}pt", flush=True)
+        if state["browser"] is not None:
+            # A browser that already died takes the close with it; the results
+            # are in hand by now, so a shutdown failure must not lose them.
+            try:
+                state["browser"].close()
+            except Exception:
+                pass
 
     offenders.sort(key=lambda o: -o["worst"])
     print(f"\n{totals['matched']} of {totals['lines']} lines matched to a truth PDF; "
@@ -237,8 +387,15 @@ def main() -> None:
         print("\nby face:")
         for fam, n in sorted(by_family.items(), key=lambda kv: -kv[1])[:12]:
             print(f"   {n:4}  {fam}")
+    vertical.sort(key=lambda v: -abs(v["dy"]))
+    if vertical:
+        print(f"\n{len(vertical)} lines sit more than 1pt off the baseline "
+              f"PowerPoint drew on; worst {args.report // 2}:")
+        for v in vertical[: args.report // 2]:
+            print(f"   {v['deck']} s{v['slide']:<3} {v['dy']:+8.3f}pt  "
+                  f"{v['size']:6.2f}pt {v['family'][:22]:23} {v['text']!r}")
     if offenders:
-        print(f"\nworst {args.report}:")
+        print(f"\nworst {args.report} by advance:")
         for o in offenders[: args.report]:
             print(f"   {o['deck']} s{o['slide']:<3} {o['worst']:8.3f}pt  "
                   f"{o['size']:6.2f}pt {o['family'][:22]:23}"
