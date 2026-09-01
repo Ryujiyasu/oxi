@@ -1855,9 +1855,20 @@ pub fn layout_text_shape(
     ph_levels: &[crate::ir::MasterStyleLevel],
     default_family: &str,
 ) -> ShapeLayout {
-    let inner_w = (shape.width - shape.l_ins - shape.r_ins).max(0.0);
+    // The shape's own outline, not its bounding box, is what holds the text --
+    // see `geom_text_insets`. The renderer has asked this since 55eb3fd2; this
+    // loop did not, so the browser editor laid `homePlate` and `chevron` text
+    // out in the full box and centred it where PowerPoint does not: d35 s17's
+    // 'first' 7.98pt right of the truth PDF, d15 s17's 'LOREM 1' 6.54pt.
+    let (geom_l, geom_r, geom_t, geom_b) = geom_text_insets(
+        shape.shape_type.as_deref(),
+        &shape.adjustments,
+        shape.width,
+        shape.height,
+    );
+    let inner_w = (shape.width - shape.l_ins - geom_l - shape.r_ins - geom_r).max(0.0);
     let mut lines: Vec<PlacedLine> = Vec::new();
-    let mut cursor = shape.t_ins;
+    let mut cursor = shape.t_ins + geom_t;
     let mut prev_fs: Option<f32> = None;
     let mut complete = true;
 
@@ -1959,7 +1970,7 @@ pub fn layout_text_shape(
                     // undo.
                     level_italic(master, ph_levels, para.lvl),
                 ),
-                x: shape.l_ins + x + align_offset(align, width, line_w),
+                x: shape.l_ins + geom_l + x + align_offset(align, width, line_w),
                 baseline: cursor + first_off + li as f32 * adv,
                 font_size: fs,
                 family: family.clone(),
@@ -1974,9 +1985,9 @@ pub fn layout_text_shape(
         cursor += para.space_after.unwrap_or(0.0);
     }
 
-    let height = (cursor - shape.t_ins).max(0.0);
+    let height = (cursor - shape.t_ins - geom_t).max(0.0);
     // Vertical anchoring shifts the whole block inside the inner box.
-    let inner_h = (shape.height - shape.t_ins - shape.b_ins).max(0.0);
+    let inner_h = (shape.height - shape.t_ins - geom_t - shape.b_ins - geom_b).max(0.0);
     //
     // ★Neither anchor clamps at zero. A block TALLER than its box still
     // centres on it: d24 slide 1's 60pt title needs 178pt in a 91pt box and
@@ -2084,6 +2095,27 @@ mod shape_tests {
         let ctr = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, Some("ctr")), &p, &[], &[], "Arial");
         let slack = (100.0 - top.height) / 2.0;
         assert!((ctr.lines[0].baseline - top.lines[0].baseline - slack).abs() < 1e-3);
+    }
+
+    /// d35 slide 17: 'first' centred in a `homePlate` of 2522700 x 1325100 EMU
+    /// with `adj` 30129. The point comes off the RIGHT only, so the centre of
+    /// the text rectangle sits half the inset left of the box's -- and the
+    /// glyph sweep read the difference as the engine placing the line 7.984pt
+    /// right of where PowerPoint drew it.
+    #[test]
+    fn a_home_plate_centres_its_text_left_of_the_box_centre() {
+        let mut p = para("first", 14.0);
+        p.alignment = Some(crate::ir::SlideAlignment::Center);
+        let mut plate = shape(2_522_700.0 / 12_700.0, 1_325_100.0 / 12_700.0, Some("ctr"));
+        plate.shape_type = Some("homePlate".to_string());
+        plate.adjustments.insert("adj".to_string(), 30_129.0);
+        let mut box_ = plate.clone();
+        box_.shape_type = Some("rect".to_string());
+
+        let got = layout_text_shape(&TableMetrics, &plate, &[p.clone()], &[], &[], "Arial");
+        let flat = layout_text_shape(&TableMetrics, &box_, &[p], &[], &[], "Arial");
+        let moved = flat.lines[0].x - got.lines[0].x;
+        assert!((moved - 7.859).abs() < 0.13, "{moved}");
     }
 
     #[test]
