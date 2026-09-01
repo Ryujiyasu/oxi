@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word</title>
-<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — scored against Microsoft Word on frozen blind benchmarks of never-seen documents (SSIM 0.84 Japanese / 0.88 English, published as-is). 100% client-side: your files never leave your device.">
+<meta name="description" content="Oxi is an open-source (MPL-2.0) Rust + WebAssembly engine that opens .docx files in the browser with Word-faithful layout — scored against Microsoft Word on frozen blind benchmarks of never-seen documents (SSIM 0.80 Japanese / 0.90 English, published as-is). 100% client-side: your files never leave your device.">
 <meta name="keywords" content="docx viewer, docx editor, browser, Word compatible, rendering engine, Rust, WebAssembly, wasm, open source, OOXML, layout engine, Japanese typography, kinsoku, vertical writing, LibreOffice alternative, docx online, no upload">
 <!-- Google Search Console: HTML-file verification is deployed at ./googlebdcd49fe8490af38.html
      (alternative: paste the <meta name="google-site-verification"> tag here) -->
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Oxi — Browser-Native .docx Rendering Engine Measured Against Microsoft Word">
-<meta property="og:description" content="Open .docx files in the browser with Word-faithful layout. Pixel-measured against Microsoft Word on frozen blind benchmarks of never-seen documents (SSIM 0.84 Japanese / 0.88 English). Open source, Rust + WebAssembly, 100% client-side.">
+<meta property="og:description" content="Open .docx files in the browser with Word-faithful layout. Pixel-measured against Microsoft Word on frozen blind benchmarks of never-seen documents (SSIM 0.80 Japanese / 0.90 English). Open source, Rust + WebAssembly, 100% client-side.">
 <meta property="og:image" content="https://oxi-dd65f4.gitlab.io/oxi-logo.png">
 <meta property="og:url" content="https://oxi-dd65f4.gitlab.io/">
 <meta property="og:site_name" content="Oxi">
@@ -196,8 +196,8 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <p class="note">Free · No account · Runs entirely in your browser</p>
 
     <div class="stats" aria-label="Key measurements">
-      <div class="stat"><div class="num">0.84</div><div class="lbl">SSIM vs Word — Japanese blind<br>benchmark (50 never-seen docs)</div></div>
-      <div class="stat"><div class="num">0.88</div><div class="lbl">SSIM vs Word — English blind<br>benchmark (50 never-seen docs)</div></div>
+      <div class="stat"><div class="num">0.80</div><div class="lbl">SSIM vs Word — Japanese blind<br>benchmark (50 never-seen docs)</div></div>
+      <div class="stat"><div class="num">0.90</div><div class="lbl">SSIM vs Word — English blind<br>benchmark (48 never-seen docs)</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">parse success on real<br>government .docx files</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">bytes uploaded —<br>everything runs client-side</div></div>
     </div>
@@ -236,7 +236,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       <p>English is measured the hard way: a <strong>frozen blind benchmark</strong> of 50 documents from the public docx-corpus that are never used as fix targets. The current set is <strong>blind-C50</strong> (manifest ranks 21-25, frozen 2026-07-29 before any measurement); this is its first pixel measurement, 2026-08-31. Word itself fails to export 2 of the 50, so every engine is scored on the same 48. <strong>Oxi reproduces Word’s page count on 48 of 48 — the only engine measured that matches every document</strong>, against ONLYOFFICE’s 42 and LibreOffice’s 43. On within-page pixels ONLYOFFICE is 0.005 ahead (0.908 vs 0.903) and LibreOffice is a near-tie at 0.892, Oxi ahead on 25 of 48. Once page-count misses are charged the order widens: penalized means are SILURUS 0.741, eigenpal 0.723, BetterOffice 0.619, GenOffice 0.570, OfficeCLI 0.486, against Oxi’s 0.903. Engines: Microsoft Word (Microsoft 365 16.0.20131.20154) as ground truth, ONLYOFFICE 9.3.1.8, LibreOffice 26.2.1.2, SILURUS @silurus/ooxml 0.83.1, eigenpal @eigenpal/docx-editor-react 1.9.0, BetterOffice @betteroffice/docx 0.1.0, GenOffice v0.1.0, OfficeCLI 1.0.145 — all at 150 DPI. <strong>OfficeCLI is measured with <code>--render html</code>, its own layout engine</strong>: its default <code>--render auto</code> delegates to Word on a host that has Word installed, scoring 0.996 against Word because it is Word.</p>
 
       <figure class="chart-card">
-        <h4>English blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-08-20)</h4>
+        <h4>English blind set — 48 never-touched documents, per-document mean SSIM vs Word (2026-08-31)</h4>
         <div class="barchart">
           <div class="brow">
             <div class="blabel">ONLYOFFICE<span>page count matches Word on 42/48 · v9.3.1.8</span></div>
@@ -756,13 +756,13 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 </svg>
 </div>
 </div>
-        <figcaption class="fnote">Top: per-engine mean — the dashed edge marks Microsoft Word itself (1.00). SILURUS is the closest architectural peer (Rust + WebAssembly rendering to a canvas, like Oxi); ONLYOFFICE and LibreOffice are mature native suites; BetterOffice (a Rust + WebAssembly editor suite, v0.0.4) and eigenpal (an Apache-2.0 ProseMirror-based DOM renderer, v1.9.0) were measured 2026-07-27, and GenOffice (Genspark's Apache-2.0 AI office suite, v0.1.0) on 2026-08-06 — all against the same frozen ground truth. Bottom: every dot is one document, with Oxi on the vertical axis; dots above the dashed diagonal are documents where Oxi is closer to Word. The blind set is measured but never fixed against, so this is first-sight generalization, published as-is.</figcaption>
+        <figcaption class="fnote">Top: per-engine mean — the dashed edge marks Microsoft Word itself (1.00). SILURUS is the closest architectural peer (Rust + WebAssembly rendering to a canvas, like Oxi); ONLYOFFICE and LibreOffice are mature native suites; BetterOffice (a Rust + WebAssembly editor suite) and eigenpal (an Apache-2.0 ProseMirror-based DOM renderer) joined the comparison on 2026-07-27 and GenOffice (Genspark's Apache-2.0 AI office suite) on 2026-08-06; every bar is the 2026-08-31 measurement at the version printed on it, against the same frozen ground truth. Bottom: every dot is one document, with Oxi on the vertical axis; dots above the dashed diagonal are documents where Oxi is closer to Word. The blind set is measured but never fixed against, so this is first-sight generalization, published as-is.</figcaption>
       </figure>
       <h3>Japanese blind set — 50 never-seen documents</h3>
-      <p>日本語も同じ厳しさで測ります。現行セットは <strong>blind-C50</strong>（順位 16-20、2026-08-31 に<strong>測定前</strong>凍結）で、これがその初測定です。前の日本語ブラインドは同日に開発コーパスへ降格しました。<strong>Oxi はピクセルで首位（0.802）</strong>ですが、SILURUS（0.790）・LibreOffice（0.788）との差は 0.012〜0.015 で、50 文書では決定的ではありません。<strong>ページ数一致は ONLYOFFICE の方が多く（40/50 対 Oxi 35/50）、両方で勝ってはいません。</strong>エンジンの順位は言語で入れ替わります — ONLYOFFICE は英語 1 位・日本語 5 位、SILURUS は英語 4 位・日本語 2 位 — これが言語ごとにブラインドを持つ理由です。同じ日・同じバイナリの独立した 2 セット（blind-B50 / blind-C50）は 0.842 と 0.802、ページ数一致は 45/50 と 35/50 でした。この 0.040 はエンジンの変化ではなく<strong>セットの難易度差</strong>で、単一のブラインド値には ±0.02 程度の幅があります。</p>
+      <p>Japanese is measured to the same standard. The current set is <strong>blind-C50</strong> (ranks 16-20, frozen 2026-08-31 <strong>before</strong> any measurement); this is its first measurement, and the previous Japanese blind set was demoted to the development corpus the same day. <strong>Oxi leads on pixels (0.802)</strong>, but by 0.012-0.015 over SILURUS (0.790) and LibreOffice (0.788) &mdash; a modest margin on 50 documents, not a decisive one. <strong>ONLYOFFICE places more page breaks correctly (40/50 against Oxi&rsquo;s 35/50), so Oxi does not lead on both.</strong> Engine rankings do not transfer between languages &mdash; ONLYOFFICE is first in English and fifth in Japanese, SILURUS fourth in English and second in Japanese &mdash; which is why a blind set is kept per language. Two independently frozen sets measured the same day on the same binary (blind-B50 / blind-C50) scored 0.842 and 0.802, matching Word&rsquo;s page count on 45/50 and 35/50. That 0.040 is <strong>set difficulty, not engine change</strong>: a single blind number carries about &plusmn;0.02.</p>
 
       <figure class="chart-card">
-        <h4>Japanese blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-08-20)</h4>
+        <h4>Japanese blind set — 50 never-touched documents, per-document mean SSIM vs Word (2026-08-31)</h4>
         <div class="barchart">
           <div class="brow">
             <div class="blabel"><strong>Oxi</strong><span>page count matches Word on 35/50</span></div>
@@ -1296,7 +1296,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>How accurate is Oxi compared with Microsoft Word?</summary>
-        <p>Measured with pixel-level SSIM against Word on frozen blind benchmarks — 50 never-seen documents per language that are never used as fix targets. Japanese: 0.829 per document with Word's page count matched on 44/50. English: 0.849 with Word's page count matched on 48/50 — the highest page-count result among the engines measured, while pixel similarity remains behind LibreOffice and ONLYOFFICE there (2026-08-04). See the <a href="#accuracy">accuracy section</a> for the comparison charts and methodology.</p>
+        <p>Oxi&rsquo;s layout is measured against Microsoft Word page by page with pixel-level SSIM, on frozen blind benchmarks of never-seen documents that are never used as fix targets. On the English blind-C50 set (first measured 2026-08-31) Oxi scores 0.903 per document and reproduces Word&rsquo;s page count on 48 of 48 documents &mdash; the only engine measured that matches every one; ONLYOFFICE is marginally ahead on pixels (0.908, 42/48) and LibreOffice close behind (0.892, 43/48). On the Japanese blind-C50 set Oxi leads on pixels at 0.802, ahead of SILURUS (0.790) and LibreOffice (0.788), though ONLYOFFICE places more page breaks correctly there (40/50 against Oxi&rsquo;s 35). Engine rankings do not transfer between languages, which is why a blind set is kept per language. See the <a href="#accuracy">accuracy section</a> for the comparison charts and methodology.</p>
       </details>
       <details>
         <summary>Which file formats does Oxi support?</summary>

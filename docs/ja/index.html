@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Oxi — ブラウザだけで Word と同じ見た目を実現する .docx レンダリングエンジン（オープンソース）</title>
-<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。修正対象には使わない初見文書だけの凍結ブラインドベンチマークで Microsoft Word とピクセル単位に照合（SSIM 日本語 0.83・英語 0.85 をそのまま公開）。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
+<meta name="description" content="Oxi は Word 文書（.docx）をブラウザだけで Word と同じレイアウトのまま表示・編集できるオープンソースエンジン。修正対象には使わない初見文書だけの凍結ブラインドベンチマークで Microsoft Word とピクセル単位に照合（SSIM 日本語 0.80・英語 0.90 をそのまま公開）。禁則処理・縦書き・ルビに対応。ファイルは 1 バイトも外に送信されません。">
 <meta name="keywords" content="docx ビューア, docx ブラウザ 表示, Word 互換, レイアウトエンジン, オープンソース, Rust, WebAssembly, wasm, 禁則処理, 縦書き, ルビ, 割注, 圏点, docx 編集 オンライン, アップロード不要, LibreOffice 代替">
 <!-- OGP / Facebook -->
 <meta property="og:type" content="website">
@@ -198,8 +198,8 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
     <p class="note">無料 · 登録不要 · 処理はすべてブラウザ内で完結</p>
 
     <div class="stats" aria-label="主要な実測値">
-      <div class="stat"><div class="num">0.84</div><div class="lbl">Word との SSIM — 日本語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
-      <div class="stat"><div class="num">0.88</div><div class="lbl">Word との SSIM — 英語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
+      <div class="stat"><div class="num">0.80</div><div class="lbl">Word との SSIM — 日本語ブラインド<br>ベンチマーク（初見 50 文書）</div></div>
+      <div class="stat"><div class="num">0.90</div><div class="lbl">Word との SSIM — 英語ブラインド<br>ベンチマーク（初見 48 文書）</div></div>
       <div class="stat"><div class="num">100%</div><div class="lbl">官公庁の実文書（.docx）での<br>パース成功率</div></div>
       <div class="stat"><div class="num">0</div><div class="lbl">アップロードは 0 バイト<br>処理はすべて手元のブラウザで</div></div>
     </div>
@@ -238,7 +238,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       <p>英語は最初から一番厳しい測り方をしています — 公開 docx-corpus から、修正のターゲットには一切使わない<strong>凍結ブラインドベンチ</strong> 50 文書。現行セットは <strong>blind-C50</strong>（マニフェスト順位 21-25、2026-07-29 に<strong>測定前</strong>凍結）で、これがその初のピクセル測定（2026-08-31）です。Word 自身が 50 文書中 2 文書を PDF 化できないため、全エンジンが同じ 48 文書で採点されます。<strong>Oxi は Word のページ数を 48/48 で再現 — 測定した 8 エンジンで唯一の全一致</strong>です（ONLYOFFICE 42、LibreOffice 43）。ページ内のピクセルでは ONLYOFFICE が 0.005 上（0.908 対 0.903）、LibreOffice は僅差の 0.892 で、Oxi は 48 文書中 25 文書で上回ります。ページ数のずれを罰した penalized で差は開きます — SILURUS 0.741、eigenpal 0.723、BetterOffice 0.619、GenOffice 0.570、OfficeCLI 0.486 に対し Oxi は 0.903。真値は Microsoft Word（Microsoft 365 16.0.20131.20154）、比較対象は ONLYOFFICE 9.3.1.8、LibreOffice 26.2.1.2、SILURUS @silurus/ooxml 0.83.1、eigenpal @eigenpal/docx-editor-react 1.9.0、BetterOffice @betteroffice/docx 0.1.0、GenOffice v0.1.0、OfficeCLI 1.0.145 — すべて 150 DPI。<strong>OfficeCLI は自前エンジンである <code>--render html</code> で測っています</strong>。既定の <code>--render auto</code> は Word の入った Windows では描画を Word 自身に委譲し、Word と 0.996 になります — それは Word だからです。</p>
 
       <figure class="chart-card">
-        <h4>英語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-08-20）</h4>
+        <h4>英語ブラインドセット — 初見の 48 文書、Word との文書平均 SSIM（2026-08-31）</h4>
         <div class="barchart">
           <div class="brow">
             <div class="blabel">ONLYOFFICE<span>Word とページ数一致 42/48 · v9.3.1.8</span></div>
@@ -758,14 +758,14 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
 </svg>
 </div>
 </div>
-        <figcaption class="fnote">上: エンジンごとの平均 — 右端の破線が Microsoft Word 自身（1.00）。SILURUS はアーキテクチャが最も近い競合（Oxi と同じく Rust + WebAssembly で Canvas に描画）、ONLYOFFICE と LibreOffice は成熟したネイティブスイート、BetterOffice（Rust + WebAssembly のエディタスイート、v0.0.4）と eigenpal（ProseMirror ベースの DOM レンダラ、Apache-2.0、v1.9.0）は 2026-07-27、GenOffice（Genspark の AI オフィススイート、Apache-2.0、v0.1.0）は 2026-08-06 に、いずれも同じ凍結グラウンドトゥルースに対して測定しました。下: 点 1 つが文書 1 件で、縦軸が Oxi。破線の対角線より上にある点が「Oxi のほうが Word に近い」文書です。ブラインドセットは「測定はするが修正対象にはしない」文書群なので、初見の実力がそのまま出ます — 負けている数字もそのまま公開しています。</figcaption>
+        <figcaption class="fnote">上: エンジンごとの平均 — 右端の破線が Microsoft Word 自身（1.00）。SILURUS はアーキテクチャが最も近い競合（Oxi と同じく Rust + WebAssembly で Canvas に描画）、ONLYOFFICE と LibreOffice は成熟したネイティブスイート、BetterOffice（Rust + WebAssembly のエディタスイート）と eigenpal（ProseMirror ベースの DOM レンダラ、Apache-2.0）は 2026-07-27、GenOffice（Genspark の AI オフィススイート、Apache-2.0）は 2026-08-06 に比較に加わりました。各バーはそのバーに書かれたバージョンでの 2026-08-31 測定値で、いずれも同じ凍結グラウンドトゥルースに対して測定しています。下: 点 1 つが文書 1 件で、縦軸が Oxi。破線の対角線より上にある点が「Oxi のほうが Word に近い」文書です。ブラインドセットは「測定はするが修正対象にはしない」文書群なので、初見の実力がそのまま出ます — 負けている数字もそのまま公開しています。</figcaption>
       </figure>
 
       <h3>日本語ブラインドセット — 初見の 50 文書</h3>
       <p>日本語も同じ厳しさで測ります。現行セットは <strong>blind-C50</strong>（順位 16-20、2026-08-31 に<strong>測定前</strong>凍結）で、これがその初測定です。前の日本語ブラインドは同日に開発コーパスへ降格しました。<strong>Oxi はピクセルで首位（0.802）</strong>ですが、SILURUS（0.790）・LibreOffice（0.788）との差は 0.012〜0.015 で、50 文書では決定的ではありません。<strong>ページ数一致は ONLYOFFICE の方が多く（40/50 対 Oxi 35/50）、両方で勝ってはいません。</strong>エンジンの順位は言語で入れ替わります — ONLYOFFICE は英語 1 位・日本語 5 位、SILURUS は英語 4 位・日本語 2 位 — これが言語ごとにブラインドを持つ理由です。同じ日・同じバイナリの独立した 2 セット（blind-B50 / blind-C50）は 0.842 と 0.802、ページ数一致は 45/50 と 35/50 でした。この 0.040 はエンジンの変化ではなく<strong>セットの難易度差</strong>で、単一のブラインド値には ±0.02 程度の幅があります。</p>
 
       <figure class="chart-card">
-        <h4>日本語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-08-20）</h4>
+        <h4>日本語ブラインドセット — 初見の 50 文書、Word との文書平均 SSIM（2026-08-31）</h4>
         <div class="barchart">
           <div class="brow">
             <div class="blabel"><strong>Oxi</strong><span>Word とページ数一致 35/50</span></div>
@@ -1298,7 +1298,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       </details>
       <details>
         <summary>Word とどれくらい同じ見た目になりますか？</summary>
-        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマーク（各言語 50 文書）で、Word とピクセル単位の SSIM を測定しています。日本語は文書平均 0.829・Word とのページ数一致 44/50。英語は文書平均 0.849・ページ数一致 48/50で、ページ数は測定したエンジン中最多ですが、ピクセル一致では LibreOffice・ONLYOFFICE にまだ及びません（2026-08-04）。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
+        <p>修正のターゲットには使わない初見文書だけの凍結ブラインドベンチマークで、Word とピクセル単位の SSIM を測定しています。英語 blind-C50（初測定 2026-08-31）で Oxi は文書平均 0.903、Word とのページ数一致は 48 文書中 48 — 測定した 8 エンジンで唯一の全一致です。ピクセルでは ONLYOFFICE がわずかに上（0.908、42/48）、LibreOffice が僅差（0.892、43/48）。日本語 blind-C50 では Oxi が 0.802 で SILURUS（0.790）と LibreOffice（0.788）を上回りますが、ページ数一致は ONLYOFFICE の方が多く（40/50 対 Oxi 35/50）、両方で勝ってはいません。エンジンの順位は言語間で入れ替わるため、ブラインドセットは言語ごとに保持しています。比較グラフと測定方法は<a href="#accuracy">再現度セクション</a>をご覧ください。</p>
       </details>
       <details>
         <summary>対応している形式は？</summary>
