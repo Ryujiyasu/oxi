@@ -1683,6 +1683,42 @@ fn parse_body(
                             }
                         }
                         // Inline images become separate blocks after the paragraph
+                        //
+                        // S1270 (2026-09-02, default ON, opt-out OXI_S1270_DISABLE):
+                        // …EXCEPT when the paragraph drew the object and THEN broke
+                        // the page. `<w:r>…<wp:inline>…</w:r><w:r><w:br type="page"/>
+                        // </w:r>` means "draw the box, then start a new page", but
+                        // the S741 flow-reservation placeholder lands AFTER the
+                        // paragraph — so the `\x0C` closes the page first and the
+                        // reservation (and the box that rides its anchor) end up on
+                        // the next one. Insert the placeholder BEFORE the paragraph
+                        // so the cursor walks the box's height, then hits the break.
+                        //
+                        // legal__02f84965dccfe4db p4: Word draws the 103.35pt box at
+                        // y=676.2 and ends the page at 746.6 (column bottom 771.05);
+                        // Oxi closed p4 at y=545.5 with 225pt of column unused and
+                        // drew the box atop p5 → 11 pages against Word's 9.
+                        //
+                        // This is the mirror of S1056 just above, which handles the
+                        // OTHER order (break first, then the picture → the image
+                        // opens the new page). Both orders occur: 15 paragraphs in
+                        // 11 docs draw-then-break, 12 break-then-draw
+                        // (`_inlinetb_before_break_census.py`), so the order has to
+                        // be read from the runs, not guessed from co-occurrence.
+                        let s1270_draw_then_break = std::env::var("OXI_S1270_DISABLE")
+                            .is_err()
+                            && !pr.inline_images.is_empty()
+                            && pr.text_boxes.iter().any(|tb| tb.host_break_after);
+                        let mut s1270_at = None;
+                        if s1270_draw_then_break {
+                            let at = current_blocks.len().saturating_sub(1);
+                            for (k, b) in
+                                std::mem::take(&mut pr.inline_images).into_iter().enumerate()
+                            {
+                                current_blocks.insert(at + k, b);
+                            }
+                            s1270_at = Some(at);
+                        }
                         current_blocks.extend(pr.inline_images);
                         // Set anchor_block_index for floating images
                         let anchor_idx = current_blocks.len().saturating_sub(1);
@@ -1692,7 +1728,15 @@ fn parse_body(
                         }
                         current_shapes.extend(pr.shapes);
                         for mut tb in pr.text_boxes {
-                            tb.anchor_block_index = anchor_idx;
+                            // S1270: a draw-then-break box rides the RESERVATION
+                            // that now sits before the paragraph, not the paragraph
+                            // itself — anchoring it to the paragraph would draw it
+                            // BELOW its own reserved height (measured: y=761.9 for a
+                            // box Word puts at 676.2).
+                            tb.anchor_block_index = match s1270_at {
+                                Some(at) if tb.host_break_after => at,
+                                _ => anchor_idx,
+                            };
                             current_text_boxes.push(tb);
                         }
                         // If this paragraph contained a section break, start a new section
