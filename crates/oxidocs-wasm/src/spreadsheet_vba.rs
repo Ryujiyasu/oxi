@@ -5813,7 +5813,7 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("merge") {
                     let across = match args {
                         [] => false,
-                        [across] => style_boolean(across, "Range.Merge Across")?,
+                        [across] => application_switch(across, "Range.Merge Across")?,
                         _ => {
                             return Err("Range.Merge expects zero or one argument".to_string())
                         }
@@ -7241,15 +7241,6 @@ fn cells_index(value: &Value) -> Result<i64, String> {
     }
 }
 
-fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
-    match value {
-        Value::Boolean(value) => Ok(*value),
-        Value::Integer(value) => Ok(*value != 0),
-        Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
-        _ => Err(format!("{property} must be Boolean")),
-    }
-}
-
 /// What one of the faces a cell wears — `Font.Bold`, `Font.Italic`,
 /// `Font.Strikethrough`, `WrapText`, `ShrinkToFit`, `MergeCells` — makes of
 /// `value`. Nothing back means LEAVE IT AS IT IS.
@@ -7285,7 +7276,16 @@ fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, Str
 }
 
 /// What one of the switches a macro flips around its work — `ScreenUpdating`,
-/// `EnableEvents`, `DisplayAlerts`, `Interactive` — makes of `value`.
+/// `EnableEvents`, `DisplayAlerts`, `Interactive` — makes of `value`, and also
+/// what `Range.Merge`'s `Across` and `Range.Find`'s flags make of one.
+///
+/// Those last two were measured on their own rather than assumed into this,
+/// and they agree on every case that tells the two rules apart: `Across:="0"`
+/// merges the whole block (so a numeric string IS read, where a cell's own
+/// faces refuse one), `Across:=Empty` does too, `Across:=5` and `:=0.4` merge
+/// across, and `Across:=Null` and `:="no"` are both refused. `Find`'s
+/// `MatchCase` answers the same way. The `#TRUE#` spelling was only ever
+/// measured at the switches; nothing else here rests on it.
 ///
 /// This is NOT the rule a cell's own Boolean properties follow, and the two
 /// must not share a helper. Asked of Excel at both entrances: assigning `"0"`
@@ -7582,7 +7582,7 @@ fn find_boolean_argument(
 ) -> Result<bool, String> {
     match value {
         None | Some(Value::Missing) => Ok(default),
-        Some(value) => style_boolean(value, &format!("Range.Find {label}")),
+        Some(value) => application_switch(value, &format!("Range.Find {label}")),
     }
 }
 
@@ -18131,5 +18131,83 @@ End Sub
             host.take_debug_output(),
             vec!["True".to_string(), "False".to_string()]
         );
+    }
+
+    /// `Merge`'s `Across` reads its argument the way the application's
+    /// switches read theirs, not the way a cell's own faces do — a numeric
+    /// string IS read here. Measured in Excel by merging `A1:C2` and asking
+    /// what A1's merge area became: across leaves each row on its own.
+    #[test]
+    fn vba_merge_across_reads_its_argument_like_a_switch() {
+        let measured = [
+            ("True", "$A$1:$C$1"),
+            ("False", "$A$1:$C$2"),
+            ("Empty", "$A$1:$C$2"),
+            ("0", "$A$1:$C$2"),
+            ("5", "$A$1:$C$1"),
+            ("0.4", "$A$1:$C$1"),
+            ("\"true\"", "$A$1:$C$1"),
+            ("\"false\"", "$A$1:$C$2"),
+            ("\"0\"", "$A$1:$C$2"),
+        ];
+        for (asked, address) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1:C2\").Merge {asked}\n\
+                   Debug.Print Range(\"A1\").MergeArea.Address\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![address.to_string()],
+                "for {asked}"
+            );
+        }
+
+        for asked in ["Null", "\"no\""] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Range(\"A1:C2\").Merge {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Act", vec![], &mut host);
+            assert!(refused.is_err(), "{asked} is refused");
+        }
+    }
+
+    /// And `Find`'s flags read theirs the same way: `MatchCase:="0"` finds a
+    /// differently-cased cell, `:="true"` does not, and `:=Null` is refused.
+    #[test]
+    fn vba_find_flags_read_their_argument_like_a_switch() {
+        let measured = [
+            ("True", "Nothing"),
+            ("False", "Range"),
+            ("Empty", "Range"),
+            ("\"true\"", "Nothing"),
+            ("\"0\"", "Range"),
+            ("5", "Nothing"),
+        ];
+        for (asked, kind) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = \"abc\"\n\
+                   Debug.Print TypeName(Range(\"A1:A2\").Find(\"ABC\", , , , , , {asked}))\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![kind.to_string()],
+                "for {asked}"
+            );
+        }
     }
 }
