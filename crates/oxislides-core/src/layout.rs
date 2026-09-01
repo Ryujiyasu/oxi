@@ -331,6 +331,48 @@ pub fn master_units_runs(
     Some(sum)
 }
 
+/// The exact advance sum of `text` in points, every character at its own run's
+/// size, weight and slant.
+///
+/// This is the width that CENTRES or right-aligns a finished line, and it is
+/// deliberately not [`master_units_runs`]: master units are the BREAK model
+/// (1/8pt per glyph, `pptx-master-unit-break-law`) while alignment is judged on
+/// the exact sum. The renderer has drawn the distinction since S-RUNALIGN
+/// (2026-08-25); this is the same rule for the callers that do not have a
+/// device.
+///
+/// Returns None when any advance is unknown, so a caller keeps its fallbacks.
+pub fn line_width_pt(
+    metrics: &dyn FaceMetrics,
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    styles: Option<&RunStyles<'_>>,
+    track: f32,
+) -> Option<f32> {
+    if text.chars().any(|c| c as u32 > 0xFFFF) {
+        return None;
+    }
+    if !metrics.has_all_glyphs(family, bold, italic, text) {
+        return None;
+    }
+    let mut sum = 0.0f32;
+    for (i, ch) in text.chars().enumerate() {
+        let (run_fs, run_bold, run_italic, run_track) = match styles {
+            // ★Only for a paragraph that HAS more than one run. A silent run
+            // reads as not-bold here (see `style_at`), which for a lone run
+            // inside a bold level would measure the line in a face it is not
+            // drawn in -- the very defect this exists to fix, in reverse.
+            Some(s) => style_at(s, s.line_start + i, fs, bold, italic, true),
+            None => (fs, bold, italic, track),
+        };
+        sum += metrics.advance_em(family, run_bold, run_italic, ch)? * run_fs + run_track;
+    }
+    Some(sum)
+}
+
 /// The pieces a line may break between.
 ///
 /// Words, keeping the space that follows them so a trailing space stays with
@@ -1951,9 +1993,27 @@ pub fn layout_text_shape(
         let mut char_at = 0usize;
         for (li, line) in broken.iter().enumerate() {
             let width = if li == 0 { geom.first_width } else { geom.rest_width };
-            let line_w = master_units(metrics, line.trim_end(), fs, &family, bold, italic, 0.0)
-                .map(|mu| master_units_pt(mu) as f32)
-                .unwrap_or(0.0);
+            // The width a line is CENTRED on is the one it is drawn at: each
+            // run at its own weight, summed exactly. Measuring the whole line
+            // in the paragraph's resolved style made one bold word widen every
+            // line of its paragraph -- d10 s4's two Nunito lines came out
+            // 10.35 / 8.36pt wide of what PowerPoint drew, purely because the
+            // paragraph ends in a bold `@reallygreatsite`, and a centred line
+            // pays half of that as position. The renderer has measured this
+            // per run since S-RUNALIGN; this loop had not.
+            let ink = line.trim_end();
+            let styles = RunStyles { runs: &para.runs, line_start: char_at };
+            let line_w = line_width_pt(
+                metrics,
+                ink,
+                fs,
+                &family,
+                bold,
+                italic,
+                (para.runs.len() > 1).then_some(&styles),
+                para_spc(&para.runs, true),
+            )
+            .unwrap_or(0.0);
             let x = if li == 0 { geom.first_x } else { geom.rest_x };
             lines.push(PlacedLine {
                 text: line.clone(),
@@ -2095,6 +2155,34 @@ mod shape_tests {
         let ctr = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, Some("ctr")), &p, &[], &[], "Arial");
         let slack = (100.0 - top.height) / 2.0;
         assert!((ctr.lines[0].baseline - top.lines[0].baseline - slack).abs() < 1e-3);
+    }
+
+    /// d10 slide 4: three centred Nunito lines whose paragraph ends in a bold
+    /// `@reallygreatsite`. Measuring every line in the paragraph's resolved
+    /// weight made the two all-regular lines 10.35 / 8.36pt too wide, and a
+    /// centred line pays half of that as position.
+    #[test]
+    fn one_bold_run_does_not_widen_the_lines_it_is_not_on() {
+        let words = "aaaa bbbb cccc dddd eeee ffff gggg hhhh";
+        let mut lone = para(words, 12.0);
+        lone.alignment = Some(crate::ir::SlideAlignment::Center);
+        let mut mixed = lone.clone();
+        mixed.runs.push(crate::ir::SlideRun {
+            bold: Some(true),
+            ..run(" iiii jjjj kkkk", Some(12.0))
+        });
+
+        let s = shape(120.0, 200.0, None);
+        let a = layout_text_shape(&TableMetrics, &s, &[lone], &[], &[], "Arial");
+        let b = layout_text_shape(&TableMetrics, &s, &[mixed], &[], &[], "Arial");
+        assert!(b.lines.len() > a.lines.len(), "the bold run must reach a later line");
+        assert_eq!(a.lines[0].text, b.lines[0].text);
+        assert!(
+            (a.lines[0].x - b.lines[0].x).abs() < 1e-3,
+            "{} vs {}",
+            a.lines[0].x,
+            b.lines[0].x
+        );
     }
 
     /// d35 slide 17: 'first' centred in a `homePlate` of 2522700 x 1325100 EMU
