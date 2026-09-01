@@ -194,23 +194,45 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
             let Ok(data) = std::fs::read(&path) else {
                 continue;
             };
-            let Ok(font) = skrifa::FontRef::new(&data) else {
-                continue;
-            };
-            if !face_matches(&font, family, bold, italic) {
-                continue;
-            }
-            if let Some(m) = metrics_from(&font, family) {
-                if std::env::var("OXI_DBG_FONTRT").is_ok() {
-                    eprintln!(
-                        "[FONTRT] resolved {:?} bold={} italic={} from {}",
-                        family,
-                        bold,
-                        italic,
-                        path.display()
-                    );
+            // S1272 (2026-09-02): a .ttc holds SEVERAL faces and `FontRef::new`
+            // reads none of them -- it only accepts a single-font file. Windows
+            // ships most of the Japanese families that way, and the one the
+            // document names is rarely the first face in the file:
+            //
+            //   BIZ-UDGothicR.ttc  -> BIZ UDゴシック (monospaced) + BIZ UDPゴシック
+            //   meiryo.ttc         -> メイリオ + Meiryo UI
+            //   YuGothM.ttc / HG*  -> likewise
+            //
+            // So every one of those resolved to None, the layout kept the em as
+            // each character's advance, and a PROPORTIONAL face wrapped early on
+            // every line. technical__898a80c889101e85 (BIZ UDPゴシック 18pt):
+            // Word fits 25 chars on the line at advances 13.68..18.00, Oxi fitted
+            // 23 at a flat 18.00 and ran one page long.
+            //
+            // Walk the collection instead of giving up on it.
+            let faces: Vec<skrifa::FontRef> = match skrifa::raw::FileRef::new(&data) {
+                Ok(skrifa::raw::FileRef::Font(f)) => vec![f],
+                Ok(skrifa::raw::FileRef::Collection(c)) => {
+                    (0..c.len()).filter_map(|i| c.get(i).ok()).collect()
                 }
-                return Some(Box::leak(Box::new(m)));
+                Err(_) => continue,
+            };
+            for font in faces {
+                if !face_matches(&font, family, bold, italic) {
+                    continue;
+                }
+                if let Some(m) = metrics_from(&font, family) {
+                    if std::env::var("OXI_DBG_FONTRT").is_ok() {
+                        eprintln!(
+                            "[FONTRT] resolved {:?} bold={} italic={} from {}",
+                            family,
+                            bold,
+                            italic,
+                            path.display()
+                        );
+                    }
+                    return Some(Box::leak(Box::new(m)));
+                }
             }
         }
     }

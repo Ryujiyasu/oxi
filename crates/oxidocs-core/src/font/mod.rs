@@ -1084,6 +1084,52 @@ impl FontMetricsRegistry {
     /// Does Oxi hold GDI-measured advances for this family? Those are the
     /// calibrated basis the whole Latin pipeline is tuned against, so a face
     /// that has them must never be replaced by unhinted outline metrics.
+    /// S1272 (2026-09-02, default ON, opt-out OXI_S1272_DISABLE): does the
+    /// shipped table for this CJK family carry NO ideograph/kana advances?
+    ///
+    /// `runtime::resolve` (S1171) only runs when every table lookup MISSES, on
+    /// the reasoning that a table entry means the face is covered. For a CJK
+    /// family that is not true: the generated entries hold ~100 Latin widths and
+    /// nothing else, so a PROPORTIONAL Japanese face silently falls back to the
+    /// em for every kana and kanji it draws -- an entry that exists but cannot
+    /// answer the question being asked.
+    ///
+    /// technical__898a80c889101e85 sets BIZ UDPGothic 18pt. Word fits 25
+    /// characters on the line (advances 13.68 / 16.20 / 16.56 / 16.78 / 18.00);
+    /// Oxi fitted 23 at a flat 18.00, wrapped two characters early on every
+    /// line, and ran 15 pages against Word's 14. The face IS installed here --
+    /// reading it gives the real advances, which is what S1171 exists to do.
+    ///
+    /// Scoped to CJK families with no GDI table: the Latin pipeline is
+    /// calibrated against the GDI advances and must keep them (the S1171 note).
+    fn cjk_table_lacks_cjk_widths(&self, family: &str) -> bool {
+        if std::env::var("OXI_S1272_DISABLE").is_ok() {
+            return false;
+        }
+        // `is_cjk_font_family` lists NORMALISED English names, so a face
+        // named in Japanese ("BIZ UDPゴシック") is not in it. A family name
+        // containing CJK characters is itself the strongest signal that the
+        // face is Japanese.
+        let is_cjk = is_cjk_font_family(family)
+            || is_cjk_font_family(&normalize_family_name(family))
+            || family.chars().any(|c| (c as u32) >= 0x3000);
+        if !is_cjk || self.has_gdi_widths(family) {
+            return false;
+        }
+        let Some(m) = self
+            .fonts
+            .get(family)
+            .or_else(|| self.fonts.get(&normalize_family_name(family)))
+        else {
+            return false;
+        };
+        // Two kana and two ideographs: a table that answers for none of them
+        // cannot lay out Japanese text.
+        !['\u{3042}', '\u{30A2}', '\u{65E5}', '\u{672C}']
+            .iter()
+            .any(|c| m.char_widths.contains_key(c))
+    }
+
     fn has_gdi_widths(&self, family: &str) -> bool {
         self.gdi_widths.contains_key(family)
             || self.gdi_widths.contains_key(&normalize_family_name(family))
@@ -1195,6 +1241,13 @@ impl FontMetricsRegistry {
 
     /// Get metrics for a font family. Falls back to default (Calibri) if not found.
     pub fn get(&self, family: &str) -> &FontMetrics {
+        // S1272: a CJK table entry with no CJK advances answers the wrong
+        // question -- read the installed face instead of returning it.
+        if self.cjk_table_lacks_cjk_widths(family) {
+            if let Some(m) = runtime::resolve(family, false, false) {
+                return m;
+            }
+        }
         // Try exact match first
         if let Some(m) = self.fonts.get(family) {
             return m;
