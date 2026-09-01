@@ -3614,6 +3614,24 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    /// Give a cell the way of showing itself that the writing asked for —
+    /// but only while the cell is still General. Asked of Excel, writing `50%`
+    /// into a cell already showing `0.000` stores 0.5 and leaves `0.000`.
+    fn ask_cell_format(&mut self, address: CellAddress, shown: &str) {
+        let Some(sheet) = self.workbook.sheets.get_mut(address.sheet) else {
+            return;
+        };
+        let Some(row) = sheet.rows.iter_mut().find(|row| row.index == address.row) else {
+            return;
+        };
+        let Some(cell) = row.cells.iter_mut().find(|cell| cell.col == address.column) else {
+            return;
+        };
+        if cell.style.number_format.is_none() {
+            cell.style.number_format = Some(shown.to_string());
+        }
+    }
+
     fn set_cell_formula(&mut self, address: CellAddress, formula: String) -> Result<(), String> {
         self.wrote = true;
         let sheet = self
@@ -3721,7 +3739,12 @@ impl<'a> WorkbookHost<'a> {
                         )?;
                         self.set_cell_formula(address, placed)?;
                     }
-                    CellInput::Constant(value) => self.set_cell_value(address, value)?,
+                    CellInput::Constant(value, shown) => {
+                        self.set_cell_value(address, value)?;
+                        if let Some(shown) = shown {
+                            self.ask_cell_format(address, shown);
+                        }
+                    }
                 }
             }
         }
@@ -9280,21 +9303,58 @@ const APOSTROPHE: char = '\u{27}';
 /// text on purpose until the format can travel with the value and the locale
 /// has been measured rather than assumed.
 fn typed_from_text(written: &str) -> CellValue {
+    typed_from_written(written).0
+}
+
+/// What Excel makes of a written string: the value, and the way of showing it
+/// that the writing itself asks for.
+///
+/// Some ways of writing a number carry a format with them. Asked of Excel by
+/// writing each into a fresh cell and reading `.Value` and `.NumberFormat`
+/// back:
+///
+/// - a per cent is the number over a hundred, shown as `0%` where it was
+///   written without a point and `0.00%` where it was written with one,
+///   however many decimals followed it — `1.2%`, `1.234%` and `1.23456%` all
+///   ask for `0.00%`. The sign may lead as well as follow: `%5` is 0.05.
+/// - an exponent is read and shown as `0.00E+00`, whatever its mantissa.
+///   Only `E` — `1D3` stays text, though VBA takes `D` in a literal — and the
+///   exponent must be whole, so `1E3.5` stays text too.
+/// - a fraction needs a whole part and ONE space: `1 1/2` is 1.5 shown as
+///   `# ?/?`, `1  1/2` with two spaces stays text, and `3/4` on its own is a
+///   date rather than a fraction, so it is left alone here. The width follows
+///   the denominator and stops at two: `1/16`, `1/100` and `1/1000` all ask
+///   for `# ??/??`.
+///
+/// The format is only ever ASKED for. Excel gives it to the cell only where
+/// the cell is still General — writing `50%` into a cell already showing
+/// `0.000` leaves `0.000` there — and that is decided where the cell is
+/// written, not here.
+fn typed_from_written(written: &str) -> (CellValue, Option<&'static str>) {
     // An apostrophe is the instruction "leave this alone", and is not kept.
     if let Some(rest) = written.strip_prefix(APOSTROPHE) {
-        return CellValue::String(rest.to_string());
+        return (CellValue::String(rest.to_string()), None);
     }
     // A written error word IS that error, and is one of the few things read
     // without trimming first -- see `written_error`.
     if let Some(named) = written_error(written) {
-        return CellValue::Error(named.to_string());
+        return (CellValue::Error(named.to_string()), None);
+    }
+    if let Some(read) = written_percent(written) {
+        return read;
+    }
+    if let Some(read) = written_exponent(written) {
+        return read;
+    }
+    if let Some(read) = written_fraction(written) {
+        return read;
     }
     let trimmed = written.trim();
     if trimmed.eq_ignore_ascii_case("true") {
-        return CellValue::Boolean(true);
+        return (CellValue::Boolean(true), None);
     }
     if trimmed.eq_ignore_ascii_case("false") {
-        return CellValue::Boolean(false);
+        return (CellValue::Boolean(false), None);
     }
     // A number in brackets is a negative one, the way an accountant writes it.
     let (body, bracketed) = match trimmed.strip_prefix('(').and_then(|rest| rest.strip_suffix(')'))
@@ -9313,10 +9373,89 @@ fn typed_from_text(written: &str) -> CellValue {
         && body.chars().any(|one| one.is_ascii_digit());
     if readable {
         if let Ok(number) = body.parse::<f64>() {
-            return CellValue::Number(if bracketed { -number } else { number });
+            return (
+                CellValue::Number(if bracketed { -number } else { number }),
+                None,
+            );
         }
     }
-    CellValue::String(written.to_string())
+    (CellValue::String(written.to_string()), None)
+}
+
+/// Whether a written string is a plain decimal number, which is all any of the
+/// three readings below accepts around their own punctuation.
+fn plain_number(body: &str) -> Option<f64> {
+    let readable = !body.is_empty()
+        && body.chars().enumerate().all(|(at, one)| {
+            one.is_ascii_digit() || one == '.' || (at == 0 && matches!(one, '+' | '-'))
+        })
+        && body.chars().filter(|one| *one == '.').count() <= 1
+        && body.chars().any(|one| one.is_ascii_digit());
+    if !readable {
+        return None;
+    }
+    body.parse::<f64>().ok()
+}
+
+fn written_percent(written: &str) -> Option<(CellValue, Option<&'static str>)> {
+    let trimmed = written.trim();
+    let body = match trimmed.strip_suffix('%') {
+        Some(body) => body,
+        None => trimmed.strip_prefix('%')?,
+    };
+    let body = body.trim();
+    let number = plain_number(body)?;
+    // Written with a point, shown with two decimals; written without one,
+    // shown with none. How many decimals were written makes no difference.
+    let shown = if body.contains('.') { "0.00%" } else { "0%" };
+    Some((CellValue::Number(number / 100.0), Some(shown)))
+}
+
+fn written_exponent(written: &str) -> Option<(CellValue, Option<&'static str>)> {
+    let trimmed = written.trim();
+    let at = trimmed.find(['e', 'E'])?;
+    let (mantissa, rest) = trimmed.split_at(at);
+    let power = &rest[1..];
+    plain_number(mantissa)?;
+    // The power must be a whole number, with a sign at most.
+    let digits = power.strip_prefix(['+', '-']).unwrap_or(power);
+    if digits.is_empty() || !digits.chars().all(|one| one.is_ascii_digit()) {
+        return None;
+    }
+    let number = trimmed.parse::<f64>().ok()?;
+    Some((CellValue::Number(number), Some("0.00E+00")))
+}
+
+fn written_fraction(written: &str) -> Option<(CellValue, Option<&'static str>)> {
+    let trimmed = written.trim();
+    let (whole, rest) = trimmed.split_once(' ')?;
+    // One space, and one only: `1  1/2` is text.
+    let (numerator, denominator) = rest.split_once('/')?;
+    if numerator.is_empty() || numerator.starts_with(['+', '-']) {
+        return None;
+    }
+    let whole = plain_number(whole)?;
+    if whole.fract() != 0.0 {
+        return None;
+    }
+    let numerator = plain_number(numerator)?;
+    let denominator = plain_number(denominator)?;
+    if numerator.fract() != 0.0 || denominator.fract() != 0.0 || denominator == 0.0 {
+        return None;
+    }
+    let part = numerator / denominator;
+    let number = if whole.is_sign_negative() || written.trim_start().starts_with('-') {
+        whole - part
+    } else {
+        whole + part
+    };
+    // The width follows the denominator, and stops at two.
+    let shown = if denominator < 10.0 {
+        "# ?/?"
+    } else {
+        "# ??/??"
+    };
+    Some((CellValue::Number(number), Some(shown)))
 }
 
 /// One side of a paste that combines rather than replaces.
@@ -9387,7 +9526,8 @@ fn format_number_plainly(number: f64) -> String {
 /// What one cell is left holding by an assignment.
 enum CellInput {
     Formula(String),
-    Constant(CellValue),
+    /// A value, and the way of showing it the writing asked for, if any.
+    Constant(CellValue, Option<&'static str>),
 }
 
 /// What was assigned, as the block of cells Excel treats it as.
@@ -9453,7 +9593,13 @@ fn cell_input(value: Value) -> Result<CellInput, String> {
             }
         }
     }
-    to_cell_value(value).map(CellInput::Constant)
+    if let Value::String(written) = &value {
+        if !written.is_empty() {
+            let (cell, shown) = typed_from_written(written);
+            return Ok(CellInput::Constant(cell, shown));
+        }
+    }
+    to_cell_value(value).map(|cell| CellInput::Constant(cell, None))
 }
 
 #[derive(Deserialize)]
@@ -17591,6 +17737,122 @@ End Sub
                 "$A$1".to_string(),
                 "$A$2".to_string(),
                 "2".to_string(),
+            ]
+        );
+    }
+
+    /// Some ways of writing a number carry a way of showing it. Measured in
+    /// Excel by writing each into a fresh cell and reading `.Value` and
+    /// `.NumberFormat` back.
+    #[test]
+    fn vba_reads_a_written_number_the_way_it_was_written() {
+        let measured = [
+            // per cent: a point in the writing asks for two decimals, however
+            // many were actually written.
+            ("50%", "0.5", "0%"),
+            ("100%", "1", "0%"),
+            ("-50%", "-0.5", "0%"),
+            ("12%", "0.12", "0%"),
+            ("50 %", "0.5", "0%"),
+            ("%5", "0.05", "0%"),
+            ("5.5%", "0.055", "0.00%"),
+            ("0.5%", "0.005", "0.00%"),
+            ("1.25%", "0.0125", "0.00%"),
+            ("1.2%", "0.012", "0.00%"),
+            ("1.23456%", "0.0123456", "0.00%"),
+            // an exponent, whatever its mantissa
+            ("1E3", "1000", "0.00E+00"),
+            ("1e3", "1000", "0.00E+00"),
+            ("1.5E3", "1500", "0.00E+00"),
+            ("1.23E-4", "0.000123", "0.00E+00"),
+            ("1.23456789E3", "1234.56789", "0.00E+00"),
+            // a fraction, its width following the denominator
+            ("1 1/2", "1.5", "# ?/?"),
+            ("1 3/8", "1.375", "# ?/?"),
+            ("0 1/2", "0.5", "# ?/?"),
+            ("1 10/8", "2.25", "# ?/?"),
+            ("-1 1/2", "-1.5", "# ?/?"),
+            ("1 1/16", "1.0625", "# ??/??"),
+            ("1 1/100", "1.01", "# ??/??"),
+            ("1 1/1000", "1.001", "# ??/??"),
+            ("1 11/100", "1.11", "# ??/??"),
+        ];
+        for (written, value, shown) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = \"{written}\"\n\
+                   Debug.Print CStr(Range(\"A1\").Value)\n\
+                   Debug.Print Range(\"A1\").NumberFormat\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![value.to_string(), shown.to_string()],
+                "for {written}"
+            );
+        }
+    }
+
+    /// And what stays text. A fraction wants a whole part and ONE space; an
+    /// exponent wants `E` and a whole power; a per cent wants one sign and a
+    /// plain number around it.
+    #[test]
+    fn vba_leaves_a_written_number_it_cannot_read_as_text() {
+        for written in [
+            "1  1/2", "3/4", "1E", "1E3.5", "1D3", "5%%", "5.5.5%", "1,23", "1E3E3",
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = \"{written}\"\n\
+                   Debug.Print TypeName(Range(\"A1\").Value)\n\
+                   Debug.Print Range(\"A1\").NumberFormat\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec!["String".to_string(), "General".to_string()],
+                "for {written}"
+            );
+        }
+    }
+
+    /// The writing only ASKS. A cell that is already showing itself some other
+    /// way keeps that way — measured: `0.000` then `50%` stores 0.5 and still
+    /// shows `0.000`.
+    #[test]
+    fn vba_lets_a_cell_keep_the_way_it_already_shows_itself() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").NumberFormat = \"0.000\"\n\
+               Range(\"A1\").Value = \"50%\"\n\
+               Debug.Print Range(\"A1\").Value\n\
+               Debug.Print Range(\"A1\").NumberFormat\n\
+               Range(\"A2\").Value = \"50%\"\n\
+               Range(\"A2\").Value = \"7\"\n\
+               Debug.Print Range(\"A2\").Value\n\
+               Debug.Print Range(\"A2\").NumberFormat\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "0.5".to_string(),
+                "0.000".to_string(),
+                "7".to_string(),
+                "0%".to_string(),
             ]
         );
     }
