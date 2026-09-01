@@ -221,7 +221,8 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                     for (i, para_json) in arr.iter_mut().enumerate() {
                                         if let Some(para) = sh_para(&sh.content, i) {
                                             let def_family = resolve_font(pres, sh);
-                                            let (bases, marker) = layout_paragraph_baselines(
+                                            let (bases, marker, mfam, mbold) =
+                                                layout_paragraph_baselines(
                                                 dc,
                                                 para,
                                                 &mut cursor_pt,
@@ -242,6 +243,8 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                                             // Spec #11: surface the marker text so autonum
                                             // number strings can be verified in the dump.
                                             para_json["marker"] = json!(marker.map(|m| m.text));
+                                            para_json["measured_family"] = json!(mfam);
+                                            para_json["measured_bold"] = json!(mbold);
                                             para_json["line_baselines"] = json!(
                                                 bases
                                                     .iter()
@@ -4770,7 +4773,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             } else {
                                 None
                             };
-                            let (lines, marker) = layout_paragraph_baselines(
+                            let (lines, marker, _mfam, _mbold) =
+                                layout_paragraph_baselines(
                                 mem_dc,
                                 p,
                                 &mut cursor_pt,
@@ -15204,7 +15208,7 @@ fn layout_paragraph_baselines(
     wrap_text: bool,
     // `a:bodyPr/@spcFirstLastPara` -- keep the first paragraph's space.
     spc_first_last: bool,
-) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>) {
+) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>, String, bool) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
@@ -15605,7 +15609,11 @@ fn layout_paragraph_baselines(
     if let Some(sa) = para.space_after {
         *cursor_pt += sa;
     }
-    (out, marker)
+    // ★The face and weight the paragraph was MEASURED with. The dump gave
+    // positions but never said what produced them, so every disagreement had to
+    // be reasoned back to a face -- six hypotheses died on d47 for want of this
+    // one string, and it settled the question in a single run.
+    (out, marker, family, bold)
 }
 
 /// Render an auto-number marker string for a buAutoNum `kind` at count `n`
