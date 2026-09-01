@@ -6836,7 +6836,9 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("strikethrough") {
-                let struck = style_boolean(&value, "Font.Strikethrough")?;
+                let Some(struck) = style_face_boolean(&value, "Font.Strikethrough")? else {
+                    return Ok(true);
+                };
                 self.set_range_style(range, |_, style| style.strikethrough = struck)?;
                 return Ok(true);
             }
@@ -6892,12 +6894,16 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("bold") {
-                let value = style_boolean(&value, "Font.Bold")?;
+                let Some(value) = style_face_boolean(&value, "Font.Bold")? else {
+                    return Ok(true);
+                };
                 self.set_range_style(range, |_, style| style.bold = value)?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("italic") {
-                let value = style_boolean(&value, "Font.Italic")?;
+                let Some(value) = style_face_boolean(&value, "Font.Italic")? else {
+                    return Ok(true);
+                };
                 self.set_range_style(range, |_, style| style.italic = value)?;
                 return Ok(true);
             }
@@ -7007,12 +7013,16 @@ impl Host for WorkbookHost<'_> {
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("wraptext") {
-            let wraps = style_boolean(&value, "Range.WrapText")?;
+            let Some(wraps) = style_face_boolean(&value, "Range.WrapText")? else {
+                return Ok(true);
+            };
             self.set_range_style(range, |_, style| style.wrap_text = wraps)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("shrinktofit") {
-            let shrinks = style_boolean(&value, "Range.ShrinkToFit")?;
+            let Some(shrinks) = style_face_boolean(&value, "Range.ShrinkToFit")? else {
+                return Ok(true);
+            };
             self.set_range_style(range, |_, style| style.shrink_to_fit = shrinks)?;
             return Ok(true);
         }
@@ -7085,11 +7095,17 @@ impl Host for WorkbookHost<'_> {
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("hidden") {
-            self.set_range_hidden(range, style_boolean(&value, "Range.Hidden")?)?;
+            // The odd one out: a hidden row given `Null` comes back, so
+            // nothing-back means False here rather than "leave it".
+            let hidden = style_face_boolean(&value, "Range.Hidden")?.unwrap_or(false);
+            self.set_range_hidden(range, hidden)?;
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("mergecells") {
-            if style_boolean(&value, "Range.MergeCells")? {
+            let Some(merges) = style_face_boolean(&value, "Range.MergeCells")? else {
+                return Ok(true);
+            };
+            if merges {
                 self.merge_range(range)?;
             } else {
                 self.unmerge_range(range)?;
@@ -7231,6 +7247,40 @@ fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
         Value::Integer(value) => Ok(*value != 0),
         Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
         _ => Err(format!("{property} must be Boolean")),
+    }
+}
+
+/// What one of the faces a cell wears — `Font.Bold`, `Font.Italic`,
+/// `Font.Strikethrough`, `WrapText`, `ShrinkToFit`, `MergeCells` — makes of
+/// `value`. Nothing back means LEAVE IT AS IT IS.
+///
+/// Measured by assigning to each of those six from VBA, which all answered
+/// alike: a number is False only at zero, `Empty` is False, and a string has
+/// to be the word True or False in any case with nothing around it — `"TRUE"`
+/// is True, `" true "` is refused, and so are `"0"` and `"1"`, which the
+/// application's switches DO take. `#FALSE#` is refused here and taken there.
+///
+/// ★ `Null` leaves the face alone rather than changing it: a bold cell given
+/// `Null` stays bold, and a range where the cells disagree — the one place
+/// `.Bold` answers `Null` when READ — keeps its disagreement. That is why this
+/// hands back an Option rather than a bool.
+///
+/// `Range.Hidden` is NOT one of these, though it looks like one: asked the
+/// same way, a hidden row given `Null` comes BACK. It is the one entrance of
+/// the seven where `Null` does something, so it reads the Option itself.
+fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, String> {
+    match value {
+        Value::Boolean(asked) => Ok(Some(*asked)),
+        Value::Integer(asked) => Ok(Some(*asked != 0)),
+        Value::Double(asked) if asked.is_finite() => Ok(Some(*asked != 0.0)),
+        Value::Empty | Value::Missing => Ok(Some(false)),
+        Value::Null => Ok(None),
+        Value::String(written) => match written.to_ascii_lowercase().as_str() {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            _ => Err(format!("{property} cannot be given {written:?}")),
+        },
+        _ => Err(format!("{property} must be True or False")),
     }
 }
 
@@ -17971,5 +18021,115 @@ End Sub
             let refused = execute_with_host(&module, "Act", vec![], &mut host);
             assert!(refused.is_err(), "{asked} passes the error on");
         }
+    }
+
+    /// The faces a cell wears take what Excel takes there, which is not what
+    /// the application's switches take: `"0"` is a number to a switch and a
+    /// refusal to a face.
+    #[test]
+    fn vba_style_faces_take_what_excel_takes_there() {
+        let measured = [
+            ("True", "True"),
+            ("0", "False"),
+            ("5", "True"),
+            ("0.4", "True"),
+            ("Empty", "False"),
+            ("\"true\"", "True"),
+            ("\"TRUE\"", "True"),
+            ("\"false\"", "False"),
+        ];
+        for (asked, answer) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Font.Bold = False\n\
+                   Range(\"A1\").Font.Bold = {asked}\n\
+                   Debug.Print Range(\"A1\").Font.Bold\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![answer.to_string()],
+                "for {asked}"
+            );
+        }
+
+        for asked in ["\"0\"", "\"1\"", "\"no\"", "\"\"", "\" true \"", "\"#FALSE#\""] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Range(\"A1\").Font.Bold = {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Act", vec![], &mut host);
+            assert!(refused.is_err(), "{asked} is refused");
+        }
+    }
+
+    /// ★ `Null` leaves a face alone. A bold cell given `Null` stays bold, and
+    /// a range whose cells disagree keeps its disagreement — which is the one
+    /// place reading `.Bold` answers `Null` in the first place.
+    #[test]
+    fn vba_a_null_leaves_a_style_face_as_it_was() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Font.Bold = True\n\
+               Range(\"A1\").Font.Bold = Null\n\
+               Debug.Print Range(\"A1\").Font.Bold\n\
+               Range(\"A2\").Font.Italic = True\n\
+               Range(\"A2\").Font.Italic = Null\n\
+               Debug.Print Range(\"A2\").Font.Italic\n\
+               Range(\"B1\").Font.Bold = True\n\
+               Range(\"B2\").Font.Bold = False\n\
+               Debug.Print TypeName(Range(\"B1:B2\").Font.Bold)\n\
+               Range(\"B1:B2\").Font.Bold = Null\n\
+               Debug.Print Range(\"B1\").Font.Bold\n\
+               Debug.Print Range(\"B2\").Font.Bold\n\
+               Range(\"B1:B2\").Font.Bold = Empty\n\
+               Debug.Print Range(\"B1\").Font.Bold\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "True".to_string(),
+                "True".to_string(),
+                "Null".to_string(),
+                "True".to_string(),
+                "False".to_string(),
+                "False".to_string(),
+            ]
+        );
+    }
+
+    /// And the one that looks like a face and is not: a hidden row given
+    /// `Null` comes back, where a bold cell given `Null` stays bold.
+    #[test]
+    fn vba_a_null_unhides_a_row() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Rows(3).Hidden = True\n\
+               Debug.Print Rows(3).Hidden\n\
+               Rows(3).Hidden = Null\n\
+               Debug.Print Rows(3).Hidden\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            host.take_debug_output(),
+            vec!["True".to_string(), "False".to_string()]
+        );
     }
 }
