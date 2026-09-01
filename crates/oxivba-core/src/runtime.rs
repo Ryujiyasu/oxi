@@ -4504,7 +4504,10 @@ fn call_builtin(
                 _ => Ok(Value::String(text(value).map_err(mismatch)?.to_lowercase())),
             },
             "len" => match value {
-                Value::Null => Err(invalid_null(line)),
+                // Asked of Excel: `Len(Null)` is Null, where `Len(Empty)` is
+                // 0. Length is one of the questions a Null passes through
+                // rather than one it refuses.
+                Value::Null => Ok(Value::Null),
                 _ => Ok(Value::Integer(
                     text(value).map_err(mismatch)?.encode_utf16().count() as i64,
                 )),
@@ -7245,7 +7248,16 @@ fn binary(
             "VBA arrays and objects cannot be used as scalar operands".to_string(),
         ));
     }
-    if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
+    // Joining is the one operator that does not pass a Null along: it counts
+    // one as a zero-length string. Asked of Excel, `Null & "a"` and
+    // `"a" & Null` are both `"a"`, `Null & 1` is `"1"`, `"" & Null` is `""` --
+    // and `Null & Null`, with nothing on either side to keep, IS Null.
+    // Everything else propagates, `Null + "a"` included.
+    if matches!(op, Concat) {
+        if matches!(lhs, Value::Null) && matches!(rhs, Value::Null) {
+            return Ok(Value::Null);
+        }
+    } else if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
         return Ok(Value::Null);
     }
     let mismatch = |message| (RuntimeErrorKind::TypeMismatch, message);
@@ -7256,11 +7268,13 @@ fn binary(
         ))
     };
     match op {
-        Concat => Ok(Value::String(format!(
-            "{}{}",
-            text(&lhs).map_err(mismatch)?,
-            text(&rhs).map_err(mismatch)?
-        ))),
+        Concat => {
+            let side = |value: &Value| match value {
+                Value::Null => Ok(String::new()),
+                value => text(value).map_err(mismatch),
+            };
+            Ok(Value::String(format!("{}{}", side(&lhs)?, side(&rhs)?)))
+        }
         Add | Sub | Mul | Div | IntDiv | Mod | Pow => {
             let (a, b) = numbers()?;
             if matches!(op, Div | IntDiv | Mod) && b == 0.0 {
@@ -10638,5 +10652,56 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, Value::String("0|Null".to_string()));
+    }
+
+    /// Joining is the one operator that does not pass a Null along — it counts
+    /// one as a zero-length string. Measured in Excel.
+    #[test]
+    fn joining_counts_a_null_as_nothing_unless_both_sides_are_null() {
+        let value = run(
+            "Public Function Joined() As String\n\
+               Dim parts As String\n\
+               parts = \"[\" & (Null & \"a\") & \"]\"\n\
+               parts = parts & \"[\" & (\"a\" & Null) & \"]\"\n\
+               parts = parts & \"[\" & (Null & 1) & \"]\"\n\
+               parts = parts & \"[\" & (\"\" & Null) & \"]\"\n\
+               parts = parts & \"[\" & TypeName(Null & Null) & \"]\"\n\
+               parts = parts & \"[\" & TypeName(Null + \"a\") & \"]\"\n\
+               Joined = parts\n\
+             End Function\n",
+            "Joined",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("[a][a][1][][Null][Null]".to_string()));
+    }
+
+    /// And the questions a Null passes through rather than refusing. Measured
+    /// in Excel, reading the answer with `TypeName` rather than turning it into
+    /// a String — which is what hid this: `CStr(Len(Null))` raises, so wrapping
+    /// the case made `Len` look as though it refused.
+    #[test]
+    fn a_null_passes_through_the_questions_that_let_it() {
+        let value = run(
+            "Public Function Passed() As String\n\
+               Dim parts As String\n\
+               parts = TypeName(Len(Null)) & \"|\" & TypeName(Len(Empty)) & \"|\"\n\
+               parts = parts & TypeName(Left(Null, 1)) & \"|\" & TypeName(Mid(Null, 1)) & \"|\"\n\
+               parts = parts & TypeName(UCase(Null)) & \"|\" & TypeName(Trim(Null)) & \"|\"\n\
+               parts = parts & TypeName(InStr(1, Null, \"a\")) & \"|\" & TypeName(Abs(Null)) & \"|\"\n\
+               parts = parts & TypeName(Int(Null)) & \"|\" & TypeName(Null > 1) & \"|\"\n\
+               parts = parts & TypeName(Null * 2) & \"|\" & TypeName(IsNull(Null))\n\
+               Passed = parts\n\
+             End Function\n",
+            "Passed",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String(
+                "Null|Long|Null|Null|Null|Null|Null|Null|Null|Null|Null|Boolean".to_string()
+            )
+        );
     }
 }
