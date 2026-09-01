@@ -6849,7 +6849,34 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                             // room, fresh Word keeps) has NO local discriminator —
                             // the fix is the nyserda natural-flow catalog (make the
                             // LRPBs redundant, the b837-pi=89 resolution pattern).
-                            est_h <= remaining && consumed > half_page
+                            let fires = est_h <= remaining && consumed > half_page;
+                            // OXI_DBG_LRPB: one line per LRPB site with the
+                            // geometry S822 tried to gate on. A saved break that
+                            // Word no longer takes (policies__0353d0b2a7f98e13
+                            // p34) leaves a LOT of fresh room; a live one leaves
+                            // little. Dump both populations before proposing a
+                            // discriminator -- S822 picked K=28 against a corpus
+                            // that has since changed.
+                            if std::env::var("OXI_DBG_LRPB").is_ok() {
+                                let preview: String = para
+                                    .runs
+                                    .iter()
+                                    .flat_map(|r| r.text.chars())
+                                    .take(18)
+                                    .collect();
+                                eprintln!(
+                                    "[LRPB] pg={} est={:.2} remaining={:.2} consumed={:.2} half={:.2} slack={:.2} fires={} text={:?}",
+                                    pages.len() + 1,
+                                    est_h,
+                                    remaining,
+                                    consumed,
+                                    half_page,
+                                    remaining - est_h,
+                                    fires,
+                                    preview
+                                );
+                            }
+                            fires
                         } else {
                             false
                         };
