@@ -331,15 +331,19 @@ pub fn master_units_runs(
     Some(sum)
 }
 
-/// The exact advance sum of `text` in points, every character at its own run's
-/// size, weight and slant.
+/// The width of `text` in points, every character at its own run's size,
+/// weight and slant.
 ///
 /// This is the width that CENTRES or right-aligns a finished line, and it is
-/// deliberately not [`master_units_runs`]: master units are the BREAK model
-/// (1/8pt per glyph, `pptx-master-unit-break-law`) while alignment is judged on
-/// the exact sum. The renderer has drawn the distinction since S-RUNALIGN
-/// (2026-08-25); this is the same rule for the callers that do not have a
-/// device.
+/// the sum of the MASTER-UNIT advances -- the same grid the break uses, and the
+/// same one the draw uses. PowerPoint's own `BoundWidth` is that sum: all 24
+/// arms of `read_pptx_drawgrid_com.py` come back exact multiples of 1/8pt, and
+/// differencing two run lengths gives `round(em * size * 8) / 8` per glyph.
+///
+/// ★It was the exact design sum until 2026-09-01, on the reading that master
+/// units were only the break model. Keeping it exact while the pen moved on the
+/// grid would centre every line on a width it is not drawn at -- half the
+/// difference, every centred line. One grid, not two.
 ///
 /// Returns None when any advance is unknown, so a caller keeps its fallbacks.
 pub fn line_width_pt(
@@ -368,7 +372,12 @@ pub fn line_width_pt(
             Some(s) => style_at(s, s.line_start + i, fs, bold, italic, true),
             None => (fs, bold, italic, track),
         };
-        sum += metrics.advance_em(family, run_bold, run_italic, ch)? * run_fs + run_track;
+        let em = metrics.advance_em(family, run_bold, run_italic, ch)?;
+        sum += if crate::font_adv::mudraw_on() {
+            crate::font_adv::mu_advance_pt(em, run_fs, run_track)
+        } else {
+            em * run_fs + run_track
+        };
     }
     Some(sum)
 }
@@ -2293,6 +2302,26 @@ mod shape_tests {
             let exact = TableMetrics.advance_em("Arial", false, false, 'n').unwrap() * fs;
             assert!((exact - want).abs() > 1e-3, "{exact}");
         }
+    }
+
+    /// One grid, not two, all the way through: the width a line is centred on
+    /// is the width its own pen ends at.
+    #[test]
+    fn a_centred_line_is_centred_on_the_width_its_pen_ends_at() {
+        let mut p = para("Hello there, world", 12.0);
+        p.alignment = Some(crate::ir::SlideAlignment::Center);
+        let box_w = 400.0;
+        let got =
+            layout_text_shape(&TableMetrics, &shape(box_w, 100.0, None), &[p], &[], &[], "Arial");
+        let line = &got.lines[0];
+        let offs = glyph_offsets_pt(&TableMetrics, line).expect("Arial is measured");
+        let drawn_w = offs[offs.len() - 1];
+        assert!(
+            (line.x - (box_w - drawn_w) / 2.0).abs() < 1e-3,
+            "x {} vs {}",
+            line.x,
+            (box_w - drawn_w) / 2.0
+        );
     }
 
     #[test]
