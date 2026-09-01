@@ -1767,8 +1767,24 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn cells_object(&mut self, sheet: usize, args: &[Value]) -> Result<Value, String> {
+        // One index counts across the whole sheet the same way it counts
+        // across a range — by rows, 16384 to a row. Asked of Excel,
+        // `Cells(16384)` is XFD1 and `Cells(16385)` is A2, and the last one it
+        // will give is `Cells(17179869184)` = XFD1048576.
+        if let [_] = args {
+            return self.range_cells_object(
+                CellRange {
+                    sheet,
+                    start_row: 1,
+                    start_column: 0,
+                    end_row: MAX_WORKSHEET_ROW,
+                    end_column: MAX_WORKSHEET_COLUMN,
+                },
+                args,
+            );
+        }
         let [row, column] = args else {
-            return Err("Cells expects row and column".to_string());
+            return Err("Cells expects an index, or a row and a column".to_string());
         };
         let row = positive_index(row, "row")?;
         let column = positive_index(column, "column")? - 1;
@@ -1798,7 +1814,14 @@ impl<'a> WorkbookHost<'a> {
             let across = step % wide;
             let row = i64::from(range.start_row) + down;
             let column = i64::from(range.start_column) + across;
-            if row < 1 || column < 0 {
+            // Walking off the sheet is refused rather than wrapped: asked of
+            // Excel, `Cells(17179869184)` is the last cell and one more than
+            // that raises.
+            if row < 1
+                || column < 0
+                || row > i64::from(MAX_WORKSHEET_ROW)
+                || column > i64::from(MAX_WORKSHEET_COLUMN)
+            {
                 return Err("Range.Cells has no cell there".to_string());
             }
             return Ok(
@@ -7019,14 +7042,21 @@ fn format_debug_value(value: &Value) -> String {
 
 /// The one-argument form of `Cells` counts from one but is not held there:
 /// Excel answers `Cells(0)` with the cell before the first.
+/// The one index of `Cells(n)`, made whole VBA's way — half to the even side.
+///
+/// Measured at both entrances, which is why one function may carry it: over a
+/// range, `Range("B2:D4").Cells(1.5)` is C2 and `Cells(2.5)` is C2 as well
+/// (2 and 2), and `Cells(3.5)` is B3 (4); over the sheet, `Cells(1.5)` is B1
+/// and `Cells(2.5)` is B1. A number written as text is read as a number here —
+/// `Cells("3")` is C1 — though the two-index form refuses one.
 fn cells_index(value: &Value) -> Result<i64, String> {
     match value {
         Value::Integer(number) => Ok(*number),
-        Value::Double(number) if number.is_finite() => Ok(number.trunc() as i64),
+        Value::Double(number) if number.is_finite() => Ok(number.round_ties_even() as i64),
         Value::String(text) => text
             .trim()
             .parse::<f64>()
-            .map(|number| number.trunc() as i64)
+            .map(|number| number.round_ties_even() as i64)
             .map_err(|_| "Range.Cells index must be a number".to_string()),
         _ => Err("Range.Cells index must be a number".to_string()),
     }
@@ -16875,5 +16905,90 @@ End Sub
             host.take_debug_output(),
             vec!["True".to_string(), "False".to_string(), "True".to_string()]
         );
+    }
+
+    /// `Cells(n)` counts across the sheet by rows, 16384 to a row — the same
+    /// walk `Range(...).Cells(n)` does across a block, so it is the same code.
+    /// Asked of Excel: 16384 is XFD1, 16385 is A2, 17179869184 is the last
+    /// cell there is, and one past it raises.
+    #[test]
+    fn vba_counts_cells_across_the_sheet_from_one_index() {
+        let measured = [
+            ("Cells(1)", "$A$1"),
+            ("Cells(2)", "$B$1"),
+            ("Cells(16384)", "$XFD$1"),
+            ("Cells(16385)", "$A$2"),
+            ("Cells(16386)", "$B$2"),
+            ("Cells(2147483647#)", "$XFC$131072"),
+            ("Cells(17179869184#)", "$XFD$1048576"),
+            // Half goes to the even side, and a number written as text is read.
+            ("Cells(1.5)", "$B$1"),
+            ("Cells(2.5)", "$B$1"),
+            ("Cells(\"3\")", "$C$1"),
+        ];
+        for (asked, address) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Debug.Print {asked}.Address\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![address.to_string()],
+                "for {asked}"
+            );
+        }
+
+        for asked in ["Cells(0)", "Cells(-1)", "Cells(17179869185#)"] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Debug.Print {asked}.Address\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Act", vec![], &mut host);
+            assert!(refused.is_err(), "{asked} is refused");
+        }
+    }
+
+    /// The same index over a block. 0 is the cell BEFORE the first, which
+    /// walks back into the column before, and one below the block keeps going.
+    #[test]
+    fn vba_counts_cells_across_a_block_from_one_index() {
+        let measured = [
+            ("Range(\"B2:D4\").Cells(2)", "$C$2"),
+            ("Range(\"B2:D4\").Cells(4)", "$B$3"),
+            ("Range(\"B2:D4\").Cells(10)", "$B$5"),
+            ("Range(\"B2:D4\").Cells(0)", "$A$2"),
+            ("Range(\"B2:D4\").Cells(1.5)", "$C$2"),
+            ("Range(\"B2:D4\").Cells(2.5)", "$C$2"),
+            ("Range(\"B2:D4\").Cells(3.5)", "$B$3"),
+            ("Range(\"B2:D4\").Cells(\"3\")", "$D$2"),
+        ];
+        for (asked, address) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Debug.Print {asked}.Address\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![address.to_string()],
+                "for {asked}"
+            );
+        }
+
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n  Debug.Print Range(\"B2:D4\").Cells(-1).Address\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        let refused = execute_with_host(&module, "Act", vec![], &mut host);
+        assert!(refused.is_err(), "the cell before A2 is off the sheet");
     }
 }
