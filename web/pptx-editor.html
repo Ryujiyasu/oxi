@@ -79,7 +79,7 @@
 <script type="module">
 import init, {
   parse_presentation, layout_slide_shape, slide_family_measurable,
-  edit_pptx_with_splits, slide_face_advance,
+  edit_pptx_with_splits, slide_face_advance, slide_glyph_offsets,
 } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent, measureFace } from './face-metrics.js';
 
@@ -154,6 +154,10 @@ function layoutSlide() {
       console.warn('layout refused', e);
     }
     if (layout) {
+      // The faces this shape was laid out with, carried on each line so the
+      // draw can ask the ENGINE where the glyphs go rather than accumulating
+      // advances a second time (see `lineOffsets`).
+      layout.lines.forEach(l => { l.__adv = advances; });
       state.laid.push({ shape, shapeIndex, paragraphs, layout });
       paragraphs.forEach((p, pi) => p.runs.forEach((r, ri) => {
         const k = shapeIndex + '/' + pi + '/' + ri;
@@ -167,17 +171,22 @@ function layoutSlide() {
 
 // The x of every character boundary of a line, in POINTS from the line's start.
 //
-// ★This is the renderer's rule, not the browser's. `runtime_dx_px` accumulates
-// the EXACT design advance and rounds the running total once per glyph -- no
-// kerning, no shaping -- because that is what PowerPoint both breaks and
-// centres against. `fillText` on a whole string kerns it, so a line drawn that
-// way drifts from where PowerPoint puts the same glyphs, and the caret drifts
-// with it. Measuring and drawing from one array keeps the three in step.
+// ★This is the ENGINE's rule, not the browser's. The pen moves by the MASTER
+// UNIT -- each advance rounded to 1/8pt -- which is what PowerPoint measures
+// and draws on: its own `BoundWidth`, differenced over two run lengths so the
+// ink overhang cancels, gives `round(em * size * 8) / 8` exactly in 22 of 24
+// arms over three faces and eight sizes, and the exact design advance in none.
+// Accumulating the exact advance instead drifts 2.461pt over a 114-character
+// line. `fillText` on a whole string kerns it, which drifts further still, and
+// the caret drifts with whatever the draw does. Measuring, breaking and drawing
+// from one array keeps all three in step.
 //
-// Null when the face cannot be measured; the caller then falls back to the
-// browser's own measuring, which is what an unmeasurable shape already gets.
+// Null when the engine cannot measure the face; the caller then falls back to
+// the browser's own measuring, which is what an unmeasurable shape already gets.
 function lineOffsets(line) {
   if (line.__off !== undefined) return line.__off;
+  const engine = engineOffsets(line);
+  if (engine) { line.__off = engine; return engine; }
   const off = [0];
   let x = 0;
   for (const sg of lineParts(line)) {
@@ -198,6 +207,28 @@ function lineOffsets(line) {
     }
   }
   line.__off = off;
+  return off;
+}
+
+// The engine's own placement for a line, spread over code units.
+//
+// `slide_glyph_offsets` answers per CODE POINT and the callers index with
+// `slice(0, i)` offsets, so a character outside the basic plane needs its
+// offset repeated for both of its code units.
+function engineOffsets(line) {
+  let pts = null;
+  try {
+    pts = slide_glyph_offsets(line, line.__adv);
+  } catch (e) {
+    return null;
+  }
+  if (!pts || pts.length !== [...line.text].length + 1) return null;
+  const off = [0];
+  let i = 0;
+  for (const ch of line.text) {
+    i += 1;
+    for (let u = 0; u < ch.length; u++) off.push(pts[i]);
+  }
   return off;
 }
 

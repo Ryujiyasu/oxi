@@ -995,6 +995,28 @@ pub fn layout_slide_shape(
     serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Where each character of one laid-out line starts, in points from its `x`.
+///
+/// `line` is a `PlacedLine` from [`layout_slide_shape`] and `advances` the same
+/// measured faces that call was given. The answer is the engine's own placement
+/// -- each advance on the master unit, which is what PowerPoint measures and
+/// draws on (see `glyph_offsets_pt`) -- so a page that draws from it puts the
+/// glyphs where the break already assumed they were.
+///
+/// Null when a face cannot be measured; the caller then has to fall back to its
+/// own measuring and should say the answer is not the engine's.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn slide_glyph_offsets(line: JsValue, advances: JsValue) -> Result<JsValue, JsError> {
+    let line: oxislides_core::layout::PlacedLine =
+        serde_wasm_bindgen::from_value(line).map_err(|e| JsError::new(&e.to_string()))?;
+    let supplied = supplied_metrics(advances)?;
+    match oxislides_core::layout::glyph_offsets_pt(&supplied, &line) {
+        Some(v) => serde_wasm_bindgen::to_value(&v).map_err(|e| JsError::new(&e.to_string())),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 /// What the compiled tables say one character advances, in EM units.
 ///
 /// The page measures faces itself; this lets it check that measuring against a

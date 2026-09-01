@@ -1864,6 +1864,62 @@ pub struct PlacedLine {
     pub char_start: usize,
 }
 
+/// Where each character of `line` starts, in points from the line's own `x`.
+///
+/// One entry per character plus a final one for the end of the line, each
+/// character measured at its OWN segment's face and size.
+///
+/// ★The pen moves by the MASTER UNIT, not by the exact advance. The break has
+/// been on this grid since `pptx-master-unit-break-law`; PowerPoint measures
+/// and draws on it too. Asked of PowerPoint's own `BoundWidth` over 3 faces x 8
+/// sizes, differencing two run lengths so the ink overhang cancels
+/// (`read_pptx_drawgrid_com.py`), the advance is `round(em * size * 8) / 8`
+/// EXACTLY in 22 of 24 arms and on the exact advance in none -- including at
+/// fractional point sizes, where 12.5pt Arial comes back 7.00000 and 15.99pt
+/// 8.87500. Every one of the 24 measured widths is itself a multiple of 1/8pt.
+///
+/// ★The truth PDF cannot answer this and says so if asked: PowerPoint restates
+/// the geometry there as a `Tf` size that is not the declared one, a per-run
+/// `Tc`, and sparse integer `TJ` corrections, and the effective advance wobbles
+/// +-0.9% with the declared size. An earlier reading of that PDF said "neither
+/// model", which was the writer talking. Ask the application, not its export.
+///
+/// The one real exception measured is Verdana at 8pt, which advances one master
+/// unit MORE than the design advance rounds to -- what a strongly hinted face
+/// does at a small ppem. It is left unhandled rather than special-cased.
+///
+/// Returns None when any face cannot be measured, so a caller keeps whatever
+/// fallback it has rather than drawing on a substitute's advances.
+pub fn glyph_offsets_pt(metrics: &dyn FaceMetrics, line: &PlacedLine) -> Option<Vec<f32>> {
+    let mut out = Vec::with_capacity(line.text.chars().count() + 1);
+    out.push(0.0f32);
+    let mut mu: i64 = 0;
+    // The same expression as `master_units`, so the last entry IS the width
+    // the line was broken and measured with -- one grid, not two.
+    let mut step = |em: f32, fs: f32| {
+        mu += f64::from(em * fs * MASTER_UNITS_PER_PT as f32).round() as i64;
+        out.push(master_units_pt(mu) as f32);
+    };
+    if line.segments.is_empty() {
+        for ch in line.text.chars() {
+            step(
+                metrics.advance_em(&line.family, line.bold, line.italic, ch)?,
+                line.font_size,
+            );
+        }
+    } else {
+        for sg in &line.segments {
+            for ch in sg.text.chars() {
+                step(
+                    metrics.advance_em(&sg.family, sg.bold, sg.italic, ch)?,
+                    sg.font_size,
+                );
+            }
+        }
+    }
+    Some(out)
+}
+
 /// A shape's text, laid out.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShapeLayout {
@@ -2204,6 +2260,39 @@ mod shape_tests {
         let flat = layout_text_shape(&TableMetrics, &box_, &[p], &[], &[], "Arial");
         let moved = flat.lines[0].x - got.lines[0].x;
         assert!((moved - 7.859).abs() < 0.13, "{moved}");
+    }
+
+    /// One grid, not two: the pen's last stop is the width the line was broken
+    /// against. If these ever disagree the editor draws a line the engine
+    /// would not have broken there.
+    #[test]
+    fn the_last_glyph_offset_is_the_width_the_line_was_broken_with() {
+        let p = [para("Hello there, world", 12.0)];
+        let got = layout_text_shape(&TableMetrics, &shape(400.0, 100.0, None), &p, &[], &[], "Arial");
+        let line = &got.lines[0];
+        let offs = glyph_offsets_pt(&TableMetrics, line).expect("Arial is measured");
+        assert_eq!(offs.len(), line.text.chars().count() + 1);
+        assert!(offs.windows(2).all(|w| w[1] >= w[0]), "{offs:?}");
+        let mu = master_units(&TableMetrics, &line.text, 12.0, "Arial", false, false, 0.0)
+            .expect("Arial is measured");
+        assert!((offs[offs.len() - 1] - master_units_pt(mu) as f32).abs() < 1e-4);
+    }
+
+    /// PowerPoint's own `BoundWidth` says 40 Arial 'n' at 12pt advance 6.62500
+    /// each and at 18pt exactly 10.00000 -- the design advance rounded to the
+    /// master unit, not the design advance.
+    #[test]
+    fn the_pen_moves_by_the_master_unit_not_the_design_advance() {
+        for (fs, want) in [(12.0f32, 6.625f32), (18.0, 10.0)] {
+            let p = [para("nn", fs)];
+            let got =
+                layout_text_shape(&TableMetrics, &shape(400.0, 100.0, None), &p, &[], &[], "Arial");
+            let offs = glyph_offsets_pt(&TableMetrics, &got.lines[0]).expect("Arial is measured");
+            assert!((offs[1] - want).abs() < 1e-4, "{fs}pt gave {}", offs[1]);
+            // And it really differs from exact accumulation, or this proves nothing.
+            let exact = TableMetrics.advance_em("Arial", false, false, 'n').unwrap() * fs;
+            assert!((exact - want).abs() > 1e-3, "{exact}");
+        }
     }
 
     #[test]
