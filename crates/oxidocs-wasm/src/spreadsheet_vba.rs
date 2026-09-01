@@ -452,10 +452,50 @@ impl<'a> WorkbookHost<'a> {
         })
     }
 
+    /// The cells behind a range object, whether or not it remembers being
+    /// asked for by row or by column.
+    ///
+    /// A range that came through `.Rows`, `.Columns`, `.EntireRow` or
+    /// `.EntireColumn` is still a range and answers like one — asked of Excel,
+    /// `TypeName(Rows(1))` is "Range", `Rows(2).Row` is 2 and
+    /// `Rows(2).Cells(2).Value` reads B2. Only `Count` and `Item` follow the
+    /// sense, and those are handled before anything gets here.
     fn range(&self, object: &ObjectRef) -> Option<CellRange> {
         match self.objects.get(object.handle as usize) {
             Some(HostObject::Range(range)) => Some(*range),
+            Some(HostObject::RangeCollection(range, _)) => Some(*range),
             _ => None,
+        }
+    }
+
+    /// The row-or-column sense a range object carries, if it has one.
+    fn range_sense(&self, object: &ObjectRef) -> Option<RangeAxis> {
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::RangeCollection(_, axis)) => Some(*axis),
+            _ => None,
+        }
+    }
+
+    /// Give a range the sense the one it came from had.
+    ///
+    /// Asked of Excel, the sense survives `Offset` and `Resize`:
+    /// `Rows(1).Offset(1, 0)` is `$2:$2` and still counts 1, and
+    /// `Columns(1).Resize(, 2)` counts 2 while `Rows(1).Resize(, 2)` counts 1.
+    /// `Cells`, `Areas` and `Union` drop it — `Rows("1:3").Areas(1).Count` is
+    /// 49152, back to counting cells.
+    fn carry_sense(&mut self, source: &ObjectRef, produced: Value) -> Value {
+        let Some(axis) = self.range_sense(source) else {
+            return produced;
+        };
+        let Value::Object(object) = &produced else {
+            return produced;
+        };
+        match self.objects.get(object.handle as usize) {
+            Some(HostObject::Range(range)) => {
+                let range = *range;
+                self.object(HostObject::RangeCollection(range, axis))
+            }
+            _ => produced,
         }
     }
 
@@ -1980,7 +2020,9 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
         };
-        Ok(self.object(HostObject::Range(item)))
+        // The item keeps the sense it was indexed through: asked of Excel,
+        // `Rows("1:3").Item(2)` is `$2:$2` and counts 1, not 16384.
+        Ok(self.object(HostObject::RangeCollection(item, axis)))
     }
 
     fn cell_value(&self, address: CellAddress) -> Value {
@@ -5583,7 +5625,7 @@ impl Host for WorkbookHost<'_> {
                     };
                     return self.range_collection_item(range, axis, index).map(Some);
                 }
-                return Ok(None);
+                // As with Count, every other call a range takes it takes too.
             }
             if let Some(range) = self.range(receiver) {
                 if name.eq_ignore_ascii_case("borders") {
@@ -5650,10 +5692,12 @@ impl Host for WorkbookHost<'_> {
                     return self.range_cells_object(range, args).map(Some);
                 }
                 if name.eq_ignore_ascii_case("offset") {
-                    return self.offset_range(range, args).map(Some);
+                    let moved = self.offset_range(range, args)?;
+                    return Ok(Some(self.carry_sense(receiver, moved)));
                 }
                 if name.eq_ignore_ascii_case("resize") {
-                    return self.resize_range(range, args).map(Some);
+                    let sized = self.resize_range(range, args)?;
+                    return Ok(Some(self.carry_sense(receiver, sized)));
                 }
                 if name.eq_ignore_ascii_case("end") {
                     return self.range_end(range, args).map(Some);
@@ -6252,7 +6296,9 @@ impl Host for WorkbookHost<'_> {
                 };
                 return Ok(Some(Value::Integer(i64::from(count))));
             }
-            return Ok(None);
+            // Everything else a range answers, a row or a column answers the
+            // same way, so this falls through to the ordinary range arms
+            // rather than stopping here.
         }
         if let Some(sheet) = self.worksheet(receiver) {
             if name.eq_ignore_ascii_case("visible") {
@@ -6377,19 +6423,29 @@ impl Host for WorkbookHost<'_> {
                 None => Value::Nothing,
             }));
         }
+        // Both of these SET the row-or-column sense rather than passing one
+        // along: asked of Excel, `Range("A1:C3").EntireRow.Count` is 3 — its
+        // rows — and `.EntireColumn.Count` is 3 as well, its columns, where a
+        // plain range of the same cells counts 9.
         if name.eq_ignore_ascii_case("entirerow") {
-            return Ok(Some(self.object(HostObject::Range(CellRange {
-                start_column: 0,
-                end_column: MAX_WORKSHEET_COLUMN,
-                ..range
-            }))));
+            return Ok(Some(self.object(HostObject::RangeCollection(
+                CellRange {
+                    start_column: 0,
+                    end_column: MAX_WORKSHEET_COLUMN,
+                    ..range
+                },
+                RangeAxis::Rows,
+            ))));
         }
         if name.eq_ignore_ascii_case("entirecolumn") {
-            return Ok(Some(self.object(HostObject::Range(CellRange {
-                start_row: 1,
-                end_row: MAX_WORKSHEET_ROW,
-                ..range
-            }))));
+            return Ok(Some(self.object(HostObject::RangeCollection(
+                CellRange {
+                    start_row: 1,
+                    end_row: MAX_WORKSHEET_ROW,
+                    ..range
+                },
+                RangeAxis::Columns,
+            ))));
         }
         if name.eq_ignore_ascii_case("font") {
             return Ok(Some(self.object(HostObject::RangeFont(range))));
@@ -17150,6 +17206,101 @@ End Sub
         let mut host = WorkbookHost::new(&mut second, 0).unwrap();
         execute_with_host(&module, "Act", vec![], &mut host).unwrap();
         assert!(host.wrote, "reading A1 has no formula to settle");
+    }
+
+    /// `Count` follows the axis the range was asked for by.
+    ///
+    /// Asked of Excel: `Rows(1).Count` is 1 — one row — where the same cells
+    /// written as `Range("1:1")` count 16384. The sense belongs to how the
+    /// range was obtained, not to the cells it covers.
+    #[test]
+    fn vba_counts_along_the_axis_a_range_was_asked_for_by() {
+        let measured = [
+            ("Rows(1).Count", "1"),
+            ("Rows(1).Address", "$1:$1"),
+            ("Rows(\"1:3\").Count", "3"),
+            ("Columns(1).Count", "1"),
+            ("Columns(\"A:C\").Count", "3"),
+            // A plain range of the very same cells still counts cells.
+            ("Range(\"1:1\").Count", "16384"),
+            ("Range(\"A:A\").Count", "1048576"),
+            ("Range(\"A1:C3\").Count", "9"),
+            // Asking again through an axis re-reads it that way.
+            ("Rows(1).Rows.Count", "1"),
+            ("Rows(1).Columns.Count", "16384"),
+            ("Range(\"1:1\").Rows.Count", "1"),
+            ("Range(\"A1:C3\").Rows.Count", "3"),
+            ("Range(\"A1:C3\").Columns.Count", "3"),
+            ("Range(\"A1:C3\").Rows(1).Count", "1"),
+            ("Range(\"A1:C3\").Rows(1).Address", "$A$1:$C$1"),
+            ("Range(\"A1:C3\").Rows(2).Address", "$A$2:$C$2"),
+            ("Range(\"A1:C3\").Columns(1).Count", "1"),
+            ("Range(\"A1:C3\").Rows.Address", "$A$1:$C$3"),
+            // Item walks the axis too.
+            ("Rows(\"1:3\").Item(2).Address", "$2:$2"),
+            ("Rows(\"1:3\").Item(2).Count", "1"),
+            ("Columns(\"A:C\").Item(2).Address", "$B:$B"),
+            // And a sensed range answers everything else like any other.
+            ("Rows(2).Row", "2"),
+            ("Rows(2).Column", "1"),
+            ("Columns(3).Column", "3"),
+            ("Rows(1).Cells(3).Address", "$C$1"),
+        ];
+        for (asked, answer) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Debug.Print {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![answer.to_string()],
+                "for {asked}"
+            );
+        }
+    }
+
+    /// Which operations carry the sense and which drop it.
+    ///
+    /// `Offset` and `Resize` carry it; `EntireRow` and `EntireColumn` SET it,
+    /// even on a range that had none; `Cells` and `Union` drop it.
+    #[test]
+    fn vba_carries_the_axis_sense_through_some_operations_and_not_others() {
+        let measured = [
+            ("Rows(1).Offset(1, 0).Address", "$2:$2"),
+            ("Rows(1).Offset(1, 0).Count", "1"),
+            ("Columns(1).Offset(0, 1).Count", "1"),
+            ("Rows(1).Resize(2).Count", "2"),
+            // Set, not passed along: a plain range gets a sense from these.
+            ("Range(\"A1\").EntireRow.Count", "1"),
+            ("Range(\"A1:C3\").EntireRow.Count", "3"),
+            ("Range(\"A1:C3\").EntireRow.Address", "$1:$3"),
+            ("Range(\"A1\").EntireColumn.Count", "1"),
+            ("Range(\"A1:C3\").EntireColumn.Count", "3"),
+            ("Range(\"A1:C3\").EntireColumn.Address", "$A:$C"),
+            ("Rows(1).EntireRow.Count", "1"),
+            ("Rows(1).EntireColumn.Count", "16384"),
+            ("Columns(1).EntireRow.Count", "1048576"),
+            // Dropped: back to counting cells.
+            ("Rows(1).Cells.Count", "16384"),
+            ("Application.Union(Rows(1), Rows(3)).Count", "32768"),
+        ];
+        for (asked, answer) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Debug.Print {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![answer.to_string()],
+                "for {asked}"
+            );
+        }
     }
 
 }
