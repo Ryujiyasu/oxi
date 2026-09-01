@@ -288,12 +288,41 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     if low_match or big_pcd:
         pass_binary = False
 
+    # 2026-09-02: BLANK pages. The gate scores only where matched paragraphs
+    # LAND, so a page with nothing on it is invisible to it -- and if the page
+    # COUNT is unchanged it is invisible to pcd too. S1270 shipped through every
+    # gate green (dev 96/96, dev SSIM byte-identical, JP mean +0.0026, this
+    # doc's score 0.5543 -> 0.8098) while inserting TWO blank sheets into
+    # legal__02f84965dccfe4db; it had to be reverted (6d5a611e) after the fact.
+    # Count them here so the next such change is caught before it lands.
+    #
+    # Word's own blanks are counted the same way and reported alongside: a
+    # document may legitimately contain one (an explicit break landing on a
+    # section boundary), so the number to watch is oxi_blank - word_blank.
+    def _blank_pages(n_pages, pages_by_str):
+        seen = set()
+        for k, recs in (pages_by_str or {}).items():
+            if recs:
+                seen.add(int(k))
+        return [p for p in range(1, (n_pages or 0) + 1) if p not in seen]
+
+    oxi_blank = _blank_pages(oxi.get("n_pages"), oxi.get("pages"))
+    word_pages_by_str: dict[str, list] = {}
+    for wp in word_paras:
+        pg = wp.get("page")
+        if pg is not None:
+            word_pages_by_str.setdefault(str(pg), []).append(wp)
+    word_blank = _blank_pages(word.get("n_pages"), word_pages_by_str)
+
     return {
         "doc_id": doc_id,
         "word_filename": word.get("filename"),
         "word_n_pages": word.get("n_pages"),
         "oxi_n_pages": oxi.get("n_pages"),
         "page_count_delta": pcd,
+        "oxi_blank_pages": oxi_blank,
+        "word_blank_pages": word_blank,
+        "blank_page_delta": len(oxi_blank) - len(word_blank),
         "n_word_paras": len(word_paras),
         "n_matched": n_matched,
         "n_unmatched": len(unmatched),
@@ -340,6 +369,8 @@ def main() -> int:
             flags += f" LOW_MATCH(rate={result['match_rate']})"
         if result.get("page_count_fail"):
             flags += f" PAGE_COUNT(delta={result['page_count_delta']})"
+        if result.get("blank_page_delta", 0) > 0:
+            flags += f" BLANK_PAGES({result['oxi_blank_pages']} vs word {result['word_blank_pages']})"
         print(f"  [{marker}] {doc_id}: score={result['score']} matched={result['n_matched']}/{result['n_matched']+result['n_unmatched']} delta_hist={result['delta_histogram']}{flags}")
         summary.append({
             "doc_id": doc_id,
@@ -351,6 +382,7 @@ def main() -> int:
             "low_match_fail": result["low_match_fail"],
             "page_count_fail": result["page_count_fail"],
             "page_count_delta": result["page_count_delta"],
+            "blank_page_delta": result.get("blank_page_delta", 0),
             "delta_histogram": result["delta_histogram"],
         })
 
@@ -358,9 +390,13 @@ def main() -> int:
     n_total = len(summary)
     pass_rate = (n_pass / n_total) if n_total else 0.0
     mean_score = (sum(s["score"] for s in summary) / n_total) if n_total else 0.0
+    n_blank_docs = sum(1 for s in summary if s.get("blank_page_delta", 0) > 0)
+    n_blank_pages = sum(max(0, s.get("blank_page_delta", 0)) for s in summary)
     summary_obj = {
         "n_total": n_total,
         "n_pass": n_pass,
+        "n_blank_docs": n_blank_docs,
+        "n_blank_pages": n_blank_pages,
         "n_fail": n_total - n_pass,
         "pass_rate": round(pass_rate, 4),
         "mean_score": round(mean_score, 4),
@@ -373,6 +409,11 @@ def main() -> int:
         json.dump(summary_obj, f, ensure_ascii=False, indent=2)
     print(f"\nsummary -> {summary_path}")
     print(f"  PHASE 1 GATE: pass_rate={pass_rate:.2%} ({n_pass}/{n_total}), mean_score={mean_score:.4f}")
+    # A blank sheet is invisible to pass_rate and to pcd (the page COUNT can be
+    # unchanged), so it gets its own line -- S1270 shipped through every gate
+    # green while inserting two of them, and was reverted after the fact.
+    print(f"  BLANK PAGES: {n_blank_pages} extra over Word, in {n_blank_docs} doc(s)"
+          + ("  <-- must be 0" if n_blank_pages else ""))
     if skipped:
         print(f"  skipped {len(skipped)} docs (missing Word or Oxi input)")
     return 0
