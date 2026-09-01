@@ -609,6 +609,18 @@ impl Workbook {
         match expr {
             Expr::Literal(v) => Arg::Value(v.clone()),
 
+            // An array written out IS a block of values -- the same thing a
+            // range materialises to, with nothing behind it.
+            Expr::Array(rows) => {
+                let height = rows.len();
+                let width = rows.first().map_or(0, |row| row.len());
+                Arg::Range(RangeData {
+                    width,
+                    height,
+                    cells: rows.iter().flatten().cloned().collect(),
+                })
+            }
+
             Expr::Ref(reference) => {
                 let target = reference.sheet.as_deref().unwrap_or(sheet);
                 if !self.sheets.contains_key(target) {
@@ -1968,5 +1980,53 @@ mod tests {
             wb.value("Sheet1", "C1")
         };
         assert_eq!(build(), build());
+    }
+
+    /// An array written out where a range could go. Measured in Excel by
+    /// putting each formula in a cell and reading what it showed.
+    #[test]
+    fn reads_an_array_written_out() {
+        let mut book = Workbook::new();
+        book.add_sheet("Sheet1");
+
+        let measured = [
+            ("SUM({1,2,3})", Value::Number(6.0)),
+            ("SUM({1,2;3,4})", Value::Number(10.0)),
+            ("INDEX({1,2;3,4},2,1)", Value::Number(3.0)),
+            ("ROWS({1,2;3,4})", Value::Number(2.0)),
+            ("COLUMNS({1,2;3,4})", Value::Number(2.0)),
+            // SUM steps over text and logicals in an array, as it does in a
+            // range, and COUNT counts only the numbers.
+            ("SUM({1,\"a\",TRUE})", Value::Number(1.0)),
+            ("COUNTA({1,\"a\"})", Value::Number(2.0)),
+            ("COUNT({1,\"a\"})", Value::Number(1.0)),
+            ("MATCH(2,{1,2,3},0)", Value::Number(2.0)),
+            ("SUM({-1,2})", Value::Number(1.0)),
+            ("SUM({1.5,2.5})", Value::Number(4.0)),
+            // An error inside is passed on.
+            ("SUM({#N/A,1})", Value::Error(ExcelError::NA)),
+        ];
+        for (formula, want) in measured {
+            assert_eq!(
+                book.evaluate("Sheet1", formula).unwrap(),
+                want,
+                "for {formula}"
+            );
+        }
+    }
+
+    /// Excel refuses a ragged one outright rather than padding it, so this
+    /// refuses to parse rather than guessing a shape.
+    #[test]
+    fn refuses_an_array_whose_rows_are_not_the_same_width() {
+        assert!(crate::parse("SUM({1,2;3})").is_err());
+        assert!(crate::parse("{1,2;3}").is_err());
+    }
+
+    /// Only constants go inside one.
+    #[test]
+    fn refuses_a_reference_inside_an_array() {
+        assert!(crate::parse("SUM({A1,2})").is_err());
+        assert!(crate::parse("SUM({SUM(1),2})").is_err());
     }
 }

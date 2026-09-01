@@ -275,10 +275,77 @@ impl Parser {
                 }
                 Ok(inner)
             }
+            Token::LBrace => self.parse_array(),
             Token::Table { name, asked } => Ok(Expr::Table { name, asked }),
             Token::Name { sheet, name } => self.finish_name(sheet, name),
             other => Err(ParseError::UnexpectedToken(format!("{other:?}"))),
         }
+    }
+
+    /// An array written out: `{1,2;3,4}`, rows separated by `;` and columns by
+    /// `,`. Only constants go inside -- a reference or a call there is not a
+    /// thing Excel accepts -- and every row must be the same width, which
+    /// Excel refuses the formula outright for.
+    fn parse_array(&mut self) -> Result<Expr, ParseError> {
+        let mut rows: Vec<Vec<Value>> = Vec::new();
+        let mut row: Vec<Value> = Vec::new();
+        loop {
+            row.push(self.parse_array_element()?);
+            match self.bump() {
+                Some(Token::Comma) => {}
+                Some(Token::Semicolon) => {
+                    rows.push(std::mem::take(&mut row));
+                }
+                Some(Token::RBrace) => {
+                    rows.push(row);
+                    break;
+                }
+                Some(other) => {
+                    return Err(ParseError::UnexpectedToken(format!("{other:?} in an array")))
+                }
+                None => return Err(ParseError::UnexpectedEnd),
+            }
+        }
+        let width = rows[0].len();
+        if rows.iter().any(|row| row.len() != width) {
+            return Err(ParseError::UnexpectedToken(
+                "every row of an array must be the same width".to_string(),
+            ));
+        }
+        Ok(Expr::Array(rows))
+    }
+
+    /// One constant inside an array. A sign may lead it; nothing else may.
+    fn parse_array_element(&mut self) -> Result<Value, ParseError> {
+        let negative = match self.peek() {
+            Some(Token::Minus) => {
+                self.pos += 1;
+                true
+            }
+            Some(Token::Plus) => {
+                self.pos += 1;
+                false
+            }
+            _ => false,
+        };
+        let token = self.bump().ok_or(ParseError::UnexpectedEnd)?;
+        let value = match token {
+            Token::Number(n) => Value::Number(if negative { -n } else { n }),
+            Token::Text(s) if !negative => Value::Text(s),
+            Token::ErrorLit(e) if !negative => Value::Error(e),
+            Token::Name { sheet: None, name } if !negative && name.eq_ignore_ascii_case("TRUE") => {
+                Value::Logical(true)
+            }
+            Token::Name { sheet: None, name } if !negative && name.eq_ignore_ascii_case("FALSE") => {
+                Value::Logical(false)
+            }
+            other => {
+                return Err(ParseError::UnexpectedToken(format!(
+                    "{other:?} is not a constant an array can hold"
+                )))
+            }
+        };
+        Ok(value)
     }
 
     /// Decide what a bare name meant, now that we can see what follows it.

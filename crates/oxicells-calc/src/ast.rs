@@ -68,6 +68,11 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    /// An array written out where a range could go: `{1,2;3,4}`. Rows first,
+    /// each the same width -- Excel refuses a ragged one outright. Only
+    /// constants may appear inside, which is why this holds values rather
+    /// than expressions.
+    Array(Vec<Vec<Value>>),
 }
 
 impl Expr {
@@ -88,7 +93,9 @@ impl Expr {
                     arg.visit(f);
                 }
             }
-            Expr::Literal(_) | Expr::Ref(_) | Expr::Name(_) => {}
+            // An array holds constants, so like a table reference it has no
+            // children to walk.
+            Expr::Literal(_) | Expr::Ref(_) | Expr::Name(_) | Expr::Array(_) => {}
         }
     }
 
@@ -144,7 +151,9 @@ impl Expr {
                     arg.walk_values(found);
                 }
             }
-            Expr::Table { .. } | Expr::Literal(_) | Expr::Name(_) => {}
+            // An array points at no cells, so it contributes no references
+            // for a dependency to be built from.
+            Expr::Table { .. } | Expr::Literal(_) | Expr::Name(_) | Expr::Array(_) => {}
         }
     }
 }

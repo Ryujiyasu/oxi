@@ -508,4 +508,140 @@ mod tests {
             matches!(&workbook.sheets[1].rows[0].cells[0].value, CellValue::Number(n) if (*n - 84.0).abs() < f64::EPSILON)
         );
     }
+
+    /// What the formula parser cannot yet read, counted over a corpus and
+    /// ranked by how many WORKBOOKS each construct blocks.
+    ///
+    /// This is a build-order instrument, not a test: it decides what to
+    /// implement next by measuring, rather than by guessing which Excel
+    /// features matter. Run it with
+    ///
+    /// ```text
+    /// cargo test -p oxicells-core formula_coverage_census -- --ignored --nocapture
+    /// ```
+    ///
+    /// against `pipeline_data/xlsx_corpus` (see the fetch script in
+    /// tools/metrics). Rank by books rather than by cells: one workbook full
+    /// of the same unsupported formula is one problem, not nine hundred.
+    #[test]
+    #[ignore = "minutes over the whole corpus; a build-order instrument, asked for by name"]
+    fn formula_coverage_census() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let roots = [
+            std::path::Path::new("../../pipeline_data/xlsx_corpus/init"),
+            std::path::Path::new("../../pipeline_data/xlsx_corpus/golden"),
+        ];
+        let entries: Vec<_> = roots
+            .iter()
+            .filter_map(|root| std::fs::read_dir(root).ok())
+            .flat_map(|entries| entries.flatten())
+            .collect();
+        if entries.is_empty() {
+            println!("no corpus found; fetch it with tools/metrics/fetch_xlsx_corpus.py");
+            return;
+        }
+
+        let mut books = 0usize;
+        let mut blocked_books = 0usize;
+        let mut formulas = 0usize;
+        let mut refused = 0usize;
+        let mut reasons: BTreeMap<String, (usize, usize, String)> = BTreeMap::new();
+
+        for entry in entries {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("xlsx") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Ok(workbook) = crate::parser::parse_xlsx_preserving_values(&bytes) else {
+                continue;
+            };
+            books += 1;
+            let mut here: BTreeSet<String> = BTreeSet::new();
+            for sheet in &workbook.sheets {
+                for row in &sheet.rows {
+                    for cell in &row.cells {
+                        let Some(formula) = cell.formula.as_deref() else {
+                            continue;
+                        };
+                        if formula.trim().is_empty() {
+                            continue;
+                        }
+                        formulas += 1;
+                        if let Err(error) = oxicells_calc::parse(formula) {
+                            refused += 1;
+                            let reason = census_reason(&error.to_string(), formula);
+                            here.insert(reason.clone());
+                            let slot = reasons.entry(reason).or_insert((0, 0, String::new()));
+                            slot.0 += 1;
+                            if slot.2.is_empty() {
+                                slot.2 = formula.chars().take(60).collect();
+                            }
+                        }
+                    }
+                }
+            }
+            if !here.is_empty() {
+                blocked_books += 1;
+                for reason in here {
+                    reasons.entry(reason).or_default().1 += 1;
+                }
+            }
+        }
+
+        println!(
+            "\n{books} books, {formulas} formulas, {refused} refused, {blocked_books} books blocked"
+        );
+        let mut ranked: Vec<_> = reasons.into_iter().collect();
+        ranked.sort_by_key(|(_, (cells, books, _))| (usize::MAX - *books, usize::MAX - *cells));
+        println!(
+            "\n{:<34} {:>7} {:>7}  example",
+            "what it could not read", "cells", "books"
+        );
+        for (reason, (cells, books, example)) in ranked {
+            println!("{reason:<34} {cells:>7} {books:>7}  {example}");
+        }
+    }
+
+    /// Group a refusal by the CONSTRUCT it stumbled on rather than by the
+    /// parser's wording: the wording says where it stopped, the construct says
+    /// what to build.
+    fn census_reason(error: &str, formula: &str) -> String {
+        // A bracketed NUMBER is another workbook -- `[1]Assistente!R6:S23` --
+        // and it can sit anywhere, not only at the front. Ask that before the
+        // structured-reference shape, which is a NAME followed by brackets.
+        if error.contains("another workbook")
+            || formula
+                .match_indices('[')
+                .any(|(at, _)| formula[at + 1..].starts_with(|c: char| c.is_ascii_digit()))
+        {
+            return "another workbook [1]Sheet!A1".to_string();
+        }
+        if formula.contains('{') {
+            return "array constant {..}".to_string();
+        }
+        if formula.contains('[') && formula.contains(']') {
+            return "structured reference Table[..]".to_string();
+        }
+        if formula.contains('@') {
+            return "implicit intersection @".to_string();
+        }
+        if error.contains("requires a cell reference on both sides") {
+            return "a `:` whose side is not a plain reference".to_string();
+        }
+        if error.contains("trailing input") {
+            return "trailing input (often the intersection space)".to_string();
+        }
+        if error.contains("unexpected character") {
+            let shown = error.split('\'').nth(1).unwrap_or("?");
+            return format!("unexpected character {shown:?}");
+        }
+        if error.contains("unexpected end") {
+            return "unexpected end".to_string();
+        }
+        format!("other: {}", error.chars().take(40).collect::<String>())
+    }
 }

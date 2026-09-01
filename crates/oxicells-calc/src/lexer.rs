@@ -55,6 +55,11 @@ pub enum Token {
     Comma,
     LParen,
     RParen,
+    /// The braces an array constant is written between, and the `;` that
+    /// separates its rows -- `{1,2;3,4}` is two rows of two.
+    LBrace,
+    RBrace,
+    Semicolon,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +159,9 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
             ',' => Some(Token::Comma),
             '(' => Some(Token::LParen),
             ')' => Some(Token::RParen),
+            '{' => Some(Token::LBrace),
+            '}' => Some(Token::RBrace),
+            ';' => Some(Token::Semicolon),
             _ => None,
         };
         if let Some(tok) = single {
@@ -857,6 +865,9 @@ pub(crate) fn render_token(output: &mut String, token: Token) {
             output.push('"');
         }
         Token::ErrorLit(value) => output.push_str(value.as_str()),
+        Token::LBrace => output.push('{'),
+        Token::RBrace => output.push('}'),
+        Token::Semicolon => output.push(';'),
         Token::Table { name, asked } => {
             output.push_str(&name);
             output.push('[');
