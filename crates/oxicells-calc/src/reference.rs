@@ -149,10 +149,19 @@ impl fmt::Display for RangeRef {
 pub struct Reference {
     pub sheet: Option<String>,
     pub range: RangeRef,
+    /// Which linked workbook this reads, where it reads one: the number in
+    /// `[1]Sheet!A1`, as written. `None` means this workbook.
+    ///
+    /// The values come from the copy the file keeps of that workbook, since
+    /// the other workbook is not open — in a browser it never is.
+    pub book: Option<u32>,
 }
 
 impl fmt::Display for Reference {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(book) = self.book {
+            write!(f, "[{book}]")?;
+        }
         match &self.sheet {
             Some(name) if needs_quoting(name) => write!(f, "'{}'!{}", name.replace('\'', "''"), self.range),
             Some(name) => write!(f, "{}!{}", name, self.range),
@@ -343,12 +352,20 @@ mod tests {
         let plain = Reference {
             sheet: Some("Sheet1".into()),
             range,
+            book: None,
         };
         let spaced = Reference {
             sheet: Some("My Sheet".into()),
             range,
+            book: None,
+        };
+        let linked = Reference {
+            sheet: Some("Assistente".into()),
+            range,
+            book: Some(1),
         };
         assert_eq!(plain.to_string(), "Sheet1!A1");
         assert_eq!(spaced.to_string(), "'My Sheet'!A1");
+        assert_eq!(linked.to_string(), "[1]Assistente!A1");
     }
 }

@@ -64,7 +64,10 @@ fn unless_denied(value: Option<&str>) -> bool {
 }
 use oxidocs_common::xml_utils::{get_attr, local_name};
 
-use crate::ir::{BorderLine, Cell, CellStyle, CellValue, MergeCell, Row, Sheet, Workbook};
+use crate::ir::{
+    BorderLine, Cell, CellStyle, CellValue, ExternalBook, ExternalSheet, MergeCell, Row, Sheet,
+    Workbook,
+};
 
 #[derive(Error, Debug)]
 pub enum XlsxError {
@@ -336,6 +339,99 @@ fn parse_defined_names(xml: &str) -> Vec<(String, String)> {
         }
     }
     names
+}
+
+/// The relationship ids of the workbooks this one links to, in the order
+/// `[1]`, `[2]` … name them.
+fn parse_external_references(xml: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut ids = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if local_name(e.name().as_ref()) == "externalReference" =>
+            {
+                // The id attribute is namespaced `r:id`; `get_attr` matches on
+                // the local name, so both spellings are found.
+                if let Some(id) = get_attr(&e, "id") {
+                    ids.push(id);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    ids
+}
+
+/// One `xl/externalLinks/externalLinkN.xml`: the sheets the linked workbook
+/// has, and whatever this file remembers of their cells.
+///
+/// A cached cell says nothing about its type when it held a number, `t="str"`
+/// when it held text and `t="b"` for a Boolean — the same shorthand a
+/// worksheet uses, minus the shared-string table, since the text is written
+/// out here rather than pooled.
+fn parse_external_link(xml: &str) -> ExternalBook {
+    let mut reader = Reader::from_str(xml);
+    let mut sheets: Vec<ExternalSheet> = Vec::new();
+    let mut at_sheet: Option<usize> = None;
+    let mut cell: Option<(u32, u32, String)> = None;
+    let mut text = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if local_name(e.name().as_ref()) == "sheetName" =>
+            {
+                sheets.push(ExternalSheet {
+                    name: get_attr(&e, "val").unwrap_or_default(),
+                    cells: Vec::new(),
+                });
+            }
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if local_name(e.name().as_ref()) == "sheetData" =>
+            {
+                at_sheet = get_attr(&e, "sheetId").and_then(|id| id.parse::<usize>().ok());
+            }
+            Ok(Event::Start(e)) if local_name(e.name().as_ref()) == "cell" => {
+                let kind = get_attr(&e, "t").unwrap_or_default();
+                // `parse_cell_ref` answers (COLUMN, row) and counts both from
+                // zero; the IR counts a row from one.
+                cell = get_attr(&e, "r")
+                    .map(|reference| parse_cell_ref(&reference))
+                    .map(|(column, row)| (row + 1, column, kind));
+                text.clear();
+            }
+            Ok(Event::Text(e)) if cell.is_some() => {
+                if let Ok(read) = e.unescape() {
+                    text.push_str(&read);
+                }
+            }
+            Ok(Event::End(e)) if local_name(e.name().as_ref()) == "cell" => {
+                if let (Some((row, column, kind)), Some(at)) = (cell.take(), at_sheet) {
+                    if let Some(sheet) = sheets.get_mut(at) {
+                        sheet.cells.push((row, column, cached_cell_value(&kind, &text)));
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    ExternalBook { sheets }
+}
+
+/// What a cached cell held, from the shorthand the link part writes.
+fn cached_cell_value(kind: &str, text: &str) -> CellValue {
+    match kind {
+        "str" | "s" => CellValue::String(text.to_string()),
+        "b" => CellValue::Boolean(text != "0"),
+        "e" => CellValue::Error(text.to_string()),
+        _ => match text.parse::<f64>() {
+            Ok(number) => CellValue::Number(number),
+            Err(_) if text.is_empty() => CellValue::Empty,
+            Err(_) => CellValue::String(text.to_string()),
+        },
+    }
 }
 
 /// Parse workbook.xml to extract sheet names and their relationship IDs.
@@ -3210,6 +3306,24 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         .map(|(id, rel)| (id, rel.target))
         .collect();
 
+    // 4b. The workbooks this one only links to, with the values it remembers
+    // of them. Their order is what `[1]`, `[2]` … mean in a formula.
+    let mut external_books = Vec::new();
+    for id in parse_external_references(&workbook_xml) {
+        let Some(target) = rid_to_path.get(&id) else {
+            continue;
+        };
+        let part = if let Some(rest) = target.strip_prefix('/') {
+            rest.to_string()
+        } else {
+            format!("xl/{target}")
+        };
+        match archive.try_read_part(&part)? {
+            Some(xml) => external_books.push(parse_external_link(&xml)),
+            None => external_books.push(ExternalBook::default()),
+        }
+    }
+
     // 5. Parse each worksheet
     let mut sheets = Vec::new();
     for info in &sheet_infos {
@@ -3364,6 +3478,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         sheets,
         default_style: resolve_cell_style(0, &stylesheet),
         defined_names: parse_defined_names(&workbook_xml),
+        external_books,
     })
 }
 

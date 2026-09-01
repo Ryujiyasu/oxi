@@ -199,7 +199,14 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
             continue;
         }
 
-        if c == '\'' || c.is_alphabetic() || c == '_' || c == '$' {
+        // `[1]Assistente!R6` starts with the link number rather than with a
+        // letter, so a bracketed number in front of a sheet name is a name
+        // start too. A bracket that is not that is still nothing here.
+        let starts_a_link = c == '['
+            && src[i + 1..].split_once(']').is_some_and(|(digits, _)| {
+                !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+            });
+        if c == '\'' || c.is_alphabetic() || c == '_' || c == '$' || starts_a_link {
             // A name followed by `[` is a table being asked for one of its
             // columns, and the whole bracket group belongs to it.
             if let Some((tok, next)) = lex_table(src, i) {
@@ -1032,19 +1039,27 @@ fn lex_name(src: &str, start: usize) -> Result<(Token, usize), ParseError> {
         if src.as_bytes().get(next) != Some(&b'!') {
             return Err(ParseError::UnterminatedSheetName);
         }
-        // `'[1]May 2021'!A1` is a sheet in a workbook this one only links to.
-        // Nothing here can resolve it, and resolving it to nothing means
-        // `#REF!` in place of a value the file actually holds — so the whole
-        // formula is left unread instead, and keeps what it was saved with.
-        if name.starts_with('[') {
-            return Err(ParseError::AnotherWorkbook(name));
-        }
+        // `'[1]May 2021'!A1` names a sheet in a workbook this one only links
+        // to. The bracket is left where it was written and the parser takes it
+        // apart, the same way a table's brackets are kept whole here and read
+        // there.
         sheet = Some(name);
         i = next + 1;
     } else {
-        // Bare sheet prefix: Sheet1!
-        let end = scan_sheet_word(src, i);
-        if src.as_bytes().get(end) == Some(&b'!') && end > i {
+        // Bare sheet prefix: `Sheet1!`, and `[1]Sheet1!` for a sheet in a
+        // workbook this one links to. The link number is not part of a sheet
+        // word, so it is stepped over here and kept in front of the name.
+        let mut from = i;
+        if src.as_bytes().get(from) == Some(&b'[') {
+            if let Some(close) = src[from..].find(']') {
+                let digits = &src[from + 1..from + close];
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                    from += close + 1;
+                }
+            }
+        }
+        let end = scan_sheet_word(src, from);
+        if src.as_bytes().get(end) == Some(&b'!') && end > from {
             sheet = Some(src[i..end].to_string());
             i = end + 1;
         }

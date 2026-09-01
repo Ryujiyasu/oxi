@@ -23,6 +23,35 @@ pub struct Workbook {
     /// sheet's range.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub defined_names: Vec<(String, String)>,
+    /// The workbooks this one only links to, in the order `[1]`, `[2]` … name
+    /// them, each carrying the values it was last seen holding.
+    ///
+    /// Excel keeps that copy in the file precisely so a formula reading
+    /// another workbook still has an answer when the other workbook is not
+    /// open — which, in a browser, it never is. A link whose copy is empty
+    /// (Excel writes `refreshError="1"` for one it could not refresh) has no
+    /// answer to give, and the cell keeps whatever it was saved showing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_books: Vec<ExternalBook>,
+}
+
+/// A workbook this one links to, as much of it as this file remembers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExternalBook {
+    /// The sheets it names, in the order the file lists them — a cached cell
+    /// says which one it belongs to by that position, not by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheets: Vec<ExternalSheet>,
+}
+
+/// One sheet of a linked workbook, and the cells this file remembers of it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExternalSheet {
+    pub name: String,
+    /// `(row, column)` — one-based row, zero-based column, as the rest of the
+    /// IR counts them — and the value that cell held.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cells: Vec<(u32, u32, CellValue)>,
 }
 
 /// Whether a sheet is shown in the tab strip.

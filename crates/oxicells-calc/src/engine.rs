@@ -178,9 +178,50 @@ pub struct Workbook {
     now: f64,
     /// True once someone has pinned the moment, so the clock is left alone.
     now_pinned: bool,
+    /// What this workbook remembers of the workbooks it links to, by the
+    /// number `[1]`, `[2]` … names them and the sheet inside.
+    ///
+    /// The other workbook is not open — in a browser it never is — so a
+    /// formula reading one is answered from the copy the file keeps, which is
+    /// the same copy Excel reads from when the source is closed.
+    linked: BTreeMap<(u32, String), BTreeMap<(u32, u32), Value>>,
+}
+
+/// `range`, with any part reaching past what is remembered of a linked sheet
+/// removed. Without this a whole-column reference into a link would ask for a
+/// million rows of nothing.
+fn cut_to_remembered(range: &RangeRef, cells: &BTreeMap<(u32, u32), Value>) -> RangeRef {
+    let Some(last_col) = cells.keys().map(|(col, _)| *col).max() else {
+        return *range;
+    };
+    let Some(last_row) = cells.keys().map(|(_, row)| *row).max() else {
+        return *range;
+    };
+    RangeRef::normalised(
+        CellRef::new(range.start.col, range.start.row),
+        CellRef::new(range.end.col.min(last_col), range.end.row.min(last_row)),
+    )
 }
 
 impl Workbook {
+    /// Remember one cell of a linked workbook: which link, which sheet of it,
+    /// and where in that sheet, counting a column and a row from zero as the
+    /// rest of the engine does.
+    pub fn add_linked_cell(&mut self, book: u32, sheet: &str, col: u32, row: u32, value: Value) {
+        self.linked
+            .entry((book, sheet.to_string()))
+            .or_default()
+            .insert((col, row), value);
+    }
+
+    /// Whether anything is remembered of a link at all. A link Excel could not
+    /// refresh leaves an empty copy behind, and a formula reading one has no
+    /// answer to be had — better to leave such a cell showing what it was
+    /// saved with than to overwrite it with `#REF!`.
+    pub fn remembers_link(&self, book: u32) -> bool {
+        self.linked.keys().any(|(at, _)| *at == book)
+    }
+
     pub fn new() -> Workbook {
         Workbook::default()
     }
@@ -619,6 +660,24 @@ impl Workbook {
                     height,
                     cells: rows.iter().flatten().cloned().collect(),
                 })
+            }
+
+            Expr::Ref(reference) if reference.book.is_some() => {
+                let book = reference.book.unwrap_or_default();
+                let Some(name) = reference.sheet.as_deref() else {
+                    return Arg::Value(Value::Error(ExcelError::Ref));
+                };
+                let Some(cells) = self.linked.get(&(book, name.to_string())) else {
+                    return Arg::Value(Value::Error(ExcelError::Ref));
+                };
+                // A linked range is often written as a whole column --
+                // `VLOOKUP(C2,[1]Lookup!A:B,2,FALSE)` -- so it is cut to what
+                // is actually remembered before being materialised, exactly as
+                // a range in this workbook is cut to the sheet's contents.
+                let range = cut_to_remembered(&reference.range, cells);
+                Arg::Range(RangeData::from_range(&range, |col, row| {
+                    cells.get(&(col, row)).cloned().unwrap_or(Value::Blank)
+                }))
             }
 
             Expr::Ref(reference) => {

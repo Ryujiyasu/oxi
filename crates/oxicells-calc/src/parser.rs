@@ -235,7 +235,32 @@ impl Parser {
             ),
             _ => return None,
         };
-        Some(Expr::Ref(Reference { sheet, range }))
+        let (book, sheet) = Self::split_linked_book(sheet);
+        Some(Expr::Ref(Reference { sheet, range, book }))
+    }
+
+    /// Take a sheet name apart into the linked workbook it names, if any, and
+    /// the sheet itself: `[1]Assistente` is the first link's `Assistente`.
+    ///
+    /// The lexer keeps the bracket where it was written rather than reading
+    /// it, the same way it keeps a table's brackets whole — what is inside is
+    /// not the ordinary language, and only here is there anything to say about
+    /// it. `[Book1.xlsx]Sheet1` names a file rather than a link, and there is
+    /// nothing here to count from, so it stays a sheet name and finds no sheet.
+    fn split_linked_book(sheet: Option<String>) -> (Option<u32>, Option<String>) {
+        let Some(name) = sheet else {
+            return (None, None);
+        };
+        let Some((digits, rest)) = name
+            .strip_prefix('[')
+            .and_then(|rest| rest.split_once(']'))
+        else {
+            return (None, Some(name));
+        };
+        match digits.parse::<u32>() {
+            Ok(book) => (Some(book), Some(rest.to_string())),
+            Err(_) => (None, Some(name)),
+        }
     }
 
     fn parse_range(&mut self) -> Result<Expr, ParseError> {
@@ -254,6 +279,7 @@ impl Parser {
                 Ok(Expr::Ref(Reference {
                     sheet: a.sheet.clone().or_else(|| b.sheet.clone()),
                     range: RangeRef::normalised(a.range.start, b.range.start),
+                    book: a.book.or(b.book),
                 }))
             }
             _ => Err(ParseError::UnexpectedToken(
@@ -370,9 +396,11 @@ impl Parser {
         }
 
         if let Some(cell) = parse_a1(&name) {
+            let (book, sheet) = Self::split_linked_book(sheet);
             return Ok(Expr::Ref(Reference {
                 sheet,
                 range: RangeRef::single(cell),
+                book,
             }));
         }
 
@@ -490,30 +518,49 @@ mod tests {
         assert_eq!(waits_for("=ROWS(INDEX(A1:C5,,B1))"), ["A1:C5", "B1"]);
     }
 
-    /// A sheet in another workbook cannot be read, and saying so is better
-    /// than answering.
+    /// A sheet in another workbook is read, and says which workbook.
     ///
-    /// `[1]` names a workbook this file links to and does not contain. The
-    /// bare form never lexed; the quoted form did, because brackets are
-    /// ordinary characters inside a sheet name, and it went on to resolve
-    /// against a sheet that is not there. A formula left unread keeps the
-    /// value the file was saved with, which is the best answer available.
-    /// One that resolves to `#REF!` replaces that value with an error.
+    /// `[1]` names a workbook this file links to and does not contain. It used
+    /// to be refused outright, so that a formula reading one kept the value it
+    /// was saved with rather than resolving against a sheet that is not there
+    /// and answering `#REF!`. It is read now because the file carries a copy
+    /// of what that workbook held, which is the same copy Excel itself reads
+    /// from when the other workbook is not open.
     #[test]
-    fn a_sheet_in_another_workbook_is_not_read() {
-        for formula in [
-            "'[1]May 2021'!$L$2:$L$29",
-            "INDEX('[1]May 2021'!$L$2:$L$29,2)",
-            "SUM('[2]Q3'!A1:A9)",
-        ] {
-            assert!(
-                parse(formula).is_err(),
-                "{formula} names a workbook that is not here",
-            );
-        }
-        // A sheet whose name merely needs quoting is read as it always was.
-        assert!(parse("'May 2021'!$L$2:$L$29").is_ok());
+    fn a_sheet_in_another_workbook_says_which_workbook() {
+        let quoted = parse("'[1]May 2021'!$L$2:$L$29").expect("reads");
+        let Expr::Ref(reference) = quoted else {
+            panic!("a range, not {quoted:?}");
+        };
+        assert_eq!(reference.book, Some(1));
+        assert_eq!(reference.sheet.as_deref(), Some("May 2021"));
+
+        let bare = parse("[2]Assistente!R6").expect("reads");
+        let Expr::Ref(reference) = bare else {
+            panic!("a range, not {bare:?}");
+        };
+        assert_eq!(reference.book, Some(2));
+        assert_eq!(reference.sheet.as_deref(), Some("Assistente"));
+
+        // And inside a call, which is where they mostly appear.
+        assert!(parse("INDEX('[1]May 2021'!$L$2:$L$29,2)").is_ok());
+        assert!(parse("IFERROR(VLOOKUP(E3,[1]Assistente!R6:S23,2,0),\" \")").is_ok());
+
+        // A sheet whose name merely needs quoting is read as it always was,
+        // and names no workbook.
+        let plain = parse("'May 2021'!$L$2:$L$29").expect("reads");
+        let Expr::Ref(reference) = plain else {
+            panic!("a range");
+        };
+        assert_eq!(reference.book, None);
         assert!(parse("'HR '!$A3").is_ok());
+
+        // Still unread: `[Book1.xlsx]Sheet1!A1` names the file rather than a
+        // link number, and there is nothing here to count from. Excel takes
+        // that spelling; this does not yet, so such a formula keeps the value
+        // it was saved with — the same bargain every linked formula used to
+        // get. No workbook in the corpus writes one.
+        assert!(parse("[Book1.xlsx]Sheet1!A1").is_err());
     }
 
     #[test]

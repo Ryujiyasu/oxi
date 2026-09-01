@@ -62,7 +62,7 @@ pub fn unparsed_formulas(workbook: &Workbook) -> usize {
 
 pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
     // One sheet on its own carries no workbook, so it has no names either.
-    recalculate(std::slice::from_mut(sheet), &[], Overwrite::All, None);
+    recalculate(std::slice::from_mut(sheet), &[], &[], Overwrite::All, None);
 }
 
 /// Recalculate every formula in the workbook, overwriting cached values.
@@ -70,7 +70,8 @@ pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
 /// Use after editing. Cross-sheet references resolve correctly.
 pub fn evaluate_workbook_formulas(workbook: &mut Workbook) {
     let names = workbook.defined_names.clone();
-    recalculate(&mut workbook.sheets, &names, Overwrite::All, None);
+    let external = workbook.external_books.clone();
+    recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, None);
 }
 
 /// The same, told what the moment is.
@@ -83,7 +84,8 @@ pub fn evaluate_workbook_formulas(workbook: &mut Workbook) {
 /// that a sheet worked out twice comes out the same both times.
 pub fn evaluate_workbook_formulas_at(workbook: &mut Workbook, now: f64) {
     let names = workbook.defined_names.clone();
-    recalculate(&mut workbook.sheets, &names, Overwrite::All, Some(now));
+    let external = workbook.external_books.clone();
+    recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, Some(now));
 }
 
 /// Work one formula out against the workbook as it stands, without storing it
@@ -104,7 +106,12 @@ pub fn evaluate_expression(
     now: Option<f64>,
 ) -> Option<oxicells_calc::Value> {
     let name = workbook.sheets.get(sheet)?.name.clone();
-    let book = assemble(&workbook.sheets, &workbook.defined_names, now);
+    let book = assemble_with_links(
+        &workbook.sheets,
+        &workbook.defined_names,
+        &workbook.external_books,
+        now,
+    );
     book.evaluate(&name, formula).ok()
 }
 
@@ -112,12 +119,43 @@ pub fn evaluate_expression(
 /// leaving everything Excel already calculated untouched.
 pub fn fill_missing_formula_values(workbook: &mut Workbook) {
     let names = workbook.defined_names.clone();
-    recalculate(&mut workbook.sheets, &names, Overwrite::OnlyMissing, None);
+    let external = workbook.external_books.clone();
+    recalculate(&mut workbook.sheets, &names, &external, Overwrite::OnlyMissing, None);
 }
 
 /// Put the workbook to the engine: its names, its sheets, its tables and
 /// every cell, either as the formula it holds or as the value it holds.
-fn assemble(
+/// Put the workbook to the engine, plus what this file remembers of the
+/// workbooks it links to.
+///
+/// A link is numbered by its place: the first `<externalReference>` is `[1]`.
+/// A sheet inside it is named, and a cell of that sheet is where it was.
+fn assemble_with_links(
+    sheets: &[Sheet],
+    names: &[(String, String)],
+    external: &[crate::ir::ExternalBook],
+    now: Option<f64>,
+) -> oxicells_calc::Workbook {
+    let mut book = assemble_sheets(sheets, names, now);
+    for (at, linked) in external.iter().enumerate() {
+        let number = at as u32 + 1;
+        for sheet in &linked.sheets {
+            for (row, column, value) in &sheet.cells {
+                // The IR counts a row from one and the engine from zero.
+                book.add_linked_cell(
+                    number,
+                    &sheet.name,
+                    *column,
+                    row.saturating_sub(1),
+                    to_calc(value),
+                );
+            }
+        }
+    }
+    book
+}
+
+fn assemble_sheets(
     sheets: &[Sheet],
     names: &[(String, String)],
     now: Option<f64>,
@@ -189,9 +227,24 @@ enum Overwrite {
     OnlyMissing,
 }
 
+/// Whether a formula reads a workbook this file remembers nothing of.
+///
+/// Excel keeps a copy of a linked workbook so a formula reading one still has
+/// an answer while the source is closed. Where it could not refresh that copy
+/// it leaves an empty one, and then there is no answer to be had — so the cell
+/// keeps whatever it was saved showing rather than being overwritten with
+/// `#REF!`. One corpus workbook has 197 such formulas, all carrying real
+/// values; answering them would throw all 197 away.
+fn reads_a_forgotten_link(formula: &str, forgotten: &[u32]) -> bool {
+    forgotten
+        .iter()
+        .any(|number| formula.contains(&format!("[{number}]")))
+}
+
 fn recalculate(
     sheets: &mut [Sheet],
     names: &[(String, String)],
+    external: &[crate::ir::ExternalBook],
     mode: Overwrite,
     now: Option<f64>,
 ) {
@@ -219,7 +272,10 @@ fn recalculate(
         Vec::new()
     };
 
-    let mut book = assemble(sheets, names, now);
+    let mut book = assemble_with_links(sheets, names, external, now);
+    let forgotten: Vec<u32> = (1..=external.len() as u32)
+        .filter(|number| !book.remembers_link(*number))
+        .collect();
 
     match mode {
         Overwrite::All => {
@@ -241,6 +297,14 @@ fn recalculate(
                     continue;
                 }
                 if mode == Overwrite::OnlyMissing && !matches!(cell.value, CellValue::Empty) {
+                    continue;
+                }
+                if !forgotten.is_empty()
+                    && cell
+                        .formula
+                        .as_deref()
+                        .is_some_and(|formula| reads_a_forgotten_link(formula, &forgotten))
+                {
                     continue;
                 }
                 cell.value = from_calc(&book.value(&name, &a1(cell.col, row.index)));
@@ -643,5 +707,129 @@ mod tests {
             return "unexpected end".to_string();
         }
         format!("other: {}", error.chars().take(40).collect::<String>())
+    }
+
+    /// A formula reading a linked workbook is answered from the copy this file
+    /// keeps of it.
+    #[test]
+    fn a_linked_formula_reads_the_copy_the_file_keeps() {
+        use crate::ir::{ExternalBook, ExternalSheet};
+
+        let mut workbook = Workbook {
+            sheets: vec![make_sheet(vec![(
+                0,
+                0,
+                CellValue::Empty,
+                Some("[1]BA!$B$2*2".to_string()),
+            )])],
+            external_books: vec![ExternalBook {
+                sheets: vec![
+                    ExternalSheet {
+                        name: "user".to_string(),
+                        cells: Vec::new(),
+                    },
+                    ExternalSheet {
+                        name: "BA".to_string(),
+                        // One-based row, zero-based column: B2.
+                        cells: vec![(2, 1, CellValue::Number(21.0))],
+                    },
+                ],
+            }],
+            ..Default::default()
+        };
+
+        evaluate_workbook_formulas(&mut workbook);
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(n) if n == 42.0
+        ));
+    }
+
+    /// A link whose copy is empty has no answer to give, so the cell keeps
+    /// whatever it was saved showing rather than being overwritten.
+    ///
+    /// Excel leaves an empty copy behind for a link it could not refresh. One
+    /// corpus workbook has 197 such formulas, every one of them carrying a
+    /// real value; answering them would throw all 197 away.
+    #[test]
+    fn a_link_with_no_copy_leaves_the_saved_value_alone() {
+        use crate::ir::{ExternalBook, ExternalSheet};
+
+        let mut workbook = Workbook {
+            sheets: vec![make_sheet(vec![(
+                0,
+                0,
+                CellValue::Number(6.5),
+                Some("[1]Assistente!R6".to_string()),
+            )])],
+            external_books: vec![ExternalBook {
+                sheets: vec![ExternalSheet {
+                    name: "Assistente".to_string(),
+                    cells: Vec::new(),
+                }],
+            }],
+            ..Default::default()
+        };
+
+        evaluate_workbook_formulas(&mut workbook);
+        assert!(matches!(
+            workbook.sheets[0].rows[0].cells[0].value,
+            CellValue::Number(n) if n == 6.5
+        ));
+    }
+
+    /// And the same over real files: every formula that reads a linked
+    /// workbook works out to the value the file was saved with.
+    ///
+    /// 566 of them across five workbooks — including whole-column lookups
+    /// (`VLOOKUP(C2,[1]Lookup!A:B,2,FALSE)`), quoted sheet names
+    /// (`'[1]May 2021'!$L$2:$L$29`) and the two books whose copy is empty.
+    #[test]
+    fn linked_formulas_in_real_workbooks_keep_their_saved_values() {
+        let books = [
+            "../../pipeline_data/xlsx_corpus/golden/14240__1_14240_golden.xlsx",
+            "../../pipeline_data/xlsx_corpus/golden/247-24__1_247-24_golden.xlsx",
+            "../../pipeline_data/xlsx_corpus/golden/54590__1_54590_golden.xlsx",
+            "../../pipeline_data/xlsx_corpus/golden/56786__1_56786_golden.xlsx",
+            "../../pipeline_data/xlsx_corpus/golden/13284__golden.xlsx",
+        ];
+        let mut checked = 0usize;
+        for name in books {
+            let Ok(bytes) = std::fs::read(name) else {
+                continue;
+            };
+            let saved = crate::parser::parse_xlsx_preserving_values(&bytes).unwrap();
+            let mut worked = saved.clone();
+            evaluate_workbook_formulas(&mut worked);
+
+            for (at, sheet) in saved.sheets.iter().enumerate() {
+                for row in &sheet.rows {
+                    for cell in &row.cells {
+                        let Some(formula) = cell.formula.as_deref() else {
+                            continue;
+                        };
+                        if !formula.contains('[') {
+                            continue;
+                        }
+                        let after = worked.sheets[at]
+                            .rows
+                            .iter()
+                            .find(|r| r.index == row.index)
+                            .and_then(|r| r.cells.iter().find(|c| c.col == cell.col))
+                            .map(|c| format!("{:?}", c.value))
+                            .unwrap_or_default();
+                        assert_eq!(
+                            format!("{:?}", cell.value),
+                            after,
+                            "{name} {formula} moved when it was worked out again"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        if checked > 0 {
+            assert!(checked >= 500, "only {checked} linked formulas were checked");
+        }
     }
 }
