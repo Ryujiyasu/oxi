@@ -6580,15 +6580,15 @@ impl Host for WorkbookHost<'_> {
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("screenupdating") {
-                self.screen_updating = style_boolean(&value, "Application.ScreenUpdating")?;
+                self.screen_updating = application_switch(&value, "Application.ScreenUpdating")?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("enableevents") {
-                self.enable_events = style_boolean(&value, "Application.EnableEvents")?;
+                self.enable_events = application_switch(&value, "Application.EnableEvents")?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("displayalerts") {
-                self.display_alerts = style_boolean(&value, "Application.DisplayAlerts")?;
+                self.display_alerts = application_switch(&value, "Application.DisplayAlerts")?;
                 return Ok(true);
             }
             if name.eq_ignore_ascii_case("calculation") {
@@ -7016,6 +7016,50 @@ fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
         Value::Integer(value) => Ok(*value != 0),
         Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
         _ => Err(format!("{property} must be Boolean")),
+    }
+}
+
+/// What one of the switches a macro flips around its work — `ScreenUpdating`,
+/// `EnableEvents`, `DisplayAlerts`, `Interactive` — makes of `value`.
+///
+/// This is NOT the rule a cell's own Boolean properties follow, and the two
+/// must not share a helper. Asked of Excel at both entrances: assigning `"0"`
+/// to `Application.ScreenUpdating` gives False, and assigning it to
+/// `Font.Bold` is refused; assigning `Null` to `Font.Bold` is taken, and to
+/// `ScreenUpdating` it raises. So each entrance keeps its own answer.
+///
+/// Measured by assignment from VBA, which is also not what `CallByName`
+/// reports — that one refuses the numeric strings this takes, and takes the
+/// `Null` this refuses. What the switches do:
+///
+/// - a number is False only when it is zero, so `0.4` and `-0.4` are both True
+/// - `Empty` is False
+/// - a string that looks like a number is read as one, spaces around it and
+///   all: `"0"` is False, `"2.5"` and `" -1 "` are True
+/// - otherwise a string has to be the word True or False, in any case and in
+///   either the plain or the `#...#` form, with nothing around it: `"false"`
+///   and `"#FALSE#"` are False, and `" False "` is a type mismatch
+/// - `Null` and an `Error` are refused
+fn application_switch(value: &Value, property: &str) -> Result<bool, String> {
+    match value {
+        Value::Boolean(asked) => Ok(*asked),
+        Value::Integer(asked) => Ok(*asked != 0),
+        Value::Double(asked) if asked.is_finite() => Ok(*asked != 0.0),
+        Value::Empty | Value::Missing => Ok(false),
+        Value::Null => Err(format!("{property} cannot be given Null")),
+        Value::String(written) => {
+            if let Ok(number) = written.trim().parse::<f64>() {
+                if number.is_finite() {
+                    return Ok(number != 0.0);
+                }
+            }
+            match written.to_ascii_lowercase().as_str() {
+                "true" | "#true#" => Ok(true),
+                "false" | "#false#" => Ok(false),
+                _ => Err(format!("{property} cannot be given {written:?}")),
+            }
+        }
+        _ => Err(format!("{property} must be True or False")),
     }
 }
 
@@ -16594,5 +16638,64 @@ End Sub
         execute_with_host(&module, "Report", vec![], &mut host)
             .expect_err("an Error variant cannot be shown");
         assert_eq!(host.status_bar.as_deref(), Some("Working"));
+    }
+
+    /// The switches a macro flips take more than a Boolean. Measured by
+    /// assigning to `Application.ScreenUpdating` from VBA: a number is False
+    /// only at zero, `Empty` is False, a string that looks like a number is
+    /// read as one, and otherwise it has to be the word itself.
+    #[test]
+    fn vba_application_switches_take_what_excel_takes() {
+        let measured = [
+            ("False", "False"),
+            ("0", "False"),
+            ("\"0\"", "False"),
+            ("\"1\"", "True"),
+            ("\"-1\"", "True"),
+            ("\"2.5\"", "True"),
+            ("\" -1 \"", "True"),
+            ("0.4", "True"),
+            ("-0.4", "True"),
+            ("Empty", "False"),
+            ("\"false\"", "False"),
+            ("\"TRUE\"", "True"),
+            ("\"#FALSE#\"", "False"),
+        ];
+        for (asked, shown) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Application.ScreenUpdating = {asked}\n\
+                   Debug.Print Application.ScreenUpdating\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![shown.to_string()],
+                "for {asked}"
+            );
+        }
+    }
+
+    /// What they do not take. A word with a space beside it is a type
+    /// mismatch even though a number with a space beside it is not, and `Null`
+    /// is refused outright — where a cell's own `Font.Bold` takes `Null` and
+    /// refuses `"0"`, which is why the two do not share a rule.
+    #[test]
+    fn vba_application_switches_refuse_what_excel_refuses() {
+        for asked in ["\" False \"", "\"False \"", "\"no\"", "\"\"", "Null"] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Application.DisplayAlerts = {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Act", vec![], &mut host);
+            assert!(refused.is_err(), "{asked} is refused");
+            assert!(host.display_alerts, "for {asked}");
+        }
     }
 }
