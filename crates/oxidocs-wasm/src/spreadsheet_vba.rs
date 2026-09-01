@@ -351,6 +351,12 @@ struct WorkbookHost<'a> {
     /// the macro's to write. Nothing here means the bar is Excel's own again,
     /// which is what it answers `False` to say.
     status_bar: Option<String>,
+    /// The pointer the macro has asked for while it works — the hourglass a
+    /// long loop puts up, and the arrow it puts back.
+    cursor: i64,
+    /// Whether the sheet is taking anything from whoever is at the keyboard.
+    /// A macro turns this off to work undisturbed, and turns it back on.
+    interactive: bool,
     last_find: Option<FindState>,
     objects: Vec<HostObject>,
     /// Whether anything was written to a cell. Excel works the formulas out
@@ -402,6 +408,8 @@ impl<'a> WorkbookHost<'a> {
             display_alerts: true,
             calculation: -4105,
             status_bar: None,
+            cursor: CURSOR_DEFAULT,
+            interactive: true,
             last_find: None,
             objects: Vec::new(),
             wrote: false,
@@ -6060,6 +6068,12 @@ impl Host for WorkbookHost<'_> {
                     None => Value::Boolean(false),
                 }));
             }
+            if name.eq_ignore_ascii_case("cursor") {
+                return Ok(Some(Value::Integer(self.cursor)));
+            }
+            if name.eq_ignore_ascii_case("interactive") {
+                return Ok(Some(Value::Boolean(self.interactive)));
+            }
             if name.eq_ignore_ascii_case("cutcopymode") {
                 // 1 is xlCut, 2 is xlCopy, and nothing held answers 0 — which
                 // is False, and is how a macro asks whether anything is.
@@ -6599,6 +6613,14 @@ impl Host for WorkbookHost<'_> {
                 self.status_bar = status_bar_text(&value)?;
                 return Ok(true);
             }
+            if name.eq_ignore_ascii_case("cursor") {
+                self.cursor = application_cursor(&value)?;
+                return Ok(true);
+            }
+            if name.eq_ignore_ascii_case("interactive") {
+                self.interactive = application_switch(&value, "Application.Interactive")?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         if let Some((range, selection)) = self.range_borders(receiver) {
@@ -7065,6 +7087,45 @@ fn application_switch(value: &Value, property: &str) -> Result<bool, String> {
 
 /// How many characters the status bar holds. A 256th is refused.
 const STATUS_BAR_LIMIT: usize = 255;
+
+/// The pointer Excel puts up when nobody has asked for another one.
+const CURSOR_DEFAULT: i64 = -4143;
+
+/// Which pointer `Application.Cursor` is left showing after a macro asks for
+/// `value`.
+///
+/// Excel takes four of them — `xlDefault` (-4143), `xlNorthwestArrow` (1),
+/// `xlWait` (2) and `xlIBeam` (3) — and one more number that is not a pointer
+/// at all: 0, which it answers -4143 to. So `False` and `Empty` both put the
+/// arrow back, being zero, while `True` is -1 and is refused along with 4, 7
+/// and -4142.
+///
+/// What it is given is made a whole number first, VBA's way: half goes to the
+/// even side. Asked of Excel, 1.5 gives 2 and 2.5 also gives 2, 2.7 gives 3,
+/// and 3.5 is refused — because it rounds to 4, which is not a pointer. A
+/// string is read as a number if it looks like one, spaces and a leading plus
+/// and all: `" 3 "`, `"+3"` and `"0003"` all give 3, while `"3.7"` rounds to 4
+/// and is refused, and `"xlIBeam"` is a type mismatch.
+fn application_cursor(value: &Value) -> Result<i64, String> {
+    let asked = match value {
+        Value::Boolean(true) => -1.0,
+        Value::Boolean(false) => 0.0,
+        Value::Integer(number) => *number as f64,
+        Value::Double(number) if number.is_finite() => *number,
+        Value::Empty | Value::Missing => 0.0,
+        Value::Null => return Err("Application.Cursor cannot be given Null".to_string()),
+        Value::String(written) => match written.trim().parse::<f64>() {
+            Ok(number) if number.is_finite() => number,
+            _ => return Err(format!("Application.Cursor cannot be given {written:?}")),
+        },
+        _ => return Err("Application.Cursor must be a mouse pointer".to_string()),
+    };
+    match asked.round_ties_even() as i64 {
+        0 | CURSOR_DEFAULT => Ok(CURSOR_DEFAULT),
+        pointer @ (1 | 2 | 3) => Ok(pointer),
+        other => Err(format!("Application.Cursor has no pointer {other}")),
+    }
+}
 
 /// What the status bar is left holding once a macro has written `value` to it,
 /// where nothing means Excel has it back.
@@ -8407,6 +8468,10 @@ fn host_constant(name: &str) -> Option<Value> {
         "xlcalculationautomatic" => -4105,
         "xlcalculationmanual" => -4135,
         "xlcalculationsemiautomatic" => 2,
+        "xldefault" => -4143,
+        "xlnorthwestarrow" => 1,
+        "xlwait" => 2,
+        "xlibeam" => 3,
         "xlformulas" => -4123,
         "xlvalues" => -4163,
         "xlwhole" => 1,
@@ -16697,5 +16762,118 @@ End Sub
             assert!(refused.is_err(), "{asked} is refused");
             assert!(host.display_alerts, "for {asked}");
         }
+    }
+
+    /// The hourglass a long macro puts up and the arrow it puts back. Asked of
+    /// Excel: it starts at `xlDefault`, takes the four pointers and 0, and 0
+    /// answers as `xlDefault`.
+    #[test]
+    fn vba_puts_up_a_pointer_while_it_works() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Debug.Print Application.Cursor\n\
+               Application.Cursor = xlWait\n\
+               Debug.Print Application.Cursor\n\
+               Application.Cursor = xlIBeam\n\
+               Debug.Print Application.Cursor\n\
+               Application.Cursor = xlNorthwestArrow\n\
+               Debug.Print Application.Cursor\n\
+               Application.Cursor = 0\n\
+               Debug.Print Application.Cursor\n\
+               Application.Cursor = xlWait\n\
+               Application.Cursor = xlDefault\n\
+               Debug.Print Application.Cursor\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(host.cursor, -4143);
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "-4143".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "1".to_string(),
+                "-4143".to_string(),
+                "-4143".to_string(),
+            ]
+        );
+    }
+
+    /// What it is given is made whole VBA's way, with half going to the even
+    /// side — which is why 2.5 gives 2 and 3.5 is refused for rounding to 4.
+    #[test]
+    fn vba_rounds_a_pointer_to_the_even_side() {
+        let taken = [
+            ("0.5", -4143),
+            ("1.5", 2),
+            ("2.4", 2),
+            ("2.5", 2),
+            ("2.7", 3),
+            ("3.4", 3),
+            ("-0.4", -4143),
+            ("-4143.4", -4143),
+            ("False", -4143),
+            ("Empty", -4143),
+            ("\" 3 \"", 3),
+            ("\"+3\"", 3),
+            ("\"0003\"", 3),
+            ("\"-4143\"", -4143),
+        ];
+        for (asked, pointer) in taken {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  Application.Cursor = {asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(host.cursor, pointer, "for {asked}");
+        }
+
+        for asked in [
+            "4", "5", "-1", "7", "-4142", "True", "3.5", "\"3.7\"", "\"xlIBeam\"", "\"\"", "Null",
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Application.Cursor = xlWait\n\
+                   Application.Cursor = {asked}\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Act", vec![], &mut host);
+            assert!(refused.is_err(), "{asked} is refused");
+            assert_eq!(host.cursor, 2, "for {asked}");
+        }
+    }
+
+    /// `Interactive` is one of the switches, and answers like the others.
+    #[test]
+    fn vba_shuts_the_sheet_off_from_the_keyboard() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Debug.Print Application.Interactive\n\
+               Application.Interactive = False\n\
+               Debug.Print Application.Interactive\n\
+               Application.Interactive = \"TRUE\"\n\
+               Debug.Print Application.Interactive\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert!(host.interactive);
+        assert_eq!(
+            host.take_debug_output(),
+            vec!["True".to_string(), "False".to_string(), "True".to_string()]
+        );
     }
 }
