@@ -253,7 +253,16 @@ def audit(doc: int) -> dict | None:
                             # consecutive differences. Deck 47 is the specimen:
                             # its text doubles vertically down a block, which no
                             # horizontal number can see.
-                            for k in range(1, min(len(cy), len(ey))):
+                            #
+                            # ★And the FIRST step is skipped, because
+                            # `Lines(1).BoundTop` bounds the paragraph's
+                            # space-before as well as its text while lines 2+
+                            # are ink tops. Deck 47 s2 p3: PowerPoint steps
+                            # [22.56, 16.56] against the engine's
+                            # [16.56, 16.56], and 22.56 - 16.56 is exactly the
+                            # 6pt `spcBef` that paragraph declares. Every
+                            # "+6.00pt advance error" in this deck was that.
+                            for k in range(2, min(len(cy), len(ey))):
                                 step = (cy[k] - cy[k - 1]) - (ey[k] - ey[k - 1])
                                 vadv.append(step)
                                 if abs(step) > 0.5:
