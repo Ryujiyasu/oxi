@@ -18,6 +18,17 @@ So this asks PowerPoint directly and compares against the engine's own
 
 It is the pptx analogue of the docx pagination gate: a signal, not an outcome.
 
+★FIRST RESULT (2026-09-02): **2428 paragraphs over 16 blind decks, 100.00%
+agreement, 0 differ** -- including 48 and 33, the two decks S-MUDRAW cost
+ground. So the remaining pptx gap is entirely WITHIN the line; there are no
+break errors left to chase on this corpus.
+
+★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
+is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
+`09 s2  PowerPoint 3 lines, engine 4` on the template-instructions paragraph.
+The tool can see a break disagreement, so not seeing one is evidence. Run that
+control again whenever this reports a clean sweep.
+
 ★Two things must not overlap this: the renderer (`pptx_render_not_parallel_safe`)
 and any other PowerPoint COM session (`pptx_com_render_must_not_overlap`). The
 dump is taken first, then COM is opened, never both at once.
