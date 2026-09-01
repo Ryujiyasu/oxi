@@ -179,10 +179,21 @@ def audit(doc: int) -> dict | None:
                 mine = eng.get(si, [])
                 for c in acc:
                     got["shapes"] += 1
-                    m = next((e for e in mine
-                              if abs(e["x"] - c["x"]) < NEAR
-                              and abs(e["y"] - c["y"]) < NEAR
-                              and abs(e["w"] - c["w"]) < NEAR), None)
+                    near = [e for e in mine
+                            if abs(e["x"] - c["x"]) < NEAR
+                            and abs(e["y"] - c["y"]) < NEAR
+                            and abs(e["w"] - c["w"]) < NEAR]
+                    # ★Identity before measurement. Deck 33 s7 stacks THREE
+                    # groups at x=1146.19 w=155.82 -- 'Upcoming', 'Done' and
+                    # 'Finalizing' -- so taking the first geometric match paired
+                    # one label's box with another's text and reported 47.15pt
+                    # and 28.02pt of "defect" that was entirely this. Geometry
+                    # narrows the candidates; the TEXT decides between them, and
+                    # a tie is counted as unmatched rather than guessed at.
+                    want = [p[2] for p in c["paras"]]
+                    exact = [e for e in near if [p[2] for p in e["paras"]] == want]
+                    m = exact[0] if len(exact) == 1 else (
+                        near[0] if len(near) == 1 else None)
                     if m is None:
                         got["unmatched"] += 1
                         continue
