@@ -10922,8 +10922,12 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 FloatKind::Img => {
                     let img = &page.floating_images[*fi];
                     if let Some(ref _pos) = img.position {
-                        let (abs_x, mut abs_y) =
-                            self.resolve_floating_image_position(img, page, &block_y_positions);
+                        let (abs_x, mut abs_y) = self.resolve_floating_image_position(
+                            img,
+                            page,
+                            &block_y_positions,
+                            page.margin.top,
+                        );
                         // S1123: see the textbox arm.
                         let mut target_page = if std::env::var("OXI_S1123_DISABLE").is_err() {
                             block_start_page_indices
@@ -11095,7 +11099,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // paragraph's lines by S1HDR (s755_header_bottom) — do not give
                 // it a line of its own here.
                 let mut s1105_prev_text = false;
+                // S1268b: the top of the block laid out before this one. A
+                // floating drawing is hoisted OUT of its host paragraph into a
+                // Block::Image that follows it, so the paragraph a
+                // relativeFrom="paragraph" anchor references is the previous
+                // block, whose top the cursor has already left.
+                let mut prev_block_top = header_y;
                 for block in hdr_blocks {
+                    let this_block_top = cy.cursor_y;
                     if let Block::Paragraph(para) = block {
                         s1105_prev_text = para.runs.iter().any(|r| !r.text.is_empty());
                     }
@@ -11182,7 +11193,29 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         } else if img.position.is_some()
                             && std::env::var("OXI_HDRFLOAT_DISABLE").is_err()
                         {
-                            let (ax, ay) = self.resolve_floating_image_position(img, page, &[]);
+                            // S1268b (2026-09-01, default ON, opt-out
+                            // OXI_S1268B_DISABLE): a header float anchored
+                            // relativeFrom="paragraph" references the HEADER's
+                            // paragraph, not the body's top margin. The header
+                            // has its own block list, so block_y_positions never
+                            // carries the anchor and the old `&[]` fell through
+                            // to page.margin.top -- 29.45pt too low on an
+                            // 851tw header. Word's PDF, three full-page header
+                            // backgrounds, image top = header_distance + offset,
+                            // exact to 0.00pt in all three:
+                            //   20f1ad3e 42.55-42.70 = -0.15 (Word -0.15)
+                            //   05a78ecd 42.55-43.60 = -1.05 (Word -1.05)
+                            //   1076f12a 42.55-47.20 = -4.65 (Word -4.65)
+                            // The page-edge clamp S1268 removes used to slide
+                            // these back to y=0, which LOOKED right for a
+                            // full-page background and hid the real error.
+                            let hdr_anchor_y = if std::env::var("OXI_S1268B_DISABLE").is_err() {
+                                prev_block_top
+                            } else {
+                                page.margin.top
+                            };
+                            let (ax, ay) =
+                                self.resolve_floating_image_position(img, page, &[], hdr_anchor_y);
                             lp.elements.push(LayoutElement::new(
                                 ax,
                                 ay,
@@ -11238,6 +11271,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             lp.elements.extend(tbl_elements);
                         }
                     }
+                    prev_block_top = this_block_top;
                 }
             }
             if !ftr_blocks.is_empty() {
@@ -12051,13 +12085,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         };
 
-        // Clamp TextBox to page boundaries (prevent overflow beyond page edge)
-        let abs_y = if abs_y + text_box.height > page.size.height {
+        // S1268 (2026-09-01, default ON, opt-out OXI_S1268_DISABLE): Word does
+        // NOT pull a floating object back onto the page. It draws where the
+        // anchor says and the page edge clips.
+        //
+        // `_pb_floatclamp_gen.py` / `_word.py`, 25 arms, PDF span origins, every
+        // arm chosen so BOTH candidate positions land inside the page (an
+        // absent glyph is not a measurement). Word matched the raw anchor to
+        // within the marker's left side bearing (+0.34..0.52pt, constant) in
+        // all 25 -- with the box hanging off the right edge (left=572.5 of a
+        // 595.3pt page), with the box WIDER than the page (700pt box, drawn at
+        // 72.4, not slid to 0), with the box left of the left margin, from both
+        // relativeFrom="column" and ="page", and vertically with the box bottom
+        // 58pt below the page and with a box TALLER than the page. Floating
+        // IMAGES answer the same (`_pb_floatclamp_img_*.py`, 6 arms, exact to
+        // 0.00pt via the PDF's placed rect) -- see resolve_floating_image_position.
+        //
+        // The clamp cost educational__0c1ced17ffb4ab6f p2 263.4pt: an 855.3pt
+        // box at column+544.613 on a 1190.55pt A3 page resolves to 598.613,
+        // overflows, and slid to 1190.55-855.3 = 335.25, while Word's PDF puts
+        // the first glyph at 606.17. The faithful slice (arm r_edu) reproduces
+        // it, and arm r_edu_c2 -- same box anchored from a paragraph flowing in
+        // column 2 -- confirms the S1222 column reference at 1150.9, i.e. Word
+        // keeps a box whose right edge is 800pt past the page.
+        let s1268 = std::env::var("OXI_S1268_DISABLE").is_err();
+        let abs_y = if !s1268 && abs_y + text_box.height > page.size.height {
             (page.size.height - text_box.height).max(0.0)
         } else {
             abs_y
         };
-        let abs_x = if abs_x + text_box.width > page.size.width {
+        let abs_x = if !s1268 && abs_x + text_box.width > page.size.width {
             (page.size.width - text_box.width).max(0.0)
         } else {
             abs_x
@@ -12067,11 +12124,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
     }
 
     /// Resolve absolute (x, y) position for a floating image.
+    ///
+    /// `paragraph_anchor_y` is the top of the anchoring paragraph to use when
+    /// `block_y_positions` does not carry it. The BODY passes the top margin;
+    /// the HEADER (S1268b) passes its own cursor, because a header's blocks
+    /// have their own y track and the body's margin is 29pt further down.
     fn resolve_floating_image_position(
         &self,
         img: &Image,
         page: &Page,
         block_y_positions: &[f32],
+        paragraph_anchor_y: f32,
     ) -> (f32, f32) {
         let pos = match &img.position {
             Some(p) => p,
@@ -12126,7 +12189,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     let anchor_y = block_y_positions
                         .get(img.anchor_block_index)
                         .copied()
-                        .unwrap_or(page.margin.top);
+                        .unwrap_or(paragraph_anchor_y);
                     anchor_y + pos.y
                 }
                 Some("margin") => page.margin.top + pos.y,
@@ -12134,8 +12197,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             }
         };
 
-        // Clamp to page boundaries (floating images can extend into margins)
-        let abs_y_clamped = if abs_y + img.height > page.size.height {
+        // S1268: same law as the text box above -- Word leaves a floating image
+        // where the anchor puts it and lets the page edge clip it.
+        // `_pb_floatclamp_img_gen.py` / `_word.py` read the placed rect out of
+        // Word's PDF for 6 arms: bottom overflow (top 760 and 800 on an 841.9pt
+        // page), an image TALLER than the page (900pt, drawn at 200 rather than
+        // slid to 0), and right overflow. Word matched the raw anchor to 0.00pt
+        // in all 6. Note only the Y axis was ever clamped here, so an image and
+        // a text box in the same position disagreed with each other as well as
+        // with Word.
+        let abs_y_clamped = if std::env::var("OXI_S1268_DISABLE").is_ok()
+            && abs_y + img.height > page.size.height
+        {
             (page.size.height - img.height).max(0.0)
         } else {
             abs_y
