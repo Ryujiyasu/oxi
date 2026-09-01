@@ -2950,6 +2950,26 @@ impl<'a> WorkbookHost<'a> {
             return Ok(Value::Integer(count as i64));
         }
 
+        if name.eq_ignore_ascii_case("count") {
+            // Count is one of the functions that IGNORES an error rather than
+            // passing it on. Asked of Excel over cells holding 10, text, a
+            // blank, 20 and #N/A: `Count` answers 2 where `Sum` over the very
+            // same cells raises, and a sheet agrees -- `=COUNT` shows 2 where
+            // `=SUM` shows #N/A. It counts numbers, so the text is not counted
+            // either.
+            let count = values
+                .iter()
+                .filter(|value| {
+                    matches!(value, Value::Integer(_))
+                        || matches!(value, Value::Double(value) if value.is_finite())
+                })
+                .count();
+            return Ok(Value::Integer(count as i64));
+        }
+
+        // Everything past here adds the numbers up rather than counting them,
+        // and those all pass an error on: Sum, Average, Min, Max, Product,
+        // Median, Large, Small and StDev were each asked, and each raised.
         let mut numbers = Vec::new();
         for value in values {
             match value {
@@ -2962,9 +2982,6 @@ impl<'a> WorkbookHost<'a> {
                 }
                 _ => {}
             }
-        }
-        if name.eq_ignore_ascii_case("count") {
-            return Ok(Value::Integer(numbers.len() as i64));
         }
 
         let result = if name.eq_ignore_ascii_case("sum") {
@@ -17905,5 +17922,54 @@ End Sub
                 "-5".to_string(),
             ]
         );
+    }
+
+    /// Some functions step over an error in the cells and some pass it on.
+    ///
+    /// Asked of Excel over 10, text, a blank, 20 and `#N/A`: the counting ones
+    /// answer — Count 2, CountA 4, CountBlank 1, CountIf 1, SumIf 10 — and the
+    /// adding ones raise, which is `WorksheetFunction` saying what a sheet
+    /// would have shown. A sheet agrees: `=COUNT` shows 2 where `=SUM` shows
+    /// `#N/A`.
+    #[test]
+    fn vba_steps_over_an_error_where_excel_steps_over_one() {
+        let setup = "Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = \"text\"\n\
+               Range(\"A4\").Value = 20\n\
+               Range(\"A5\").Value = \"#N/A\"";
+
+        for (asked, answer) in [
+            ("Count(Range(\"A1:A5\"))", "2"),
+            ("CountA(Range(\"A1:A5\"))", "4"),
+            ("CountBlank(Range(\"A1:A5\"))", "1"),
+            ("CountIf(Range(\"A1:A5\"), 10)", "1"),
+            ("SumIf(Range(\"A1:A5\"), 10)", "10"),
+        ] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  {setup}\n  \
+                 Debug.Print Application.WorksheetFunction.{asked}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![answer.to_string()],
+                "for {asked}"
+            );
+        }
+
+        for asked in ["Sum", "Average", "Min", "Max"] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n  {setup}\n  \
+                 Debug.Print Application.WorksheetFunction.{asked}(Range(\"A1:A5\"))\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            let refused = execute_with_host(&module, "Act", vec![], &mut host);
+            assert!(refused.is_err(), "{asked} passes the error on");
+        }
     }
 }
