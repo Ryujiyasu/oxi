@@ -7431,12 +7431,77 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Boolean(true) => "True".to_string(),
         Value::Boolean(false) => "False".to_string(),
         Value::Integer(value) => value.to_string(),
-        Value::Double(value) => value.to_string(),
+        Value::Double(value) => vba_number_text(*value),
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
         Value::Object(_) => return Err("type mismatch converting object to String".to_string()),
     })
+}
+
+/// A Double written the way VBA writes one.
+///
+/// Asked of Excel through `CStr(x)` and through `x & ""` side by side, which
+/// never once differed: fifteen significant digits, written out plainly while
+/// the plain form needs at most **fifteen integer digits** and reaches no
+/// further than the **fifteenth decimal place**, and in exponent form
+/// otherwise. So `1E14` writes out in full and `1E15` does not; `1E-15` writes
+/// out in full and `1E-16` does not; and `0.000123456789012` writes out where
+/// `0.0001234567890123` does not, one digit longer having pushed its last
+/// significant digit past the fifteenth place. The exponent is always at least
+/// two digits — `1.2345678901234E-04`, not `E-4`.
+///
+/// This is NOT how Excel writes the same value into `Range.Formula` or across
+/// the status bar. Those go by a character budget instead (21 and 20), and
+/// they do not pad the exponent, so the same number can come out three ways:
+/// `1234567890123456` is `1.23456789012346E+15` here and `1234567890123460`
+/// there. One question, three answers, three functions.
+fn vba_number_text(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    if !value.is_finite() {
+        // VBA holds neither, so nothing was measured. Rust's spelling keeps it
+        // readable rather than claiming an answer.
+        return value.to_string();
+    }
+    let sign = if value < 0.0 { "-" } else { "" };
+    let written = format!("{:.14e}", value.abs());
+    let (mantissa, exponent) = written
+        .split_once('e')
+        .expect("Rust writes an exponent in this form");
+    let exponent: i32 = exponent.parse().expect("Rust writes a whole exponent");
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+
+    // Where the LAST significant digit sits is what decides the small side —
+    // not where the first one sits, which is why two numbers of the same size
+    // can be written differently.
+    let last = exponent - (digits.len() as i32 - 1);
+    if exponent <= 14 && last >= -15 {
+        return format!("{sign}{}", plain_digits(digits, exponent));
+    }
+    let mantissa = if digits.len() == 1 {
+        digits.to_string()
+    } else {
+        format!("{}.{}", &digits[..1], &digits[1..])
+    };
+    let sign_of_exponent = if exponent < 0 { '-' } else { '+' };
+    format!("{sign}{mantissa}E{sign_of_exponent}{:02}", exponent.abs())
+}
+
+/// Those digits written out with the point put back where the exponent says.
+fn plain_digits(digits: &str, exponent: i32) -> String {
+    if exponent < 0 {
+        let zeros = (-exponent - 1) as usize;
+        return format!("0.{}{}", "0".repeat(zeros), digits);
+    }
+    let whole = exponent as usize + 1;
+    if digits.len() <= whole {
+        return format!("{}{}", digits, "0".repeat(whole - digits.len()));
+    }
+    format!("{}.{}", &digits[..whole], &digits[whole..])
 }
 
 fn string_width(value: &Value) -> usize {
@@ -10369,5 +10434,79 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
         assert_eq!(failure.line, None);
+    }
+
+    /// How VBA writes a Double as text. Measured in Excel through `CStr(x)`
+    /// and through `x & ""` side by side, which never differed.
+    ///
+    /// Fifteen significant digits, written out plainly while that needs at
+    /// most fifteen integer digits and reaches no further than the fifteenth
+    /// decimal place.
+    #[test]
+    fn writes_a_double_as_text_the_way_vba_does() {
+        let measured = [
+            ("0", "0"),
+            ("1 / 3", "0.333333333333333"),
+            ("2 / 3", "0.666666666666667"),
+            ("0.1 + 0.2", "0.3"),
+            ("123.456", "123.456"),
+            ("-0.5", "-0.5"),
+            ("CDbl(42)", "42"),
+            ("CDbl(100)", "100"),
+            // The large side gives up at sixteen integer digits.
+            ("CDbl(1E14)", "100000000000000"),
+            ("CDbl(999999999999999#)", "999999999999999"),
+            ("CDbl(123456789012345#)", "123456789012345"),
+            ("CDbl(1E15)", "1E+15"),
+            ("CDbl(1000000000000000#)", "1E+15"),
+            ("CDbl(1234567890123456#)", "1.23456789012346E+15"),
+            ("CDbl(1.5E+17)", "1.5E+17"),
+            ("CDbl(-1.5E+17)", "-1.5E+17"),
+            // The small side gives up past the fifteenth decimal place, so
+            // where the LAST significant digit sits is what decides it.
+            ("CDbl(1E-15)", "0.000000000000001"),
+            ("CDbl(1E-16)", "1E-16"),
+            ("CDbl(1.5E-14)", "0.000000000000015"),
+            ("CDbl(1.5E-15)", "1.5E-15"),
+            ("0.00012345678901", "0.00012345678901"),
+            ("0.000123456789012", "0.000123456789012"),
+            ("0.0001234567890123", "1.234567890123E-04"),
+            ("0.000123456789012345", "1.23456789012345E-04"),
+            // A fraction that survives the fifteen digits, and one that does not.
+            ("12345678901234.5", "12345678901234.5"),
+            ("123456789012345.6", "123456789012346"),
+            // The exponent is always at least two digits.
+            ("0.000000123456789012346", "1.23456789012346E-07"),
+            ("CDbl(1E-100)", "1E-100"),
+            ("CDbl(1E+100)", "1E+100"),
+            ("CDbl(1.7976931348623157E+308)", "1.79769313486232E+308"),
+        ];
+        for (asked, written) in measured {
+            let value = run(
+                &format!("Public Function Wrote() As String\n  Wrote = CStr({asked})\nEnd Function\n"),
+                "Wrote",
+                vec![],
+            )
+            .unwrap();
+            assert_eq!(value, Value::String(written.to_string()), "for {asked}");
+        }
+    }
+
+    /// Joining with `&` asks the same question and gets the same answer, and a
+    /// whole number that VBA is holding as a Long is never given an exponent.
+    #[test]
+    fn joins_a_double_as_text_the_way_it_writes_one() {
+        let value = run(
+            "Public Function Joined() As String\n\
+               Joined = (0.1 + 0.2) & \"|\" & CDbl(1E15) & \"|\" & CLng(-7) & \"|\" & CInt(42) & \"|\" & (1# / 3#)\n\
+             End Function\n",
+            "Joined",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("0.3|1E+15|-7|42|0.333333333333333".to_string())
+        );
     }
 }
