@@ -130,6 +130,11 @@ pub enum RuntimeErrorKind {
     Host,
     UserDefined,
     DivisionByZero,
+    /// Null where a value was wanted. VBA gives this its own number, 94, and
+    /// a macro branches on it — asked of Excel, `CStr(Null)`, `CDbl(Null)`,
+    /// `Val(Null)`, `Sqr(Null)` and a dozen more all raise 94, where a plain
+    /// type mismatch such as `CDbl("abc")` raises 13.
+    InvalidNull,
     Unsupported,
     StepLimit,
     CallDepth,
@@ -1007,7 +1012,7 @@ impl<'a> Runtime<'a> {
         let replacement = match replacement {
             Value::Null => {
                 return Err(error(
-                    RuntimeErrorKind::TypeMismatch,
+                    RuntimeErrorKind::InvalidNull,
                     "invalid use of Null",
                     Some(statement.span.line),
                 ))
@@ -1061,7 +1066,7 @@ impl<'a> Runtime<'a> {
         let value = match value {
             Value::Null => {
                 return Err(error(
-                    RuntimeErrorKind::TypeMismatch,
+                    RuntimeErrorKind::InvalidNull,
                     "invalid use of Null",
                     Some(statement.span.line),
                 ))
@@ -3270,6 +3275,23 @@ fn empty_frame() -> Frame {
     }
 }
 
+/// Null where a value was wanted, which VBA numbers 94 rather than 13.
+fn invalid_null(line: Option<u32>) -> RuntimeError {
+    error(RuntimeErrorKind::InvalidNull, "invalid use of Null", line)
+}
+
+/// A coercion that failed, carrying the number VBA gives it: 94 where the
+/// value was Null and 13 otherwise. Asked of Excel, `CDbl(Null)` is 94 and
+/// `CDbl("abc")` is 13, so the number turns on what was handed over rather
+/// than on which function was asked.
+fn coercion_error(value: &Value, message: String, line: Option<u32>) -> RuntimeError {
+    let kind = match value {
+        Value::Null => RuntimeErrorKind::InvalidNull,
+        _ => RuntimeErrorKind::TypeMismatch,
+    };
+    error(kind, message, line)
+}
+
 fn constant_assignment_error(name: &str, line: u32) -> RuntimeError {
     error(
         RuntimeErrorKind::Unsupported,
@@ -3377,6 +3399,7 @@ fn runtime_error_number(failure: &RuntimeError) -> i64 {
         RuntimeErrorKind::Host => 1004,
         RuntimeErrorKind::UserDefined => 513,
         RuntimeErrorKind::DivisionByZero => 11,
+        RuntimeErrorKind::InvalidNull => 94,
         RuntimeErrorKind::Unsupported => 445,
         RuntimeErrorKind::StepLimit => 6,
         RuntimeErrorKind::CallDepth => 28,
@@ -3999,7 +4022,7 @@ fn call_builtin(
                 Value::String(value) => value.encode_utf16().collect::<Vec<_>>(),
                 Value::Null => {
                     return Err(error(
-                        RuntimeErrorKind::TypeMismatch,
+                        RuntimeErrorKind::InvalidNull,
                         "invalid use of Null",
                         line,
                     ));
@@ -4013,7 +4036,7 @@ fn call_builtin(
                 None | Some(Value::Missing) => true,
                 Some(Value::Null) => {
                     return Err(error(
-                        RuntimeErrorKind::TypeMismatch,
+                        RuntimeErrorKind::InvalidNull,
                         "invalid use of Null",
                         line,
                     ));
@@ -4229,7 +4252,7 @@ fn call_builtin(
             }
             if matches!(args[0], Value::Null) {
                 return Err(error(
-                    RuntimeErrorKind::TypeMismatch,
+                    RuntimeErrorKind::InvalidNull,
                     "invalid use of Null",
                     line,
                 ));
@@ -4378,7 +4401,7 @@ fn call_builtin(
                 }
             },
             "cbool" => match value {
-                Value::Null => Err(mismatch("invalid use of Null".to_string())),
+                Value::Null => Err(invalid_null(line)),
                 _ => Ok(Value::Boolean(truthy(value).map_err(mismatch)?)),
             },
             "cbyte" => Ok(Value::Integer(convert_integer(value, 0, 255, line)?)),
@@ -4410,7 +4433,9 @@ fn call_builtin(
                     Ok(Value::Double(value))
                 }
             }
-            "cdbl" => Ok(Value::Double(number(value).map_err(mismatch)?)),
+            "cdbl" => Ok(Value::Double(
+                number(value).map_err(|message| coercion_error(value, message, line))?,
+            )),
             "cint" => Ok(Value::Integer(convert_integer(
                 value, -32_768, 32_767, line,
             )?)),
@@ -4448,7 +4473,7 @@ fn call_builtin(
                 }
             }
             "cstr" => match value {
-                Value::Null => Err(mismatch("invalid use of Null".to_string())),
+                Value::Null => Err(invalid_null(line)),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?)),
             },
             "cvar" => Ok(value.clone()),
@@ -4479,7 +4504,7 @@ fn call_builtin(
                 _ => Ok(Value::String(text(value).map_err(mismatch)?.to_lowercase())),
             },
             "len" => match value {
-                Value::Null => Err(mismatch("invalid use of Null".to_string())),
+                Value::Null => Err(invalid_null(line)),
                 _ => Ok(Value::Integer(
                     text(value).map_err(mismatch)?.encode_utf16().count() as i64,
                 )),
@@ -5171,8 +5196,13 @@ fn call_text_conversion_builtin(
             if !(2..=3).contains(&args.len()) {
                 return Err(count_error());
             }
+            // This one PASSES a Null along rather than refusing it: asked of
+            // Excel, `StrConv(Null, vbUpperCase)` raises nothing at all, as
+            // `StrComp(Null, "a")` does not. Which side of the line a function
+            // falls on is per function -- `Val(Null)` and `Space(Null)` raise
+            // 94 while `Len(Null)` and `Abs(Null)` pass it along.
             if matches!(args[0], Value::Null) {
-                return Err(mismatch("invalid use of Null".to_string()));
+                return Ok(Value::Null);
             }
             let mut value = text(&args[0]).map_err(mismatch)?;
             let conversion = integer_argument(&args[1], line)?;
@@ -5220,7 +5250,7 @@ fn optional_boolean(
     match value {
         None | Some(Value::Missing) => Ok(default),
         Some(Value::Null) => Err(error(
-            RuntimeErrorKind::TypeMismatch,
+            RuntimeErrorKind::InvalidNull,
             "invalid use of Null",
             line,
         )),
@@ -6390,7 +6420,7 @@ fn call_string_builtin(
                 return Err(wrong_count("1 argument"));
             }
             let value = nullable_text(&args[0])?
-                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+                .ok_or_else(|| invalid_null(line))?;
             let unit = value.encode_utf16().next().ok_or_else(|| {
                 invalid_procedure_call(format!("{name} requires a non-empty String"), line)
             })?;
@@ -6532,11 +6562,11 @@ fn call_string_builtin(
                 return Err(wrong_count("3 to 6 arguments"));
             }
             let source = nullable_text(&args[0])?
-                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+                .ok_or_else(|| invalid_null(line))?;
             let needle = nullable_text(&args[1])?
-                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+                .ok_or_else(|| invalid_null(line))?;
             let replacement = nullable_text(&args[2])?
-                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+                .ok_or_else(|| invalid_null(line))?;
             let start = match args.get(3) {
                 None | Some(Value::Missing) => 0,
                 Some(value) => positive_position(value, line)?,
@@ -6572,11 +6602,11 @@ fn call_string_builtin(
                 return Err(wrong_count("1 to 4 arguments"));
             }
             let source = nullable_text(&args[0])?
-                .ok_or_else(|| mismatch("invalid use of Null".to_string()))?;
+                .ok_or_else(|| invalid_null(line))?;
             let delimiter = match args.get(1) {
                 None | Some(Value::Missing) => " ".to_string(),
                 Some(value) => nullable_text(value)?
-                    .ok_or_else(|| mismatch("invalid use of Null".to_string()))?,
+                    .ok_or_else(|| invalid_null(line))?,
             };
             let limit = match args.get(2) {
                 None | Some(Value::Missing) => usize::MAX,
@@ -6624,7 +6654,7 @@ fn call_string_builtin(
             let delimiter = match args.get(1) {
                 None | Some(Value::Missing) => " ".to_string(),
                 Some(value) => nullable_text(value)?
-                    .ok_or_else(|| mismatch("invalid use of Null".to_string()))?,
+                    .ok_or_else(|| invalid_null(line))?,
             };
             let values = array
                 .values
@@ -6741,7 +6771,7 @@ fn builtin_constant(name: &str) -> Option<Value> {
 
 fn integer_argument(value: &Value, line: Option<u32>) -> Result<i64, RuntimeError> {
     let value = number(value)
-        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+        .map_err(|message| coercion_error(value, message, line))?
         .round_ties_even();
     if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
         Err(error(
@@ -6761,7 +6791,7 @@ fn convert_integer(
     line: Option<u32>,
 ) -> Result<i64, RuntimeError> {
     let value = number(value)
-        .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
+        .map_err(|message| coercion_error(value, message, line))?
         .round_ties_even();
     if !value.is_finite() || value < minimum as f64 || value > maximum as f64 {
         Err(error(
@@ -7544,13 +7574,9 @@ fn coerce_string_width(
     line: Option<u32>,
 ) -> Result<Value, RuntimeError> {
     let value = match value {
-        Value::Null => {
-            return Err(error(
-                RuntimeErrorKind::TypeMismatch,
-                "invalid use of Null",
-                line,
-            ))
-        }
+        // Measured at this entrance too: `Dim s As String * 5: s = Null`
+        // raises 94, as a plain String and a Long do.
+        Value::Null => return Err(invalid_null(line)),
         value => {
             text(&value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
         }
@@ -9216,7 +9242,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(value, Value::String("5|5|5|13".to_string()));
+        assert_eq!(value, Value::String("5|5|5|0".to_string()));
     }
 
     #[test]
@@ -9287,7 +9313,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(value, Value::String("5|5|13".to_string()));
+        assert_eq!(value, Value::String("5|5|94".to_string()));
     }
 
     #[test]
@@ -10560,5 +10586,57 @@ mod tests {
             value,
             Value::String("37623|0.5|37624|2003|1|2|36525".to_string())
         );
+    }
+
+    /// Null where a value was wanted carries VBA's own number, 94, and not the
+    /// 13 a plain type mismatch carries — a macro branches on the difference.
+    ///
+    /// Measured in Excel with `On Error Resume Next` and the value taken into
+    /// a variable before `Err.Number` is read, so a refusal cannot hide.
+    #[test]
+    fn a_null_where_a_value_was_wanted_carries_ninety_four() {
+        let value = run(
+            "Public Function Numbers() As String\n\
+               Dim answer As Variant\n\
+               Dim seen As String\n\
+               On Error Resume Next\n\
+               Err.Clear: answer = CStr(Null): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = CDbl(Null): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = CInt(Null): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = CBool(Null): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = Val(Null): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = Space(Null): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = CDbl(\"abc\"): seen = seen & Err.Number & \"|\"\n\
+               Err.Clear: answer = 1 / 0: seen = seen & Err.Number\n\
+               Numbers = seen\n\
+             End Function\n",
+            "Numbers",
+            vec![],
+        )
+        .unwrap();
+
+        // The last two are there to show what 94 is NOT: a type mismatch is
+        // still 13 and a division by zero is still 11.
+        assert_eq!(value, Value::String("94|94|94|94|94|94|13|11".to_string()));
+    }
+
+    /// And one that does NOT refuse a Null: `StrConv` passes it along, as
+    /// Excel does — which side of the line a function falls on is per
+    /// function, not a rule about Null.
+    #[test]
+    fn strconv_passes_a_null_along() {
+        let value = run(
+            "Public Function Passed() As String\n\
+               Dim answer As Variant\n\
+               On Error Resume Next\n\
+               Err.Clear\n\
+               answer = StrConv(Null, 1)\n\
+               Passed = CStr(Err.Number) & \"|\" & TypeName(answer)\n\
+             End Function\n",
+            "Passed",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("0|Null".to_string()));
     }
 }
