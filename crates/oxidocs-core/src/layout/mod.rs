@@ -23779,8 +23779,42 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 .map(|(_, rs, _, _, _)| {
                     self.resolve_font_size(rs, para_style) - self.doc_regime_fs
                 });
+            // S1269 (2026-09-01, default ON, opt-out OXI_S1269_DISABLE): S1237
+            // only applies to the compat regime it was DERIVED in. Its evidence
+            // — probe C and the harassmanual slice — is compat 11; the S568 gate
+            // it rides on admits compat < 15, and S568's own note justified its
+            // width with "the ONLY compat<15 linesAndChars compressPunctuation
+            // doc in the corpus is harassmanual ... compat=14 docs are
+            // type=lines, not linesAndChars". Both halves of that are now false:
+            // `_s568_gate_census.py` finds **12** docs through the gate, **9 of
+            // them compat 14**. jaBlindB50 joined dev on 2026-08-31 and brought
+            // them in.
+            //
+            // On its derivation regime S1237 changes NO page count at all
+            // (harassmanual 4=4, parttime 7=7, 9e4d04b4 6=6 in every arm — its
+            // evidence was line-level). On compat 14 it costs pages:
+            //
+            //   doc         Word  S1237 ON  S1237 OFF
+            //   0ea3ec86     43     45        43 =
+            //   167853753    29     33        30
+            //   0b6f3b32     25     25 =      24
+            //   sum|pcd| over the 8 scored gate docs:  7  ->  3
+            //
+            // Turning S1237 off wholesale was NOT taken: its law is measured.
+            // Narrowing it to compat < 14 keeps the measured behaviour where it
+            // was measured and stops it acting on a population it was never
+            // tested against — a scope correction, not another regime carve-out
+            // (the Ra no-EXCEPTION-stacking rule: S1234 -> S1236 -> S1237 are
+            // already three cuts on this one gate).
+            //
+            // ★ 0b6f3b32 loses its exact 25 (-> 24) and is left NAMED as the
+            // next target rather than bought back with a fourth cut. It is a
+            // 25-page doc moving by one page — the +-1 knife-edge the pcd-first
+            // rule calls a sub-pt noise floor.
+            let s1269_derived_regime_only = std::env::var("OXI_S1269_DISABLE").is_err();
             let s1237_at_default_refuse = std::env::var("OXI_S1237_DISABLE").is_err()
                 && s568_legacy_oikomi
+                && (!s1269_derived_regime_only || self.compat_mode < 14)
                 && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5);
             let s568_legacy_oikomi = s568_legacy_oikomi && !s1237_at_default_refuse;
             let s1234_offdefault_light = std::env::var("OXI_S1234_DISABLE").is_err()
