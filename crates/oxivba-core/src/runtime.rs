@@ -7211,6 +7211,9 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
         UnaryOp::Not => match value {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
             Value::Integer(value) => Ok(Value::Integer(!value)),
+            // Nothing to turn over: asked of Excel, `Not Null` is Null, where
+            // `Not 5` is -6.
+            Value::Null => Ok(Value::Null),
             other => Ok(Value::Boolean(!truthy(&other)?)),
         },
     }
@@ -7257,6 +7260,24 @@ fn binary(
         if matches!(lhs, Value::Null) && matches!(rhs, Value::Null) {
             return Ok(Value::Null);
         }
+    } else if matches!(op, And | Or) && (matches!(lhs, Value::Null) || matches!(rhs, Value::Null)) {
+        // Three-valued logic: a Null only stays Null while the other side
+        // cannot settle the answer on its own. Asked of Excel,
+        // `Null And False` is False and `Null Or True` is True, while
+        // `Null And True` and `Null Or False` are both Null.
+        let settles = |value: &Value| match value {
+            Value::Null => None,
+            value => truthy(value).ok(),
+        };
+        let decided = match op {
+            And => [settles(&lhs), settles(&rhs)].contains(&Some(false)),
+            _ => [settles(&lhs), settles(&rhs)].contains(&Some(true)),
+        };
+        return Ok(if decided {
+            Value::Boolean(matches!(op, Or))
+        } else {
+            Value::Null
+        });
     } else if matches!(lhs, Value::Null) || matches!(rhs, Value::Null) {
         return Ok(Value::Null);
     }
@@ -7297,6 +7318,12 @@ fn binary(
         Eq | Ne | Lt | Le | Gt | Ge => {
             let ordering = match (&lhs, &rhs) {
                 (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+                // Empty takes the shape of whatever it is put beside. Against
+                // text it is a zero-length string, which is why
+                // `Range("A1").Value = ""` on a blank cell is True -- and why
+                // `Empty = "0"` is FALSE, where `Empty = 0` is True.
+                (Value::Empty, Value::String(b)) => "".partial_cmp(b.as_str()),
+                (Value::String(a), Value::Empty) => a.as_str().partial_cmp(""),
                 _ => {
                     let (a, b) = numbers()?;
                     a.partial_cmp(&b)
@@ -7314,16 +7341,33 @@ fn binary(
             }))
         }
         And | Or | Xor | Eqv | Imp => {
-            let a = truthy(&lhs).map_err(mismatch)?;
-            let b = truthy(&rhs).map_err(mismatch)?;
-            Ok(Value::Boolean(match op {
-                And => a && b,
-                Or => a || b,
+            // These work on BITS, not on truth. Asked of Excel: `5 And 3` is
+            // 1, `5 Or 3` is 7, `5 Xor 3` is 6, `5 Eqv 3` is -7 and
+            // `5 Imp 3` is -5 -- and `Not 5` is -6, which this build already
+            // had. Truth still comes out where both sides are Booleans,
+            // because True is -1 and every bit of it is set: `True And False`
+            // is False and `5 And True` is 5.
+            //
+            // What is given is made whole VBA's way first, half to the even
+            // side: `2.7 And 3` is 3. A numeric string is read as a number.
+            let both_boolean = matches!(lhs, Value::Boolean(_)) && matches!(rhs, Value::Boolean(_));
+            let bits = |value: &Value| -> Result<i64, (RuntimeErrorKind, String)> {
+                Ok(number(value).map_err(mismatch)?.round_ties_even() as i64)
+            };
+            let (a, b) = (bits(&lhs)?, bits(&rhs)?);
+            let answer = match op {
+                And => a & b,
+                Or => a | b,
                 Xor => a ^ b,
-                Eqv => a == b,
-                Imp => !a || b,
+                Eqv => !(a ^ b),
+                Imp => !a | b,
                 _ => unreachable!(),
-            }))
+            };
+            Ok(if both_boolean {
+                Value::Boolean(answer != 0)
+            } else {
+                Value::Integer(answer)
+            })
         }
         Is => unreachable!(),
         Like => Ok(Value::Boolean(
@@ -10702,6 +10746,93 @@ mod tests {
             Value::String(
                 "Null|Long|Null|Null|Null|Null|Null|Null|Null|Null|Null|Boolean".to_string()
             )
+        );
+    }
+
+    /// `And`, `Or`, `Xor`, `Eqv` and `Imp` work on BITS, not on truth — which
+    /// is how a macro tests a flag with `If style And 4 Then`. Measured in
+    /// Excel.
+    #[test]
+    fn the_logical_operators_work_on_bits() {
+        let value = run(
+            "Public Function Bits() As String\n\
+               Dim parts As String\n\
+               parts = CStr(5 And 3) & \"|\" & CStr(5 Or 3) & \"|\" & CStr(5 Xor 3) & \"|\"\n\
+               parts = parts & CStr(5 Eqv 3) & \"|\" & CStr(5 Imp 3) & \"|\" & CStr(Not 5) & \"|\"\n\
+               parts = parts & CStr(1 And 2) & \"|\" & CStr(5 And True) & \"|\"\n\
+               parts = parts & CStr(\"5\" And 3) & \"|\" & CStr(2.7 And 3)\n\
+               Bits = parts\n\
+             End Function\n",
+            "Bits",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("1|7|6|-7|-5|-6|0|5|1|3".to_string()));
+    }
+
+    /// Truth still comes out where both sides are Booleans, because True is -1
+    /// and every bit of it is set.
+    #[test]
+    fn two_booleans_still_answer_with_a_boolean() {
+        let value = run(
+            "Public Function Truth() As String\n\
+               Dim parts As String\n\
+               parts = TypeName(True And False) & \"/\" & CStr(True And False) & \"|\"\n\
+               parts = parts & TypeName(True And True) & \"/\" & CStr(True And True) & \"|\"\n\
+               parts = parts & TypeName(5 And 3)\n\
+               Truth = parts\n\
+             End Function\n",
+            "Truth",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("Boolean/False|Boolean/True|Long".to_string())
+        );
+    }
+
+    /// A Null stays Null only while the other side cannot settle the answer on
+    /// its own: `Null And False` is False and `Null Or True` is True.
+    #[test]
+    fn a_null_settles_where_the_other_side_can_settle_it() {
+        let value = run(
+            "Public Function Three() As String\n\
+               Dim parts As String\n\
+               parts = TypeName(Null And True) & \"|\" & CStr(Null And False) & \"|\"\n\
+               parts = parts & CStr(Null Or True) & \"|\" & TypeName(Null Or False) & \"|\"\n\
+               parts = parts & TypeName(Not Null)\n\
+               Three = parts\n\
+             End Function\n",
+            "Three",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(value, Value::String("Null|False|True|Null|Null".to_string()));
+    }
+
+    /// Empty takes the shape of whatever it is put beside — a zero-length
+    /// string against text, a zero against a number. Which is why
+    /// `Range("A1").Value = ""` on a blank cell is True, and why
+    /// `Empty = "0"` is not.
+    #[test]
+    fn empty_compares_as_whatever_it_is_put_beside() {
+        let value = run(
+            "Public Function Beside() As String\n\
+               Dim parts As String\n\
+               parts = CStr(Empty = \"\") & \"|\" & CStr(Empty = \"a\") & \"|\"\n\
+               parts = parts & CStr(Empty < \"a\") & \"|\" & CStr(Empty > \"a\") & \"|\"\n\
+               parts = parts & CStr(\"\" = Empty) & \"|\" & CStr(Empty = 0) & \"|\"\n\
+               parts = parts & CStr(Empty = \"0\") & \"|\" & CStr(Empty = False)\n\
+               Beside = parts\n\
+             End Function\n",
+            "Beside",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("True|False|True|False|True|True|False|True".to_string())
         );
     }
 }
