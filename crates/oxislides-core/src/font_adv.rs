@@ -15,6 +15,50 @@
 //!
 //! Each table holds ASCII 32..=126 (95 entries) in code-point order.
 
+/// One glyph's advance in POINTS, on the unit PowerPoint measures in.
+///
+/// ★The design advance is not what the pen moves by: PowerPoint puts it on the
+/// MASTER UNIT (1/8pt, 576 to the inch) first. Asked of PowerPoint's own
+/// `BoundWidth` over three faces and eight sizes, differencing two run lengths
+/// so the ink overhang cancels (`read_pptx_drawgrid_com.py`), the advance is
+/// `round(em * size * 8) / 8` exactly in 22 of 24 arms and the design advance
+/// in none -- including at fractional point sizes, where 12.5pt Arial comes
+/// back 7.00000 and 15.99pt 8.87500. All 24 measured widths are themselves
+/// multiples of 1/8pt, so the LINE's width is the sum of these, not the sum of
+/// the design advances.
+///
+/// The truth PDF cannot be asked this: it restates the geometry as a `Tf` size
+/// that is not the declared one plus a per-run `Tc` plus sparse integer `TJ`,
+/// and the effective advance wobbles +-0.9% with the declared size.
+///
+/// `spc` is the run's `a:rPr/@spc` tracking in points, added BEFORE the
+/// rounding -- the same order [`crate::layout::master_units`] uses, so the
+/// break and the draw stay one grid.
+///
+/// ★The flag is NOT read here. Each caller keeps its own OFF expression,
+/// character for character, because restoring a formula through a different
+/// type or a different association is not restoring it: S-FIRSTLINE lost one
+/// page of 357 to `0.75 * fs * 1.2 * n` where the original was `0.75 * adv`,
+/// an ULP apart and one rounded pixel wide. An opt-out that is a hair off is
+/// not an opt-out (`pptx-optout-flag-must-cover-all-crates`).
+pub fn mu_advance_pt(em: f32, fs: f32, spc: f32) -> f32 {
+    ((em * fs + spc) * crate::layout::MASTER_UNITS_PER_PT as f32).round()
+        / crate::layout::MASTER_UNITS_PER_PT as f32
+}
+
+/// Text is measured and drawn on the master unit unless this is set, which
+/// restores the design advance for both.
+///
+/// ★Read in the CORE, not in the renderer, because the sites the rule touches
+/// are on both sides of that boundary -- the design-width sum and the `Dx`
+/// array live here, the GDI measurement and the run-aware width live there. A
+/// flag that covered only one of them would not be an opt-out
+/// (`pptx-optout-flag-must-cover-all-crates`).
+pub fn mudraw_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_MUDRAW_DISABLE").is_err())
+}
+
 /// Arial (Regular) hmtx advance, in EM units.
 static ARIAL: [f32; 95] = [
     0.27783, 0.27783, 0.35498, 0.55615, 0.55615, 0.88916, 0.66699, 0.19092, 0.33301, 0.33301,
@@ -127,6 +171,9 @@ pub fn line_hmtx_width_pt(line: &str, fs: f32, family: &str) -> Option<f32> {
     let mut sum = 0.0f32;
     for c in visible.chars() {
         match hmtx_advance_em(family, c) {
+            // Each advance on the master unit, then summed -- which is what
+            // PowerPoint's own `BoundWidth` returns (see `mu_advance_pt`).
+            Some(em) if mudraw_on() => sum += mu_advance_pt(em, fs, 0.0),
             Some(em) => sum += em * fs,
             None => return None, // non-ASCII char -> not measurable with hmtx
         }
@@ -151,8 +198,22 @@ pub fn line_hmtx_dx_px(text: &str, fs: f32, family: &str, scale: f64, spc: f32) 
         return None;
     }
     let mut dx = Vec::with_capacity(text.len());
+    // ★The RUNNING position is what gets rounded to a pixel, not each advance
+    // on its own: the advance is already exact on the master unit, so rounding
+    // it again per glyph would add a second, unwanted grid on top of the real
+    // one and let 40 of those roundings drift the line off its own width.
+    let mut pt = 0.0f64;
+    let mut prev = 0i32;
     for c in text.chars() {
         match hmtx_advance_em(family, c) {
+            Some(em) if mudraw_on() => {
+                pt += f64::from(mu_advance_pt(em, fs, spc));
+                let pos = (pt * scale).round() as i32;
+                dx.push(pos - prev);
+                prev = pos;
+            }
+            // The per-advance rounding this had before the master unit, so the
+            // opt-out restores the shipped build exactly.
             Some(em) => dx.push(((em * fs + spc) * scale as f32).round() as i32),
             None => return None,
         }
@@ -171,5 +232,46 @@ pub fn text_hmtx_px(text: &str, fs: f32, family: &str, scale: f64, spc: f32) -> 
 /// family is unsupported.
 pub fn space_hmtx_px(fs: f32, family: &str, scale: f64) -> Option<i32> {
     let em = hmtx_advance_em(family, ' ')?;
+    // On the same grid as the words it sits between: this feeds the justify
+    // stretch, where a space measured on one grid and the words on another
+    // would put the whole remainder into the gaps.
+    if mudraw_on() {
+        return Some((f64::from(mu_advance_pt(em, fs, 0.0)) * scale).round() as i32);
+    }
     Some((em * fs * scale as f32).round() as i32)
+}
+
+#[cfg(test)]
+mod mu_tests {
+    use super::*;
+
+    /// The four values PowerPoint's own `BoundWidth` returned for Arial 'n',
+    /// with the ink overhang differenced out (`read_pptx_drawgrid_com.py`).
+    /// The design advance is in the third column, and it is never the answer.
+    #[test]
+    fn arial_n_advances_what_powerpoint_measured() {
+        let em = hmtx_advance_em("Arial", 'n').expect("Arial is tabled");
+        for (fs, want) in [
+            (12.0f32, 6.625f32),
+            (12.5, 7.000),
+            (15.99, 8.875),
+            (18.0, 10.000),
+        ] {
+            let got = mu_advance_pt(em, fs, 0.0);
+            assert!((got - want).abs() < 1e-4, "{fs}pt gave {got}, wanted {want}");
+            assert!(
+                (em * fs - want).abs() > 1e-3,
+                "{fs}pt: the design advance must differ, or this proves nothing"
+            );
+        }
+    }
+
+    /// Tracking rides INSIDE the rounding, the way the break model adds it.
+    #[test]
+    fn tracking_is_added_before_the_advance_is_put_on_the_grid() {
+        let em = hmtx_advance_em("Arial", 'n').expect("Arial is tabled");
+        // 12pt lands at 53.39 master units; +0.1pt of tracking is +0.8 of one.
+        assert!((mu_advance_pt(em, 12.0, 0.0) - 6.625).abs() < 1e-4);
+        assert!((mu_advance_pt(em, 12.0, 0.1) - 6.750).abs() < 1e-4);
+    }
 }

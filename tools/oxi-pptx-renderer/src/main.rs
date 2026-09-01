@@ -14199,7 +14199,15 @@ fn runtime_dx_px(
             Some(CharPlan::Skip) => 0.0,
             None => runtime_advance_em(family, bold, italic, ch)?,
         };
-        acc += (em as f64 * fs as f64 + f64::from(spc)) * scale;
+        // The advance goes on the MASTER UNIT before it goes on a pixel: that
+        // is the unit PowerPoint measures in (`font_adv::mu_advance_pt`), and
+        // the pixel grid is only the device's. Two grids in that order -- the
+        // outer one is what `advwidth_on` already governs.
+        acc += if oxislides_core::font_adv::mudraw_on() {
+            f64::from(oxislides_core::font_adv::mu_advance_pt(em, fs, spc)) * scale
+        } else {
+            (em as f64 * fs as f64 + f64::from(spc)) * scale
+        };
         let pos = if advwidth_on() {
             acc.round() as i32
         } else {
