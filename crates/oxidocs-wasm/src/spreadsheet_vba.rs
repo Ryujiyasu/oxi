@@ -3054,6 +3054,9 @@ impl<'a> WorkbookHost<'a> {
             }
             Value::Integer(held) => held.to_string(),
             Value::Double(held) => excel_number_text(held, FORMULA_TEXT_WIDTH),
+            // Asked of Excel, a cell holding #N/A answers `#N/A` for its
+            // formula, not a description of an error.
+            Value::Error(held) => spreadsheet_error_text(held).to_string(),
             held => shown_text(&held, None),
         })
     }
@@ -8040,7 +8043,11 @@ fn find_value_text(value: &Value) -> String {
         Value::Boolean(value) => if *value { "TRUE" } else { "FALSE" }.to_string(),
         Value::Integer(value) => value.to_string(),
         Value::Double(value) => value.to_string(),
-        Value::Error(value) => format!("Error {value}"),
+        // The word itself is what a cell holding an error shows and what a
+        // search reads: asked of Excel, `.Text` of a cell holding #DIV/0! is
+        // `#DIV/0!`, and `Find("N/A")` lands on the cell holding #N/A.
+        // `Debug.Print` is NOT this -- VBA writes `Error 2042` there.
+        Value::Error(value) => spreadsheet_error_text(*value).to_string(),
         Value::String(value) => value.clone(),
         Value::Null => "Null".to_string(),
         Value::Missing => String::new(),
@@ -9277,6 +9284,11 @@ fn typed_from_text(written: &str) -> CellValue {
     if let Some(rest) = written.strip_prefix(APOSTROPHE) {
         return CellValue::String(rest.to_string());
     }
+    // A written error word IS that error, and is one of the few things read
+    // without trimming first -- see `written_error`.
+    if let Some(named) = written_error(written) {
+        return CellValue::Error(named.to_string());
+    }
     let trimmed = written.trim();
     if trimmed.eq_ignore_ascii_case("true") {
         return CellValue::Boolean(true);
@@ -9585,6 +9597,27 @@ const ERROR_DIV_ZERO: i64 = 2007;
 const ERROR_REF: i64 = 2023;
 const ERROR_NUM: i64 = 2036;
 const ERROR_NA: i64 = 2042;
+
+/// The error a written word names, where it names one.
+///
+/// Asked of Excel by writing each into a cell: the seven a sheet can work out
+/// for itself and `#GETTING_DATA` are taken, in any case -- `"#n/a"` becomes
+/// `#N/A` -- and with nothing around them, since `" #N/A"` and `"#N/A "` both
+/// stay text. Nothing else beginning with a hash is taken: `"#NOPE!"` stays
+/// text, and so does `"#SPILL!"`, though a sheet can work that one out itself.
+fn written_error(written: &str) -> Option<&'static str> {
+    match written.to_ascii_uppercase().as_str() {
+        "#NULL!" => Some("#NULL!"),
+        "#DIV/0!" => Some("#DIV/0!"),
+        "#VALUE!" => Some("#VALUE!"),
+        "#REF!" => Some("#REF!"),
+        "#NAME?" => Some("#NAME?"),
+        "#NUM!" => Some("#NUM!"),
+        "#N/A" => Some("#N/A"),
+        "#GETTING_DATA" => Some("#GETTING_DATA"),
+        _ => None,
+    }
+}
 
 fn spreadsheet_error_number(value: &str) -> i64 {
     match value.to_ascii_uppercase().as_str() {
@@ -17454,4 +17487,111 @@ End Sub
         }
     }
 
+    /// A written error word IS that error, and the cell says so however it is
+    /// asked. Measured in Excel at three entrances — `.Formula`, `.Text` and
+    /// a `Find` — which is why one helper may carry the answer.
+    #[test]
+    fn vba_writes_an_error_word_into_a_cell_as_an_error() {
+        let measured = [
+            ("#N/A", "2042"),
+            ("#VALUE!", "2015"),
+            ("#REF!", "2023"),
+            ("#DIV/0!", "2007"),
+            ("#NAME?", "2029"),
+            ("#NULL!", "2000"),
+            ("#NUM!", "2036"),
+            ("#GETTING_DATA", "2043"),
+        ];
+        for (word, number) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = \"{word}\"\n\
+                   Debug.Print TypeName(Range(\"A1\").Value)\n\
+                   Debug.Print CLng(Range(\"A1\").Value)\n\
+                   Debug.Print Range(\"A1\").Formula\n\
+                   Debug.Print Range(\"A1\").Text\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![
+                    "Error".to_string(),
+                    number.to_string(),
+                    word.to_string(),
+                    word.to_string(),
+                ],
+                "for {word}"
+            );
+        }
+    }
+
+    /// The word is read in any case and with nothing around it, and no other
+    /// word beginning with a hash is read at all — `#SPILL!` included, though
+    /// a sheet can work that one out for itself.
+    #[test]
+    fn vba_reads_an_error_word_exactly_or_not_at_all() {
+        let measured = [
+            ("\"#n/a\"", "Error", "#N/A"),
+            ("\"#N/a\"", "Error", "#N/A"),
+            ("\" #N/A\"", "String", " #N/A"),
+            ("\"#N/A \"", "String", "#N/A "),
+            ("\"#NOPE!\"", "String", "#NOPE!"),
+            ("\"#SPILL!\"", "String", "#SPILL!"),
+            ("\"#\"", "String", "#"),
+            // An apostrophe still means "leave this alone".
+            ("\"'#N/A\"", "String", "#N/A"),
+        ];
+        for (written, kind, formula) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = {written}\n\
+                   Debug.Print TypeName(Range(\"A1\").Value)\n\
+                   Debug.Print Range(\"A1\").Formula\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![kind.to_string(), formula.to_string()],
+                "for {written}"
+            );
+        }
+    }
+
+    /// `CVErr` puts the same thing in the cell as the word does, and a search
+    /// reads the word — `Find("N/A")` lands on a cell holding `#N/A`.
+    #[test]
+    fn vba_finds_a_cell_by_the_error_it_holds() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = CVErr(2042)\n\
+               Range(\"A2\").Value = \"#DIV/0!\"\n\
+               Debug.Print Range(\"A1\").Formula\n\
+               Debug.Print Range(\"A1:A2\").Find(\"N/A\").Address\n\
+               Debug.Print Range(\"A1:A2\").Find(\"#DIV/0!\").Address\n\
+               Debug.Print Application.WorksheetFunction.CountA(Range(\"A1:A2\"))\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "#N/A".to_string(),
+                "$A$1".to_string(),
+                "$A$2".to_string(),
+                "2".to_string(),
+            ]
+        );
+    }
 }
