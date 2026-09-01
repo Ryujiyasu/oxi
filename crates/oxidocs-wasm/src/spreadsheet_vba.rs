@@ -9444,13 +9444,13 @@ fn typed_from_written(written: &str) -> (CellValue, Option<&'static str>) {
             .all(|(at, one)| one.is_ascii_digit() || one == '.' || (at == 0 && matches!(one, '+' | '-')))
         && body.chars().filter(|one| *one == '.').count() <= 1
         && body.chars().any(|one| one.is_ascii_digit());
-    if readable {
-        if let Ok(number) = body.parse::<f64>() {
-            return (
-                CellValue::Number(if bracketed { -number } else { number }),
-                None,
-            );
-        }
+    if let Some((number, grouped)) = grouped_number(body) {
+        // Brackets keep the separated form: `(1,234)` is -1234 shown as
+        // `#,##0`, where a plain `(5)` is -5 and stays General.
+        return (
+            CellValue::Number(if bracketed { -number } else { number }),
+            grouped.then(|| grouped_format(body)),
+        );
     }
     (CellValue::String(written.to_string()), None)
 }
@@ -9470,6 +9470,54 @@ fn plain_number(body: &str) -> Option<f64> {
     body.parse::<f64>().ok()
 }
 
+/// A written decimal number that may have its thousands separated.
+///
+/// Measured by writing each into a cell: a group after the first must carry at
+/// least three digits, so `1,234`, `12,345`, `1,234,567` and even `1,2345` are
+/// read, while `1,23`, `12,34` and `1,234,56` stay text -- as do `,123` and
+/// `1,`, which leave a group empty. The second value says whether any
+/// separator was there, since that is what the cell is then shown with.
+///
+/// English and Japanese separate thousands the same way, and those are the two
+/// this is built for, so there is nothing here that waits on a locale.
+fn grouped_number(body: &str) -> Option<(f64, bool)> {
+    if !body.contains(',') {
+        return plain_number(body).map(|number| (number, false));
+    }
+    let (sign, digits) = match body.strip_prefix(['+', '-']) {
+        Some(rest) => (&body[..1], rest),
+        None => ("", body),
+    };
+    let groups: Vec<&str> = digits.split(',').collect();
+    if groups.len() < 2 || groups.iter().any(|group| group.is_empty()) {
+        return None;
+    }
+    // Only the last group may carry the decimal point, and every group after
+    // the first needs three digits in front of it.
+    for (at, group) in groups.iter().enumerate() {
+        let whole = group.split('.').next().unwrap_or(group);
+        if at > 0 && whole.len() < 3 {
+            return None;
+        }
+        if at + 1 < groups.len() && group.contains('.') {
+            return None;
+        }
+    }
+    let joined = format!("{sign}{}", groups.concat());
+    plain_number(&joined).map(|number| (number, true))
+}
+
+/// How a cell shows a number whose thousands were written out: measured as
+/// `#,##0` where nothing followed a point and `#,##0.00` where anything did,
+/// however many digits followed it.
+fn grouped_format(body: &str) -> &'static str {
+    if body.contains('.') {
+        "#,##0.00"
+    } else {
+        "#,##0"
+    }
+}
+
 fn written_percent(written: &str) -> Option<(CellValue, Option<&'static str>)> {
     let trimmed = written.trim();
     let body = match trimmed.strip_suffix('%') {
@@ -9477,9 +9525,10 @@ fn written_percent(written: &str) -> Option<(CellValue, Option<&'static str>)> {
         None => trimmed.strip_prefix('%')?,
     };
     let body = body.trim();
-    let number = plain_number(body)?;
+    let (number, _) = grouped_number(body)?;
     // Written with a point, shown with two decimals; written without one,
-    // shown with none. How many decimals were written makes no difference.
+    // shown with none. How many decimals were written makes no difference, and
+    // neither do separated thousands: `1,234%` is 12.34 shown as `0%`.
     let shown = if body.contains('.') { "0.00%" } else { "0%" };
     Some((CellValue::Number(number / 100.0), Some(shown)))
 }
@@ -18207,6 +18256,73 @@ End Sub
                 host.take_debug_output(),
                 vec![kind.to_string()],
                 "for {asked}"
+            );
+        }
+    }
+
+    /// Thousands written out are read, and the cell is shown with them.
+    ///
+    /// Measured in Excel. English and Japanese separate thousands the same
+    /// way, so this needs no locale behind it.
+    #[test]
+    fn vba_reads_a_number_whose_thousands_were_written_out() {
+        let measured = [
+            ("1,234", "1234", "#,##0"),
+            ("12,345", "12345", "#,##0"),
+            ("123,456", "123456", "#,##0"),
+            ("1,234,567", "1234567", "#,##0"),
+            ("-1,234", "-1234", "#,##0"),
+            // A group after the first may be longer than three.
+            ("1,2345", "12345", "#,##0"),
+            // A point brings two decimals with it, however many were written.
+            ("1,234.5", "1234.5", "#,##0.00"),
+            ("1,234.56", "1234.56", "#,##0.00"),
+            ("1,234.567", "1234.567", "#,##0.00"),
+            // Brackets keep the separated form, where a plain (5) does not.
+            ("(1,234)", "-1234", "#,##0"),
+            // And a per cent stays a per cent.
+            ("1,234%", "12.34", "0%"),
+        ];
+        for (written, value, shown) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = \"{written}\"\n\
+                   Debug.Print CStr(Range(\"A1\").Value)\n\
+                   Debug.Print Range(\"A1\").NumberFormat\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![value.to_string(), shown.to_string()],
+                "for {written}"
+            );
+        }
+    }
+
+    /// A group after the first that carries fewer than three digits is not a
+    /// separated number at all, and neither is one with a group missing.
+    #[test]
+    fn vba_leaves_a_badly_separated_number_as_text() {
+        for written in ["1,23", "12,34", "1,234,56", ",123", "1,"] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = \"{written}\"\n\
+                   Debug.Print TypeName(Range(\"A1\").Value)\n\
+                   Debug.Print Range(\"A1\").NumberFormat\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec!["String".to_string(), "General".to_string()],
+                "for {written}"
             );
         }
     }
