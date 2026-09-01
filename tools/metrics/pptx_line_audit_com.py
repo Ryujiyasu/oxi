@@ -95,13 +95,18 @@ def engine_paras(dump: dict) -> dict[int, list]:
                 rows.append((len(p.get("line_x_offsets") or []),
                              p.get("line_x_offsets") or [], text))
             # ★The dump's line offsets are measured from the TEXT AREA, while
-            # PowerPoint's `BoundLeft - Left` is measured from the SHAPE. The
-            # difference is the left inset, and it showed itself: deck 21's
-            # median came back exactly +7.20pt. A per-deck median hides it, but
-            # the SPREAD does not -- a deck mixing shapes at 0 and at 7.2
-            # reported hundreds of lines "over 3pt" that were all this.
+            # PowerPoint's `BoundLeft` is measured from the slide. The engine
+            # STATES where its text area starts (`text_left`) rather than this
+            # rebuilding the inset rules -- which matters, because an audit that
+            # recomputes the same insets can never catch the insets being wrong.
+            #
+            # Both biases showed themselves before the field existed: deck 21's
+            # median came back exactly +7.20pt (`l_ins`), and its three ellipses
+            # read +26.4pt, which is an ellipse's own text inset on a 180.38pt
+            # box to the hundredth.
             shapes.append({"x": sh["x"], "y": sh["y"], "w": sh["w"],
-                           "l_ins": sh.get("l_ins") or 0.0, "paras": rows})
+                           "text_left": sh.get("text_left", sh["x"]),
+                           "paras": rows})
         out[si] = shapes
     return out
 
@@ -196,8 +201,10 @@ def audit(doc: int) -> dict | None:
                             # reported every run as the check on that reading.
                             # The SPREAD is the signal either way, since a
                             # constant bias would cancel out of it.
+                            # PowerPoint's absolute line left, against the
+                            # engine's own text-area origin plus its offset.
                             for a, b in zip(cx, ex):
-                                d = a - (b + m["l_ins"])
+                                d = (a + c["x"]) - (m["text_left"] + b)
                                 offs.append(d)
                                 if abs(d) > 3.0:
                                     far.append((si, round(d, 2), ctext[:40]))

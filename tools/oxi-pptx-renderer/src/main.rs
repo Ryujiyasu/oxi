@@ -178,6 +178,18 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                 .iter()
                 .map(|sh| {
                     let mut v = shape_json(sh);
+                    // Where the text area actually starts, so a reader does not
+                    // have to rebuild the inset rules to know what the line
+                    // offsets below are measured from. `pptx_line_audit_com.py`
+                    // read them against the SHAPE and saw an ellipse's 26.41pt
+                    // text inset as a 26.4pt defect -- and had it rebuilt the
+                    // rule to subtract, it could never have caught the rule
+                    // itself being wrong.
+                    {
+                        let (dgl, _dgr, dgt, _dgb) = geom_text_inset(sh);
+                        v["text_left"] = json!(sh.x + sh.l_ins + dgl);
+                        v["text_top"] = json!(sh.y + sh.t_ins + dgt);
+                    }
                     // Attach wrapped-line baselines for text-bearing shapes.
                     if let Some(p) = v.get_mut("content") {
                         let text_shape = matches!(
