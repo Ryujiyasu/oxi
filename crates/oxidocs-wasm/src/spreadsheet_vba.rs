@@ -3053,13 +3053,7 @@ impl<'a> WorkbookHost<'a> {
                 if held { "TRUE".to_string() } else { "FALSE".to_string() }
             }
             Value::Integer(held) => held.to_string(),
-            Value::Double(held) => {
-                if held.fract() == 0.0 && held.abs() < 1e21 {
-                    format!("{held:.0}")
-                } else {
-                    held.to_string()
-                }
-            }
+            Value::Double(held) => excel_number_text(held, FORMULA_TEXT_WIDTH),
             held => shown_text(&held, None),
         })
     }
@@ -7238,6 +7232,99 @@ fn application_switch(value: &Value, property: &str) -> Result<bool, String> {
 /// How many characters the status bar holds. A 256th is refused.
 const STATUS_BAR_LIMIT: usize = 255;
 
+/// Excel keeps fifteen significant digits of a number and no more.
+const EXCEL_SIGNIFICANT_DIGITS: usize = 15;
+
+/// How wide a number written as text may be before Excel gives up on the plain
+/// form. Measured at two entrances, which answer the same way except here:
+/// `Range.Formula` allows 21 characters and the status bar allows 20, so
+/// `1E+20` is `100000000000000000000` through the first and `1E+20` through
+/// the second. The sign is not counted — `-1.5E+20` still writes out plain
+/// through `Formula`, at 21 digits and a minus.
+const FORMULA_TEXT_WIDTH: usize = 21;
+const STATUS_BAR_TEXT_WIDTH: usize = 20;
+
+/// A number written as text the way Excel writes one.
+///
+/// Not the way a CELL shows one — that is a different rendering again, capped
+/// at eleven characters and narrowed further by the column, and it belongs to
+/// the cell renderer. This is the value-as-text form that `Range.Formula` and
+/// the status bar answer with, and it goes: keep fifteen significant digits,
+/// write it out plainly if that fits `width`, and otherwise write it in
+/// exponent form with as many significant digits as will fit.
+///
+/// Asked of Excel: `1/3` is `0.333333333333333`, `0.1 + 0.2` is `0.3`,
+/// `1234567890123456` is `1234567890123460`, `1E+19` is
+/// `10000000000000000000`, `1E+21` is `1E+21`, `1E-18` writes out in full and
+/// `1E-20` does not, and the largest Double there is comes back as
+/// `1.79769313486232E+308` through `Formula` and `1.7976931348623E+308`
+/// through the bar — the exponent form giving up a digit to fit the narrower
+/// budget.
+fn excel_number_text(value: f64, width: usize) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    if !value.is_finite() {
+        // Excel holds neither, and a cell cannot be given one, so nothing was
+        // measured here. Rust's own spelling keeps it readable.
+        return value.to_string();
+    }
+    let sign = if value < 0.0 { "-" } else { "" };
+    let magnitude = value.abs();
+
+    // Fifteen significant digits, and the exponent they sit at.
+    let (digits, exponent) = significant_digits(magnitude, EXCEL_SIGNIFICANT_DIGITS);
+    let plain = plain_decimal(&digits, exponent);
+    if plain.len() <= width {
+        return format!("{sign}{plain}");
+    }
+
+    // The exponent form, giving up significant digits until it fits.
+    let mut kept = EXCEL_SIGNIFICANT_DIGITS;
+    loop {
+        let (digits, exponent) = significant_digits(magnitude, kept);
+        let mantissa = match digits.len() {
+            1 => digits.clone(),
+            _ => format!("{}.{}", &digits[..1], &digits[1..]),
+        };
+        let written = format!("{mantissa}E{}{}", if exponent < 0 { "-" } else { "+" }, {
+            exponent.abs()
+        });
+        if written.len() <= width || kept == 1 {
+            return format!("{sign}{written}");
+        }
+        kept -= 1;
+    }
+}
+
+/// The significant digits of a positive number, rounded to `count` of them and
+/// with trailing zeros dropped, together with the power of ten the first digit
+/// sits at.
+fn significant_digits(magnitude: f64, count: usize) -> (String, i32) {
+    let written = format!("{:.*e}", count.saturating_sub(1), magnitude);
+    let (mantissa, exponent) = written.split_once('e').expect("Rust writes an exponent");
+    let exponent: i32 = exponent.parse().expect("Rust writes a whole exponent");
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let trimmed = digits.trim_end_matches('0');
+    if trimmed.is_empty() {
+        return ("0".to_string(), exponent);
+    }
+    (trimmed.to_string(), exponent)
+}
+
+/// Those digits written out without an exponent.
+fn plain_decimal(digits: &str, exponent: i32) -> String {
+    if exponent < 0 {
+        let zeros = (-exponent - 1) as usize;
+        return format!("0.{}{}", "0".repeat(zeros), digits);
+    }
+    let whole = exponent as usize + 1;
+    if digits.len() <= whole {
+        return format!("{}{}", digits, "0".repeat(whole - digits.len()));
+    }
+    format!("{}.{}", &digits[..whole], &digits[whole..])
+}
+
 /// The pointer Excel puts up when nobody has asked for another one.
 const CURSOR_DEFAULT: i64 = -4143;
 
@@ -7301,7 +7388,9 @@ fn status_bar_text(value: &Value) -> Result<Option<String>, String> {
         Value::Empty | Value::Missing | Value::Null => return Ok(None),
         Value::String(written) if written.is_empty() => return Ok(None),
         Value::String(written) => written.clone(),
-        Value::Boolean(_) | Value::Integer(_) | Value::Double(_) => shown_text(value, None),
+        Value::Integer(number) => excel_number_text(*number as f64, STATUS_BAR_TEXT_WIDTH),
+        Value::Double(number) => excel_number_text(*number, STATUS_BAR_TEXT_WIDTH),
+        Value::Boolean(_) => shown_text(value, None),
         _ => return Err("Application.StatusBar can only be shown text".to_string()),
     };
     let width = shown.chars().count();
@@ -16775,16 +16864,9 @@ End Sub
         );
     }
 
-    /// A number reaches the bar written the way Excel writes a value as text,
-    /// which is the same question a cell asks — so the bar asks it of the same
-    /// renderer rather than growing a second one to drift against.
-    ///
-    /// Which means the bar inherits that renderer's reach. Excel was measured
-    /// on five more numbers this does not ask for, because `General` does not
-    /// yet cap a value at fifteen significant digits or turn to scientific:
-    /// `1/3` is `0.333333333333333`, `0.1 + 0.2` is `0.3`, `1E+20` is `1E+20`,
-    /// `-1E+20` is `-1E+20`, and `1234567890123456` is `1234567890123460`.
-    /// Those belong to the renderer, and to a cell just as much as to the bar.
+    /// A number reaches the bar written the way Excel writes one as text:
+    /// fifteen significant digits, plainly if that fits twenty characters and
+    /// in exponent form when it does not.
     #[test]
     fn vba_status_bar_shows_a_number_the_way_excel_writes_one() {
         let measured = [
@@ -16793,20 +16875,89 @@ End Sub
             ("-0.5", "-0.5"),
             ("3.5", "3.5"),
             ("100000", "100000"),
+            ("1 / 3", "0.333333333333333"),
+            ("2 / 3", "0.666666666666667"),
+            ("0.1 + 0.2", "0.3"),
             ("1E+15", "1000000000000000"),
             ("1E+16", "10000000000000000"),
-            ("1E+19", "10000000000000000000"),
             ("0.0000001", "0.0000001"),
+            // Twenty characters fit; the twenty-first sends it to an exponent.
+            ("1E+19", "10000000000000000000"),
+            ("1E+20", "1E+20"),
+            ("1.5E+20", "1.5E+20"),
+            ("1E-18", "0.000000000000000001"),
+            ("1E-19", "1E-19"),
+            ("-1.5E-20", "-1.5E-20"),
+            ("1E+100", "1E+100"),
+            ("1234567890123456", "1234567890123460"),
+            ("1.23456789012345678E+20", "1.23456789012346E+20"),
+            // The widest Double there is gives up a significant digit to fit.
+            ("1.7976931348623157E+308", "1.7976931348623E+308"),
         ];
         for (number, shown) in measured {
             let mut workbook = workbook();
             let module = parse_module(&format!(
-                "Public Sub Report()\n  Application.StatusBar = {number}\nEnd Sub\n"
+                "Public Sub Report()
+  Application.StatusBar = {number}
+End Sub
+"
             ))
             .unwrap();
             let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
             execute_with_host(&module, "Report", vec![], &mut host).unwrap();
             assert_eq!(host.status_bar.as_deref(), Some(shown), "for {number}");
+        }
+    }
+
+    /// `Range.Formula` asks the same question and gets the same answer, but it
+    /// is allowed one character more than the bar — so `1E+20` writes out in
+    /// full here and does not there. Measured at both entrances; the two
+    /// differ ONLY in that width.
+    #[test]
+    fn vba_writes_a_number_into_a_formula_the_way_excel_does() {
+        let measured = [
+            ("0", "0"),
+            ("42", "42"),
+            ("-0.5", "-0.5"),
+            ("123.456", "123.456"),
+            ("100.5", "100.5"),
+            ("1E-5", "0.00001"),
+            ("1 / 3", "0.333333333333333"),
+            ("2 / 3", "0.666666666666667"),
+            ("0.1 + 0.2", "0.3"),
+            ("0.000123456789012345678", "0.000123456789012346"),
+            ("1234567890123456", "1234567890123460"),
+            ("9.99999999999999E+19", "99999999999999900000"),
+            // Twenty-one characters fit, where the bar stops at twenty.
+            ("1E+19", "10000000000000000000"),
+            ("1E+20", "100000000000000000000"),
+            ("1.5E+20", "150000000000000000000"),
+            ("-1.5E+20", "-150000000000000000000"),
+            ("1E+21", "1E+21"),
+            ("1E-18", "0.000000000000000001"),
+            ("1E-19", "0.0000000000000000001"),
+            ("1E-20", "1E-20"),
+            ("-1.5E-20", "-1.5E-20"),
+            ("1E+100", "1E+100"),
+            ("1.7976931348623157E+308", "1.79769313486232E+308"),
+        ];
+        for (number, written) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()
+                   Range(\"A1\").Value = {number}
+                   Debug.Print Range(\"A1\").Formula
+                 End Sub
+"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![written.to_string()],
+                "for {number}"
+            );
         }
     }
 
