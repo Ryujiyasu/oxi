@@ -40,6 +40,6 @@ pub use fingerprint::{compare, fingerprint_module, ModuleFingerprint, Similarity
 pub use lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 pub use parser::parse_module;
 pub use runtime::{
-    execute, execute_with_host, ArrayDimension, ArrayValue, Host, ObjectRef, Runtime, RuntimeError,
-    RuntimeErrorKind, Value,
+    execute, execute_with_host, vba_number_text, ArrayDimension, ArrayValue, Host, ObjectRef,
+    Runtime, RuntimeError, RuntimeErrorKind, Value,
 };

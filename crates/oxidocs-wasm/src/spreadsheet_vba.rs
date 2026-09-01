@@ -12,7 +12,8 @@ use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
 use oxivba_core::{
-    parse_module, ArrayDimension, ArrayValue, Host, ModuleItem, ObjectRef, Runtime, Value,
+    parse_module, vba_number_text, ArrayDimension, ArrayValue, Host, ModuleItem, ObjectRef,
+    Runtime, Value,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -7172,7 +7173,12 @@ fn format_debug_value(value: &Value) -> String {
         Value::Null => "Null".to_string(),
         Value::Boolean(value) => if *value { "True" } else { "False" }.to_string(),
         Value::Integer(value) => value.to_string(),
-        Value::Double(value) => value.to_string(),
+        // The same digits `CStr` and `&` give, and the same the `Print`
+        // statement writes -- measured at all three. What is NOT copied is
+        // Print's spacing, which puts a space in front of every positive
+        // number and one after every number: that is the Immediate window's
+        // layout, and this log has its own.
+        Value::Double(value) => vba_number_text(*value),
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => "<Array>".to_string(),
@@ -11894,7 +11900,7 @@ mod tests {
                 // The blank A5 is not equal to 20, but it is not non-blank.
                 "3\t4".to_string(),
                 "70\t9".to_string(),
-                "23.333333333333332\t3".to_string(),
+                "23.3333333333333\t3".to_string(),
             ]
         );
     }
@@ -17853,6 +17859,50 @@ End Sub
                 "0.000".to_string(),
                 "7".to_string(),
                 "0%".to_string(),
+            ]
+        );
+    }
+
+    /// `Debug.Print` writes a number the way VBA writes one, which is the way
+    /// `CStr` and `&` write it and the way the `Print` statement writes it —
+    /// measured at all three. It leaves IEEE's own spelling behind: a third of
+    /// seventy is `23.3333333333333` here as it is in Excel, not
+    /// `23.333333333333332`.
+    ///
+    /// What is deliberately NOT copied is Print's spacing. Excel writes
+    /// ` 42 ` — a space in front of a positive number and one after every
+    /// number — because that is how the Immediate window lays its fields out.
+    /// This log joins with tabs and has its own.
+    #[test]
+    fn vba_prints_a_number_the_way_vba_writes_one() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Debug.Print 0.1 + 0.2\n\
+               Debug.Print 1# / 3#\n\
+               Debug.Print 1.23456 / 100\n\
+               Debug.Print 70# / 3#\n\
+               Debug.Print CDbl(1E15)\n\
+               Debug.Print CDbl(1E-16)\n\
+               Debug.Print 42\n\
+               Debug.Print -5\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "0.3".to_string(),
+                "0.333333333333333".to_string(),
+                "0.0123456".to_string(),
+                "23.3333333333333".to_string(),
+                "1E+15".to_string(),
+                "1E-16".to_string(),
+                "42".to_string(),
+                "-5".to_string(),
             ]
         );
     }

@@ -7451,12 +7451,17 @@ fn text(value: &Value) -> Result<String, String> {
 /// significant digit past the fifteenth place. The exponent is always at least
 /// two digits — `1.2345678901234E-04`, not `E-4`.
 ///
+/// Confirmed at a third entrance since: the `Print` statement writes the same
+/// digits (`Print #1, 1.23456 / 100` gives `0.0123456`). Print lays its fields
+/// out differently — a space in front of a positive number and one after every
+/// number — but that is Print's spacing, not another way of writing the digits.
+///
 /// This is NOT how Excel writes the same value into `Range.Formula` or across
 /// the status bar. Those go by a character budget instead (21 and 20), and
 /// they do not pad the exponent, so the same number can come out three ways:
 /// `1234567890123456` is `1.23456789012346E+15` here and `1234567890123460`
 /// there. One question, three answers, three functions.
-fn vba_number_text(value: f64) -> String {
+pub fn vba_number_text(value: f64) -> String {
     if value == 0.0 {
         return "0".to_string();
     }
