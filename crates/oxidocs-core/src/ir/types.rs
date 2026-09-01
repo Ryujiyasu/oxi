@@ -966,6 +966,22 @@ pub struct TextBox {
     /// cover pages) keep their legacy merged-textbox behavior byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vector_shapes: Vec<VectorShape>,
+    /// S1270 (2026-09-02): the host paragraph ends with an explicit page break
+    /// that sits AFTER this drawing's run.
+    ///
+    /// `<w:r>…<wp:inline>…</w:r><w:r><w:br w:type="page"/></w:r></w:p>` means
+    /// "draw the box here, THEN start a new page". The drawing is lifted out of
+    /// the run list into the text-box list, so all the paragraph has left is the
+    /// `\x0C` the parser writes for the break — the page closes first and the
+    /// box lands on the NEXT page with it (legal__02f84965dccfe4db p4: Word puts
+    /// the 103.35pt box at y=676.2 and ends the page, Oxi ended the page at
+    /// y=545.5 with 225pt of column unused and drew the box atop p5).
+    ///
+    /// The order matters and is not implied by co-occurrence: the corpus has 15
+    /// paragraphs with the drawing first and 12 with the break first, so the
+    /// layout cannot infer this from "the anchor paragraph also has a break".
+    #[serde(default)]
+    pub host_break_after: bool,
 }
 
 /// S839: one drawable vector primitive from a wpg/wps drawing group.

@@ -2186,6 +2186,9 @@ fn parse_paragraph(
     let mut inline_img_runs: Vec<(usize, Image)> = Vec::new();
     let mut found_shapes: Vec<Shape> = Vec::new();
     let mut found_text_boxes: Vec<TextBox> = Vec::new();
+    // S1270: the run each text box was lifted out of, so the flag below can be
+    // set from the ORDER of drawing vs page break within this paragraph.
+    let mut s1270_tb_runs: Vec<usize> = Vec::new();
     let mut math_blocks: Vec<crate::ir::MathBlock> = Vec::new();
     // S1252: math_blocks slots taken by expressions that were ALSO routed
     // in-run. Keeping the slot preserves document order against a sibling
@@ -2517,6 +2520,7 @@ fn parse_paragraph(
                                 found_shapes.push(shape);
                             }
                             if let Some(tb) = drawing.text_box {
+                                s1270_tb_runs.push(runs.len().saturating_sub(1));
                                 found_text_boxes.push(tb);
                             }
                         }
@@ -3974,6 +3978,20 @@ fn parse_paragraph(
         && runs.iter().all(|r| r.text.is_empty())
     {
         style.ppr_rpr = Some(runs[0].style.clone());
+    }
+
+    // S1270 (2026-09-02, default ON, opt-out OXI_S1270_DISABLE): mark the text
+    // boxes this paragraph draws BEFORE its explicit page break. The drawing is
+    // gone from `runs` by now (it was lifted into found_text_boxes), so the only
+    // record of the original order is the run index captured at lift time.
+    if std::env::var("OXI_S1270_DISABLE").is_err() {
+        if let Some(ff) = runs.iter().position(|r| r.text.contains('\u{0C}')) {
+            for (tb, at) in found_text_boxes.iter_mut().zip(s1270_tb_runs.iter()) {
+                if *at <= ff {
+                    tb.host_break_after = true;
+                }
+            }
+        }
     }
 
     Ok(ParagraphResult {
@@ -7395,6 +7413,9 @@ fn parse_drawing(
             } else {
                 Vec::new()
             },
+            // S1270: set by the paragraph loop once it knows whether a page
+            // break follows this drawing's run.
+            host_break_after: false,
         })
     } else {
         None
@@ -8166,6 +8187,7 @@ fn parse_vml_pict(
             vert_overflow: None,
             compat_line_spacing: false,
             vector_shapes: Vec::new(),
+            host_break_after: false,
         });
         let placeholder = Some(Image {
             paragraph_space_before: 0.0,

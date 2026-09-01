@@ -10879,6 +10879,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             .copied()
                             .unwrap_or(0)
                     };
+                    // S1270 NOT APPLIED HERE — see `TextBox::host_break_after`.
+                    // Moving the box back a page on that flag alone is WRONG:
+                    // the anchor's recorded y is the new page's TOP, so the box
+                    // lands at y=71.0 over the previous page's own content
+                    // (legal__02f84965dccfe4db p4: 140 box glyphs at y=79.6..160.6
+                    // OVERLAPPING 26 body elements, and the page count stays 11
+                    // because the body still breaks where it did). The page and
+                    // the y have to be corrected together, and the way to get
+                    // both is to make the inline drawing RESERVE ITS HEIGHT in
+                    // the line — then the cursor advances past the box before the
+                    // break fires and everything follows. See the ship note.
+                    let _ = text_box.host_break_after;
                     if std::env::var("OXI_DEBUG_TB").is_ok() {
                         let (rx, ry) =
                             self.resolve_textbox_position(text_box, page, &block_y_positions, &block_col_x);
