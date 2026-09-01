@@ -82,12 +82,26 @@ def engine_paras(dump: dict) -> dict[int, list]:
             paras = content.get("paragraphs")
             if not paras:
                 continue
+            # ★A turned shape's lines run along an axis the dump does not turn:
+            # the engine answers in the shape's own frame while `BoundLeft` is
+            # slide space, so comparing them measures the rotation. d04 and d21
+            # both put their worst offsets on s34, whose 'HIGH VALUE 1' sits at
+            # +90 -- the same shape the editor sweep skips, for the same reason.
+            if sh.get("rotation"):
+                continue
             rows = []
             for p in paras:
                 text = "".join(r.get("text", "") for r in p.get("runs", []))
                 rows.append((len(p.get("line_x_offsets") or []),
                              p.get("line_x_offsets") or [], text))
-            shapes.append({"x": sh["x"], "y": sh["y"], "w": sh["w"], "paras": rows})
+            # ★The dump's line offsets are measured from the TEXT AREA, while
+            # PowerPoint's `BoundLeft - Left` is measured from the SHAPE. The
+            # difference is the left inset, and it showed itself: deck 21's
+            # median came back exactly +7.20pt. A per-deck median hides it, but
+            # the SPREAD does not -- a deck mixing shapes at 0 and at 7.2
+            # reported hundreds of lines "over 3pt" that were all this.
+            shapes.append({"x": sh["x"], "y": sh["y"], "w": sh["w"],
+                           "l_ins": sh.get("l_ins") or 0.0, "paras": rows})
         out[si] = shapes
     return out
 
@@ -101,6 +115,10 @@ def com_shapes(shape, acc: list) -> None:
         return
     try:
         if not shape.HasTextFrame or not shape.TextFrame.HasText:
+            return
+        # Skipped on BOTH sides, or a shape the engine side drops reads as
+        # "unmatched" -- a coverage hole dressed up as a mismatch.
+        if abs(shape.Rotation) > 1e-6:
             return
     except Exception:
         return
@@ -143,6 +161,8 @@ def audit(doc: int) -> dict | None:
     app = win32com.client.Dispatch("PowerPoint.Application")
     got = {"paras": 0, "same": 0, "diff": 0, "shapes": 0, "unmatched": 0}
     worst: list = []
+    offs: list[float] = []
+    far: list = []
     try:
         pres = app.Presentations.Open(str(src.resolve()), WithWindow=False)
         try:
@@ -165,6 +185,22 @@ def audit(doc: int) -> dict | None:
                         got["paras"] += 1
                         if cn == en:
                             got["same"] += 1
+                            # Where PowerPoint put the line's left edge against
+                            # where the engine put it.
+                            #
+                            # ★`BoundLeft` reads as a PEN position, not an ink
+                            # one: the median of this difference comes back
+                            # -0.00pt on d34 and +0.00pt on d48, which a left
+                            # side bearing would not do. Measured, not assumed
+                            # -- the name says "Bound", so the median is
+                            # reported every run as the check on that reading.
+                            # The SPREAD is the signal either way, since a
+                            # constant bias would cancel out of it.
+                            for a, b in zip(cx, ex):
+                                d = a - (b + m["l_ins"])
+                                offs.append(d)
+                                if abs(d) > 3.0:
+                                    far.append((si, round(d, 2), ctext[:40]))
                         else:
                             got["diff"] += 1
                             worst.append((si, cn, en, ctext[:44]))
@@ -179,6 +215,17 @@ def audit(doc: int) -> dict | None:
           f"({got['unmatched']} unmatched)", flush=True)
     for si, cn, en, t in worst[:6]:
         print(f"      s{si:<3} PowerPoint {cn} lines, engine {en}  {t!r}", flush=True)
+    if offs:
+        srt = sorted(offs)
+        med = srt[len(srt) // 2]
+        spread = sorted(abs(v - med) for v in offs)
+        got["lines"] = len(offs)
+        got["p95"] = spread[int(0.95 * (len(spread) - 1))]
+        print(f"      line left: median {med:+.2f}pt (0 = BoundLeft is a pen), "
+              f"spread |x-median| p50 {spread[len(spread) // 2]:.2f}pt "
+              f"p95 {got['p95']:.2f}pt, {len(far)} over 3pt", flush=True)
+        for si, d, t in sorted(far, key=lambda r: -abs(r[1]))[:4]:
+            print(f"        s{si:<3} {d:+7.2f}pt  {t!r}", flush=True)
     return got
 
 
