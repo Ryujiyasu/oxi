@@ -532,6 +532,63 @@ impl<'a> WorkbookHost<'a> {
             Some(now) => oxicells_core::formula::evaluate_workbook_formulas_at(self.workbook, now),
             None => oxicells_core::formula::evaluate_workbook_formulas(self.workbook),
         }
+        self.wrote = false;
+    }
+
+    /// Work the book out, if an answer is about to be given from a formula
+    /// that has not been worked out since the last write.
+    ///
+    /// Excel settles a formula the moment anything it reads changes, so a
+    /// macro that writes `=A1*2` and then asks that cell for its value gets
+    /// the answer. This build works the whole book out in one pass, which is
+    /// far too much to do after every write — so it does it here instead, and
+    /// only when the cells being read actually hold a formula. A macro that
+    /// only writes pays nothing; one that writes and then reads pays a single
+    /// pass for the round, however many cells it wrote.
+    ///
+    /// A macro that turned calculation off is taken at its word, the same way
+    /// the pass at the end of the run takes it.
+    fn settle(&mut self, range: CellRange) {
+        if !self.wrote || self.calculation != -4105 || !self.holds_formula(range) {
+            return;
+        }
+        self.recalculate();
+    }
+
+    /// The same, for whatever cells a set of arguments names — what
+    /// `WorksheetFunction.Sum(Range("A1:A4"))` is about to add up.
+    fn settle_arguments(&mut self, args: &[Value]) {
+        for value in args {
+            let Value::Object(object) = value else {
+                continue;
+            };
+            if let Some(range) = self.range(object) {
+                self.settle(range);
+            } else if let Some(blocks) = self.blocks(object) {
+                for block in blocks.to_vec() {
+                    self.settle(block);
+                }
+            }
+        }
+    }
+
+    /// Whether any cell of `range` holds a formula. Only the rows and cells
+    /// that exist are looked at, so an empty sheet costs nothing.
+    fn holds_formula(&self, range: CellRange) -> bool {
+        let Some(sheet) = self.workbook.sheets.get(range.sheet) else {
+            return false;
+        };
+        sheet
+            .rows
+            .iter()
+            .filter(|row| row.index >= range.start_row && row.index <= range.end_row)
+            .any(|row| {
+                row.cells.iter().any(|cell| {
+                    cell.formula.is_some()
+                        && cell.col >= range.start_column
+                        && cell.col <= range.end_column
+                })
+            })
     }
 
     /// The blocks a many-block range is made of.
@@ -2784,6 +2841,11 @@ impl<'a> WorkbookHost<'a> {
                 "WorksheetFunction.{name} expects at least one argument"
             ));
         }
+        // What it is about to work over may be a formula the macro has only
+        // just written, and Excel would have settled that before answering.
+        // This sits at the one door every function comes through, native and
+        // engine-carried alike.
+        self.settle_arguments(args);
         if name.eq_ignore_ascii_case("vlookup") {
             return self.worksheet_lookup(name, args, LookupOrientation::Vertical);
         }
@@ -6285,6 +6347,7 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         };
         if name.eq_ignore_ascii_case("value") || name.eq_ignore_ascii_case("value2") {
+            self.settle(range);
             return self.range_value(range).map(Some);
         }
         if name.eq_ignore_ascii_case("formula") || name.eq_ignore_ascii_case("formula2") {
@@ -6429,6 +6492,7 @@ impl Host for WorkbookHost<'_> {
             return self.range_row_height(range).map(Some);
         }
         if name.eq_ignore_ascii_case("text") {
+            self.settle(range);
             return Ok(Some(self.range_text(range)));
         }
         if name.eq_ignore_ascii_case("hidden") {
@@ -16053,12 +16117,12 @@ End Sub
         assert_eq!(value_at(2, 1).as_deref(), Some("12"));
     }
 
-    /// A macro can ask for the formulas to be worked out.
+    /// A macro can ask for the formulas to be worked out, and does not have to.
     ///
-    /// Until it asks, a formula this build has just been given has no answer
-    /// yet — which is why `Calculate` exists here at all. Excel works them out
-    /// after every change; this one rebuilds the whole dependency graph each
-    /// time, so it waits to be told.
+    /// A formula answers as soon as it is asked, the way Excel's does — asked
+    /// of Excel, a macro that writes `=A1*2` and reads that cell on the next
+    /// line gets the answer, not a blank. `Calculate` still works, and after
+    /// one there is nothing left for a read to settle.
     #[test]
     fn vba_works_out_the_formulas_when_it_is_asked_to() {
         let mut workbook = workbook();
@@ -16082,7 +16146,7 @@ End Sub
             execute_with_host(&module, "Worked", vec![], &mut host).unwrap()
         };
 
-        assert_eq!(result, Value::String("[]10|12|100|57".to_string()));
+        assert_eq!(result, Value::String("[10]10|12|100|57".to_string()));
     }
 
     /// A many-block range answers for all its blocks, or for the first alone.
@@ -16991,4 +17055,101 @@ End Sub
         let refused = execute_with_host(&module, "Act", vec![], &mut host);
         assert!(refused.is_err(), "the cell before A2 is off the sheet");
     }
+
+    /// A formula answers as soon as it is asked, not only once the macro is
+    /// over. Measured in Excel with A1=10, A2="text", A3="" and A4 given
+    /// `=A1*2`: A4 reads 20 straight away, and the functions that walk A1:A4
+    /// see it — Sum 30, Count 2, CountA 3.
+    #[test]
+    fn vba_reads_a_formula_it_has_only_just_written() {
+        let mut book = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Value = \"text\"\n\
+               Range(\"A3\").Value = \"\"\n\
+               Range(\"A4\").Formula = \"=A1*2\"\n\
+               Debug.Print Application.WorksheetFunction.Sum(Range(\"A1:A4\"))\n\
+               Debug.Print Range(\"A4\").Value\n\
+               Debug.Print Range(\"A4\").Text\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        // The aggregation is asked FIRST, before any read has had a chance to
+        // settle the book — otherwise it would pass whether it settles or not.
+        assert_eq!(
+            host.take_debug_output(),
+            vec!["30".to_string(), "20".to_string(), "20".to_string()]
+        );
+
+        // And the counts, each on its own run for the same reason.
+        for (asked, answer) in [
+            ("Count(Range(\"A1:A4\"))", "2"),
+            ("CountA(Range(\"A1:A4\"))", "3"),
+        ] {
+            let mut fresh = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Act()\n\
+                   Range(\"A1\").Value = 10\n\
+                   Range(\"A2\").Value = \"text\"\n\
+                   Range(\"A3\").Value = \"\"\n\
+                   Range(\"A4\").Formula = \"=A1*2\"\n\
+                   Debug.Print Application.WorksheetFunction.{asked}\n\
+                 End Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut fresh, 0).unwrap();
+            execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+            assert_eq!(
+                host.take_debug_output(),
+                vec![answer.to_string()],
+                "for {asked}"
+            );
+        }
+    }
+
+    /// Reading a cell that holds no formula settles nothing, and a macro that
+    /// turned calculation off is taken at its word — the same word the pass at
+    /// the end of the run takes.
+    #[test]
+    fn vba_settles_only_what_it_has_to() {
+        let mut first = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Application.Calculation = xlCalculationManual\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Formula = \"=A1*2\"\n\
+               Debug.Print \"[\" & Range(\"A2\").Value & \"]\"\n\
+               Application.Calculation = xlCalculationAutomatic\n\
+               Debug.Print Range(\"A2\").Value\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut first, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+
+        assert_eq!(
+            host.take_debug_output(),
+            vec!["[]".to_string(), "20".to_string()]
+        );
+
+        // A plain value read leaves the writes unincorporated, so the pass at
+        // the end of the run still has something to do.
+        let mut second = workbook();
+        let module = parse_module(
+            "Public Sub Act()\n\
+               Range(\"A1\").Value = 10\n\
+               Range(\"A2\").Formula = \"=A1*2\"\n\
+               Debug.Print Range(\"A1\").Value\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut second, 0).unwrap();
+        execute_with_host(&module, "Act", vec![], &mut host).unwrap();
+        assert!(host.wrote, "reading A1 has no formula to settle");
+    }
+
 }
