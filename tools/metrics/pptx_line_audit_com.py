@@ -93,7 +93,8 @@ def engine_paras(dump: dict) -> dict[int, list]:
             for p in paras:
                 text = "".join(r.get("text", "") for r in p.get("runs", []))
                 rows.append((len(p.get("line_x_offsets") or []),
-                             p.get("line_x_offsets") or [], text))
+                             p.get("line_x_offsets") or [], text,
+                             p.get("line_baselines") or []))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -141,7 +142,9 @@ def com_shapes(shape, acc: list) -> None:
             rows.append((n,
                          [round(para.Lines(j).BoundLeft - shape.Left, 2)
                           for j in range(1, n + 1)],
-                         para.Text.rstrip("\r")))
+                         para.Text.rstrip("\r"),
+                         [round(para.Lines(j).BoundTop, 2)
+                          for j in range(1, n + 1)]))
         acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width, "paras": rows})
     except Exception as e:
         # Loud, not silent: a shape this cannot read is a hole in the audit's
@@ -164,10 +167,14 @@ def audit(doc: int) -> dict | None:
         return None
 
     app = win32com.client.Dispatch("PowerPoint.Application")
-    got = {"paras": 0, "same": 0, "diff": 0, "shapes": 0, "unmatched": 0}
+    got = {"paras": 0, "same": 0, "diff": 0, "shapes": 0, "unmatched": 0,
+           "para_count": 0}
     worst: list = []
     offs: list[float] = []
     far: list = []
+    vadv: list[float] = []
+    vfar: list = []
+    pfar: list = []
     try:
         pres = app.Presentations.Open(str(src.resolve()), WithWindow=False)
         try:
@@ -197,7 +204,32 @@ def audit(doc: int) -> dict | None:
                     if m is None:
                         got["unmatched"] += 1
                         continue
-                    for (cn, cx, ctext), (en, ex, etext) in zip(c["paras"], m["paras"]):
+                    # ★Two paragraph lists of different LENGTH must not be
+                    # zipped. Deck 47 s2 has 3 paragraphs in PowerPoint and 4 in
+                    # the engine, so from the first mismatch on, every
+                    # comparison was between unrelated paragraphs -- and the
+                    # deck's 6pt `spcBef` came out as a phantom "+6.00pt line
+                    # advance error" on 39 lines. The count disagreement is the
+                    # real finding; it is reported as itself.
+                    # ★A TRAILING EMPTY paragraph is in the file and in the
+                    # engine, but `TextRange.Paragraphs()` does not enumerate
+                    # it. Deck 47 s2 really does hold four `<a:p>` with the
+                    # last one empty; COM says three. Dropping it here is
+                    # normalising a representational difference, not hiding a
+                    # defect -- the engine is right to keep it, and it is what
+                    # made twelve shapes look mismatched.
+                    mine_paras = m["paras"]
+                    if (len(mine_paras) == len(c["paras"]) + 1
+                            and not mine_paras[-1][2].strip()):
+                        mine_paras = mine_paras[:-1]
+                    m = dict(m, paras=mine_paras)
+                    if len(c["paras"]) != len(m["paras"]):
+                        got["para_count"] += 1
+                        pfar.append((si, len(c["paras"]), len(m["paras"]),
+                                     c["paras"][0][2][:38] if c["paras"] else ""))
+                        continue
+                    for (cn, cx, ctext, cy), (en, ex, etext, ey) in zip(
+                            c["paras"], m["paras"]):
                         got["paras"] += 1
                         if cn == en:
                             got["same"] += 1
@@ -214,6 +246,18 @@ def audit(doc: int) -> dict | None:
                             # constant bias would cancel out of it.
                             # PowerPoint's absolute line left, against the
                             # engine's own text-area origin plus its offset.
+                            # ★The line-to-line ADVANCE, which is what
+                            # accumulates. `BoundTop` is an ink top and the
+                            # engine's is a baseline, so they differ by an
+                            # ascent -- a per-face constant that cancels out of
+                            # consecutive differences. Deck 47 is the specimen:
+                            # its text doubles vertically down a block, which no
+                            # horizontal number can see.
+                            for k in range(1, min(len(cy), len(ey))):
+                                step = (cy[k] - cy[k - 1]) - (ey[k] - ey[k - 1])
+                                vadv.append(step)
+                                if abs(step) > 0.5:
+                                    vfar.append((si, round(step, 2), ctext[:38]))
                             for a, b in zip(cx, ex):
                                 d = (a + c["x"]) - (m["text_left"] + b)
                                 offs.append(d)
@@ -243,6 +287,20 @@ def audit(doc: int) -> dict | None:
               f"spread |x-median| p50 {spread[len(spread) // 2]:.2f}pt "
               f"p95 {got['p95']:.2f}pt, {len(far)} over 3pt", flush=True)
         for si, d, t in sorted(far, key=lambda r: -abs(r[1]))[:4]:
+            print(f"        s{si:<3} {d:+7.2f}pt  {t!r}", flush=True)
+    if got["para_count"]:
+        print(f"      shapes whose PARAGRAPH COUNT disagrees: {got['para_count']} "
+              f"(not compared further -- the lists do not line up)", flush=True)
+        for si, cn, en, txt in pfar[:4]:
+            print(f"        s{si:<3} PowerPoint {cn} paragraphs, engine {en}  {txt!r}",
+                  flush=True)
+    if vadv:
+        srt = sorted(abs(v) for v in vadv)
+        got["vadv_p95"] = srt[int(0.95 * (len(srt) - 1))]
+        print(f"      line advance: {len(vadv)} steps, |err| p50 "
+              f"{srt[len(srt) // 2]:.2f}pt p95 {got['vadv_p95']:.2f}pt, "
+              f"{len(vfar)} over 0.5pt", flush=True)
+        for si, d, t in sorted(vfar, key=lambda r: -abs(r[1]))[:4]:
             print(f"        s{si:<3} {d:+7.2f}pt  {t!r}", flush=True)
     return got
 
