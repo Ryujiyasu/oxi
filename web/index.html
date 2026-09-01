@@ -2517,6 +2517,11 @@ function formatVbaExecution(execution) {
     if (execution.debug_output?.length) {
         sections.push(`Debug.Print:\n${execution.debug_output.join('\n')}`);
     }
+    // Excel leaves the status bar showing whatever the macro last wrote, so a
+    // macro that forgot to hand it back still has its last word to show.
+    if (execution.status_bar !== null && execution.status_bar !== undefined) {
+        sections.push(`StatusBar:\n${execution.status_bar}`);
+    }
     sections.push(result);
     return sections.join('\n\n');
 }

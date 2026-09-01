@@ -347,6 +347,10 @@ struct WorkbookHost<'a> {
     enable_events: bool,
     display_alerts: bool,
     calculation: i64,
+    /// What a macro has written across the bottom of the window, while it is
+    /// the macro's to write. Nothing here means the bar is Excel's own again,
+    /// which is what it answers `False` to say.
+    status_bar: Option<String>,
     last_find: Option<FindState>,
     objects: Vec<HostObject>,
     /// Whether anything was written to a cell. Excel works the formulas out
@@ -397,6 +401,7 @@ impl<'a> WorkbookHost<'a> {
             enable_events: true,
             display_alerts: true,
             calculation: -4105,
+            status_bar: None,
             last_find: None,
             objects: Vec::new(),
             wrote: false,
@@ -6047,6 +6052,14 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("calculation") {
                 return Ok(Some(Value::Integer(self.calculation)));
             }
+            if name.eq_ignore_ascii_case("statusbar") {
+                // While the bar is Excel's own it answers False, which is how
+                // a macro asks whether anything has taken it over.
+                return Ok(Some(match &self.status_bar {
+                    Some(shown) => Value::String(shown.clone()),
+                    None => Value::Boolean(false),
+                }));
+            }
             if name.eq_ignore_ascii_case("cutcopymode") {
                 // 1 is xlCut, 2 is xlCopy, and nothing held answers 0 — which
                 // is False, and is how a macro asks whether anything is.
@@ -6582,6 +6595,10 @@ impl Host for WorkbookHost<'_> {
                 self.calculation = application_calculation(&value)?;
                 return Ok(true);
             }
+            if name.eq_ignore_ascii_case("statusbar") {
+                self.status_bar = status_bar_text(&value)?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         if let Some((range, selection)) = self.range_borders(receiver) {
@@ -7000,6 +7017,45 @@ fn style_boolean(value: &Value, property: &str) -> Result<bool, String> {
         Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
         _ => Err(format!("{property} must be Boolean")),
     }
+}
+
+/// How many characters the status bar holds. A 256th is refused.
+const STATUS_BAR_LIMIT: usize = 255;
+
+/// What the status bar is left holding once a macro has written `value` to it,
+/// where nothing means Excel has it back.
+///
+/// Asked of Excel from VBA itself: the bar starts out Excel's own and answers
+/// `False` while it is. A string takes it over. An empty string, `Empty` and
+/// `Null` all hand it back.
+///
+/// Anything else is shown the way Excel writes a value as text — `42`, `3.5`,
+/// `1E+20`, and for a Boolean the word `TRUE` or `FALSE`. Which makes `False`
+/// the trap: every guide ends a macro with `Application.StatusBar = False` to
+/// restore the default bar, and in Excel 16 that does not restore it, it
+/// leaves the word FALSE sitting across the bottom of the window. The Boolean
+/// is reaching Excel intact — the same assignment into a cell stores a
+/// Boolean, so this is Excel's own answer and not a bridge losing the type.
+/// The way to give the bar back is an empty string.
+///
+/// Only text can go on it: an `Error` variant is refused, and so is anything
+/// past 255 characters — counted in characters, not bytes, so 255 kana fit.
+/// A refusal leaves what was already there.
+fn status_bar_text(value: &Value) -> Result<Option<String>, String> {
+    let shown = match value {
+        Value::Empty | Value::Missing | Value::Null => return Ok(None),
+        Value::String(written) if written.is_empty() => return Ok(None),
+        Value::String(written) => written.clone(),
+        Value::Boolean(_) | Value::Integer(_) | Value::Double(_) => shown_text(value, None),
+        _ => return Err("Application.StatusBar can only be shown text".to_string()),
+    };
+    let width = shown.chars().count();
+    if width > STATUS_BAR_LIMIT {
+        return Err(format!(
+            "Application.StatusBar holds {STATUS_BAR_LIMIT} characters, and was given {width}"
+        ));
+    }
+    Ok(Some(shown))
 }
 
 fn application_calculation(value: &Value) -> Result<i64, String> {
@@ -9234,6 +9290,11 @@ struct RunResult {
     result: OutputValue,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
+    /// What the macro left across the status bar, if it wrote one. Excel does
+    /// not clear it when the macro ends — a macro that forgets to give the bar
+    /// back leaves its last word showing — so the page is told the last thing
+    /// written rather than nothing.
+    status_bar: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -9340,12 +9401,14 @@ pub fn run_spreadsheet_vba(
     }
     let debug_output = host.take_debug_output();
     let messages = host.take_messages();
+    let status_bar = host.status_bar.take();
     drop(host);
     serde_wasm_bindgen::to_value(&RunResult {
         workbook,
         result: result.into(),
         debug_output,
         messages,
+        status_bar,
     })
     .map_err(|error| JsError::new(&error.to_string()))
 }
@@ -16386,5 +16449,150 @@ End Sub
                 "=D2*10|=Sheet1!G9|=Sheet2!D2|=SUM(Sheet2!D2:E3)|=Sheet2!D2|=#REF!|42".to_string()
             )
         );
+    }
+
+    /// Asked of Excel from VBA itself: the bar answers `False` until a macro
+    /// writes to it, holds whatever string it is given, and is handed back by
+    /// an empty string, `Empty` or `Null` — but NOT by `False`, which writes
+    /// the word FALSE across it.
+    #[test]
+    fn vba_writes_across_the_status_bar_and_hands_it_back() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Report()\n\
+               Debug.Print Application.StatusBar\n\
+               Application.StatusBar = \"Working\"\n\
+               Debug.Print Application.StatusBar\n\
+               Application.StatusBar = \"\"\n\
+               Debug.Print Application.StatusBar\n\
+               Application.StatusBar = \"Working\"\n\
+               Application.StatusBar = Empty\n\
+               Debug.Print Application.StatusBar\n\
+               Application.StatusBar = \"Working\"\n\
+               Application.StatusBar = Null\n\
+               Debug.Print Application.StatusBar\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Report", vec![], &mut host).unwrap();
+
+        assert_eq!(host.status_bar, None);
+        assert_eq!(
+            host.take_debug_output(),
+            vec![
+                "False".to_string(),
+                "Working".to_string(),
+                "False".to_string(),
+                "False".to_string(),
+                "False".to_string(),
+            ]
+        );
+    }
+
+    /// The trap every guide walks into. `Application.StatusBar = False` is the
+    /// documented way to restore the default bar, and Excel 16 does not
+    /// restore it — it shows the word FALSE, and leaves it showing.
+    #[test]
+    fn vba_status_bar_false_writes_the_word_rather_than_giving_the_bar_back() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Report()\n\
+               Application.StatusBar = \"Working\"\n\
+               Application.StatusBar = False\n\
+               Debug.Print Application.StatusBar\n\
+               Application.StatusBar = True\n\
+               Debug.Print Application.StatusBar\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Report", vec![], &mut host).unwrap();
+
+        assert_eq!(host.status_bar.as_deref(), Some("TRUE"));
+        assert_eq!(
+            host.take_debug_output(),
+            vec!["FALSE".to_string(), "TRUE".to_string()]
+        );
+    }
+
+    /// A number reaches the bar written the way Excel writes a value as text,
+    /// which is the same question a cell asks — so the bar asks it of the same
+    /// renderer rather than growing a second one to drift against.
+    ///
+    /// Which means the bar inherits that renderer's reach. Excel was measured
+    /// on five more numbers this does not ask for, because `General` does not
+    /// yet cap a value at fifteen significant digits or turn to scientific:
+    /// `1/3` is `0.333333333333333`, `0.1 + 0.2` is `0.3`, `1E+20` is `1E+20`,
+    /// `-1E+20` is `-1E+20`, and `1234567890123456` is `1234567890123460`.
+    /// Those belong to the renderer, and to a cell just as much as to the bar.
+    #[test]
+    fn vba_status_bar_shows_a_number_the_way_excel_writes_one() {
+        let measured = [
+            ("0", "0"),
+            ("42", "42"),
+            ("-0.5", "-0.5"),
+            ("3.5", "3.5"),
+            ("100000", "100000"),
+            ("1E+15", "1000000000000000"),
+            ("1E+16", "10000000000000000"),
+            ("1E+19", "10000000000000000000"),
+            ("0.0000001", "0.0000001"),
+        ];
+        for (number, shown) in measured {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Report()\n  Application.StatusBar = {number}\nEnd Sub\n"
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Report", vec![], &mut host).unwrap();
+            assert_eq!(host.status_bar.as_deref(), Some(shown), "for {number}");
+        }
+    }
+
+    /// 255 characters fit and a 256th is refused, counted in characters rather
+    /// than bytes — so 255 kana fit as well. What was already on the bar stays.
+    #[test]
+    fn vba_status_bar_holds_255_characters() {
+        for filler in ['z', 'あ'] {
+            let mut workbook = workbook();
+            let module = parse_module(&format!(
+                "Public Sub Report()\n\
+                   Application.StatusBar = \"{}\"\n\
+                   Debug.Print Len(Application.StatusBar)\n\
+                   Application.StatusBar = \"{}\"\n\
+                 End Sub\n",
+                filler.to_string().repeat(255),
+                filler.to_string().repeat(256),
+            ))
+            .unwrap();
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Report", vec![], &mut host)
+                .expect_err("a 256th character is refused");
+            assert_eq!(
+                host.status_bar.as_deref(),
+                Some(filler.to_string().repeat(255).as_str())
+            );
+            assert_eq!(host.take_debug_output(), vec!["255".to_string()]);
+        }
+    }
+
+    /// Only text goes on the bar. An `Error` variant is refused and what was
+    /// there stays.
+    #[test]
+    fn vba_status_bar_refuses_an_error_value() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Sub Report()\n\
+               Application.StatusBar = \"Working\"\n\
+               Application.StatusBar = CVErr(2042)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+        execute_with_host(&module, "Report", vec![], &mut host)
+            .expect_err("an Error variant cannot be shown");
+        assert_eq!(host.status_bar.as_deref(), Some("Working"));
     }
 }
