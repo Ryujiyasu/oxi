@@ -338,7 +338,9 @@ def main() -> None:
                       f"{d['totals']['matched']:5} matched  "
                       f"{d['totals']['unsure']:4} unsure  "
                       f"worst dx {d['worst']:7.3f}pt  "
-                      f"dy {d.get('worst_dy', 0.0):7.3f}pt   (stored)", flush=True)
+                      f"dy {d.get('worst_dy', 0.0):7.3f}pt  "
+                      f"line x |mean| {d.get('dx_mean', 0.0):6.3f}pt   (stored)",
+                      flush=True)
                 continue
             lines, turned, n_slides = [], 0, None
             for attempt in (1, 2):
@@ -378,7 +380,8 @@ def main() -> None:
                 print(f"{stem:6} no truth PDF: {str(e)[:50]}", flush=True)
                 continue
             worst, matched, unsure = 0.0, 0, 0
-            dys = []
+            dys: list[float] = []
+            dxs: list[float] = []
             for line in lines:
                 chars = pages.get(line["slide"])
                 if not chars:
@@ -398,6 +401,15 @@ def main() -> None:
                     unsure += 1
                     continue
                 dx = horizontal_offset(line, run)
+                # ★Every line's offset is kept, not only the ones past
+                # POSITION_NEAR. An ALIGNMENT change moves a centred line by a
+                # few tenths of a point, and an instrument that only reports
+                # past 2.0pt answers "no change" to a change it cannot see --
+                # which is not the same answer. `dx_mean` is what gates a
+                # width: how far, on average, a line starts from where
+                # PowerPoint started it.
+                if dx is not None:
+                    dxs.append(abs(dx))
                 if dx is not None and abs(dx) > POSITION_NEAR:
                     misplaced.append({
                         "deck": stem, "slide": line["slide"],
@@ -427,11 +439,15 @@ def main() -> None:
             off_here = [m for m in misplaced if m["deck"] == stem]
             totals["misplaced"] += len(off_here)
             worst_dy = max(dys) if dys else 0.0
+            dx_mean = (sum(dxs) / len(dxs)) if dxs else 0.0
+            dx_over = sum(1 for v in dxs if v > 0.5)
             mine = [o for o in offenders if o["deck"] == stem]
             with store.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({
                     "deck": stem, "worst": round(worst, 3),
                     "worst_dy": round(worst_dy, 3),
+                    "dx_mean": round(dx_mean, 4), "dx_over": dx_over,
+                    "dx_n": len(dxs),
                     "totals": {"lines": len(lines), "matched": matched,
                                "unsure": unsure, "misplaced": len(off_here)},
                     "offenders": mine,
@@ -441,7 +457,8 @@ def main() -> None:
             print(f"{stem:6} {len(lines):5} lines  {matched:5} matched  "
                   f"{unsure:4} unsure  {len(off_here):3} misplaced  "
                   f"{turned:3} turned  "
-                  f"worst dx {worst:7.3f}pt  dy {worst_dy:7.3f}pt", flush=True)
+                  f"worst dx {worst:7.3f}pt  dy {worst_dy:7.3f}pt  "
+                  f"line x |mean| {dx_mean:6.3f}pt ({dx_over} over 0.5)", flush=True)
         if state["browser"] is not None:
             # A browser that already died takes the close with it; the results
             # are in hand by now, so a shutdown failure must not lose them.
