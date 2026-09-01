@@ -5769,6 +5769,14 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             }
             let parsed = value_date_serial(&args[0]);
             if name == "isdate" {
+                // Asked of Excel, `IsDate(37623)` is False and
+                // `IsDate(#1/2/2003#)` is True -- and those two cannot both
+                // hold here, because both are a Double once this runtime has
+                // them and it has no Date of its own to tell them apart.
+                // Answering True to anything that converts keeps the common
+                // case right: a macro asks `IsDate(Range("A1").Value)` about a
+                // cell holding a date, which Excel hands over AS a Date and
+                // which arrives here as a serial.
                 return Ok(Value::Boolean(parsed.is_ok()));
             }
             let serial = parsed.map_err(mismatch)?;
@@ -6944,7 +6952,21 @@ fn literal_value(literal: &Literal) -> Value {
             .parse::<i64>()
             .map(Value::Integer)
             .unwrap_or_else(|_| Value::Double(digits.parse().unwrap_or(f64::INFINITY))),
-        Literal::Str(value) | Literal::Date(value) => Value::String(value.clone()),
+        Literal::Str(value) => Value::String(value.clone()),
+        // A date written between hashes is a MOMENT, and VBA works it out
+        // where it is written rather than where it is run: `#1/2/2003#` is
+        // always the second of January, month first, whatever the machine's
+        // own order is. Asked of Excel, it comes back as 37623 and
+        // `#12:00:00 PM#` as 0.5, so both are serials and both can be added
+        // to, converted, and written into a cell -- none of which they could
+        // be while they were text.
+        //
+        // A literal the lexer accepted but this cannot read stays as the text
+        // it was written as, which is what it did before.
+        Literal::Date(value) => match parse_date_text(value) {
+            Ok(serial) => Value::Double(serial),
+            Err(_) => Value::String(value.clone()),
+        },
         Literal::Bool(value) => Value::Boolean(*value),
         Literal::Empty => Value::Empty,
         Literal::Nothing => Value::Nothing,
@@ -10512,6 +10534,31 @@ mod tests {
         assert_eq!(
             value,
             Value::String("0.3|1E+15|-7|42|0.333333333333333".to_string())
+        );
+    }
+
+    /// A date written between hashes is a moment, not the text it was written
+    /// as — so it can be converted, added to, and handed on.
+    ///
+    /// Measured in Excel: `#1/2/2003#` is 37623 and `#12:00:00 PM#` is 0.5,
+    /// and the month comes FIRST however the machine writes dates, because VBA
+    /// reads the literal where it is written rather than where it is run.
+    #[test]
+    fn reads_a_date_literal_as_the_moment_it_names() {
+        let value = run(
+            "Public Function Moment() As String\n\
+               Moment = CStr(CDbl(#1/2/2003#)) & \"|\" & CStr(CDbl(#12:00:00 PM#)) & \"|\" \n\
+               Moment = Moment & CStr(CDbl(#1/2/2003# + 1)) & \"|\" & CStr(Year(#1/2/2003#)) & \"|\"\n\
+               Moment = Moment & CStr(Month(#1/2/2003#)) & \"|\" & CStr(Day(#1/2/2003#)) & \"|\"\n\
+               Moment = Moment & CStr(CDbl(#12/31/1999#))\n\
+             End Function\n",
+            "Moment",
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            Value::String("37623|0.5|37624|2003|1|2|36525".to_string())
         );
     }
 }
