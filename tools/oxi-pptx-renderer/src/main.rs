@@ -15357,8 +15357,19 @@ fn layout_paragraph_baselines(
     match &bullet {
         SlideBullet::Char { ch, font } => {
             let marker_family = font.clone().unwrap_or_else(|| family.clone());
-            let marker_w =
-                font_adv::bullet_advance_em(&marker_family, *ch).unwrap_or(0.0) * fs;
+            // The marker moves on the same grid as the text beside it.
+            // It only reaches the layout when it OVERFLOWS its own indent
+            // (`marker_push` takes a max), so this is worth at most one
+            // master unit on one line -- below every instrument here. It is
+            // a consistency fix, not a gain: one law, no site left on the
+            // old model.
+            let marker_w = match font_adv::bullet_advance_em(&marker_family, *ch) {
+                Some(em) if font_adv::mudraw_on() => {
+                    font_adv::mu_advance_pt(em, fs, 0.0)
+                }
+                Some(em) => em * fs,
+                None => 0.0,
+            };
             line0_x_off =
                 oxislides_core::layout::marker_push(line0_x_off, marker_rel, marker_w);
             marker = Some(MarkerInfo {
