@@ -45,8 +45,13 @@ import re, fitz, numpy as np
 def check(path):
     data = open(path, 'rb').read()
     type1     = len(re.findall(rb'/Subtype /Type1', data))
-    composite = len(re.findall(rb'/Subtype /CIDFontType2', data))
-    programs  = len(re.findall(rb'/FontFile2', data))
+    # CIDFontType2/FontFile2 is the TrueType spelling and CIDFontType0/
+    # FontFile3 the CFF one. Counting only the first pair passes vacuously on
+    # a page drawn entirely in CFF — every CJK face macOS ships is CFF — so
+    # the check would have nothing to say about exactly the fonts most likely
+    # to go wrong.
+    composite = len(re.findall(rb'/Subtype /CIDFontType[02][^C]', data))
+    programs  = len(re.findall(rb'/FontFile[23]', data))
 
     ink_rows = 0
     for page in fitz.open(path):
@@ -66,6 +71,12 @@ def check(path):
 program writes glyph numbers with nothing in the file to resolve them: not a
 different rendering, an undefined one. This is an invariant, and
 `every_composite_font_carries_its_font_file` asserts it in the writer's tests.
+
+Count both spellings. A TrueType-backed CID font is `CIDFontType2` with a
+`FontFile2`; a CFF-backed one is `CIDFontType0` with a `FontFile3`, and that is
+what a page drawn in Hiragino or any other CJK face on macOS is made of. A
+check that counts only the TrueType pair reports `0 == 0` on such a page and
+inspects nothing.
 
 **`ink_rows` must not be zero** for a page with text on it, and should be in
 proportion to the lines that page has. This is the check that catches an
