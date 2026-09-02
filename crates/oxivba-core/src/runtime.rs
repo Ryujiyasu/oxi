@@ -33,8 +33,25 @@ pub enum Value {
     Nothing,
     Null,
     Boolean(bool),
+    /// VBA's `Integer`: two bytes, and it OVERFLOWS rather than widening.
+    /// Asked of Excel, `32767 + 1` is error 6, not 32768 as a Long.
+    Int16(i16),
+    /// VBA's `Long`. Named `Integer` since before the smaller one was
+    /// told apart, and left that way so the several hundred places that
+    /// already mean Long keep meaning it.
     Integer(i64),
+    /// VBA's `Byte`, which is unsigned and stops at 255.
+    Byte(u8),
+    /// VBA's `Single`.
+    Single(f32),
     Double(f64),
+    /// VBA's `Currency`, held as ten-thousandths so the four decimal
+    /// places it promises are exact.
+    Currency(i64),
+    /// A moment, held as the OLE serial VBA holds it as. Separate from
+    /// `Double` only so that `VarType` and `TypeName` can tell the truth
+    /// and `IsDate` can tell a date from the number 37623.
+    Date(f64),
     /// A Variant of subtype Error, normally created by `CVErr`.
     Error(i64),
     String(String),
@@ -6178,8 +6195,9 @@ fn date_serial(year: i64, month: i64, day: i64) -> Result<f64, String> {
 
 fn value_date_serial(value: &Value) -> Result<f64, String> {
     let serial = match value {
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) => *value,
+        Value::Date(value) | Value::Double(value) => *value,
+        Value::Int16(_) | Value::Byte(_) | Value::Integer(_) | Value::Single(_)
+        | Value::Currency(_) => number(value)?,
         Value::String(value) => parse_date_text(value)?,
         Value::Empty => 0.0,
         Value::Null => return Err("invalid use of Null".to_string()),
@@ -7269,7 +7287,21 @@ fn key(name: &str) -> String {
 
 fn literal_value(literal: &Literal) -> Value {
     match literal {
-        Literal::Number(value) | Literal::TypedNumber { value, .. } => numeric_literal(*value),
+        // A number written without a type character takes the smallest
+        // whole type that holds it, and anything with a point or an
+        // exponent is a Double. Measured: `1` and `32767` are Integers,
+        // `32768` is a Long, `2147483648` is a Double, and `1E15` is a
+        // Double even though it is a whole number.
+        Literal::Number(value) => written_number(*value),
+        // A type character says the type outright: `1%` Integer, `1&`
+        // Long, `1!` Single, `1#` Double, `1@` Currency.
+        Literal::TypedNumber { value, suffix } => match suffix {
+            '%' => Value::Int16(*value as i16),
+            '&' => Value::Integer(*value as i64),
+            '!' => Value::Single(*value as f32),
+            '@' => Value::Currency((*value * 10_000.0).round_ties_even() as i64),
+            _ => Value::Double(*value),
+        },
         Literal::LargeInteger { digits, .. } => digits
             .parse::<i64>()
             .map(Value::Integer)
@@ -7286,13 +7318,33 @@ fn literal_value(literal: &Literal) -> Value {
         // A literal the lexer accepted but this cannot read stays as the text
         // it was written as, which is what it did before.
         Literal::Date(value) => match parse_date_text(value) {
-            Ok(serial) => Value::Double(serial),
+            Ok(serial) => Value::Date(serial),
             Err(_) => Value::String(value.clone()),
         },
         Literal::Bool(value) => Value::Boolean(*value),
         Literal::Empty => Value::Empty,
         Literal::Nothing => Value::Nothing,
         Literal::Null => Value::Null,
+    }
+}
+
+/// A number as VBA reads it where it is written: the smallest whole type
+/// that holds it, or a Double when it has a point, an exponent, or will
+/// not fit in a Long.
+///
+/// `-32768` is a Long rather than an Integer, and that falls out rather
+/// than being arranged: the minus is an operator applied to `32768`,
+/// which is already past what an Integer holds.
+fn written_number(value: f64) -> Value {
+    if value.fract() != 0.0 || !value.is_finite() {
+        return Value::Double(value);
+    }
+    if (-32_768.0..=32_767.0).contains(&value) {
+        Value::Int16(value as i16)
+    } else if (-2_147_483_648.0..=2_147_483_647.0).contains(&value) {
+        Value::Integer(value as i64)
+    } else {
+        Value::Double(value)
     }
 }
 
@@ -7323,15 +7375,29 @@ fn coerce_declared(value: Value, declared: &str, line: u32) -> Result<Value, Run
             if !narrowed.is_finite() && number.is_finite() {
                 return Err(overflow(declared, line));
             }
-            return Ok(Value::Double(narrowed as f64));
+            return Ok(Value::Single(narrowed));
         }
+        "currency" => {
+            let number = coerce_number(&value, declared, line)?;
+            let scaled = (number * 10_000.0).round_ties_even();
+            if !scaled.is_finite() || scaled.abs() > 9_223_372_036_854_775_000.0 {
+                return Err(overflow(declared, line));
+            }
+            return Ok(Value::Currency(scaled as i64));
+        }
+        "date" => return Ok(Value::Date(coerce_number(&value, declared, line)?)),
         "double" => return Ok(Value::Double(coerce_number(&value, declared, line)?)),
         "boolean" => {
             return Ok(Value::Boolean(match &value {
                 Value::Boolean(value) => *value,
-                Value::String(_) | Value::Integer(_) | Value::Double(_) => {
-                    coerce_number(&value, declared, line)? != 0.0
-                }
+                Value::String(_)
+                | Value::Int16(_)
+                | Value::Byte(_)
+                | Value::Integer(_)
+                | Value::Single(_)
+                | Value::Currency(_)
+                | Value::Date(_)
+                | Value::Double(_) => coerce_number(&value, declared, line)? != 0.0,
                 _ => return Ok(value),
             }))
         }
@@ -7353,7 +7419,11 @@ fn coerce_declared(value: Value, declared: &str, line: u32) -> Result<Value, Run
     if !(low..=high).contains(&number) {
         return Err(overflow(declared, line));
     }
-    Ok(Value::Integer(number as i64))
+    Ok(match declared.to_ascii_lowercase().as_str() {
+        "byte" => Value::Byte(number as u8),
+        "integer" => Value::Int16(number as i16),
+        _ => Value::Integer(number as i64),
+    })
 }
 
 fn coerce_number(value: &Value, declared: &str, line: u32) -> Result<f64, RuntimeError> {
@@ -7380,9 +7450,13 @@ fn overflow(declared: &str, line: u32) -> RuntimeError {
 fn default_value(type_name: &TypeName) -> Value {
     match type_name.name.to_ascii_lowercase().as_str() {
         "boolean" => Value::Boolean(false),
-        "byte" | "integer" | "long" | "longlong" | "longptr" | "currency" => Value::Integer(0),
-        "single" | "double" | "decimal" => Value::Double(0.0),
-        "date" => Value::Double(0.0),
+        "byte" => Value::Byte(0),
+        "integer" => Value::Int16(0),
+        "long" | "longlong" | "longptr" => Value::Integer(0),
+        "currency" => Value::Currency(0),
+        "single" => Value::Single(0.0),
+        "double" | "decimal" => Value::Double(0.0),
+        "date" => Value::Date(0.0),
         "string" => Value::String(String::new()),
         "object"
         | "application"
@@ -7413,8 +7487,13 @@ fn value_type_name(value: &Value) -> String {
         Value::Nothing => "Nothing".to_string(),
         Value::Null => "Null".to_string(),
         Value::Boolean(_) => "Boolean".to_string(),
+        Value::Int16(_) => "Integer".to_string(),
         Value::Integer(_) => "Long".to_string(),
+        Value::Byte(_) => "Byte".to_string(),
+        Value::Single(_) => "Single".to_string(),
         Value::Double(_) => "Double".to_string(),
+        Value::Currency(_) => "Currency".to_string(),
+        Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
         Value::String(_) => "String".to_string(),
         Value::Array(_) => "Variant()".to_string(),
@@ -7429,8 +7508,13 @@ fn value_var_type(value: &Value) -> i64 {
     match value {
         Value::Empty => 0,
         Value::Null => 1,
+        Value::Int16(_) => 2,
         Value::Integer(_) => 3,
+        Value::Single(_) => 4,
         Value::Double(_) => 5,
+        Value::Currency(_) => 6,
+        Value::Date(_) => 7,
+        Value::Byte(_) => 17,
         Value::Error(_) => 10,
         Value::String(_) => 8,
         Value::Object(_) | Value::Nothing => 9,
@@ -7459,8 +7543,13 @@ fn number(value: &Value) -> Result<f64, String> {
     match value {
         Value::Empty | Value::Boolean(false) => Ok(0.0),
         Value::Boolean(true) => Ok(-1.0),
+        Value::Int16(value) => Ok(*value as f64),
         Value::Integer(value) => Ok(*value as f64),
+        Value::Byte(value) => Ok(*value as f64),
+        Value::Single(value) => Ok(*value as f64),
         Value::Double(value) => Ok(*value),
+        Value::Currency(value) => Ok(*value as f64 / 10_000.0),
+        Value::Date(value) => Ok(*value),
         Value::Error(value) => Ok(*value as f64),
         Value::String(value) => value
             .trim()
@@ -7479,8 +7568,13 @@ fn truthy(value: &Value) -> Result<bool, String> {
     match value {
         Value::Empty | Value::Null | Value::Boolean(false) => Ok(false),
         Value::Boolean(true) => Ok(true),
+        Value::Int16(value) => Ok(*value != 0),
         Value::Integer(value) => Ok(*value != 0),
+        Value::Byte(value) => Ok(*value != 0),
+        Value::Single(value) => Ok(*value != 0.0),
         Value::Double(value) => Ok(*value != 0.0),
+        Value::Currency(value) => Ok(*value != 0),
+        Value::Date(value) => Ok(*value != 0.0),
         Value::String(value) if value.is_empty() => Ok(false),
         Value::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
         Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
@@ -7502,10 +7596,17 @@ fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
         return Err("type mismatch using Error value as an operand".to_string());
     }
     match op {
-        UnaryOp::Plus => Ok(numeric_literal(number(&value)?)),
-        UnaryOp::Neg => Ok(numeric_literal(-number(&value)?)),
+        // A sign keeps the type it was put in front of, so `-1` is an
+        // Integer just as `1` is. It can overflow: the one Integer that
+        // has no positive twin is -32768.
+        UnaryOp::Plus => Ok(keep_rank(number(&value)?, &value)?),
+        UnaryOp::Neg => Ok(keep_rank(-number(&value)?, &value)?),
         UnaryOp::Not => match value {
             Value::Boolean(value) => Ok(Value::Boolean(!value)),
+            // Every whole type turns over on its bits, and answers in the
+            // type it was given: `Not 5` is -6.
+            Value::Int16(value) => Ok(Value::Int16(!value)),
+            Value::Byte(value) => Ok(Value::Int16(!(value as i16))),
             Value::Integer(value) => Ok(Value::Integer(!value)),
             // Nothing to turn over: asked of Excel, `Not Null` is Null, where
             // `Not 5` is -6.
@@ -7601,12 +7702,22 @@ fn binary(
                 ));
             }
             Ok(match op {
-                Add => numeric_result(a + b, &lhs, &rhs),
-                Sub => numeric_result(a - b, &lhs, &rhs),
-                Mul => numeric_result(a * b, &lhs, &rhs),
+                Add | Sub | Mul => {
+                    let answer = match op {
+                        Add => a + b,
+                        Sub => a - b,
+                        _ => a * b,
+                    };
+                    arithmetic_result(answer, &lhs, &rhs, op)?
+                }
+                // Division and raising to a power are Double whatever they
+                // are given: asked of Excel, `4 / 2` is a Double and so is
+                // `2 ^ 2`.
                 Div => Value::Double(a / b),
-                IntDiv => Value::Integer((a / b).trunc() as i64),
-                Mod => Value::Integer((a as i64) % (b as i64)),
+                // Integer division and Mod keep an integer type. Both fit in
+                // an Integer only when both sides did.
+                IntDiv => integer_result((a / b).trunc(), &lhs, &rhs)?,
+                Mod => integer_result((a as i64 % b as i64) as f64, &lhs, &rhs)?,
                 Pow => Value::Double(a.powf(b)),
                 _ => unreachable!(),
             })
@@ -7859,6 +7970,146 @@ fn like_fold(value: char, text_compare: bool) -> char {
     }
 }
 
+
+/// A number put back in the type it came out of.
+fn keep_rank(number: f64, was: &Value) -> Result<Value, String> {
+    match was {
+        Value::Date(_) => Ok(Value::Date(number)),
+        _ => match NumRank::of(was) {
+            Some(rank) => rank.hold(number, None).map_err(|(_, why)| why),
+            None => Ok(numeric_literal(number)),
+        },
+    }
+}
+
+/// What `+`, `-` and `*` hand back, and when they refuse.
+///
+/// The result takes the higher of the two ranks and OVERFLOWS rather than
+/// widening — measured against Excel, where `32767 + 1` is error 6 rather than
+/// 32768 as a Long, and an Integer times an Integer that will not fit is error
+/// 6 rather than a Long.
+///
+/// A Date is not on the ladder: it wins against anything that is not a Date,
+/// so `aDate + 1` is a Date, while two Dates give the plain number of days
+/// between them.
+fn arithmetic_result(
+    answer: f64,
+    lhs: &Value,
+    rhs: &Value,
+    _op: BinaryOp,
+) -> Result<Value, (RuntimeErrorKind, String)> {
+    let dates = (
+        matches!(lhs, Value::Date(_)),
+        matches!(rhs, Value::Date(_)),
+    );
+    match dates {
+        (true, true) => return Ok(Value::Double(answer)),
+        (true, _) | (_, true) => return Ok(Value::Date(answer)),
+        _ => {}
+    }
+    match (NumRank::of(lhs), NumRank::of(rhs)) {
+        (Some(left), Some(right)) => left.max(right).hold(answer, None),
+        // A side this ladder does not know — a numeric String, most often —
+        // answers the way it always did.
+        _ => Ok(numeric_literal(answer)),
+    }
+}
+
+/// What `\` and `Mod` hand back: an Integer when both sides were no wider,
+/// and a Long otherwise.
+fn integer_result(
+    answer: f64,
+    lhs: &Value,
+    rhs: &Value,
+) -> Result<Value, (RuntimeErrorKind, String)> {
+    let narrow = |value: &Value| {
+        matches!(NumRank::of(value), Some(NumRank::Byte) | Some(NumRank::Int16))
+    };
+    let rank = if narrow(lhs) && narrow(rhs) {
+        NumRank::Int16
+    } else {
+        NumRank::Long
+    };
+    rank.hold(answer, None)
+}
+
+/// Where each numeric type sits when two of them meet.
+///
+/// Measured against Excel, and it is not simply "widest wins": Currency beats
+/// Double, and a Date beats everything except another Date. Byte, being at the
+/// bottom, is the one type that keeps its own kind rather than widening —
+/// `aByte + aByte` is still a Byte, and 200 + 200 is error 6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NumRank {
+    Byte,
+    Int16,
+    Long,
+    Single,
+    Double,
+    Currency,
+}
+
+impl NumRank {
+    fn of(value: &Value) -> Option<NumRank> {
+        Some(match value {
+            Value::Byte(_) => NumRank::Byte,
+            Value::Int16(_) | Value::Boolean(_) => NumRank::Int16,
+            Value::Integer(_) => NumRank::Long,
+            Value::Single(_) => NumRank::Single,
+            Value::Double(_) => NumRank::Double,
+            Value::Currency(_) => NumRank::Currency,
+            // Empty sits below everything and never lifts the answer: asked of
+            // Excel, `Empty + 1` is an Integer, the same as `1 + 1`.
+            Value::Empty => NumRank::Byte,
+            _ => return None,
+        })
+    }
+
+    /// The value this rank holds, or the overflow VBA raises when it cannot.
+    fn hold(self, number: f64, line: Option<u32>) -> Result<Value, (RuntimeErrorKind, String)> {
+        let overflowed = || {
+            Err((
+                RuntimeErrorKind::Overflow,
+                "overflow".to_string(),
+            ))
+        };
+        let _ = line;
+        Ok(match self {
+            NumRank::Byte | NumRank::Int16 | NumRank::Long => {
+                let whole = number.round_ties_even();
+                let (low, high) = match self {
+                    NumRank::Byte => (0.0, 255.0),
+                    NumRank::Int16 => (-32_768.0, 32_767.0),
+                    _ => (-2_147_483_648.0, 2_147_483_647.0),
+                };
+                if !whole.is_finite() || whole < low || whole > high {
+                    return overflowed();
+                }
+                match self {
+                    NumRank::Byte => Value::Byte(whole as u8),
+                    NumRank::Int16 => Value::Int16(whole as i16),
+                    _ => Value::Integer(whole as i64),
+                }
+            }
+            NumRank::Single => {
+                let narrowed = number as f32;
+                if !narrowed.is_finite() && number.is_finite() {
+                    return overflowed();
+                }
+                Value::Single(narrowed)
+            }
+            NumRank::Double => Value::Double(number),
+            NumRank::Currency => {
+                let scaled = (number * 10_000.0).round_ties_even();
+                if !scaled.is_finite() || scaled.abs() > 9_223_372_036_854_775_000.0 {
+                    return overflowed();
+                }
+                Value::Currency(scaled as i64)
+            }
+        })
+    }
+}
+
 fn numeric_result(value: f64, lhs: &Value, rhs: &Value) -> Value {
     if matches!(lhs, Value::Integer(_)) && matches!(rhs, Value::Integer(_)) && value.fract() == 0.0
     {
@@ -7876,8 +8127,13 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Null => "Null".to_string(),
         Value::Boolean(true) => "True".to_string(),
         Value::Boolean(false) => "False".to_string(),
+        Value::Int16(value) => value.to_string(),
         Value::Integer(value) => value.to_string(),
+        Value::Byte(value) => value.to_string(),
+        Value::Single(value) => vba_number_text(*value as f64),
         Value::Double(value) => vba_number_text(*value),
+        Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
+        Value::Date(value) => vba_number_text(*value),
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
@@ -8430,6 +8686,133 @@ mod tests {
     /// is what separates the rule from the one case: `CByte(-1)` overflows
     /// just as it did before, so "True is -1, and -1 is 255" would have been
     /// the wrong law.
+    /// What a number written in source IS.
+    ///
+    /// Asked of Excel across fifteen shapes. The one that reads oddly is
+    /// `-32768`, which is a Long: the minus is an operator applied to `32768`,
+    /// and that is already past what an Integer holds.
+    #[test]
+    fn a_written_number_takes_the_smallest_type_that_holds_it() {
+        let kind = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n  Ask = CStr(VarType({expression}))\nEnd Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        // 2 Integer, 3 Long, 4 Single, 5 Double, 6 Currency, 7 Date, 17 Byte
+        assert_eq!(kind("1"), "2");
+        assert_eq!(kind("32767"), "2");
+        assert_eq!(kind("32768"), "3");
+        assert_eq!(kind("2147483647"), "3");
+        assert_eq!(kind("2147483648"), "5");
+        assert_eq!(kind("-32768"), "3");
+        assert_eq!(kind("1.5"), "5");
+        // An exponent is a Double even where the number is whole.
+        assert_eq!(kind("1E15"), "5");
+        // A type character says it outright.
+        assert_eq!(kind("1%"), "2");
+        assert_eq!(kind("1&"), "3");
+        assert_eq!(kind("1!"), "4");
+        assert_eq!(kind("1#"), "5");
+        assert_eq!(kind("1@"), "6");
+        assert_eq!(kind("#1/2/2003#"), "7");
+    }
+
+    /// A declared variable keeps its declared type, and so does what a
+    /// procedure declares it returns.
+    #[test]
+    fn a_declared_variable_keeps_its_type() {
+        let source = "Public Function Ask() As String\n\
+                        Dim aByte As Byte\n\
+                        Dim anInteger As Integer\n\
+                        Dim aLong As Long\n\
+                        Dim aSingle As Single\n\
+                        Dim aDouble As Double\n\
+                        Dim aCurrency As Currency\n\
+                        Dim aDate As Date\n\
+                        Ask = VarType(aByte) & \"/\" & VarType(anInteger) & \"/\" & \
+                              VarType(aLong) & \"/\" & VarType(aSingle) & \"/\" & \
+                              VarType(aDouble) & \"/\" & VarType(aCurrency) & \"/\" & \
+                              VarType(aDate)\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("17/2/3/4/5/6/7".to_string())
+        );
+    }
+
+    /// Arithmetic takes the higher of the two types and OVERFLOWS rather than
+    /// widening — the single most consequential thing here, because a
+    /// `Dim i As Integer` that a macro walks past 32767 is meant to stop.
+    ///
+    /// The ladder is not simply "widest wins": Currency beats Double, and a
+    /// Date beats anything that is not a Date while two Dates give the plain
+    /// number of days between them. All measured against Excel.
+    #[test]
+    fn arithmetic_takes_the_higher_type_and_overflows() {
+        let kind = |setup: &str, expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim aByte As Byte\n\
+                   Dim anInteger As Integer\n\
+                   Dim aLong As Long\n\
+                   Dim aSingle As Single\n\
+                   Dim aDouble As Double\n\
+                   Dim aCurrency As Currency\n\
+                   Dim aDate As Date\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   {setup}\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = CStr(VarType(answer))\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        let plain = "aByte = 1: anInteger = 300: aLong = 32767: aSingle = 1.5: \
+                     aDouble = 1.5: aCurrency = 1.5: aDate = #1/2/2003#";
+
+        assert_eq!(kind(plain, "1 + 1"), "2");
+        assert_eq!(kind(plain, "aByte + aByte"), "17");
+        assert_eq!(kind(plain, "aByte + anInteger"), "2");
+        assert_eq!(kind(plain, "aLong + anInteger"), "3");
+        assert_eq!(kind(plain, "aSingle + anInteger"), "4");
+        assert_eq!(kind(plain, "aSingle + aDouble"), "5");
+        // Currency wins against Double, which the ladder alone would not say.
+        assert_eq!(kind(plain, "aCurrency + aDouble"), "6");
+        // A Date wins against anything that is not one; two of them do not.
+        assert_eq!(kind(plain, "aDate + 1"), "7");
+        assert_eq!(kind(plain, "aDate - aDate"), "5");
+        // Division and powers are Double whatever they were given.
+        assert_eq!(kind(plain, "1 / 2"), "5");
+        assert_eq!(kind(plain, "4 / 2"), "5");
+        assert_eq!(kind(plain, "2 ^ 2"), "5");
+        assert_eq!(kind(plain, "aByte / aByte"), "5");
+        // Integer division and Mod keep a whole type.
+        assert_eq!(kind(plain, "5 \\ 2"), "2");
+        assert_eq!(kind(plain, "5 Mod 2"), "2");
+        // Empty never lifts the answer.
+        assert_eq!(kind(plain, "Empty + 1"), "2");
+        // A sign keeps the type it was put in front of.
+        assert_eq!(kind(plain, "-1"), "2");
+
+        // And what does NOT happen: widening.
+        assert_eq!(kind(plain, "32767 + 1"), "err6");
+        assert_eq!(kind(plain, "2147483647 + 1"), "err6");
+        assert_eq!(kind(plain, "anInteger * anInteger"), "err6");
+        assert_eq!(kind("aByte = 200", "aByte + aByte"), "err6");
+    }
+
     #[test]
     fn a_boolean_reaches_byte_by_its_bits() {
         let ask = |expression: &str| {
@@ -8767,8 +9150,8 @@ mod tests {
             runtime.call("SheetTotal", vec![]).unwrap()
         };
         assert_eq!(value, Value::Integer(42));
-        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(40)));
-        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(2)));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Int16(40)));
+        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Int16(2)));
     }
 
     #[test]
@@ -8789,8 +9172,8 @@ mod tests {
         let result = execute_with_host(&module, "ShortcutProbe", vec![], &mut host).unwrap();
 
         assert_eq!(result, Value::String("40|42|42".to_string()));
-        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(40)));
-        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(42)));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Int16(40)));
+        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Int16(42)));
     }
 
     #[test]
@@ -8807,7 +9190,7 @@ mod tests {
         let mut host = SheetHost::default();
         let value = execute_with_host(&module, "WriteThroughObject", vec![], &mut host).unwrap();
         assert_eq!(value, Value::Integer(42));
-        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(42)));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Int16(42)));
     }
 
     /// An object standing in a value context reads as its default member, which
@@ -8867,7 +9250,7 @@ mod tests {
         assert_eq!(
             value,
             Value::String(
-                "3|8|0|4|TEXT|42|42|True|False|True|Cell|True".to_string()
+                "2|8|0|4|TEXT|42|42|False|False|True|Cell|True".to_string()
             )
         );
     }
@@ -8882,14 +9265,14 @@ mod tests {
             ("Long", "43.5", Value::Integer(44)),
             ("Long", "42.6", Value::Integer(43)),
             ("Long", "-42.5", Value::Integer(-42)),
-            ("Integer", "42.5", Value::Integer(42)),
+            ("Integer", "42.5", Value::Int16(42)),
             ("Long", "\"17\"", Value::Integer(17)),
             ("Double", "42", Value::Double(42.0)),
-            ("Single", "0.5", Value::Double(0.5)),
+            ("Single", "0.5", Value::Single(0.5)),
             ("String", "42", Value::String("42".to_string())),
             ("Boolean", "3", Value::Boolean(true)),
             ("Boolean", "0", Value::Boolean(false)),
-            ("Variant", "42", Value::Integer(42)),
+            ("Variant", "42", Value::Int16(42)),
         ] {
             let source =
                 format!("Public Function Narrow() As {declared}\n  Narrow = {assigned}\nEnd Function\n");
@@ -9320,8 +9703,8 @@ mod tests {
         let value = execute_with_host(&module, "WithProbe", vec![], &mut host).unwrap();
 
         assert_eq!(value, Value::Integer(42));
-        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Integer(10)));
-        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Integer(32)));
+        assert_eq!(host.cells.get(&(1, 1)), Some(&Value::Int16(10)));
+        assert_eq!(host.cells.get(&(2, 1)), Some(&Value::Int16(32)));
     }
 
     #[test]

@@ -179,8 +179,7 @@ fn nearest_palette_index(colour: i64) -> i64 {
 /// names Excel gives to "this cell chooses no colour of its own".
 fn palette_choice(value: &Value, clears: i64, what: &str) -> Result<Option<String>, String> {
     let asked = match value {
-        Value::Integer(number) => *number,
-        Value::Double(number) if number.fract() == 0.0 => *number as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err(format!("{what} takes one of the 56 colours by number")),
     };
     if asked == clears {
@@ -715,8 +714,8 @@ impl<'a> WorkbookHost<'a> {
         let column_absolute = read(1, true, "column absolute")?;
         let r1c1 = match args.get(2) {
             None | Some(Value::Missing) => false,
-            Some(Value::Integer(1)) => false,
-            Some(Value::Integer(-4150)) => true,
+            Some(value) if any_whole_number(value) == Some(1) => false,
+            Some(value) if any_whole_number(value) == Some(-4150) => true,
             Some(other) => {
                 return Err(format!(
                     "unsupported Range.Address ReferenceStyle constant: {other:?}"
@@ -1460,7 +1459,7 @@ impl<'a> WorkbookHost<'a> {
                 .iter()
                 .position(|sheet| sheet.name.eq_ignore_ascii_case(name))
                 .ok_or_else(|| format!("worksheet not found: {name}")),
-            Value::Integer(index) => self.worksheet_from_number(*index as f64),
+            value if any_number(value).is_some() => self.worksheet_from_number(any_number(value).unwrap_or_default()),
             Value::Double(index) => self.worksheet_from_number(*index),
             _ => Err("Worksheets expects a sheet name or one-based index".to_string()),
         }
@@ -1563,7 +1562,7 @@ impl<'a> WorkbookHost<'a> {
     fn name_item(&mut self, value: &Value) -> Result<Value, String> {
         let wanted = match value {
             Value::String(text) => text.clone(),
-            Value::Integer(_) | Value::Double(_) => {
+            value if any_number(value).is_some() => {
                 let index = positive_index(value, "index")? as usize;
                 let mut held = self
                     .workbook
@@ -2973,8 +2972,7 @@ impl<'a> WorkbookHost<'a> {
         let mut numbers = Vec::new();
         for value in values {
             match value {
-                Value::Integer(value) => numbers.push(value as f64),
-                Value::Double(value) if value.is_finite() => numbers.push(value),
+                value if any_number(&value).is_some() => numbers.push(any_number(&value).unwrap_or_default()),
                 Value::Error(value) => {
                     return Err(format!(
                         "WorksheetFunction.{name} encountered Error {value}"
@@ -6735,8 +6733,7 @@ impl Host for WorkbookHost<'_> {
                 let asked = match &value {
                     Value::Boolean(true) => -1,
                     Value::Boolean(false) => 0,
-                    Value::Integer(number) => *number,
-                    Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                    value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
                     _ => {
                         return Err("Worksheet.Visible takes True, False or a number".to_string())
                     }
@@ -6846,8 +6843,7 @@ impl Host for WorkbookHost<'_> {
                 let asked = match &value {
                     Value::Boolean(true) => UNDERLINE_SINGLE,
                     Value::Boolean(false) => UNDERLINE_NONE,
-                    Value::Integer(number) => *number,
-                    Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                    value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
                     _ => {
                         return Err(
                             "Font.Underline takes True, False, or an underline style".to_string()
@@ -6880,9 +6876,10 @@ impl Host for WorkbookHost<'_> {
                     Value::String(named) if named.is_empty() => None,
                     Value::String(named) => Some(named.clone()),
                     Value::Integer(number) => Some(number.to_string()),
-                    Value::Double(number) if number.is_finite() => {
+                    value if any_number(value).is_some() => {
+                        let number = any_number(value).unwrap_or_default();
                         Some(if number.fract() == 0.0 {
-                            format!("{}", *number as i64)
+                            format!("{}", number as i64)
                         } else {
                             number.to_string()
                         })
@@ -6935,8 +6932,7 @@ impl Host for WorkbookHost<'_> {
                 // leaves it filled WHITE — the fill is there, it just cannot
                 // be told from the paper — and `xlNone` takes the fill away.
                 let asked = match &value {
-                    Value::Integer(number) => *number,
-                    Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                    value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
                     _ => return Err("Interior.Pattern takes a pattern by number".to_string()),
                 };
                 match asked {
@@ -6993,8 +6989,7 @@ impl Host for WorkbookHost<'_> {
             // The five Excel accepts. Asked with xlLeft, and with a bare 7, it
             // refuses outright rather than passing them through.
             let asked = match &value {
-                Value::Integer(number) => *number,
-                Value::Double(number) if number.is_finite() => number.trunc() as i64,
+                value if any_number(value).is_some() => any_number(value).unwrap_or_default().trunc() as i64,
                 _ => return Err("Range.VerticalAlignment must be a number".to_string()),
             };
             let named = match asked {
@@ -7028,8 +7023,7 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("orientation") {
             let asked = match &value {
-                Value::Integer(number) => *number,
-                Value::Double(number) if number.fract() == 0.0 => *number as i64,
+                value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
                 _ => return Err("Range.Orientation takes a direction by number".to_string()),
             };
             let stacked = match asked {
@@ -7052,8 +7046,7 @@ impl Host for WorkbookHost<'_> {
             // number is not refused but quietly becomes nought. Measured with
             // -1, 15, 250 and 251.
             let asked = match &value {
-                Value::Integer(number) => *number,
-                Value::Double(number) if number.is_finite() => number.trunc() as i64,
+                value if any_number(value).is_some() => any_number(value).unwrap_or_default().trunc() as i64,
                 _ => return Err("Range.IndentLevel must be a number".to_string()),
             };
             if asked > 250 {
@@ -7205,7 +7198,12 @@ fn format_debug_value(value: &Value) -> String {
         Value::Nothing => "Nothing".to_string(),
         Value::Null => "Null".to_string(),
         Value::Boolean(value) => if *value { "True" } else { "False" }.to_string(),
+        Value::Int16(value) => value.to_string(),
+        Value::Byte(value) => value.to_string(),
         Value::Integer(value) => value.to_string(),
+        Value::Single(value) => vba_number_text(*value as f64),
+        Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
+        Value::Date(value) => vba_number_text(*value),
         // The same digits `CStr` and `&` give, and the same the `Print`
         // statement writes -- measured at all three. What is NOT copied is
         // Print's spacing, which puts a space in front of every positive
@@ -7231,8 +7229,7 @@ fn format_debug_value(value: &Value) -> String {
 /// `Cells("3")` is C1 — though the two-index form refuses one.
 fn cells_index(value: &Value) -> Result<i64, String> {
     match value {
-        Value::Integer(number) => Ok(*number),
-        Value::Double(number) if number.is_finite() => Ok(number.round_ties_even() as i64),
+        value if any_number(value).is_some() => Ok(any_number(value).unwrap_or_default().round_ties_even() as i64),
         Value::String(text) => text
             .trim()
             .parse::<f64>()
@@ -7263,7 +7260,7 @@ fn cells_index(value: &Value) -> Result<i64, String> {
 fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, String> {
     match value {
         Value::Boolean(asked) => Ok(Some(*asked)),
-        Value::Integer(asked) => Ok(Some(*asked != 0)),
+        value if any_number(value).is_some() => Ok(Some(any_number(value).unwrap_or_default() != 0.0)),
         Value::Double(asked) if asked.is_finite() => Ok(Some(*asked != 0.0)),
         Value::Empty | Value::Missing => Ok(Some(false)),
         Value::Null => Ok(None),
@@ -7309,7 +7306,7 @@ fn style_face_boolean(value: &Value, property: &str) -> Result<Option<bool>, Str
 fn application_switch(value: &Value, property: &str) -> Result<bool, String> {
     match value {
         Value::Boolean(asked) => Ok(*asked),
-        Value::Integer(asked) => Ok(*asked != 0),
+        value if any_number(value).is_some() => Ok(any_number(value).unwrap_or_default() != 0.0),
         Value::Double(asked) if asked.is_finite() => Ok(*asked != 0.0),
         Value::Empty | Value::Missing => Ok(false),
         Value::Null => Err(format!("{property} cannot be given Null")),
@@ -7447,8 +7444,7 @@ fn application_cursor(value: &Value) -> Result<i64, String> {
     let asked = match value {
         Value::Boolean(true) => -1.0,
         Value::Boolean(false) => 0.0,
-        Value::Integer(number) => *number as f64,
-        Value::Double(number) if number.is_finite() => *number,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         Value::Empty | Value::Missing => 0.0,
         Value::Null => return Err("Application.Cursor cannot be given Null".to_string()),
         Value::String(written) => match written.trim().parse::<f64>() {
@@ -7488,8 +7484,9 @@ fn status_bar_text(value: &Value) -> Result<Option<String>, String> {
         Value::Empty | Value::Missing | Value::Null => return Ok(None),
         Value::String(written) if written.is_empty() => return Ok(None),
         Value::String(written) => written.clone(),
-        Value::Integer(number) => excel_number_text(*number as f64, STATUS_BAR_TEXT_WIDTH),
-        Value::Double(number) => excel_number_text(*number, STATUS_BAR_TEXT_WIDTH),
+        value if any_number(value).is_some() => {
+            excel_number_text(any_number(value).unwrap_or_default(), STATUS_BAR_TEXT_WIDTH)
+        }
         Value::Boolean(_) => shown_text(value, None),
         _ => return Err("Application.StatusBar can only be shown text".to_string()),
     };
@@ -7504,8 +7501,7 @@ fn status_bar_text(value: &Value) -> Result<Option<String>, String> {
 
 fn application_calculation(value: &Value) -> Result<i64, String> {
     let value = match value {
-        Value::Integer(value) => *value,
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => {
             return Err("Application.Calculation must be an Excel calculation constant".to_string())
         }
@@ -7521,9 +7517,8 @@ fn application_calculation(value: &Value) -> Result<i64, String> {
 fn find_integer_argument(value: Option<&Value>, default: i64, label: &str) -> Result<i64, String> {
     match value {
         None | Some(Value::Missing) => Ok(default),
-        Some(Value::Integer(value)) => Ok(*value),
-        Some(Value::Double(value)) if value.is_finite() && value.fract() == 0.0 => {
-            Ok(*value as i64)
+        Some(value) if any_whole_number(value).is_some() => {
+            Ok(any_whole_number(value).unwrap_or_default())
         }
         _ => Err(format!("Range.Find {label} must be an Excel constant")),
     }
@@ -7599,8 +7594,7 @@ enum LookupKey<'a> {
 fn lookup_key(value: &Value) -> Option<LookupKey<'_>> {
     match value {
         Value::Boolean(value) => Some(LookupKey::Boolean(*value)),
-        Value::Integer(value) => Some(LookupKey::Number(*value as f64)),
-        Value::Double(value) if value.is_finite() => Some(LookupKey::Number(*value)),
+        value if any_number(value).is_some() => Some(LookupKey::Number(any_number(value).unwrap_or_default())),
         Value::String(value) => Some(LookupKey::Text(value)),
         _ => None,
     }
@@ -7747,8 +7741,7 @@ fn sorted_lookup_position(
 
 fn lookup_index_argument(value: &Value, name: &str) -> Result<usize, String> {
     let number = match value {
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) if value.is_finite() => *value,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err(format!("WorksheetFunction.{name} index must be numeric")),
     };
     let number = number.trunc();
@@ -7905,8 +7898,7 @@ fn criteria_text(criteria: &Criteria) -> String {
 
 fn criteria_number(value: &Value) -> Option<f64> {
     match value {
-        Value::Integer(value) => Some(*value as f64),
-        Value::Double(value) if value.is_finite() => Some(*value),
+        value if any_number(value).is_some() => Some(any_number(value).unwrap_or_default()),
         _ => None,
     }
 }
@@ -7955,8 +7947,7 @@ fn shown_text(value: &Value, format: Option<&str>) -> String {
 
 fn worksheet_number(value: &Value, name: &str) -> Result<f64, String> {
     match value {
-        Value::Integer(value) => Ok(*value as f64),
-        Value::Double(value) if value.is_finite() => Ok(*value),
+        value if any_number(value).is_some() => Ok(any_number(value).unwrap_or_default()),
         Value::Boolean(value) => Ok(f64::from(*value)),
         Value::String(value) => value
             .trim()
@@ -7968,8 +7959,7 @@ fn worksheet_number(value: &Value, name: &str) -> Result<f64, String> {
 
 fn sort_number(value: &Value, label: &str) -> Result<i64, String> {
     match value {
-        Value::Integer(value) => Ok(*value),
-        Value::Double(value) if value.is_finite() => Ok(value.trunc() as i64),
+        value if any_number(value).is_some() => Ok(any_number(value).unwrap_or_default().trunc() as i64),
         _ => Err(format!("Range.Sort {label} must be numeric")),
     }
 }
@@ -7978,7 +7968,7 @@ fn sort_number(value: &Value, label: &str) -> Result<i64, String> {
 /// last however the sort runs. Text ignores case.
 fn sort_rank(value: &Value) -> u8 {
     match value {
-        Value::Integer(_) | Value::Double(_) => 0,
+        value if any_number(value).is_some() => 0,
         Value::String(_) => 1,
         Value::Boolean(_) => 2,
         _ => 3,
@@ -8052,18 +8042,40 @@ fn sort_compare_cased(
     }
 }
 
-fn number_of(value: &Value) -> Option<f64> {
+/// Every shape a number can arrive in from the interpreter.
+///
+/// The interpreter tells VBA's numeric types apart — Integer, Long, Byte,
+/// Single, Currency and Date are separate things there — so a host that
+/// recognised only two of them refused perfectly ordinary arguments:
+/// `Range.Borders(xlEdgeTop)` stopped working the day a small whole number
+/// stopped being a Long. One place to ask, so the next type added reaches
+/// every caller at once.
+fn any_number(value: &Value) -> Option<f64> {
     match value {
+        Value::Int16(value) => Some(*value as f64),
+        Value::Byte(value) => Some(*value as f64),
         Value::Integer(value) => Some(*value as f64),
+        Value::Single(value) if value.is_finite() => Some(*value as f64),
         Value::Double(value) if value.is_finite() => Some(*value),
+        Value::Currency(value) => Some(*value as f64 / 10_000.0),
+        Value::Date(value) if value.is_finite() => Some(*value),
         _ => None,
     }
 }
 
+/// The same, where the caller needs a whole number and a fraction is not one.
+fn any_whole_number(value: &Value) -> Option<i64> {
+    let number = any_number(value)?;
+    (number.fract() == 0.0 && number.abs() < 9.2e18).then_some(number as i64)
+}
+
+fn number_of(value: &Value) -> Option<f64> {
+    any_number(value)
+}
+
 fn index_argument(value: &Value, label: &str) -> Result<usize, String> {
     let number = match value {
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) if value.is_finite() => *value,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err(format!("WorksheetFunction.Index {label} must be numeric")),
     };
     let number = number.trunc();
@@ -8120,8 +8132,7 @@ fn lookup_boolean_argument(value: Option<&Value>, name: &str) -> Result<bool, St
 fn match_type_argument(value: Option<&Value>) -> Result<i64, String> {
     let number = match value {
         None | Some(Value::Missing) => return Ok(1),
-        Some(Value::Integer(value)) => *value as f64,
-        Some(Value::Double(value)) if value.is_finite() => *value,
+        Some(value) if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         Some(_) => return Err("WorksheetFunction.Match type must be numeric".to_string()),
     };
     let number = number.trunc();
@@ -8138,7 +8149,12 @@ fn find_value_text(value: &Value) -> String {
     match value {
         Value::Empty => String::new(),
         Value::Boolean(value) => if *value { "TRUE" } else { "FALSE" }.to_string(),
+        Value::Int16(value) => value.to_string(),
+        Value::Byte(value) => value.to_string(),
         Value::Integer(value) => value.to_string(),
+        Value::Single(value) => (*value as f64).to_string(),
+        Value::Currency(value) => (*value as f64 / 10_000.0).to_string(),
+        Value::Date(value) => value.to_string(),
         Value::Double(value) => value.to_string(),
         // The word itself is what a cell holding an error shows and what a
         // search reads: asked of Excel, `.Text` of a cell holding #DIV/0! is
@@ -8267,8 +8283,7 @@ fn replace_matching_text(
 fn optional_dimension(value: Value, property: &str, maximum: f64) -> Result<Option<f32>, String> {
     let number = match value {
         Value::Empty => return Ok(None),
-        Value::Integer(value) => value as f64,
-        Value::Double(value) => value,
+        value if any_number(&value).is_some() => any_number(&value).unwrap_or_default(),
         _ => return Err(format!("{property} must be numeric")),
     };
     if !number.is_finite() || !(0.0..=maximum).contains(&number) {
@@ -8280,8 +8295,7 @@ fn optional_dimension(value: Value, property: &str, maximum: f64) -> Result<Opti
 fn font_size(value: &Value) -> Result<Option<f32>, String> {
     let number = match value {
         Value::Empty => return Ok(None),
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) => *value,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err("Font.Size must be numeric".to_string()),
     };
     if !number.is_finite() || number <= 0.0 || number > f32::MAX as f64 {
@@ -8293,8 +8307,7 @@ fn font_size(value: &Value) -> Result<Option<f32>, String> {
 fn color_number(value: &Value, property: &str) -> Result<Option<u32>, String> {
     let number = match value {
         Value::Empty => return Ok(None),
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) => *value,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err(format!("{property} must be an RGB color number")),
     };
     if !number.is_finite() || number.fract() != 0.0 || !(0.0..=16_777_215.0).contains(&number) {
@@ -8340,8 +8353,7 @@ fn style_color_value(value: Option<Option<String>>, bare: i64) -> Value {
 fn horizontal_alignment(value: &Value) -> Result<Option<String>, String> {
     let value = match value {
         Value::Empty => return Ok(None),
-        Value::Integer(value) => *value,
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => {
             return Err("Range.HorizontalAlignment must be an Excel alignment constant".to_string())
         }
@@ -8383,8 +8395,7 @@ fn horizontal_alignment_value(value: Option<Option<String>>) -> Value {
 
 fn border_selection(value: &Value) -> Result<BorderSelection, String> {
     let value = match value {
-        Value::Integer(value) => *value,
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err("Range.Borders index must be an Excel border constant".to_string()),
     };
     match value {
@@ -8480,8 +8491,7 @@ fn border_after_weight(line: i64, weight: i64) -> Option<&'static str> {
 fn border_line_style(value: &Value) -> Result<i64, String> {
     let value = match value {
         Value::Empty => return Ok(LINE_NONE),
-        Value::Integer(value) => *value,
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err("Borders.LineStyle must be an Excel line-style constant".to_string()),
     };
     if value == LINE_NONE || BORDER_KINDS.iter().any(|(_, line, _)| *line == value) {
@@ -8493,8 +8503,7 @@ fn border_line_style(value: &Value) -> Result<i64, String> {
 
 fn border_weight(value: &Value) -> Result<i64, String> {
     let value = match value {
-        Value::Integer(value) => *value,
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err("Borders.Weight must be an Excel weight constant".to_string()),
     };
     if BORDER_KINDS.iter().any(|(_, _, weight)| *weight == value) {
@@ -8622,8 +8631,7 @@ fn rgb_value(args: &[Value]) -> Result<Value, String> {
     };
     let component = |value: &Value, name: &str| -> Result<u32, String> {
         let value = match value {
-            Value::Integer(value) => *value as f64,
-            Value::Double(value) => *value,
+            value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
             _ => return Err(format!("RGB {name} must be numeric")),
         };
         if !value.is_finite() || value.fract() != 0.0 || !(0.0..=255.0).contains(&value) {
@@ -8721,8 +8729,7 @@ fn ctrl_arrow_destination(
 
 fn end_direction(value: &Value) -> Result<EndDirection, String> {
     let value = match value {
-        Value::Integer(value) => *value,
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => *value as i64,
+        value if any_whole_number(value).is_some() => any_whole_number(value).unwrap_or_default(),
         _ => return Err("Range.End direction must be an Excel direction constant".to_string()),
     };
     match value {
@@ -9007,8 +9014,7 @@ fn parse_a1_reference(reference: &str) -> Result<(u32, u32), String> {
 
 fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
     let number = match value {
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) => *value,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err(format!("Cells {label} must be numeric")),
     };
     if !number.is_finite() || number.fract() != 0.0 || !(1.0..=u32::MAX as f64).contains(&number) {
@@ -9034,8 +9040,7 @@ fn range_axis_name(axis: RangeAxis) -> &'static str {
 
 fn integer_offset(value: &Value, label: &str) -> Result<i64, String> {
     let number = match value {
-        Value::Integer(value) => *value as f64,
-        Value::Double(value) => *value,
+        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
         _ => return Err(format!("Range.Offset {label} offset must be numeric")),
     };
     if !number.is_finite()
@@ -9231,7 +9236,7 @@ fn optional_boolean_argument(value: &Value, default: bool, label: &str) -> Resul
 fn boolean_argument(value: &Value, label: &str) -> Result<bool, String> {
     match value {
         Value::Boolean(value) => Ok(*value),
-        Value::Integer(value) => Ok(*value != 0),
+        value if any_number(value).is_some() => Ok(any_number(value).unwrap_or_default() != 0.0),
         Value::Double(value) if value.is_finite() => Ok(*value != 0.0),
         _ => Err(format!("Range.Address {label} must be Boolean")),
     }
@@ -9346,7 +9351,15 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         Value::Missing => Err("an omitted VBA argument cannot be assigned to a cell".to_string()),
         Value::Nothing => Err("Nothing cannot be assigned to a spreadsheet cell".to_string()),
         Value::Boolean(value) => Ok(CellValue::Boolean(value)),
+        Value::Int16(value) => Ok(CellValue::Number(value as f64)),
+        Value::Byte(value) => Ok(CellValue::Number(value as f64)),
         Value::Integer(value) => Ok(CellValue::Number(value as f64)),
+        Value::Single(value) => Ok(CellValue::Number(value as f64)),
+        Value::Currency(value) => Ok(CellValue::Number(value as f64 / 10_000.0)),
+        // A cell told to hold a date keeps the serial. What Excel ALSO
+        // does is give the cell a date format, which has not been
+        // measured here, so the number goes in and the dressing does not.
+        Value::Date(value) => Ok(CellValue::Number(value)),
         Value::Double(value) => Ok(CellValue::Number(value)),
         Value::Error(value) => Ok(CellValue::Error(spreadsheet_error_text(value).to_string())),
         // An empty string does not leave an empty string in the cell: asked of
@@ -9788,7 +9801,12 @@ impl From<Value> for OutputValue {
             Value::Nothing => Self::Nothing,
             Value::Null => Self::Null,
             Value::Boolean(value) => Self::Boolean(value),
+            Value::Int16(value) => Self::Integer(value as i64),
+            Value::Byte(value) => Self::Integer(value as i64),
             Value::Integer(value) => Self::Integer(value),
+            Value::Single(value) => Self::Double(value as f64),
+            Value::Currency(value) => Self::Double(value as f64 / 10_000.0),
+            Value::Date(value) => Self::Double(value),
             Value::Double(value) => Self::Double(value),
             Value::Error(value) => Self::Error(value),
             Value::String(value) => Self::String(value),
@@ -9849,8 +9867,7 @@ fn worksheet_function_carries(name: &str) -> bool {
 fn engine_value(value: &Value) -> oxicells_calc::Value {
     use oxicells_calc::{ExcelError, Value as Sheet};
     match value {
-        Value::Integer(number) => Sheet::Number(*number as f64),
-        Value::Double(number) => Sheet::Number(*number),
+        value if any_number(value).is_some() => Sheet::Number(any_number(value).unwrap_or_default()),
         Value::String(text) => Sheet::Text(text.clone()),
         Value::Boolean(state) => Sheet::Logical(*state),
         Value::Error(number) => Sheet::Error(match spreadsheet_error_text(*number) {
