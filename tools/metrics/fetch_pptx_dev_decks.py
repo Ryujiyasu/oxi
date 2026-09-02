@@ -39,9 +39,16 @@ SEED = 20260902
 
 
 def sanitize(name: str) -> str:
-    name = re.sub(r'[\\/:*?"<>|]', "_", name)
-    name = re.sub(r"\s+", "_", name.strip())
-    return name[:80] or "slide"
+    """Trim the STEM, never the extension.
+
+    ★Capping the whole basename at 80 characters ate the `.pptx` off three long
+    names, and the audit then reported those decks as "no such deck" -- a
+    download that worked, reported as a missing file.
+    """
+    stem, dot, ext = name.rpartition(".")
+    stem = re.sub(r'[\\/:*?"<>|]', "_", stem or name)
+    stem = re.sub(r"\s+", "_", stem.strip())
+    return (stem[:74] or "slide") + (dot + ext if dot else "")
 
 
 def listing() -> list[str]:
