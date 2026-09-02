@@ -83,14 +83,18 @@ the "19% of lines sit 2pt out" class -- including d09 s9's 'Yellow' and d32 s1's
     9 / d32 / 34    232 lines, median -0.00pt, slope under 0.7 per mille,
                     **0 lines over 2%**
 
-★But this number has NO POSITIVE CONTROL YET, and until it has one, read it as
-"the instrument could not tell them apart" rather than "the advances are right".
-`OXI_CLOUDADV_DISABLE`, `OXI_SLOTFACE_DISABLE`, `OXI_FDSYNTH_DISABLE`,
-`OXI_BOLDADV_DISABLE` and `OXI_HMTXSTYLE_DISABLE` all leave deck 9's figure
-identical to the hundredth -- because `line_w` is measured by `per_run` /
-`runtime_width_px`, a different chain from the break test's `advance_em`, and
-those flags steer the break chain. Finding a lever that moves this number is the
-next thing this file needs.
+★Its POSITIVE CONTROL is `OXI_ADVEXACT_DISABLE=1`, and it took some finding:
+
+    deck 9, default              median -0.00pt   slope  +0.05 per mille   0 over 2%
+    deck 9, ADVEXACT off         median -0.24pt   slope **-35.22** per mille  3 over 2%
+                                 worst line -90.40pt (-20.9%)
+
+Five flags that steer FACE and ADVANCE decisions -- `OXI_CLOUDADV_DISABLE`,
+`OXI_SLOTFACE_DISABLE`, `OXI_FDSYNTH_DISABLE`, `OXI_BOLDADV_DISABLE`,
+`OXI_HMTXSTYLE_DISABLE` -- leave the figure identical to the hundredth, which is
+itself worth knowing: `line_w` comes from `per_run` / `runtime_width_px` and the
+break test from `advance_em`, so the two gates in this file watch DIFFERENT
+chains and a change to one need not show in the other.
 
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
