@@ -1868,17 +1868,25 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
 ///                lines over 3pt from PowerPoint's own left edge, 6 -> 4
 ///                SSIM 0.974247 -> 0.974413, MIN 0.9515 -> 0.9539, 2 up 0 down
 ///
-/// ★And that deck says something sharper than "it improved". PowerPoint
-/// REFUSES its CFF-outlined 'Open Sauce' part and DRAWS the text in Calibri --
-/// its own PDF says so on pages 15, 21 and 23 (`pptx_cff_part_census.py`) --
-/// but it does not BREAK it in Calibri. Page 21 sets 'communication tools' in
-/// Calibri at 24pt, which measures 152.33 + 48.24pt plus a space, about 206pt,
-/// inside boxes of 220.4 / 225.4 / 241.1 / 243.6pt. It fits four times over,
-/// and PowerPoint breaks it anyway -- because 'Open Sauce' does not fit. The
-/// part is used for the METRICS and refused only for the RASTER, so the design
-/// table this flag reads is the right quantity even where the face is not the
-/// one drawn. (Which is also why dropping the part outright cost -0.0199 on
-/// this deck in 2026-08-28's `_cffskip_ab.log`: it threw away the metrics too.)
+/// ★And that deck says something sharper than "it improved". Its truth PDF
+/// carries the body text in Calibri -- pages 15, 21 and 23 all name it, which
+/// is what `pptx_cff_part_census.py` read as "PowerPoint refuses the
+/// CFF-outlined 'Open Sauce' part" -- and yet it does not BREAK it in Calibri.
+/// Page 21 sets 'communication tools' at 24pt over 152.33 + 48.24pt plus a
+/// space, about 206pt, inside boxes of 220.4 / 225.4 / 241.1 / 243.6pt. It fits
+/// four times over, and PowerPoint breaks it anyway, exactly where 'Open Sauce'
+/// stops fitting. So the break is measured with the embedded part, and this
+/// flag reads the part's own table.
+///
+/// ★The Calibri is the PDF's TEXT LAYER, not its ink. The page draws
+/// `/Image414 Do` at the heading's exact box and then `(STRENGTHS)Tj` in F4 --
+/// a stencil for the eye and a fallback font for copy-and-paste, because a CFF
+/// part is what PowerPoint cannot EMBED, not what it cannot draw
+/// (`pptx_pdf_stencil_layer`). Rendering those runs in Calibri to "match" the
+/// name cost -0.0244 on this deck, and the ink says why: the pre-change render
+/// is Open Sauce Bold and so is PowerPoint's. Which also re-reads
+/// 2026-08-28's `_cffskip_ab.log`: dropping the part cost -0.0199 because
+/// PowerPoint uses it, for the metrics AND for the glyphs.
 ///
 /// The mechanism underneath. `precise_advance_em` answers None for that face
 /// (`GetCharABCWidthsW` refuses it), so with the design table blocked the wrap
