@@ -1853,14 +1853,55 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
 /// advance is the right quantity in principle -- it is what PowerPoint's PDF
 /// places glyphs at -- but the break test evidently is not measured with it,
 /// and until that is understood the GDI probe is the better default.
-/// The design table is refused for a weight GDI only synthesises, unless
-/// this is set.
-fn fdsynth_on() -> bool {
-    std::env::var("OXI_FDSYNTH_DISABLE").is_err()
+///
+/// ★That "until" arrived (2026-09-02). What the break test was not measured
+/// with is a SYNTHESISED weight: `read_face_advances` reads a face's `hmtx`,
+/// which has no weight axis, so a bold line got the REGULAR advances -- 2.0%
+/// wide on blind 35, and that is the whole of the -0.0033. `fdsynth_on` below
+/// refuses the table exactly there.
+///
+/// With that in place the flag reaches ONE deck of 114 (`pptx_dump_ab.py`,
+/// 48365 paragraphs over dev + blind); every other deck lays out identically
+/// in both arms.
+///
+///     blind 31   99.25% -> 100.00% break agreement (`pptx_line_audit_com.py`)
+///                lines over 3pt from PowerPoint's own left edge, 6 -> 4
+///                SSIM 0.974247 -> 0.974413, MIN 0.9515 -> 0.9539, 2 up 0 down
+///
+/// ★That deck is NOT what makes this right, and this note is here so its
+/// number is never read as more than it is. PowerPoint REFUSES blind 31's
+/// CFF-outlined 'Open Sauce' part and sets the text in Calibri -- its own PDF
+/// says so on pages 15, 21 and 23 (`pptx_cff_part_census.py`) -- while Oxi
+/// still draws the refused part. Landing on PowerPoint's line count out of the
+/// wrong face's advances is a coincidence, not a fix.
+///
+/// What makes it right is the mechanism. `precise_advance_em` answers None for
+/// that face (`GetCharABCWidthsW` refuses it), so with the design table blocked
+/// the wrap has nothing left but GDI's device-pixel extent -- and that is
+/// measured at whatever scale the caller hands it, which is 1.0 for the dump
+/// and dpi*supersample/72 for the picture:
+///
+///     blind 31, 72 vs 150 DPI, OXI_FDBREAK_DISABLE=1   2 paragraphs differ
+///     blind 31, 72 vs 150 DPI, default                 0
+///
+/// The design table is the quantity the master-unit law was derived from, and
+/// taking it makes the break independent of the resolution the page is drawn
+/// at. `OXI_FDBREAK_DISABLE` restores the GDI probe.
+fn fdbreak_on() -> bool {
+    std::env::var("OXI_FDBREAK_DISABLE").is_err()
 }
 
-fn fdbreak_on() -> bool {
-    std::env::var("OXI_FDBREAK_ENABLE").is_ok()
+/// The design table is refused for a weight GDI only SYNTHESISES, unless this
+/// is set.
+///
+/// `read_face_advances` reads the face's own `hmtx` and that table has no
+/// weight axis (`OXI_FD_DEBUG` on blind 35: `Gruppo` answers `'a'=0.58154` for
+/// w=400 and w=700 alike), so the one thing it must not answer is a weight it
+/// does not carry. `styled_face` is what makes the test cheap: a deck that
+/// files a REAL bold part under the slot comes back as that part at w=400
+/// (S-SLOTNAT), so only a weight GDI is about to fake still reads >= 600 here.
+fn fdsynth_on() -> bool {
+    std::env::var("OXI_FDSYNTH_DISABLE").is_err()
 }
 
 /// Parts are selected by SLOT only when this is set.
