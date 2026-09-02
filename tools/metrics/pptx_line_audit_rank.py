@@ -28,9 +28,14 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+# ★The tail is `(N unmatched)` in runs before 2026-09-02 and
+# `(N unmatched, M paragraphs turned -- breaks only)` after it. Anchoring on the
+# closing bracket would match neither reliably and the parser would report "no
+# deck lines" -- an empty ledger that reads like a clean corpus.
 DECK = re.compile(
     r"^\s*(?P<doc>\S+):\s+(?P<paras>\d+) paragraphs\s+(?P<rate>[\d.]+)% break agreement\s+"
-    r"\((?P<differ>\d+) differ\)\s+shapes (?P<shapes>\d+) \((?P<unmatched>\d+) unmatched\)"
+    r"\((?P<differ>\d+) differ\)\s+shapes (?P<shapes>\d+) \((?P<unmatched>\d+) unmatched"
+    r"(?:,\s*(?P<turned>\d+) paragraphs turned)?"
 )
 LEFT = re.compile(r"p95 (?P<p95>[\d.]+)pt, (?P<over>\d+) over 3pt")
 ADV = re.compile(r"line advance: (?P<steps>\d+) steps.*?p95 (?P<p95>[\d.]+)pt, (?P<over>\d+) over")
@@ -81,8 +86,11 @@ def main() -> None:
 
     paras = sum(d["paragraphs"] for d in decks)
     differ = sum(d["differ"] for d in decks)
+    turned = sum(d["turned_paras"] for d in decks)
     print(f"{len(decks)} decks, {paras} paragraphs, {differ} break differently "
-          f"({100.0 * (paras - differ) / paras:.2f}% agreement)\n")
+          f"({100.0 * (paras - differ) / paras:.2f}% agreement)")
+    print(f"{turned} of them sit in a turned shape and were compared for their "
+          f"breaks only\n")
 
     # ★Decks with no break disagreement are not "done": a deck can agree on
     # every line count and still put every line in the wrong place, which is
