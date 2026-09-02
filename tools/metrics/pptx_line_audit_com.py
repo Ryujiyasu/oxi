@@ -153,13 +153,27 @@ def com_shapes(shape, acc: list) -> None:
         return
 
 
-def audit(doc: int) -> dict | None:
+def deck_path(doc: str) -> Path | None:
+    """A blind deck by index, or a dev deck by its `dNN` name.
+
+    Dev decks need no truth PDF for this audit -- PowerPoint is the oracle --
+    so the corpus can grow without paying for an export per deck.
+    """
+    if str(doc).lower().startswith("d"):
+        hit = sorted((ROOT / "dev" / "pptx").glob(f"{doc}__*.pptx"))
+        return hit[0] if hit else None
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-    item = next((i for i in manifest if i["idx"] == doc), None)
+    item = next((i for i in manifest if i["idx"] == int(doc)), None)
     if item is None:
         return None
     src = ROOT / "pptx" / item["local"]
-    if not src.exists():
+    return src if src.exists() else None
+
+
+def audit(doc) -> dict | None:
+    src = deck_path(doc)
+    if src is None:
+        print(f"{doc}: no such deck", flush=True)
         return None
     eng = engine_paras(engine_dump(src))
     if not eng:
@@ -281,7 +295,7 @@ def audit(doc: int) -> dict | None:
     finally:
         app.Quit()
     rate = 100.0 * got["same"] / got["paras"] if got["paras"] else 0.0
-    print(f"{doc:02d}: {got['paras']:5} paragraphs  {rate:6.2f}% break agreement  "
+    print(f"{str(doc):>4}: {got['paras']:5} paragraphs  {rate:6.2f}% break agreement  "
           f"({got['diff']} differ)  shapes {got['shapes']} "
           f"({got['unmatched']} unmatched)", flush=True)
     for si, cn, en, t in worst[:6]:
@@ -316,13 +330,18 @@ def audit(doc: int) -> dict | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("docs", nargs="*", type=int)
+    ap.add_argument("docs", nargs="*", help="blind indices, or dev names like d41")
     ap.add_argument("--all", action="store_true")
+    ap.add_argument("--dev", action="store_true", help="every dev deck")
     args = ap.parse_args()
     docs = args.docs
     if args.all:
         manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
         docs = [i["idx"] for i in manifest]
+    if args.dev:
+        import re as _re
+        docs = sorted({m.group(1) for f in (ROOT / "dev" / "pptx").glob("*.pptx")
+                       if (m := _re.match(r"(d\d+)__", f.name))})
     if not docs:
         sys.exit("name at least one deck, or pass --all")
     tot = {"paras": 0, "same": 0, "diff": 0}
