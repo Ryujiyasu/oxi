@@ -52,6 +52,8 @@ pub enum Capability {
     TouchesTheRegistry,
     /// Writes, moves or deletes files.
     TouchesFiles,
+    /// Creates something outside Excel whose own behaviour is not read here.
+    ReachesOutsideExcel,
     /// Builds what it reaches at run time rather than writing it down.
     HidesWhatItReaches,
     /// Turns off the prompts and screen updates that would show its work.
@@ -68,6 +70,7 @@ impl Capability {
             Capability::CallsIntoADll => "calls into a DLL",
             Capability::TouchesTheRegistry => "reads or writes the registry",
             Capability::TouchesFiles => "reads or writes files",
+            Capability::ReachesOutsideExcel => "creates an object outside Excel",
             Capability::HidesWhatItReaches => "builds what it reaches at run time",
             Capability::QuietensExcel => "turns off Excel's prompts or display",
         }
@@ -183,7 +186,7 @@ pub fn assess(module: &Module, analysis: &Analysis) -> SafetyReport {
     // Dotted names keep their receiver, so `shell.Run` and a bare `Run` are
     // told apart. These are counted per module, so they carry no line.
     for name in analysis.api_names.keys() {
-        if let Some((capability, reason)) = reached_by(name) {
+        if let Some((capability, reason)) = reached_by_name(name) {
             report.signals.push(Signal {
                 capability,
                 what: name.clone(),
@@ -196,10 +199,7 @@ pub fn assess(module: &Module, analysis: &Analysis) -> SafetyReport {
     for binding in &analysis.late_bindings {
         match &binding.target {
             Some(target) => {
-                let (capability, reason) = reached_by(target).unwrap_or((
-                    Capability::HidesWhatItReaches,
-                    "creates an object outside Excel",
-                ));
+                let (capability, reason) = reached_by_progid(target);
                 report.signals.push(Signal {
                     capability,
                     what: format!("{}(\"{target}\")", binding.callee),
@@ -260,49 +260,69 @@ fn runs_by_itself(name: &str) -> Option<&'static str> {
     })
 }
 
-/// What a name reaches, by the name alone. Whole-name tests come first so a
-/// ProgID is recognised wherever it appears; the leaf tests then catch calls
-/// however the variable holding the object was named.
-fn reached_by(name: &str) -> Option<(Capability, &'static str)> {
-    let lowered = name.to_ascii_lowercase();
+/// What a written-down ProgID reaches. Applied ONLY to the string inside a
+/// `CreateObject` / `GetObject`, never to an identifier: a substring test is
+/// right for a ProgID and wrong for code, where `web_WinHttpRequestOption` is
+/// an enum member and reaches nothing.
+fn reached_by_progid(progid: &str) -> (Capability, &'static str) {
+    let lowered = progid.to_ascii_lowercase();
+    if lowered.starts_with("msxml2.")
+        || lowered.starts_with("winhttp.")
+        || lowered.contains("xmlhttp")
+    {
+        return (
+            Capability::ReachesTheNetwork,
+            "fetches from a URL while it runs",
+        );
+    }
+    if lowered.starts_with("wscript.shell") || lowered.starts_with("shell.application") {
+        return (
+            Capability::StartsAProgram,
+            "creates the Windows shell object, which runs command lines",
+        );
+    }
+    if lowered.contains("filesystemobject") {
+        return (
+            Capability::TouchesFiles,
+            "opens the file system through the Scripting runtime",
+        );
+    }
+    if lowered.starts_with("adodb.stream") {
+        return (
+            Capability::TouchesFiles,
+            "writes raw bytes to disk through ADO, which is how fetched content is saved",
+        );
+    }
+    if lowered.starts_with("scripting.") {
+        return (
+            Capability::ReachesOutsideExcel,
+            "creates a Windows Scripting object",
+        );
+    }
+    (
+        Capability::ReachesOutsideExcel,
+        "creates an object outside Excel; what that object does is not read here",
+    )
+}
 
-    if lowered.contains("vbproject") || lowered.contains("vbcomponents") {
+/// What an identifier in the code reaches. Matched on whole dotted segments so
+/// a name that merely CONTAINS a word is left alone.
+fn reached_by_name(name: &str) -> Option<(Capability, &'static str)> {
+    let lowered = name.to_ascii_lowercase();
+    let segments: Vec<&str> = lowered.split('.').collect();
+    let leaf = *segments.last().unwrap_or(&lowered.as_str());
+    let dotted = segments.len() > 1;
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "vbproject" | "vbcomponents"))
+    {
         return Some((
             Capability::WritesItsOwnCode,
             "reaches the VBA project itself, so it can add or change macros while it runs",
         ));
     }
-    if lowered.contains("xmlhttp")
-        || lowered.contains("winhttp")
-        || lowered.contains("internetopen")
-        || lowered.contains("urldownloadtofile")
-    {
-        return Some((
-            Capability::ReachesTheNetwork,
-            "fetches from a URL while it runs",
-        ));
-    }
-    if lowered.contains("wscript.shell") || lowered.contains("shell.application") {
-        return Some((
-            Capability::StartsAProgram,
-            "creates the Windows shell object, which runs command lines",
-        ));
-    }
-    if lowered.contains("filesystemobject") || lowered.contains("scripting.filesystem") {
-        return Some((
-            Capability::TouchesFiles,
-            "opens the file system through the Scripting runtime",
-        ));
-    }
-    if lowered.contains("adodb.stream") {
-        return Some((
-            Capability::TouchesFiles,
-            "writes raw bytes to disk through ADO, which is how fetched content is saved",
-        ));
-    }
 
-    let dotted = lowered.contains('.');
-    let leaf = lowered.rsplit('.').next().unwrap_or(&lowered);
     match leaf {
         "shell" if !dotted => Some((
             Capability::StartsAProgram,
@@ -330,7 +350,6 @@ fn reached_by(name: &str) -> Option<(Capability, &'static str)> {
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +449,41 @@ mod tests {
             report.capabilities().keys().next(),
             Some(&Capability::WritesItsOwnCode)
         );
+    }
+
+    /// A substring test is right for a ProgID and wrong for code. `VBA-Web`
+    /// declares an enum whose members are named `web_WinHttpRequestOption_*`;
+    /// they reach nothing, and calling them a network signal would be the kind
+    /// of false alarm that gets the whole report ignored.
+    #[test]
+    fn a_name_that_merely_contains_a_word_reaches_nothing() {
+        let report = read(
+            "Public Enum web_WinHttpRequestOption\n\
+               web_WinHttpRequestOption_EnableRedirects = 6\n\
+             End Enum\n\
+             Sub Go()\n\
+               Dim n As Long\n\
+               n = web_WinHttpRequestOption_EnableRedirects\n\
+             End Sub\n",
+        );
+        assert_eq!(report.capabilities().get(&Capability::ReachesTheNetwork), None);
+    }
+
+    /// A ProgID that IS written down is known, whatever it is. Calling it
+    /// "built at run time" would contradict the source in front of the reader.
+    #[test]
+    fn a_progid_written_down_is_never_called_hidden() {
+        let report = read(
+            "Sub Go()\n\
+               Dim ie As Object\n\
+               Set ie = CreateObject(\"InternetExplorer.Application\")\n\
+             End Sub\n",
+        );
+        assert_eq!(
+            report.signals[0].capability,
+            Capability::ReachesOutsideExcel
+        );
+        assert_eq!(report.capabilities().get(&Capability::HidesWhatItReaches), None);
     }
 
     #[test]

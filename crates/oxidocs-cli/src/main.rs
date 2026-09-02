@@ -30,6 +30,17 @@ fn main() {
                 std::process::exit(2);
             }
         }
+        Some("vba-safety") => {
+            let input = args.get(2).expect("Usage: oxi vba-safety <input.xlsm>");
+            match vba::safety(input) {
+                Ok(true) => std::process::exit(3),
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!("VBA safety read failed: {error}");
+                    std::process::exit(2);
+                }
+            }
+        }
         Some("vba-inventory") => {
             let input = args
                 .get(2)
@@ -54,6 +65,7 @@ fn main() {
             eprintln!("Usage:");
             eprintln!("  oxi docx-to-pdf <input.docx> <output.pdf>");
             eprintln!("  oxi vba-analyze <input.xlsm>");
+            eprintln!("  oxi vba-safety <input.xlsm>");
             eprintln!("  oxi vba-inventory <file-or-directory>");
             eprintln!("  oxi vba-inventory-json <file-or-directory>");
             std::process::exit(1);

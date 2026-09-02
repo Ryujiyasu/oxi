@@ -10,6 +10,7 @@ use oxidocs_common::archive::OoxmlArchive;
 use oxivba_core::fingerprint::{
     compare, fingerprint_module, ModuleFingerprint, Similarity, Strength,
 };
+use oxivba_core::safety::{assess, Capability, SafetyReport};
 use oxivba_core::{analyse, parse_module, Analysis, Class};
 use serde_json::json;
 
@@ -17,6 +18,7 @@ struct ModuleReport {
     name: String,
     analysis: Analysis,
     fingerprint: ModuleFingerprint,
+    safety: SafetyReport,
 }
 
 struct ProjectReport {
@@ -79,6 +81,98 @@ pub(crate) fn analyze_file(input: &str) -> Result<(), String> {
         report.modules.len()
     );
     Ok(())
+}
+
+/// Says what the macros in a file would be able to reach, without opening the
+/// file in Office and without running anything.
+///
+/// Deliberately gives no verdict beyond one: whether opening the file is by
+/// itself enough to run code. `Shell` is how a legitimate macro opens a PDF,
+/// so a tool that calls it dangerous teaches its reader to click through.
+///
+/// Exit status is the material, not a judgement: `0` when there is nothing for
+/// a person to read, `3` when there is.
+pub(crate) fn safety(input: &str) -> Result<bool, String> {
+    let report = inspect_project(Path::new(input))?;
+
+    println!("VBA project: {}", report.path.display());
+    println!("Container part: {}", report.container_part);
+    println!("Modules: {}", report.modules.len());
+    println!();
+
+    let mut whole = SafetyReport::default();
+    let mut opens: Vec<(&str, &str)> = Vec::new();
+    for module in &report.modules {
+        for name in &module.safety.runs_without_asking {
+            opens.push((module.name.as_str(), name.as_str()));
+        }
+        whole.signals.extend(module.safety.signals.iter().cloned());
+        whole.unread_lines += module.safety.unread_lines;
+        whole
+            .unresolved_late_binding
+            .extend(module.safety.unresolved_late_binding.iter().copied());
+    }
+
+    if opens.is_empty() {
+        println!("Opening the file does not by itself run anything.");
+    } else {
+        println!("RUNS WHEN THE FILE IS OPENED:");
+        for (module, procedure) in &opens {
+            println!("  {module}.{procedure}");
+        }
+        println!("  Opening this file is the trigger, so the question is not");
+        println!("  whether to run the macros but whether they have already run.");
+    }
+    println!();
+
+    for module in &report.modules {
+        if !module.safety.needs_a_reader() {
+            continue;
+        }
+        println!("[{}]", module.name);
+        for signal in &module.safety.signals {
+            let place = if signal.line == 0 {
+                "     ".to_string()
+            } else {
+                format!("{:>5}", signal.line)
+            };
+            println!(
+                "  {place}  {}: {} — {}",
+                signal.capability.label(),
+                signal.what,
+                signal.reason
+            );
+        }
+        if module.safety.unread_lines > 0 {
+            println!(
+                "         {} line(s) could not be read, so nobody has cleared them",
+                module.safety.unread_lines
+            );
+        }
+        println!();
+    }
+
+    let quiet = report
+        .modules
+        .iter()
+        .filter(|module| !module.safety.needs_a_reader())
+        .count();
+    println!(
+        "Summary: {} module(s), {quiet} with nothing to read.",
+        report.modules.len()
+    );
+    let mut counts: Vec<(Capability, usize)> = whole.capabilities().into_iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (capability, count) in counts {
+        println!("  {count:>5}  {}", capability.label());
+    }
+    if !whole.unresolved_late_binding.is_empty() {
+        println!(
+            "  {:>5}  CreateObject/GetObject whose target is worked out while it runs",
+            whole.unresolved_late_binding.len()
+        );
+    }
+    Ok(whole.needs_a_reader() || !opens.is_empty())
 }
 
 pub(crate) fn inventory(input: &str) -> Result<(), String> {
@@ -280,10 +374,13 @@ fn inspect_project(path: &Path) -> Result<ProjectReport, String> {
             .map_err(|error| format!("cannot extract module {}: {error}", module_info.name))?;
         let module = parse_module(&source)
             .map_err(|error| format!("cannot tokenize module {}: {error}", module_info.name))?;
+        let analysis = analyse(&module);
+        let safety = assess(&module, &analysis);
         modules.push(ModuleReport {
             name: module_info.name.clone(),
-            analysis: analyse(&module),
+            analysis,
             fingerprint: fingerprint_module(&module, Strength::Standard),
+            safety,
         });
     }
 
