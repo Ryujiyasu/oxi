@@ -2254,6 +2254,17 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                 None,
             )
         };
+        if rc != 0 && sf_debug() {
+            // ★The part that did NOT load. `Installed 19/20` names a count and
+            // not a casualty, and the one that fell is the one whose family the
+            // engine then measures through GDI's substitute -- d31's 'Item 1'
+            // reports `mu=None` for 'Open Sauce' while 'Canva Sans' in the same
+            // deck answers `mu=Some(264)` and breaks correctly.
+            eprintln!(
+                "INSTALL FAILED typeface={:?} bold={} italic={} as {face:?} rc=0x{rc:x}",
+                font.typeface, font.bold, font.italic
+            );
+        }
         if rc == 0 {
             loaded += 1;
             let mut address: Option<String> = None;
@@ -14588,6 +14599,26 @@ fn gdi_wrap_lines(
     );
     if let Ok(want) = std::env::var("OXI_LINE_DEBUG") {
         if text.contains(&want) {
+            // ★WHY the master-unit path declined, when it does. `mu=None`
+            // sends the wrap to GDI's own extent, which is measured with
+            // whatever face GDI substituted -- and the deck's 'Open Sauce'
+            // declines while its 'Canva Sans' does not, in the same render.
+            use oxislides_core::layout::FaceMetrics;
+            let all = GdiFaceMetrics.has_all_glyphs(family, bold, italic, text);
+            let miss: Vec<char> = text
+                .chars()
+                .filter(|c| GdiFaceMetrics.advance_em(family, bold, italic, *c).is_none())
+                .collect();
+            // Which STAGE of the chain declines, for the first character.
+            let c0 = text.chars().next().unwrap_or('n');
+            let (sf, sw, si) = styled_face(family, bold, italic);
+            eprintln!(
+                "   WHY has_all_glyphs={all} no_advance={miss:?} | cloud={:?} hmtx={:?} fontdata={:?} precise={:?} | styled_face={sf:?} w={sw} i={si}",
+                cloud_advance_em(family, bold, italic, c0),
+                font_adv::hmtx_advance_em(family, c0),
+                fontdata_advance_em(family, bold, italic, c0),
+                precise_advance_em(family, bold, italic, c0),
+            );
             eprintln!(
                 "LINE fam={family:?} fs={fs} bold={bold} first={first_width_pt} rest={rest_width_pt}                  scale={scale:.4} mu={:?} lines={lines:?}",
                 master_units(text, fs, family, bold, italic, 0.0),
