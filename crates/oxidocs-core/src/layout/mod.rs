@@ -1734,6 +1734,28 @@ pub struct LayoutPage {
     pub height: f32,
     pub elements: Vec<LayoutElement>,
 }
+/// S1290: one paragraph's shared column properties, measured once in the
+/// vertical writer's Phase A and referenced by each of the columns it fills.
+struct VertParaRecipe {
+    style: RunStyle,
+    fs: f32,
+    /// Advance per character DOWN the column (one em).
+    char_adv: f32,
+    font_family: Option<String>,
+    block_idx: usize,
+}
+
+/// S1290: one measured column of a vertical section, before it knows its band.
+struct VertColumn {
+    recipe: usize,
+    text: String,
+    pitch: f32,
+    /// An empty paragraph: reserves its width, draws nothing.
+    blank: bool,
+    /// This column carries the paragraph's `<w:pageBreakBefore/>` (S1165).
+    hard_break: bool,
+}
+
 #[track_caller]
 fn dbg_page_push(n_before: usize, n_elems: usize) {
     if std::env::var("OXI_DBG_PGPUSH").is_ok() {
@@ -3873,9 +3895,38 @@ impl LayoutEngine {
     /// a line; lines advance RIGHT-to-LEFT; `w:cols num=N` divides the page into
     /// N horizontal BANDS stacked top-to-bottom (reading order top band first,
     /// each band right-to-left). Gate-safe by construction: only fires when
-    /// `page.vertical_section` (2 corpus docs); the horizontal path is untouched.
+    /// `page.vertical_section` (19 corpus docs); the horizontal path is untouched.
     /// The renderer's S489 `is_vertical` path stacks each Text element's chars
     /// downward, centred in [x, x+w]. Opt-out OXI_VERTICAL_DISABLE → horizontal.
+    ///
+    /// S1290 (2026-09-02, opt-out OXI_S1290_DISABLE): the band grid is PER
+    /// SECTION, and a continuous section break is a COLUMN CUT shared by every
+    /// band. Both halves were measured on 015355870669f8d3 (Word COM, collapsed
+    /// start ranges, per-CHARACTER x so a paragraph spanning several columns
+    /// reports each one — paragraph starts alone show a phantom staircase):
+    ///
+    /// ```text
+    /// page 4  sec2 3-col  band0 col1               (bands 1,2 empty)
+    ///         sec3 3-col  band0/1/2 cols 2..18     = 17+17+17
+    ///         sec4 1-col  col19  (past the left margin — Word overflows)
+    /// page 5  sec5 1-col  col1
+    ///         sec6 2-col  band0 cols 2..17, band1 cols 2..16 = 16+15
+    ///         sec7 2-col  col18
+    /// ```
+    ///
+    /// i.e. (a) each section carries its own N, (b) a section owns the same
+    /// column RANGE in every band and the next one resumes after it, and (c)
+    /// the columns of a section that ends in a CONTINUOUS break are BALANCED
+    /// over its bands, earlier bands taking the remainder (31 over 2 = 16+15,
+    /// 51 over 3 = 17+17+17). This is the horizontal continuous-multi-column
+    /// rule rotated 90 degrees: there a break is a horizontal cut across all
+    /// columns, here a vertical cut across all bands.
+    ///
+    /// Before this, `page.columns` — the FIRST section's layout — drove the
+    /// whole page, so every continuous `w:cols` merged onto it was lost:
+    /// 015355870669f8d3 laid its 3-band and 2-band pages out with ONE band and
+    /// ran a page long (pcd +1). The machinery was already here; only the value
+    /// never arrived.
     fn layout_page_vertical(&self, page: &Page) -> Vec<LayoutPage> {
         let page_w = page.size.width;
         let page_h = page.size.height;
@@ -3883,96 +3934,339 @@ impl LayoutEngine {
         let right = page_w - page.margin.right;
         let top = page.margin.top;
         let bottom = page_h - page.margin.bottom;
-
-        let num_bands = page
-            .columns
-            .as_ref()
-            .map(|c| c.num.max(1) as usize)
-            .unwrap_or(1);
-        let band_space = page.columns.as_ref().and_then(|c| c.space).unwrap_or(0.0);
-        if std::env::var("OXI_DBG_BANDS").is_ok() {
-            eprintln!("[BANDS] num_bands={} space={:.1} columns={:?}", num_bands, band_space,
-                page.columns.as_ref().map(|c| (c.num, c.space)));
-        }
         let content_h = (bottom - top).max(0.0);
-        let band_h = ((content_h - band_space * num_bands.saturating_sub(1) as f32)
-            / num_bands as f32)
-            .max(0.0);
-        let band_top = |b: usize| top + b as f32 * (band_h + band_space);
-        let band_bottom = |b: usize| band_top(b) + band_h;
+
+        // S1290: per-section band layouts. `column_runs` (parser S560) files
+        // every continuous section's `w:cols` at the block index where its
+        // blocks begin; run 0 is the page's own section. Disabled -> the old
+        // single page-level layout, which is what run 0 alone amounts to.
+        let s1290 = std::env::var("OXI_S1290_DISABLE").is_err();
+        let runs: Vec<(usize, Option<ColumnLayout>)> = if s1290 && !page.column_runs.is_empty() {
+            page.column_runs.clone()
+        } else {
+            vec![(0usize, page.columns.clone())]
+        };
 
         // Horizontal advance between vertical lines = docGrid linePitch (rotated
         // line grid), falling back to ~1.2em.
-        let line_pitch = page.grid_line_pitch.unwrap_or(self.default_font_size * 1.2);
+        let page_pitch = page.grid_line_pitch.unwrap_or(self.default_font_size * 1.2);
 
         let mut elements: Vec<LayoutElement> = Vec::new();
         let mut pages_out: Vec<LayoutPage> = Vec::new();
-        let mut band = 0usize;
-        // S1185b: `next_right` = the right edge available to the NEXT column.
-        // A leftward advance means a new column's box is
-        // [next_right − its_own_pitch, next_right], so the step into a column
-        // uses THAT column's pitch — the old `line_x = right - line_pitch` seed
-        // charged the page-level pitch (047ff775: Word's first column box is
-        // [right−36, right]; the old seed put it at right−18) and mixed-pitch
-        // adjacency stepped with the previous paragraph's pitch.
-        // S759 (2026-07-06): multi-page vertical writing. The v1 (S679) BROKE
-        // out of the loops when the last band filled — a 5-page probevert
-        // rendered 1 page and DROPPED 47/60 paragraphs (the gate-masked
-        // content-loss class, honest FAIL since S724). Now a full page is
-        // finalized (with its band separators) and layout continues on a
-        // fresh page. Single-page docs (albaluna×3) never overflow → the
-        // finalize path never runs → byte-identical.
-        let mut next_right = right;
-        let sep_needed = page.columns.as_ref().map_or(false, |c| c.separator) && num_bands > 1;
-        let push_separators = |els: &mut Vec<LayoutElement>| {
-            if !sep_needed {
-                return;
-            }
-            for b in 0..num_bands - 1 {
-                let sep_y = band_bottom(b) + band_space / 2.0;
-                els.push(LayoutElement::new(
-                    left,
-                    sep_y,
-                    (right - left).max(0.0),
-                    0.0,
-                    LayoutContent::TableBorder {
-                        x1: left,
-                        y1: sep_y,
-                        x2: right,
-                        y2: sep_y,
-                        color: None,
-                        width: 0.5,
-                        style: None,
-                    },
-                ));
-            }
-        };
+        // `avail_right` = the right edge available to the next COLUMN. A section
+        // cut moves it left by the section's own extent, so the next section
+        // resumes after it in every band (the measured law above).
+        let mut avail_right = right;
+        // Band separators are page-level furniture but their y depends on the
+        // band grid of the section that asked for them; collect and emit at
+        // page finalize.
+        let mut pending_seps: Vec<f32> = Vec::new();
 
-        for (block_idx, block) in page.blocks.iter().enumerate() {
-            let para = match block {
+        for (run_idx, (run_start, layout)) in runs.iter().enumerate() {
+            let run_end = runs
+                .get(run_idx + 1)
+                .map(|(s, _)| *s)
+                .unwrap_or(page.blocks.len())
+                .min(page.blocks.len());
+            let run_start = (*run_start).min(page.blocks.len());
+            if run_start >= run_end {
+                continue;
+            }
+            let num_bands = layout.as_ref().map(|c| c.num.max(1) as usize).unwrap_or(1);
+            let band_space = layout.as_ref().and_then(|c| c.space).unwrap_or(0.0);
+            let sep_on = layout.as_ref().map_or(false, |c| c.separator) && num_bands > 1;
+            let band_h = ((content_h - band_space * num_bands.saturating_sub(1) as f32)
+                / num_bands as f32)
+                .max(0.0);
+            let band_top = |b: usize| top + b as f32 * (band_h + band_space);
+            if std::env::var("OXI_DBG_BANDS").is_ok() {
+                eprintln!(
+                    "[BANDS] run={} blocks={}..{} num_bands={} space={:.1} band_h={:.2}",
+                    run_idx, run_start, run_end, num_bands, band_space, band_h
+                );
+            }
+
+            // ---- Phase A: this section's columns, band-relative --------------
+            // Each column holds one paragraph's worth of text that fits in one
+            // band height; a paragraph too long for one column continues in the
+            // next. Every column starts at its band's TOP — the truth x-walk
+            // shows no paragraph beginning mid-column; only Word's own
+            // section-break MARK does, and that is not an Oxi block.
+            let (recipes, cols) =
+                self.vertical_section_columns(page, run_start, run_end, band_h, page_pitch);
+
+            // ---- Phase B: place them ----------------------------------------
+            // A section that ends in a continuous break balances; the LAST run
+            // on the page ends in a nextPage break (that is why the page group
+            // stopped there) and does not.
+            let balance = s1290 && run_idx + 1 < runs.len();
+            let mut i = 0usize;
+            while i < cols.len() {
+                if cols[i].hard_break && !elements.is_empty() {
+                    // S1165: an explicit page break inside a vertical section.
+                    Self::finalize_vertical_page(
+                        &mut elements,
+                        &mut pages_out,
+                        &mut pending_seps,
+                        page_w,
+                        page_h,
+                        left,
+                        right,
+                    );
+                    avail_right = right;
+                }
+                // A hard break also ends the run of columns that can balance
+                // together — the break, not the section, decides where this
+                // page's content stops.
+                let chunk_end = (i + 1..cols.len())
+                    .find(|&k| cols[k].hard_break)
+                    .unwrap_or(cols.len());
+                let avail = (avail_right - left).max(0.0);
+                let m = chunk_end - i;
+
+                // Balanced placement, if the whole chunk fits that way.
+                let mut placed = false;
+                if balance && m > 0 {
+                    let counts = Self::balanced_band_counts(m, num_bands);
+                    let mut widths = Vec::with_capacity(num_bands);
+                    let mut k = i;
+                    for &c in &counts {
+                        widths.push(cols[k..k + c].iter().map(|p| p.pitch).sum::<f32>());
+                        k += c;
+                    }
+                    if widths.iter().all(|w| *w <= avail + 0.01) {
+                        let mut k = i;
+                        for (b, &c) in counts.iter().enumerate() {
+                            let mut used = 0.0f32;
+                            for col in &cols[k..k + c] {
+                                elements.extend(self.place_vertical_column(
+                                    page,
+                                    &recipes[col.recipe],
+                                    col,
+                                    avail_right - used - col.pitch,
+                                    band_top(b),
+                                ));
+                                used += col.pitch;
+                            }
+                            k += c;
+                        }
+                        avail_right -= widths.iter().cloned().fold(0.0f32, f32::max);
+                        if sep_on {
+                            Self::note_separators(
+                                &mut pending_seps,
+                                num_bands,
+                                band_top,
+                                band_h,
+                                band_space,
+                            );
+                        }
+                        i = chunk_end;
+                        placed = true;
+                    }
+                }
+                if placed {
+                    continue;
+                }
+
+                // Fill band by band to capacity (the unbalanced last run, or a
+                // chunk too big to balance onto what is left of this page).
+                let mut k = i;
+                let mut max_used = 0.0f32;
+                for b in 0..num_bands {
+                    let mut used = 0.0f32;
+                    while k < chunk_end && used + cols[k].pitch <= avail + 0.01 {
+                        elements.extend(self.place_vertical_column(
+                            page,
+                            &recipes[cols[k].recipe],
+                            &cols[k],
+                            avail_right - used - cols[k].pitch,
+                            band_top(b),
+                        ));
+                        used += cols[k].pitch;
+                        k += 1;
+                    }
+                    max_used = max_used.max(used);
+                    if k >= chunk_end {
+                        break;
+                    }
+                }
+                if sep_on && k > i {
+                    Self::note_separators(
+                        &mut pending_seps,
+                        num_bands,
+                        band_top,
+                        band_h,
+                        band_space,
+                    );
+                }
+                if k >= chunk_end {
+                    avail_right -= max_used;
+                    i = chunk_end;
+                    continue;
+                }
+                // The page is full.
+                if k == i && !elements.is_empty() {
+                    // Not one column of this section fits in what is left of
+                    // the page, so the section OPENS THE NEXT ONE — it does not
+                    // squeeze into the remainder. (Word: sec1 ends at col 18 of
+                    // p3 with nothing to spare, and sec2 starts at col 1 of p4.)
+                    // Retry the same `i` against a full page.
+                    Self::finalize_vertical_page(
+                        &mut elements,
+                        &mut pages_out,
+                        &mut pending_seps,
+                        page_w,
+                        page_h,
+                        left,
+                        right,
+                    );
+                    avail_right = right;
+                    continue;
+                }
+                if k == i {
+                    // A fresh page and still nothing fits: one column is wider
+                    // than the whole text area. Force it so the loop ends.
+                    elements.extend(self.place_vertical_column(
+                        page,
+                        &recipes[cols[k].recipe],
+                        &cols[k],
+                        right - cols[k].pitch,
+                        band_top(0),
+                    ));
+                    k += 1;
+                }
+                Self::finalize_vertical_page(
+                    &mut elements,
+                    &mut pages_out,
+                    &mut pending_seps,
+                    page_w,
+                    page_h,
+                    left,
+                    right,
+                );
+                avail_right = right;
+                i = k;
+            }
+        }
+
+        // Final page (separators included; empty trailing pages are not pushed
+        // unless the document produced no pages at all).
+        if !elements.is_empty() || pages_out.is_empty() {
+            Self::finalize_vertical_page(
+                &mut elements,
+                &mut pages_out,
+                &mut pending_seps,
+                page_w,
+                page_h,
+                left,
+                right,
+            );
+        }
+        pages_out
+    }
+
+    /// `m` columns over `n` bands, earlier bands taking the remainder — the
+    /// balance Word applies to a section that ends in a continuous break
+    /// (measured: 31 over 2 = 16+15, 51 over 3 = 17+17+17, 1 over 3 = 1+0+0).
+    fn balanced_band_counts(m: usize, n: usize) -> Vec<usize> {
+        let n = n.max(1);
+        (0..n).map(|j| (m + n - 1 - j) / n).collect()
+    }
+
+    /// Record the y of each band boundary so the page finalizer can draw
+    /// `w:cols w:sep="1"` separators once, whichever section asked for them.
+    fn note_separators<F: Fn(usize) -> f32>(
+        seps: &mut Vec<f32>,
+        num_bands: usize,
+        band_top: F,
+        band_h: f32,
+        band_space: f32,
+    ) {
+        for b in 0..num_bands.saturating_sub(1) {
+            let y = band_top(b) + band_h + band_space / 2.0;
+            if !seps.iter().any(|s| (*s - y).abs() < 0.01) {
+                seps.push(y);
+            }
+        }
+    }
+
+    /// Push the accumulated elements as one page, drawing any pending band
+    /// separators first.
+    fn finalize_vertical_page(
+        elements: &mut Vec<LayoutElement>,
+        pages_out: &mut Vec<LayoutPage>,
+        seps: &mut Vec<f32>,
+        page_w: f32,
+        page_h: f32,
+        left: f32,
+        right: f32,
+    ) {
+        for y in seps.drain(..) {
+            elements.push(LayoutElement::new(
+                left,
+                y,
+                (right - left).max(0.0),
+                0.0,
+                LayoutContent::TableBorder {
+                    x1: left,
+                    y1: y,
+                    x2: right,
+                    y2: y,
+                    color: None,
+                    width: 0.5,
+                    style: None,
+                },
+            ));
+        }
+        // 2026-09-02: the vertical (tbRl) writer wraps pages here, NOT through
+        // the sites `dbg_page_push` already covers -- a 14-page tbRl document
+        // logged ZERO pushes, which read as "no page breaks happen" instead of
+        // "this instrument does not watch this path".
+        dbg_page_push(pages_out.len(), elements.len());
+        pages_out.push(LayoutPage {
+            width: page_w,
+            height: page_h,
+            elements: std::mem::take(elements),
+        });
+    }
+
+    /// Phase A of the vertical writer: turn one section's blocks into the
+    /// ordered list of COLUMNS it needs, independent of which band each will
+    /// land in. Splitting measurement from placement is what lets a section be
+    /// balanced across its bands (S1290) — the old single pass had already
+    /// committed a column to a band by the time it knew how many there were.
+    fn vertical_section_columns(
+        &self,
+        page: &Page,
+        run_start: usize,
+        run_end: usize,
+        band_h: f32,
+        page_pitch: f32,
+    ) -> (Vec<VertParaRecipe>, Vec<VertColumn>) {
+        let mut recipes: Vec<VertParaRecipe> = Vec::new();
+        let mut cols: Vec<VertColumn> = Vec::new();
+        let s1165_on = std::env::var("OXI_S1165_DISABLE").is_err();
+
+        for block_idx in run_start..run_end {
+            let para = match &page.blocks[block_idx] {
                 Block::Paragraph(p) => p,
                 _ => continue, // tables/images in vertical sections: not yet supported
             };
-            // S1165 (2026-08-17, opt-out OXI_S1165_DISABLE): honour an explicit
-            // page break. This minimal vertical path (S679/S759) advances by
-            // CAPACITY alone and never looked at pageBreakBefore, so a vertical
-            // section ignored every explicit break: _pb_vertpitch_gen.py, whose
-            // nine arms each carry <w:pageBreakBefore/>, renders 9 pages in Word
-            // and 2 in Oxi (the arms just flow on, 5 columns apart). Nothing is
-            // emitted for a break at the very start, so a leading break cannot
-            // produce a blank first page.
-            if para.style.page_break_before
-                && !elements.is_empty()
-                && std::env::var("OXI_S1165_DISABLE").is_err()
+            // S730 in the vertical axis (S1290): an EMPTY paragraph carrying a
+            // CONTINUOUS section-break mark renders at zero size, which here
+            // means it consumes no COLUMN. Word's per-character walk of
+            // 015355870669f8d3 p3 puts para 41 (a plain empty paragraph) and
+            // para 42 (the mark) at the IDENTICAL (x, y) = col 18 top, and
+            // every other mark rides at the end of its section's last column
+            // (p4 i=44 below i=43 in col 1; p5 i=65 below i=64 in col 1).
+            // Charging it a column made section 1 run 55 columns instead of 54,
+            // so the cut landed one column late and every section after it was
+            // off by one — p4 opened at col 2 where Word opens at col 1.
+            if std::env::var("OXI_S730_DISABLE").is_err()
+                && para.style.continuous_section_break
+                && para.runs.iter().all(|r| r.text.is_empty())
             {
-                push_separators(&mut elements);
-                pages_out.push(LayoutPage {
-                    width: page_w,
-                    height: page_h,
-                    elements: std::mem::take(&mut elements),
-                });
-                band = 0;
-                next_right = right;
+                continue;
             }
             let style = para
                 .runs
@@ -4077,19 +4371,19 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             } else {
                 1.0
             };
-            let line_pitch = if std::env::var("OXI_S1166_DISABLE").is_ok() {
-                line_pitch
+            let pitch = if std::env::var("OXI_S1166_DISABLE").is_ok() {
+                page_pitch
             } else {
                 match para.style.line_spacing_rule.as_deref() {
-                    Some("exact") => para.style.line_spacing.unwrap_or(line_pitch).max(0.0),
+                    Some("exact") => para.style.line_spacing.unwrap_or(page_pitch).max(0.0),
                     Some("atLeast") => para
                         .style
                         .line_spacing
                         .unwrap_or(0.0)
-                        .max(line_pitch * s1185_cells),
+                        .max(page_pitch * s1185_cells),
                     // auto (or absent): multiplier and cell count compete.
                     _ => {
-                        line_pitch
+                        page_pitch
                             * para
                                 .style
                                 .line_spacing
@@ -4100,106 +4394,92 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                 }
             };
 
-            // S1185b: one band/page wrap, shared by every placement site.
-            let mut wrap_band = |elements: &mut Vec<LayoutElement>,
-                                 pages_out: &mut Vec<LayoutPage>,
-                                 band: &mut usize| {
-                *band += 1;
-                if *band >= num_bands {
-                    push_separators(elements);
-                    // 2026-09-02: the vertical (tbRl) writer wraps pages here,
-                    // NOT through the sites `dbg_page_push` already covers -- a
-                    // 14-page tbRl document logged ZERO pushes, which read as
-                    // "no page breaks happen" instead of "this instrument does
-                    // not watch this path".
-                    dbg_page_push(pages_out.len(), elements.len());
-                    pages_out.push(LayoutPage {
-                        width: page_w,
-                        height: page_h,
-                        elements: std::mem::take(elements),
-                    });
-                    *band = 0;
-                }
-            };
+            recipes.push(VertParaRecipe {
+                style,
+                fs,
+                char_adv,
+                font_family,
+                block_idx,
+            });
+            let recipe = recipes.len() - 1;
+            let hard_break = para.style.page_break_before && s1165_on;
 
             // Empty paragraph: occupies one (blank) column of its own pitch.
             if para_text.chars().all(|c| c.is_whitespace()) {
-                let nl = next_right - line_pitch;
-                if nl < left - 0.01 {
-                    // Band boundary absorbs the empty (the next paragraph takes
-                    // the fresh band's first slot) — unchanged behaviour.
-                    wrap_band(&mut elements, &mut pages_out, &mut band);
-                    next_right = right;
-                } else {
-                    next_right = nl;
-                }
+                cols.push(VertColumn {
+                    recipe,
+                    text: String::new(),
+                    pitch,
+                    blank: true,
+                    hard_break,
+                });
                 continue;
             }
 
-            // Lay the paragraph's chars into vertical lines (each line starts at
-            // the band top and runs down; wrap to the next line leftward). Each
-            // column's box is [next_right − line_pitch, next_right].
             let mut buf: Vec<char> = Vec::new();
-            let mut cur_y = band_top(band);
-            let mut buf_top = cur_y;
-            let mut flush =
-                |buf: &mut Vec<char>,
-                 buf_top: f32,
-                 elements: &mut Vec<LayoutElement>,
-                 pages_out: &mut Vec<LayoutPage>,
-                 band: &mut usize,
-                 next_right: &mut f32| {
-                    let mut lx = *next_right - line_pitch;
-                    if lx < left - 0.01 {
-                        wrap_band(elements, pages_out, band);
-                        *next_right = right;
-                        lx = right - line_pitch;
-                    }
-                    let n = buf.len() as f32;
-                    elements.push(self.vertical_line_element(
-                        buf.drain(..).collect(),
-                        lx,
-                        buf_top,
-                        line_pitch,
-                        n * char_adv,
-                        fs,
-                        char_adv - fs,
-                        &font_family,
-                        &style,
-                        &para.style,
-                        block_idx,
-                    ));
-                    *next_right = lx;
-                };
+            let mut cur_y = 0.0f32;
+            let mut first = true;
             for ch in para_text.chars() {
-                if cur_y + char_adv > band_bottom(band) + 0.01 && !buf.is_empty() {
-                    // Flush this line, move to the next line (leftward).
-                    flush(&mut buf, buf_top, &mut elements, &mut pages_out,
-                          &mut band, &mut next_right);
-                    cur_y = band_top(band);
-                    buf_top = cur_y;
+                if cur_y + char_adv > band_h + 0.01 && !buf.is_empty() {
+                    cols.push(VertColumn {
+                        recipe,
+                        text: buf.drain(..).collect(),
+                        pitch,
+                        blank: false,
+                        hard_break: hard_break && first,
+                    });
+                    first = false;
+                    cur_y = 0.0;
                 }
                 buf.push(ch);
                 cur_y += char_adv;
             }
             if !buf.is_empty() {
-                flush(&mut buf, buf_top, &mut elements, &mut pages_out,
-                      &mut band, &mut next_right);
+                cols.push(VertColumn {
+                    recipe,
+                    text: buf.drain(..).collect(),
+                    pitch,
+                    blank: false,
+                    hard_break: hard_break && first,
+                });
             }
         }
+        (recipes, cols)
+    }
 
-        // Final page (separators included; empty trailing pages are not pushed
-        // unless the document produced no pages at all).
-        if !elements.is_empty() || pages_out.is_empty() {
-            push_separators(&mut elements);
-            dbg_page_push(pages_out.len(), elements.len());
-            pages_out.push(LayoutPage {
-                width: page_w,
-                height: page_h,
-                elements,
-            });
+    /// Phase B of the vertical writer: turn one measured column into its
+    /// element at `(x, y)`. A blank column (an empty paragraph) reserves its
+    /// width and draws nothing — the old single pass emitted no element for one
+    /// either, and the blank-page census counts elements.
+    fn place_vertical_column(
+        &self,
+        page: &Page,
+        recipe: &VertParaRecipe,
+        col: &VertColumn,
+        x: f32,
+        y: f32,
+    ) -> Option<LayoutElement> {
+        if col.blank {
+            return None;
         }
-        pages_out
+        let para_style = match &page.blocks[recipe.block_idx] {
+            Block::Paragraph(p) => p.style.clone(),
+            _ => Default::default(),
+        };
+        let n = col.text.chars().count() as f32;
+        Some(self.vertical_line_element(
+            col.text.clone(),
+            x,
+            y,
+            col.pitch,
+            n * recipe.char_adv,
+            recipe.fs,
+            recipe.char_adv - recipe.fs,
+            &recipe.font_family,
+            &recipe.style,
+            &para_style,
+            recipe.block_idx,
+        ))
     }
 
     /// Build one vertical-line Text element (is_vertical=true). The renderer
