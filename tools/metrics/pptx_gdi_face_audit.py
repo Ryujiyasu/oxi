@@ -34,6 +34,7 @@ ones. Caladea is six times that, negative, and per-glyph it scatters both ways
 
     python tools/metrics/pptx_gdi_face_audit.py
     python tools/metrics/pptx_gdi_face_audit.py Caladea Carlito
+    python tools/metrics/pptx_gdi_face_audit.py --corpus   # every family the decks name
 """
 from __future__ import annotations
 
@@ -140,8 +141,40 @@ def file_width(path: Path, text: str, size: int) -> float | None:
     return total / upm * size
 
 
+def corpus_families() -> list[str]:
+    """Every typeface the decks name, so the claim can be corpus-wide.
+
+    A family nothing on the machine serves drops out of the comparison on its
+    own (`gdi_extent` returns None when the mapper substitutes), which is the
+    right answer here: the engine measures those through the deck's embedded
+    part, not through an installed file.
+    """
+    import re
+    import zipfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from pptx_dump_ab import deck_paths
+
+    seen: set[str] = set()
+    for _, src in deck_paths("all"):
+        try:
+            with zipfile.ZipFile(src) as z:
+                for name in z.namelist():
+                    if re.match(r"ppt/(slides|slideLayouts|slideMasters|theme)/[^/]+\.xml$", name):
+                        xml = z.read(name).decode("utf-8", "replace")
+                        seen |= {t for t in re.findall(r'typeface="([^"]*)"', xml)
+                                 if t and not t.startswith("+")}
+        except Exception:
+            continue
+    return sorted(seen)
+
+
 def main() -> None:
-    families = sys.argv[1:] or DEFAULT
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--corpus":
+        families = corpus_families()
+        print(f"{len(families)} families named by the corpus\n")
+    else:
+        families = argv or DEFAULT
     print(f"{len(SAMPLE)} characters at {SIZE}px em\n")
     print(f"{'family':<22}{'GDI':>10}{'file':>12}{'delta':>10}   file")
     rows: list[tuple[float, str]] = []
@@ -158,13 +191,20 @@ def main() -> None:
         delta = (got - want) / want * 100.0
         rows.append((abs(delta), fam))
         print(f"{fam:<22}{got:>10}{want:>12.1f}{delta:>9.2f}%   {path.name}")
+    # ★The denominator, so a short list of hits is never read as a clean sweep:
+    # most families a deck names are not on the machine at all -- they arrive as
+    # embedded parts -- and those are simply outside this question.
     if rows:
         rows.sort(reverse=True)
-        worst, fam = rows[0]
-        print(f"\nlargest disagreement: {fam} at {worst:.2f}%")
-        agree = [f for d, f in rows if d < 0.05]
-        print(f"{len(agree)} families agree with their file to under 0.05%: "
-              f"{', '.join(agree[:6])}")
+        band = [d for d, _ in rows]
+        print(f"\n{len(families)} families asked, {len(rows)} served by this machine "
+              f"and comparable, {len(families) - len(rows)} not served or with no file")
+        bad = [(d, f) for d, f in rows if d > 1.5]
+        print(f"{len(bad)} disagree with their file by more than 1.5%"
+              + (": " + ", ".join(f"{f} {d:.2f}%" for d, f in bad) if bad else ""))
+        print(f"the rest sit within {max(d for d, _ in rows if d <= 1.5):.2f}%, "
+              f"which is the per-glyph pixel rounding of the extent call"
+              if any(d <= 1.5 for d in band) else "")
 
 
 if __name__ == "__main__":
