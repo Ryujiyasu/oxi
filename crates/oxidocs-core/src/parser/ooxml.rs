@@ -16,6 +16,9 @@ use super::theme::{parse_theme, ThemeColors};
 use super::ParseError;
 use crate::ir::{VerticalAlign, *};
 
+/// The character Word writes into run text for `<w:br w:type="page"/>`.
+const PAGE_BREAK_CHAR: char = '\u{000C}';
+
 /// S1182: sentinel alt_text tagging a data-less flow placeholder for a
 /// VISUAL-only inline wps shape. Kept only when the host paragraph turns out
 /// to be a body image-only paragraph; stripped everywhere else (text hosts,
@@ -1691,10 +1694,68 @@ fn parse_body(
                                 }
                             }
                         }
+                        // S1293 (2026-09-02, opt-out OXI_S1293_DISABLE): a drawing
+                        // lifted OUT of its paragraph must not cross a
+                        // `<w:br w:type="page"/>` that FOLLOWS it inside that same
+                        // paragraph. legal__02f84965dccfe4db's shape paragraph is
+                        // literally [drawing][br type=page]: the drawing leaves as
+                        // its own block APPENDED AFTER the paragraph, so the
+                        // paragraph's break fires first and the 455x103.35 box lands
+                        // at the TOP of the next page. Word draws it on the page
+                        // BEFORE the break (truth PDF: the box's text at y=665.8 on
+                        // p4), and the document runs +1 from there -- 66 of its 184
+                        // paragraphs, score 0.5543.
+                        //
+                        // The break-character conversion further down only inspects
+                        // `runs.first()`, and here the break is the SECOND run, so it
+                        // stays a character and becomes the line's
+                        // LineBreakType::PageBreak at layout time -- right for the
+                        // paragraph, wrong for the drawing that is no longer in it.
+                        //
+                        // Emitting the drawing BEFORE the paragraph restores document
+                        // order: the box draws at the current cursor, then the
+                        // paragraph's stub line and its break end the page. Gated on
+                        // the paragraph having NO visible text of its own besides the
+                        // break, so the drawing really did precede everything left in
+                        // it; a paragraph with text keeps today's append order.
+                        // Derived with `_pb_inlinebox_gen.py` (12 arms, Word PDF):
+                        // with the break in the box's paragraph Word keeps the box on
+                        // the page before it in every arm, Oxi moved it in every arm.
+                        let s1293 = std::env::var("OXI_S1293_DISABLE").is_err()
+                            && !pr.inline_images.is_empty()
+                            && matches!(
+                                current_blocks.last(),
+                                Some(crate::ir::Block::Paragraph(p))
+                                    if p.runs.iter().any(|r| r.text.contains(PAGE_BREAK_CHAR))
+                                        && p.runs.iter().all(|r| {
+                                            r.text.chars().all(|c| {
+                                                c == PAGE_BREAK_CHAR || c.is_whitespace()
+                                            })
+                                        })
+                            );
                         // Inline images become separate blocks after the paragraph
-                        current_blocks.extend(pr.inline_images);
+                        let anchor_idx = if s1293 {
+                            // Drop the host paragraph and hand its break to the LAST
+                            // drawing. Leaving the paragraph in place instead was
+                            // tried and costs a page: in Word the paragraph mark
+                            // shares the drawing's line and adds no height, so the
+                            // leftover stub can overflow a page the box only just
+                            // fits (repro arm t49 -- Word 2 pages, Oxi 3).
+                            current_blocks.pop();
+                            current_blocks.extend(pr.inline_images.drain(..));
+                            if let Some(crate::ir::Block::Image(img)) = current_blocks.last_mut()
+                            {
+                                img.page_break_after = true;
+                            }
+                            // Floats anchored here belong to the DRAWING (a text
+                            // box's own text is positioned at its frame), so they
+                            // follow it rather than the paragraph that is gone.
+                            current_blocks.len().saturating_sub(1)
+                        } else {
+                            current_blocks.extend(pr.inline_images);
+                            current_blocks.len().saturating_sub(1)
+                        };
                         // Set anchor_block_index for floating images
-                        let anchor_idx = current_blocks.len().saturating_sub(1);
                         for mut img in pr.floating_images {
                             img.anchor_block_index = anchor_idx;
                             current_floating_images.push(img);
@@ -7257,6 +7318,7 @@ fn parse_drawing(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,
@@ -7475,6 +7537,7 @@ fn parse_drawing(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,
@@ -7502,6 +7565,7 @@ fn parse_drawing(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            page_break_after: false,
             // S1238: carry the wps shape's visible frame so the flowed
             // placeholder can render it (kyotei digit boxes: a:ln 0.5pt black
             // + lt1 fill). border=false shapes stay invisible (None).
@@ -8029,6 +8093,7 @@ fn parse_vml_pict(
                 paragraph_space_after: 0.0,
                 host_paragraph: None,
                 page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,
@@ -8114,6 +8179,7 @@ fn parse_vml_pict(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,
@@ -8203,6 +8269,7 @@ fn parse_vml_pict(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,
@@ -8385,6 +8452,7 @@ fn parse_ole_object(
             paragraph_space_after: 0.0,
             host_paragraph: None,
             page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,
@@ -10112,6 +10180,7 @@ fn parse_table_cell(
                                 paragraph_space_after: 0.0,
                                 host_paragraph: None,
                                 page_break_before: false,
+            page_break_after: false,
             placeholder_outline: None,
             advance_extra_w: 0.0,
             effect_extent_b: 0.0,

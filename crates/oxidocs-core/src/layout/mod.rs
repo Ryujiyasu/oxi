@@ -6609,6 +6609,35 @@ h_tw={} pitch_tw={} cells={} text={:?}",
             block_col_x.push(start_x); // S1222: the current column's left edge
             block_page_indices.push(current_page_idx);
             block_start_page_indices.push(current_page_idx);
+            // What a float ANCHORED to this block will resolve against. A
+            // floating box lands where these two say, so when a box appears on
+            // the wrong page this is the pair to read first.
+            if std::env::var("OXI_DBG_ANCHOR").is_ok() {
+                let (preview, nruns, pbb, pba) = match block {
+                    Block::Paragraph(p) => (
+                        p.runs
+                            .iter()
+                            .flat_map(|r| r.text.chars())
+                            .take(14)
+                            .collect::<String>(),
+                        p.runs.len(),
+                        p.style.page_break_before,
+                        p.style.page_break_after,
+                    ),
+                    _ => ("<non-paragraph>".to_string(), 0, false, false),
+                };
+                eprintln!(
+                    "[ANCHOR] blk={} page={} y={:.2} flow_off={:.2} runs={} pbb={} pba={} text={:?}",
+                    block_start_page_indices.len() - 1,
+                    current_page_idx,
+                    cursor.cursor_y,
+                    anchor_flow_offset,
+                    nruns,
+                    pbb,
+                    pba,
+                    preview
+                );
+            }
             match block {
                 Block::Paragraph(para) => {
                     // S945 (2026-07-19): an EMPTY section-ending paragraph (in-body
@@ -10429,6 +10458,11 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         );
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                        // S1293b: see the overflow path below -- the START index
+                        // drives float anchors and has to move with the block.
+                        if std::env::var("OXI_S1293_DISABLE").is_err() {
+                            *block_start_page_indices.last_mut().unwrap() = current_page_idx;
+                        }
                     }
                     // S549 (2026-06-12, opt-out OXI_S549_DISABLE): in a docGrid
                     // lines section the image-only paragraph's line occupies a
@@ -10559,6 +10593,17 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         }
                         *block_page_indices.last_mut().unwrap() = current_page_idx;
                         *block_y_positions.last_mut().unwrap() = cursor.cursor_y;
+                        // S1293b: the block's START moved too. S1123 resolves a
+                        // float's anchor against `block_start_page_indices`, and
+                        // leaving it on the pre-push page splits a text box from
+                        // its own frame -- the frame goes to the new page, its
+                        // text stays on the old one (legal__02f84965 boxes 3 and
+                        // 4: an image-ONLY page 8 and 10, which the gate counts
+                        // as blank sheets). An image that did not fit genuinely
+                        // starts on the page it was moved to.
+                        if std::env::var("OXI_S1293_DISABLE").is_err() {
+                            *block_start_page_indices.last_mut().unwrap() = current_page_idx;
+                        }
                     }
                     if img_before > 0.0 {
                         cursor.advance(img_before);
@@ -10627,6 +10672,41 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         // S1183: an after-autospacing host hands the flat auto
                         // amount to that collapse instead of its explicit after.
                         prev_space_after = s1183_sa.unwrap_or(img.paragraph_space_after);
+                    }
+                    // S1293: the drawing's host paragraph ended with a page break
+                    // AFTER the drawing. The paragraph is gone (its mark shared the
+                    // drawing's line in Word and added no height), so its break
+                    // rides on the image and fires HERE -- after the drawing is on
+                    // the page, which is the whole point. Mirrors the paragraph
+                    // `page_break_after` handler above.
+                    if img.page_break_after
+                        && !elements.is_empty()
+                        && std::env::var("OXI_S1293_DISABLE").is_err()
+                    {
+                        dbg_page_push(pages.len(), 0);
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: std::mem::take(&mut elements),
+                        });
+                        if let Some(g) = s755_geom.as_ref() {
+                            start_y = g.top(pages.len() + 1);
+                            content_height = g.ch(pages.len() + 1);
+                        }
+                        cursor.set(start_y);
+                        current_column = 0;
+                        start_x = col_x_positions[0];
+                        content_width = col_widths[0];
+                        current_page_idx += 1;
+                        lm2_cells = 0;
+                        footnote_reserve_current = 0.0;
+                        footnote_ids_current_page.clear();
+                        s900_fold(
+                            &mut footnote_reserve_current,
+                            &mut footnote_ids_current_page,
+                            &mut s900_pending_deferred,
+                            current_page_idx,
+                        );
                     }
                 }
                 Block::UnsupportedElement(_) => {

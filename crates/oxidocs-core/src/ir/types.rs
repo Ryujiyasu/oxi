@@ -830,6 +830,13 @@ pub struct Image {
     /// `pageBreakBefore` handler does.
     #[serde(default)]
     pub page_break_before: bool,
+    /// S1293: the drawing's host paragraph ended with `<w:br w:type="page"/>`
+    /// AFTER the drawing, and the paragraph itself carried nothing else. The
+    /// paragraph is dropped (in Word its mark shares the drawing's line, so it
+    /// adds no height) and its break rides here instead, which keeps the
+    /// drawing on the page it belonged to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub page_break_after: bool,
     /// S1238: a data-less flow-reservation placeholder (S741) whose source wps
     /// shape draws a visible frame — (stroke hex, stroke width pt, fill hex).
     /// The inline emit renders this as a rectangle at the flowed position
