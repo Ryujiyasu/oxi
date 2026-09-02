@@ -60,8 +60,29 @@ EXE = REPO / "tools" / "oxi-pptx-renderer" / "target" / "release" / "oxi-pptx-re
 NEAR = 0.75
 
 
+def wait_for_powerpoint_to_exit(limit: float = 60.0) -> None:
+    """Block until no POWERPNT.EXE is left running.
+
+    ★`app.Quit()` returns before the process is gone, and a renderer started in
+    that window resolves embedded fonts against a PowerPoint that still holds
+    them (`pptx_com_render_must_not_overlap`). This tool audited one deck at a
+    time for most of its life and never noticed; run twelve decks in a row and
+    d44 reports 16 break disagreements that a single-deck run does not have --
+    the same deck, the same binary, 88.81% against 100.00%.
+    """
+    import time
+    deadline = time.time() + limit
+    while time.time() < deadline:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq POWERPNT.EXE", "/NH"],
+                           capture_output=True, text=True, check=False)
+        if "POWERPNT" not in (r.stdout or ""):
+            return
+        time.sleep(0.5)
+
+
 def engine_dump(src: Path) -> dict:
     """The engine's layout for `src`, via `--dump-layout`."""
+    wait_for_powerpoint_to_exit()
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "layout.json"
         subprocess.run(
