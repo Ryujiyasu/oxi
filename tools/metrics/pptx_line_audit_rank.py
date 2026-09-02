@@ -38,6 +38,10 @@ DECK = re.compile(
     r"(?:,\s*(?P<turned>\d+) paragraphs turned)?"
 )
 LEFT = re.compile(r"p95 (?P<p95>[\d.]+)pt, (?P<over>\d+) over 3pt")
+WIDTH = re.compile(
+    r"line width: (?P<lines>\d+) lines.*?median (?P<median>[-+][\d.]+)pt; "
+    r"fit = (?P<slope>[-+][\d.]+) per mille of the line \+ (?P<icept>[-+][\d.]+)pt, "
+    r"(?P<over>\d+) over 2%")
 ADV = re.compile(r"line advance: (?P<steps>\d+) steps.*?p95 (?P<p95>[\d.]+)pt, (?P<over>\d+) over")
 PCOUNT = re.compile(r"shapes whose PARAGRAPH COUNT disagrees: (?P<n>\d+)")
 
@@ -61,6 +65,11 @@ def parse(text: str) -> list[dict]:
                 "adv_over": 0,
                 "para_count_mismatch": 0,
                 "turned_paras": int(m["turned"] or 0),
+                "width_lines": 0,
+                "width_median": None,
+                "width_slope": None,
+                "width_icept": None,
+                "width_over2": 0,
             }
             decks.append(cur)
             continue
@@ -72,6 +81,12 @@ def parse(text: str) -> list[dict]:
         elif (m := ADV.search(line)):
             cur["adv_p95"] = float(m["p95"])
             cur["adv_over"] = int(m["over"])
+        elif (m := WIDTH.search(line)):
+            cur["width_lines"] = int(m["lines"])
+            cur["width_median"] = float(m["median"])
+            cur["width_slope"] = float(m["slope"])
+            cur["width_icept"] = float(m["icept"])
+            cur["width_over2"] = int(m["over"])
         elif (m := PCOUNT.search(line)):
             cur["para_count_mismatch"] = int(m["n"])
     return decks
@@ -113,6 +128,18 @@ def main() -> None:
     for d in placed[:12]:
         print(f"  {d['doc']:>4}  left p95 {d['left_p95']:5.2f}pt ({d['left_over3']} over 3pt)"
               f"   adv p95 {d['adv_p95']}  ({d['paragraphs']} paragraphs)")
+
+    wid = sorted((d for d in decks if d["width_slope"] is not None),
+                 key=lambda d: -abs(d["width_slope"]))
+    if wid:
+        lines = sum(d["width_lines"] for d in wid)
+        over = sum(d["width_over2"] for d in wid)
+        print(f"\nWIDTH, {lines} lines compared over {len(wid)} decks, "
+              f"{over} of them more than 2% out (worst advance slope first):")
+        for d in wid[:10]:
+            print(f"  {d['doc']:>4}  {d['width_slope']:+7.2f} per mille  "
+                  f"median {d['width_median']:+5.2f}pt  bearing {d['width_icept']:+5.2f}pt  "
+                  f"{d['width_over2']:3} of {d['width_lines']:4} over 2%")
 
     hole = [d for d in decks if d["unmatched"] or d["para_count_mismatch"]]
     if hole:
