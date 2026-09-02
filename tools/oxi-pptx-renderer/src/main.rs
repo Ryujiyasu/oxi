@@ -339,7 +339,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
             let t = t.borrow();
             eprintln!(
                 "KERN {} lines, {} carry a pair ({:.1}%), {:.2}pt in all, worst {:.2}pt: {} \
-                 [{} faces keep their pairs in GPOS, where this cannot see them]",
+                 [{} faces answer from GPOS, which GDI's pair API does not report]",
                 t.0, t.1,
                 if t.0 > 0 { 100.0 * t.1 as f64 / t.0 as f64 } else { 0.0 },
                 t.2, t.3, t.4, t.5
@@ -13629,6 +13629,257 @@ fn boldfamily_on() -> bool {
     std::env::var("OXI_BOLDFAMILY_DISABLE").is_err()
 }
 
+/// The kern pairs a face keeps in GPOS, which is where every embedded face in
+/// the corpus keeps them.
+///
+/// `GetKerningPairsW` reads the legacy `kern` table and nothing else, so it
+/// answers 0 for Jua, Rubik, Gruppo, Bebas Neue, Montserrat and Inknut alike
+/// (`OXI_KERN_CENSUS` prints `kern_table=false gpos=true` for each). PowerPoint
+/// kerns them anyway -- d10 s8 pulls its apostrophe 7.75pt in -- so the pairs
+/// have to be read out of the table rather than asked for.
+///
+/// Only the lookups the `kern` FEATURE names are read: a font may position
+/// marks or cursive-join through the same lookup type, and applying those as
+/// kerning would move text PowerPoint does not move.
+#[cfg(windows)]
+#[derive(Default)]
+struct GposKern {
+    /// Format 1: an explicit (first, second) -> x-advance adjustment.
+    pairs: std::collections::HashMap<(u16, u16), i16>,
+    /// Format 2: coverage of the first glyph, both class tables, and the
+    /// class1 x class2 matrix of adjustments.
+    classes: Vec<(
+        std::collections::HashSet<u16>,
+        std::collections::HashMap<u16, u16>,
+        std::collections::HashMap<u16, u16>,
+        Vec<Vec<i16>>,
+    )>,
+}
+
+#[cfg(windows)]
+impl GposKern {
+    fn get(&self, first: u16, second: u16) -> i16 {
+        if let Some(v) = self.pairs.get(&(first, second)) {
+            return *v;
+        }
+        for (cov, c1, c2, matrix) in &self.classes {
+            if !cov.contains(&first) {
+                continue;
+            }
+            let i = *c1.get(&first).unwrap_or(&0) as usize;
+            let j = *c2.get(&second).unwrap_or(&0) as usize;
+            if let Some(v) = matrix.get(i).and_then(|row| row.get(j)) {
+                if *v != 0 {
+                    return *v;
+                }
+            }
+        }
+        0
+    }
+}
+
+/// The glyphs a Coverage table covers, in coverage order.
+#[cfg(windows)]
+fn gpos_coverage(b: &[u8], off: usize) -> Option<Vec<u16>> {
+    let mut out = Vec::new();
+    match be16(b, off)? {
+        1 => {
+            let n = be16(b, off + 2)? as usize;
+            for i in 0..n {
+                out.push(be16(b, off + 4 + i * 2)?);
+            }
+        }
+        2 => {
+            let n = be16(b, off + 2)? as usize;
+            for i in 0..n {
+                let r = off + 4 + i * 6;
+                let (start, end) = (be16(b, r)?, be16(b, r + 2)?);
+                for g in start..=end {
+                    out.push(g);
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+/// glyph -> class, from a ClassDef table. Glyphs it does not name are class 0.
+#[cfg(windows)]
+fn gpos_classdef(b: &[u8], off: usize) -> Option<std::collections::HashMap<u16, u16>> {
+    let mut out = std::collections::HashMap::new();
+    match be16(b, off)? {
+        1 => {
+            let start = be16(b, off + 2)?;
+            let n = be16(b, off + 4)? as usize;
+            for i in 0..n {
+                out.insert(start + i as u16, be16(b, off + 6 + i * 2)?);
+            }
+        }
+        2 => {
+            let n = be16(b, off + 2)? as usize;
+            for i in 0..n {
+                let r = off + 4 + i * 6;
+                let (s, e, c) = (be16(b, r)?, be16(b, r + 2)?, be16(b, r + 4)?);
+                for g in s..=e {
+                    out.insert(g, c);
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+/// How many bytes a ValueRecord takes, and whether it carries an x-advance.
+#[cfg(windows)]
+fn gpos_value_size(format: u16) -> usize {
+    (format.count_ones() as usize) * 2
+}
+
+/// The x-advance inside a ValueRecord, or 0 when the format has none.
+#[cfg(windows)]
+fn gpos_value_xadvance(b: &[u8], off: usize, format: u16) -> i16 {
+    if format & 0x0004 == 0 {
+        return 0;
+    }
+    // The record holds its fields in bit order, so the x-advance sits after
+    // whichever of x-placement and y-placement are present.
+    let before = (format & 0x0003).count_ones() as usize;
+    be16(b, off + before * 2).map(|v| v as i16).unwrap_or(0)
+}
+
+/// One PairPos subtable, added to `out`.
+#[cfg(windows)]
+fn gpos_pairpos(b: &[u8], off: usize, out: &mut GposKern) -> Option<()> {
+    let format = be16(b, off)?;
+    let cov_off = off + be16(b, off + 2)? as usize;
+    let vf1 = be16(b, off + 4)?;
+    let vf2 = be16(b, off + 6)?;
+    let (s1, s2) = (gpos_value_size(vf1), gpos_value_size(vf2));
+    match format {
+        1 => {
+            let coverage = gpos_coverage(b, cov_off)?;
+            let n = be16(b, off + 8)? as usize;
+            for i in 0..n.min(coverage.len()) {
+                let set = off + be16(b, off + 10 + i * 2)? as usize;
+                let count = be16(b, set)? as usize;
+                for k in 0..count {
+                    let rec = set + 2 + k * (2 + s1 + s2);
+                    let second = be16(b, rec)?;
+                    let adv = gpos_value_xadvance(b, rec + 2, vf1);
+                    if adv != 0 {
+                        out.pairs.insert((coverage[i], second), adv);
+                    }
+                }
+            }
+        }
+        2 => {
+            let cov: std::collections::HashSet<u16> =
+                gpos_coverage(b, cov_off)?.into_iter().collect();
+            let c1 = gpos_classdef(b, off + be16(b, off + 8)? as usize)?;
+            let c2 = gpos_classdef(b, off + be16(b, off + 10)? as usize)?;
+            let n1 = be16(b, off + 12)? as usize;
+            let n2 = be16(b, off + 14)? as usize;
+            let mut matrix = Vec::with_capacity(n1);
+            for i in 0..n1 {
+                let mut row = Vec::with_capacity(n2);
+                for j in 0..n2 {
+                    let rec = off + 16 + (i * n2 + j) * (s1 + s2);
+                    row.push(gpos_value_xadvance(b, rec, vf1));
+                }
+                matrix.push(row);
+            }
+            out.classes.push((cov, c1, c2, matrix));
+        }
+        _ => {}
+    }
+    Some(())
+}
+
+/// Every pair adjustment the `kern` feature reaches, read from the face's own
+/// GPOS table.
+#[cfg(windows)]
+fn gpos_kern_table(b: &[u8]) -> GposKern {
+    let mut out = GposKern::default();
+    let (Some(feature_off), Some(lookup_off)) = (
+        be16(b, 6).map(|v| v as usize),
+        be16(b, 8).map(|v| v as usize),
+    ) else {
+        return out;
+    };
+    // Which lookups the `kern` feature names. A font may also carry pair
+    // positioning for something else entirely.
+    let mut wanted: std::collections::HashSet<u16> = std::collections::HashSet::new();
+    if let Some(n) = be16(b, feature_off) {
+        for i in 0..n as usize {
+            let rec = feature_off + 2 + i * 6;
+            let tag = b.get(rec..rec + 4).unwrap_or(&[]);
+            if tag != b"kern" {
+                continue;
+            }
+            let Some(f) = be16(b, rec + 4).map(|v| feature_off + v as usize) else {
+                continue;
+            };
+            let Some(count) = be16(b, f + 2) else { continue };
+            for k in 0..count as usize {
+                if let Some(idx) = be16(b, f + 4 + k * 2) {
+                    wanted.insert(idx);
+                }
+            }
+        }
+    }
+    let Some(n_lookups) = be16(b, lookup_off) else {
+        return out;
+    };
+    for i in 0..n_lookups as usize {
+        if !wanted.is_empty() && !wanted.contains(&(i as u16)) {
+            continue;
+        }
+        let Some(l) = be16(b, lookup_off + 2 + i * 2).map(|v| lookup_off + v as usize) else {
+            continue;
+        };
+        let (Some(kind), Some(subs)) = (be16(b, l), be16(b, l + 4)) else {
+            continue;
+        };
+        for k in 0..subs as usize {
+            let Some(sub) = be16(b, l + 6 + k * 2).map(|v| l + v as usize) else {
+                continue;
+            };
+            match kind {
+                2 => {
+                    let _ = gpos_pairpos(b, sub, &mut out);
+                }
+                // An extension lookup names the real type and a 32-bit offset,
+                // which is how a large font keeps its pair table addressable.
+                9 => {
+                    if be16(b, sub + 2) == Some(2) {
+                        if let Some(delta) = be32(b, sub + 4) {
+                            let _ = gpos_pairpos(b, sub + delta as usize, &mut out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// One face's kerning, from both places it can live.
+#[cfg(windows)]
+#[derive(Default)]
+struct KernSource {
+    /// `GetKerningPairsW`, in the units of the 2048-em probe font. Empty for
+    /// every embedded face in the corpus, which is why the next two exist.
+    gdi: std::collections::HashMap<(u16, u16), i32>,
+    gpos: GposKern,
+    /// code point -> glyph id, because GPOS is indexed by glyph.
+    cmap: std::collections::HashMap<u32, u16>,
+    /// The em GPOS's units are in.
+    upem: f32,
+}
+
 /// The kern PowerPoint applies between two characters, in EM units.
 ///
 /// DERIVED 2026-09-03 (`gen_pptx_kern.py`, Arial, PowerPoint's own
@@ -13654,9 +13905,11 @@ fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: cha
     use windows::Win32::Graphics::Gdi::*;
 
     thread_local! {
+        // Per face: what GDI's pair API says, what GPOS says, the cmap needed
+        // to ask GPOS (it is indexed by GLYPH, not by character), and the em
+        // those GPOS units are in.
         static KERN_CACHE: std::cell::RefCell<
-            std::collections::HashMap<(String, i32, bool),
-                                      std::collections::HashMap<(u16, u16), i32>>,
+            std::collections::HashMap<(String, i32, bool), KernSource>,
         > = std::cell::RefCell::new(std::collections::HashMap::new());
     }
     // GDI answers in the units of the font it was asked for, so the face is
@@ -13671,7 +13924,7 @@ fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: cha
         let mut cache = cache.borrow_mut();
         let fresh = !cache.contains_key(&(face.clone(), weight, italic));
         let table = cache.entry((face.clone(), weight, italic)).or_insert_with(|| {
-            let mut out = std::collections::HashMap::new();
+            let mut out = KernSource::default();
             let dc = probe_dc();
             let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
             unsafe {
@@ -13692,9 +13945,26 @@ fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: cha
                     let got = GetKerningPairsW(dc, Some(&mut buf));
                     for kp in buf.iter().take(got as usize) {
                         if kp.iKernAmount != 0 {
-                            out.insert((kp.wFirst, kp.wSecond), kp.iKernAmount);
+                            out.gdi.insert((kp.wFirst, kp.wSecond), kp.iKernAmount);
                         }
                     }
+                }
+                // The same face's GPOS, which is where a modern font keeps the
+                // pairs GDI's API cannot report. Read once, and only if the
+                // legacy answer is empty -- when GDI does answer, that is what
+                // it kerns with.
+                if out.gdi.is_empty() {
+                    if let Some(gpos) = font_table(dc, b"GPOS") {
+                        out.gpos = gpos_kern_table(&gpos);
+                    }
+                    if let Some(cmap) = font_table(dc, b"cmap") {
+                        out.cmap = cmap_by_code_point(&cmap).unwrap_or_default();
+                    }
+                    out.upem = font_table(dc, b"head")
+                        .and_then(|h| be16(&h, 18))
+                        .filter(|v| *v > 0)
+                        .map(|v| v as f32)
+                        .unwrap_or(1000.0);
                 }
                 SelectObject(dc, old);
                 let _ = DeleteObject(font);
@@ -13729,24 +13999,34 @@ fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: cha
                     (k, g)
                 }
             };
-            if table.is_empty() && !has_kern && has_gpos {
+            if table.gdi.is_empty() && !has_kern && has_gpos {
                 KERN_TALLY.with(|t| t.borrow_mut().5 += 1);
             }
             eprintln!(
-                "KERNFACE {face:?} w={weight} gdi_pairs={} kern_table={has_kern} gpos={has_gpos}",
-                table.len()
+                "KERNFACE {face:?} w={weight} gdi_pairs={} gpos_pairs={} gpos_classes={}                  kern_table={has_kern} gpos={has_gpos}",
+                table.gdi.len(), table.gpos.pairs.len(), table.gpos.classes.len()
             );
         }
-        table
-            .get(&(a as u16, b as u16))
-            .map(|v| *v as f32 / KERN_PROBE_EM as f32)
-            .unwrap_or(0.0)
+        if let Some(v) = table.gdi.get(&(a as u16, b as u16)) {
+            return *v as f32 / KERN_PROBE_EM as f32;
+        }
+        // GPOS is indexed by glyph, so the pair is asked for after the cmap has
+        // turned the characters into the glyphs this face actually uses.
+        let (Some(g1), Some(g2)) = (table.cmap.get(&a), table.cmap.get(&b)) else {
+            return 0.0;
+        };
+        table.gpos.get(*g1, *g2) as f32 / table.upem
     })
 }
 
 /// Counts what kerning WOULD move, printed per deck when `OXI_KERN_CENSUS` is
 /// set. Measuring the exposure before changing the arithmetic.
 #[cfg(windows)]
+/// The line's width carries the kern PowerPoint applies, when this is set.
+fn kernwidth_on() -> bool {
+    std::env::var("OXI_KERNWIDTH_ENABLE").is_ok()
+}
+
 fn kern_census() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("OXI_KERN_CENSUS").is_ok())
@@ -16058,13 +16338,35 @@ fn layout_paragraph_baselines(
         };
         align_at += line.chars().count();
         let pspc = para_spc(&para.runs);
+        // S-KERNWIDTH, and the gate REFUSED it. PowerPoint kerns by default
+        // (`gen_pptx_kern.py`, Arial: 'AV' -3.025pt at 40pt against a +0.004pt
+        // control) and the corpus's faces keep pairs in GPOS, which
+        // `kern_pair_em` reads -- 30.5% of deck 10's lines carry one, 616pt in
+        // all. Putting that into the width takes deck 10 from median -0.00pt
+        // and ONE line over 2% to median +1.48pt and THIRTY-TWO, and deck 35
+        // from 6 to 14. The engine's unkerned widths already sit on
+        // PowerPoint's boxes, so **PowerPoint does not kern these faces**:
+        // Arial carries a legacy `kern` table, and every embedded face here is
+        // GPOS-only. Kept behind the flag because the reading is what proves
+        // it, and because a face that does carry `kern` may yet need it.
+        let kern_w = if kernwidth_on() {
+            let chars: Vec<char> = ink.trim_end().chars().collect();
+            chars
+                .windows(2)
+                .map(|w| kern_pair_em(&family, bold, italic, w[0], w[1]))
+                .sum::<f32>()
+                * fs
+        } else {
+            0.0
+        };
         let line_w = per_run
             .or_else(|| hmtx_width_styled(ink, fs, &family, bold, italic, pspc))
             .or_else(|| {
                 runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale, pspc)
                     .map(|px| px as f32 / scale as f32)
             })
-            .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32);
+            .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32)
+            + kern_w;
         // Spec #6: horizontal alignment resolution — a paragraph with no
         // explicit alignment inherits the master txStyles level's algn (then
         // the default Left). The run level carries no alignment; the chain is
