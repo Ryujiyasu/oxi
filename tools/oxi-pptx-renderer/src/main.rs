@@ -15701,7 +15701,28 @@ fn layout_paragraph_baselines(
     // END of the line it closed so the caller's character accounting -- which
     // maps lines back to runs -- still lines up.
     let lines = if !wrap_text && wrapnone_on() {
-        vec![text.clone()]
+        // ★"does not WRAP" is not "does not BREAK". A `<a:br/>` ends the line
+        // wherever it stands, and a box that refuses to wrap still honours it:
+        // PowerPoint answers the same seven line counts for the wrap="none" and
+        // the wrapping row of `gen_pptx_trailbr.py` (1,1,2,2,1,2,3), while this
+        // branch returned ONE line for all seven. No deck in dev or blind puts
+        // a break inside a wrap="none" body, which is why the corpus never said
+        // so -- and why this changes nothing there.
+        if softbreak_on() && text.contains('\n') {
+            let mut out: Vec<String> = Vec::new();
+            for (si, seg) in text.split('\n').enumerate() {
+                if si > 0 {
+                    match out.last_mut() {
+                        Some(last) => last.push('\n'),
+                        None => out.push("\n".to_string()),
+                    }
+                }
+                out.push(seg.to_string());
+            }
+            out
+        } else {
+            vec![text.clone()]
+        }
     } else if softbreak_on() && text.contains('\n') {
         let mut out: Vec<String> = Vec::new();
         let mut seg_base = 0usize;
