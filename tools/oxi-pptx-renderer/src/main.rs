@@ -1838,6 +1838,12 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
 /// advance is the right quantity in principle -- it is what PowerPoint's PDF
 /// places glyphs at -- but the break test evidently is not measured with it,
 /// and until that is understood the GDI probe is the better default.
+/// The design table is refused for a weight GDI only synthesises, unless
+/// this is set.
+fn fdsynth_on() -> bool {
+    std::env::var("OXI_FDSYNTH_DISABLE").is_err()
+}
+
 fn fdbreak_on() -> bool {
     std::env::var("OXI_FDBREAK_ENABLE").is_ok()
 }
@@ -13325,6 +13331,36 @@ fn fontdata_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Opti
     use windows::Win32::Graphics::Gdi::*;
 
     let (face, weight, italic) = styled_face(family, bold, italic);
+    // ★The face's `hmtx` does not know about weight: `read_face_advances`
+    // answers the same numbers for w=400 and w=700 (`OXI_FD_DEBUG` on d35:
+    // `Gruppo ... 'a'=0.58154` for both). So for a family whose bold GDI
+    // SYNTHESISES, this hands a bold line the REGULAR design advances --
+    // 2.0% wide on d35 s12, which wraps its body a line early. PowerPoint's
+    // own character positions there match the GDI probe (12.625pt for 'L' at
+    // 23pt) and not the design table (12.875pt), so the probe is right for
+    // this case and the table is not.
+    //
+    // The design table stays right where the weight is REAL -- d31's
+    // 'Open Sauce' body is upright, and reading its part is what fixes that
+    // deck's five broken paragraphs.
+    // ★The design table has no WEIGHT axis: `read_face_advances` reads a
+    // face's `hmtx`, which answers the same for w=400 and w=700 (`OXI_FD_DEBUG`
+    // on d35: `Gruppo ... 'a'=0.58154` for both). So it can only be trusted
+    // where no weight is being asked for.
+    //
+    // Two decks fix the rule between them. d31's 'Open Sauce' body is upright
+    // and the table is what gets its five paragraphs right. d35 s12's Gruppo
+    // is BOLD, has no bold face anywhere, and the table hands it the regular
+    // advances -- 2.0% wide, wrapping the body a line early. PowerPoint's own
+    // characters there read 12.625pt for 'L' at 23pt, which is the GDI probe
+    // (12.603 -> 12.625 on the master unit) and not the table (12.875).
+    //
+    // Asking "does GDI have a real bold" does NOT separate them: a synthesised
+    // bold still moves the advance more than 1%, so that test calls Gruppo
+    // served. The weight being asked for at all is the discriminator.
+    if fdsynth_on() && weight >= 600 {
+        return None;
+    }
     FACE_ADV_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let entry = cache
