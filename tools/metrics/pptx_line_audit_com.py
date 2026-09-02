@@ -18,10 +18,25 @@ So this asks PowerPoint directly and compares against the engine's own
 
 It is the pptx analogue of the docx pagination gate: a signal, not an outcome.
 
-★FIRST RESULT (2026-09-02): **2428 paragraphs over 16 blind decks, 100.00%
-agreement, 0 differ** -- including 48 and 33, the two decks S-MUDRAW cost
-ground. So the remaining pptx gap is entirely WITHIN the line; there are no
-break errors left to chase on this corpus.
+★FIRST RESULT (2026-09-02): 2428 paragraphs over 16 blind decks, 100.00%
+agreement, 0 differ -- including 48 and 33, the two decks S-MUDRAW cost ground.
+
+★THE LEDGER (2026-09-02, the whole blind set, after the dump was fixed to
+measure at the scale the picture is drawn at): **7620 paragraphs over 48 decks,
+4 disagreements in 2 decks**. All four have since been read:
+
+    44 s25, 44 s36, d06 s36, d19 s37   the paragraph ends in `<a:br/>`, and
+        `Lines.Count` does not count the empty line it opens even though
+        PowerPoint reserves its height (`gen_pptx_trailbr.py`). The ENGINE was
+        right; this tool now compares them on the same footing.
+    47 s2, 47 s25   this machine's GDI serves Caladea 3.36% narrow
+        (`pptx_gdi_face_audit.py`), so the engine fits a line PowerPoint does
+        not. Environmental, not a defect (`gdi_font_view_can_be_corrupt`).
+
+So the remaining pptx gap is entirely WITHIN the line on this corpus. Two of
+this tool's own blind spots were closed on the way: turned shapes were dropped
+whole (2.8% of the corpus's text shapes) and are now compared for their breaks,
+and the trailing break above.
 
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
@@ -49,6 +64,9 @@ import win32com.client
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# Whether shapes that carry a rotation are audited at all (breaks only).
+ROTATED = True
 
 REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / "pipeline_data" / "pptx_benchmark"
@@ -108,7 +126,15 @@ def engine_paras(dump: dict) -> dict[int, list]:
             # slide space, so comparing them measures the rotation. d04 and d21
             # both put their worst offsets on s34, whose 'HIGH VALUE 1' sits at
             # +90 -- the same shape the editor sweep skips, for the same reason.
-            if sh.get("rotation"):
+            #
+            # ★But that is an argument about GEOMETRY, and it was costing the
+            # BREAK its evidence too: 390 of the corpus's 14002 text shapes are
+            # turned (2.8%, and 29% of d39 -- `pptx_audit_blindspot.py`), so a
+            # clean sweep was a claim about the other 97%. A line COUNT does not
+            # care which way the shape faces. So a turned shape stays in, with
+            # its geometry excluded and only its breaks compared.
+            turned = bool(sh.get("rotation"))
+            if turned and not ROTATED:
                 continue
             rows = []
             for p in paras:
@@ -128,6 +154,7 @@ def engine_paras(dump: dict) -> dict[int, list]:
             # box to the hundredth.
             shapes.append({"x": sh["x"], "y": sh["y"], "w": sh["w"],
                            "text_left": sh.get("text_left", sh["x"]),
+                           "turned": turned,
                            "paras": rows})
         out[si] = shapes
     return out
@@ -144,8 +171,11 @@ def com_shapes(shape, acc: list) -> None:
         if not shape.HasTextFrame or not shape.TextFrame.HasText:
             return
         # Skipped on BOTH sides, or a shape the engine side drops reads as
-        # "unmatched" -- a coverage hole dressed up as a mismatch.
-        if abs(shape.Rotation) > 1e-6:
+        # "unmatched" -- a coverage hole dressed up as a mismatch. With
+        # `ROTATED` it is kept on both sides instead, and only its GEOMETRY is
+        # left out of the comparison.
+        turned = abs(shape.Rotation) > 1e-6
+        if turned and not ROTATED:
             return
     except Exception:
         return
@@ -166,7 +196,8 @@ def com_shapes(shape, acc: list) -> None:
                          para.Text.rstrip("\r"),
                          [round(para.Lines(j).BoundTop, 2)
                           for j in range(1, n + 1)]))
-        acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width, "paras": rows})
+        acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width,
+                    "turned": turned, "paras": rows})
     except Exception as e:
         # Loud, not silent: a shape this cannot read is a hole in the audit's
         # coverage, and a coverage hole that prints nothing reads as a pass.
@@ -203,7 +234,7 @@ def audit(doc) -> dict | None:
 
     app = win32com.client.Dispatch("PowerPoint.Application")
     got = {"paras": 0, "same": 0, "diff": 0, "shapes": 0, "unmatched": 0,
-           "para_count": 0}
+           "para_count": 0, "turned_paras": 0, "trailing_br": 0}
     worst: list = []
     offs: list[float] = []
     far: list = []
@@ -263,9 +294,29 @@ def audit(doc) -> dict | None:
                         pfar.append((si, len(c["paras"]), len(m["paras"]),
                                      c["paras"][0][2][:38] if c["paras"] else ""))
                         continue
+                    # A turned shape is compared for its BREAKS only: its line
+                    # boxes are stated in two different frames, and rotating one
+                    # into the other would make this audit depend on arithmetic
+                    # it is supposed to be checking.
+                    geom = not (c.get("turned") or m.get("turned"))
                     for (cn, cx, ctext, cy), (en, ex, etext, ey) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
+                        if not geom:
+                            got["turned_paras"] += 1
+                        # ★The oracle's own blind spot. `Lines.Count` does not
+                        # count the empty line a TRAILING `<a:br/>` opens, but
+                        # PowerPoint reserves its height: for 'abc' + br it says
+                        # one line and reports `BoundHeight` 43.20 against a
+                        # one-line box's 21.60, and for two trailing breaks it
+                        # says two and reports 64.80 (`gen_pptx_trailbr.py`,
+                        # seven arms in both wrap modes). The four paragraphs in
+                        # dev + blind that end in a break -- 44 s25/s36, d06 s36,
+                        # d19 s37 -- were the whole of this audit's 0.05%, and
+                        # the engine was right in all four.
+                        if etext.endswith("\n") and en > 1:
+                            en -= 1
+                            got["trailing_br"] += 1
                         if cn == en:
                             got["same"] += 1
                             # Where PowerPoint put the line's left edge against
@@ -297,16 +348,17 @@ def audit(doc) -> dict | None:
                             # [16.56, 16.56], and 22.56 - 16.56 is exactly the
                             # 6pt `spcBef` that paragraph declares. Every
                             # "+6.00pt advance error" in this deck was that.
-                            for k in range(2, min(len(cy), len(ey))):
-                                step = (cy[k] - cy[k - 1]) - (ey[k] - ey[k - 1])
-                                vadv.append(step)
-                                if abs(step) > 0.5:
-                                    vfar.append((si, round(step, 2), ctext[:38]))
-                            for a, b in zip(cx, ex):
-                                d = (a + c["x"]) - (m["text_left"] + b)
-                                offs.append(d)
-                                if abs(d) > 3.0:
-                                    far.append((si, round(d, 2), ctext[:40]))
+                            if geom:
+                                for k in range(2, min(len(cy), len(ey))):
+                                    step = (cy[k] - cy[k - 1]) - (ey[k] - ey[k - 1])
+                                    vadv.append(step)
+                                    if abs(step) > 0.5:
+                                        vfar.append((si, round(step, 2), ctext[:38]))
+                                for a, b in zip(cx, ex):
+                                    d = (a + c["x"]) - (m["text_left"] + b)
+                                    offs.append(d)
+                                    if abs(d) > 3.0:
+                                        far.append((si, round(d, 2), ctext[:40]))
                         else:
                             got["diff"] += 1
                             worst.append((si, cn, en, ctext[:44]))
@@ -318,7 +370,8 @@ def audit(doc) -> dict | None:
     rate = 100.0 * got["same"] / got["paras"] if got["paras"] else 0.0
     print(f"{str(doc):>4}: {got['paras']:5} paragraphs  {rate:6.2f}% break agreement  "
           f"({got['diff']} differ)  shapes {got['shapes']} "
-          f"({got['unmatched']} unmatched)", flush=True)
+          f"({got['unmatched']} unmatched, {got['turned_paras']} paragraphs "
+          f"turned -- breaks only, {got['trailing_br']} end in a break)", flush=True)
     for si, cn, en, t in worst[:6]:
         print(f"      s{si:<3} PowerPoint {cn} lines, engine {en}  {t!r}", flush=True)
     if offs:
@@ -354,7 +407,14 @@ def main() -> None:
     ap.add_argument("docs", nargs="*", help="blind indices, or dev names like d41")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--dev", action="store_true", help="every dev deck")
+    # ★Turned shapes are IN by default: their line counts are comparable and
+    # they are 2.8% of the corpus's text shapes (29% of d39). This restores the
+    # pre-2026-09-02 population for comparing against an older run.
+    ap.add_argument("--no-rotated", action="store_true",
+                    help="drop turned shapes entirely, as this did before")
     args = ap.parse_args()
+    global ROTATED
+    ROTATED = not args.no_rotated
     docs = args.docs
     if args.all:
         manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
