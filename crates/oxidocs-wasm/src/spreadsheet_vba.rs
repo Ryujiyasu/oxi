@@ -7215,6 +7215,7 @@ fn format_debug_value(value: &Value) -> String {
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => "<Array>".to_string(),
+        Value::Record(record) => format!("<{}>", record.type_name),
         Value::Object(value) => format!("<{}>", value.kind),
     }
 }
@@ -8149,6 +8150,7 @@ fn find_value_text(value: &Value) -> String {
         Value::Missing => String::new(),
         Value::Nothing => "Nothing".to_string(),
         Value::Array(_) => "<Array>".to_string(),
+        Value::Record(record) => format!("<{}>", record.type_name),
         Value::Object(value) => format!("<{}>", value.kind),
     }
 }
@@ -9353,6 +9355,7 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         Value::String(value) if value.is_empty() => Ok(CellValue::Empty),
         Value::String(value) => Ok(typed_from_text(&value)),
         Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
+        Value::Record(_) => Err("a VBA Type cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
     }
 }
@@ -9767,6 +9770,10 @@ enum OutputValue {
         resizable: bool,
         values: Vec<OutputValue>,
     },
+    Record {
+        type_name: String,
+        fields: Vec<(String, OutputValue)>,
+    },
     Object {
         handle: u64,
         kind: String,
@@ -9797,6 +9804,14 @@ impl From<Value> for OutputValue {
                     .collect(),
                 resizable: value.resizable,
                 values: value.values.into_iter().map(OutputValue::from).collect(),
+            },
+            Value::Record(record) => Self::Record {
+                type_name: record.type_name,
+                fields: record
+                    .fields
+                    .into_iter()
+                    .map(|(name, value)| (name, OutputValue::from(value)))
+                    .collect(),
             },
             Value::Object(value) => Self::Object {
                 handle: value.handle,

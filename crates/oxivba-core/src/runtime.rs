@@ -20,7 +20,7 @@ use crate::ast::{
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
     OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ResumeTarget, SelectCaseStmt, Statement,
-    TypeName, UnaryOp, VarDecl, VarItem,
+    TypeDef, TypeName, UnaryOp, VarDecl, VarItem,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +39,47 @@ pub enum Value {
     Error(i64),
     String(String),
     Array(ArrayValue),
+    /// A variable declared `As` a `Type ... End Type` from the same module.
+    Record(RecordValue),
     Object(ObjectRef),
+}
+
+/// A `Type ... End Type` variable. Records have VALUE semantics in VBA: Excel
+/// answers `1/99` to assigning one record to another and then changing the
+/// copy, so this is a `Value` and not an object handle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordValue {
+    pub type_name: String,
+    /// In declaration order, which is the order a reader sees.
+    pub fields: Vec<(String, Value)>,
+}
+
+/// Whether an expression could name a record field: a member reach or a
+/// subscript, either of which may sit on top of the other.
+fn is_place_expression(expr: &Expr) -> bool {
+    matches!(expr, Expr::Member { .. } | Expr::Index { .. })
+}
+
+/// One step down into a record place: a named field, or array subscripts.
+enum RecordStep {
+    Field(String),
+    Index(Vec<i64>),
+}
+
+impl RecordValue {
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        self.fields
+            .iter()
+            .find(|(field, _)| field.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value)
+    }
+
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut Value> {
+        self.fields
+            .iter_mut()
+            .find(|(field, _)| field.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1431,6 +1471,9 @@ impl<'a> Runtime<'a> {
         line: u32,
     ) -> Result<Value, RuntimeError> {
         let Some(length) = &type_name.fixed_length else {
+            if let Some(record) = self.new_record(&type_name.name, frame, line, 0)? {
+                return Ok(record);
+            }
             return Ok(default_value(type_name));
         };
         let length = self.array_index(length, frame, line)?;
@@ -1445,6 +1488,60 @@ impl<'a> Runtime<'a> {
                 )
             })?;
         Ok(Value::String(" ".repeat(length)))
+    }
+
+    /// Builds a fresh value for a `Type ... End Type` declared in this module,
+    /// or `None` when the name is not one. Every field starts at the default
+    /// for its own declared type, which Excel confirms: an untouched `Long`
+    /// field reads 0 and an untouched `String` field has length 0.
+    fn new_record(
+        &mut self,
+        type_name: &str,
+        frame: &mut Frame,
+        line: u32,
+        depth: usize,
+    ) -> Result<Option<Value>, RuntimeError> {
+        if depth > 16 {
+            return Err(error(
+                RuntimeErrorKind::Overflow,
+                format!("VBA Type {type_name} is nested inside itself"),
+                Some(line),
+            ));
+        }
+        let Some(definition) = self.find_type(type_name) else {
+            return Ok(None);
+        };
+        let mut fields = Vec::with_capacity(definition.fields.len());
+        for field in &definition.fields {
+            let value = match &field.array_bounds {
+                Some(bounds) => {
+                    self.make_array(bounds, &field.type_name, frame, line, bounds.is_empty())?
+                }
+                None if field.type_name.fixed_length.is_none() => {
+                    match self.new_record(&field.type_name.name, frame, line, depth + 1)? {
+                        Some(record) => record,
+                        None => default_value(&field.type_name),
+                    }
+                }
+                None => self.declared_default_value(&field.type_name, frame, line)?,
+            };
+            fields.push((field.name.clone(), value));
+        }
+        Ok(Some(Value::Record(RecordValue {
+            type_name: definition.name,
+            fields,
+        })))
+    }
+
+    /// The module's `Type` declarations, by name. Returned owned because the
+    /// caller goes on to use `&mut self` while building the fields.
+    fn find_type(&self, name: &str) -> Option<TypeDef> {
+        self.module.items.iter().find_map(|item| match item {
+            ModuleItem::Type(definition) if definition.name.eq_ignore_ascii_case(name) => {
+                Some(definition.clone())
+            }
+            _ => None,
+        })
     }
 
     fn redim(
@@ -1612,6 +1709,111 @@ impl<'a> Runtime<'a> {
         })
     }
 
+    /// The variable a member/subscript chain starts at, read off the syntax
+    /// without evaluating any of it.
+    fn place_root(expr: &Expr) -> Option<&str> {
+        match expr {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Some(name),
+            Expr::Member { object, .. } => Self::place_root(object),
+            Expr::Index { target, .. } => Self::place_root(target),
+            _ => None,
+        }
+    }
+
+    /// Whether a chain starts at a record, or at an array of them. Checked
+    /// before the subscripts are evaluated, so an ordinary host expression such
+    /// as `Cells(Next()).Value` does not evaluate its arguments twice on the
+    /// way to being handled as a host property.
+    fn record_rooted(&self, frame: &Frame, expr: &Expr) -> bool {
+        let Some(name) = Self::place_root(expr) else {
+            return false;
+        };
+        let Some(slot) = self.lookup_slot(frame, name) else {
+            return false;
+        };
+        let value = slot.borrow();
+        match &*value {
+            Value::Record(_) => true,
+            Value::Array(array) => matches!(array.element_default.as_ref(), Value::Record(_)),
+            _ => false,
+        }
+    }
+
+    /// Walks a `record.field`, `records(i).field` or `outer.inner.field` chain
+    /// down to the field itself and hands it to `action`, so a read and a write
+    /// take the same route. `None` means the chain is not a record place and
+    /// the caller should carry on with the host object path.
+    fn with_record_place<R>(
+        &mut self,
+        expr: &Expr,
+        frame: &mut Frame,
+        line: u32,
+        action: impl FnOnce(&mut Value) -> R,
+    ) -> Result<Option<R>, RuntimeError> {
+        if !self.record_rooted(frame, expr) {
+            return Ok(None);
+        }
+        let mut steps = Vec::new();
+        let Some(root) = self.record_steps(expr, frame, line, &mut steps)? else {
+            return Ok(None);
+        };
+        let Some(slot) = self.lookup_slot(frame, &root) else {
+            return Ok(None);
+        };
+        let mut place = slot.borrow_mut();
+        let mut cursor: &mut Value = &mut place;
+        for step in &steps {
+            cursor = match (step, cursor) {
+                (RecordStep::Field(name), Value::Record(record)) => {
+                    let type_name = record.type_name.clone();
+                    match record.field_mut(name) {
+                        Some(field) => field,
+                        None => {
+                            return Err(error(
+                                RuntimeErrorKind::UndefinedVariable,
+                                format!("VBA Type {type_name} has no field named {name}"),
+                                Some(line),
+                            ))
+                        }
+                    }
+                }
+                (RecordStep::Index(indices), Value::Array(array)) => {
+                    let offset = array_offset(array, indices, line)?;
+                    &mut array.values[offset]
+                }
+                _ => return Ok(None),
+            };
+        }
+        Ok(Some(action(cursor)))
+    }
+
+    fn record_steps(
+        &mut self,
+        expr: &Expr,
+        frame: &mut Frame,
+        line: u32,
+        steps: &mut Vec<RecordStep>,
+    ) -> Result<Option<String>, RuntimeError> {
+        match expr {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => Ok(Some(name.clone())),
+            Expr::Member { object, name, .. } => {
+                let Some(root) = self.record_steps(object, frame, line, steps)? else {
+                    return Ok(None);
+                };
+                steps.push(RecordStep::Field(name.clone()));
+                Ok(Some(root))
+            }
+            Expr::Index { target, args, .. } => {
+                let Some(root) = self.record_steps(target, frame, line, steps)? else {
+                    return Ok(None);
+                };
+                steps.push(RecordStep::Index(self.array_arguments(args, frame, line)?));
+                Ok(Some(root))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn lookup_slot(&self, frame: &Frame, name: &str) -> Option<ValueSlot> {
         let name = key(name);
         frame
@@ -1760,6 +1962,17 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<(), RuntimeError> {
+        let mut value = value;
+        if is_place_expression(target) && self.record_rooted(frame, target) {
+            let mut carried = Some(value);
+            let placed = self.with_record_place(target, frame, line, |place| {
+                *place = carried.take().expect("a record field is written once");
+            })?;
+            if placed.is_some() {
+                return Ok(());
+            }
+            value = carried.take().expect("the walk left the value behind");
+        }
         match target {
             Expr::EvaluateShortcut { text, .. } => {
                 let receiver = match self.evaluate_shortcut(text, line, true)? {
@@ -1947,6 +2160,13 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        if is_place_expression(expr) && self.record_rooted(frame, expr) {
+            if let Some(field) =
+                self.with_record_place(expr, frame, expr.span().line, |place| place.clone())?
+            {
+                return Ok(field);
+            }
+        }
         match expr {
             Expr::Literal(literal, _) => Ok(literal_value(literal)),
             Expr::EvaluateShortcut { text, span } => self.evaluate_shortcut(text, span.line, false),
@@ -7129,6 +7349,9 @@ fn value_type_name(value: &Value) -> String {
         Value::Error(_) => "Error".to_string(),
         Value::String(_) => "String".to_string(),
         Value::Array(_) => "Variant()".to_string(),
+        // Excel cannot be asked: passing a record to `TypeName` is a COMPILE
+        // error there, so no measurement exists. It names itself.
+        Value::Record(record) => record.type_name.clone(),
         Value::Object(object) => object.kind.clone(),
     }
 }
@@ -7145,6 +7368,8 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Boolean(_) => 11,
         Value::Array(_) => 8_192 + 12,
         Value::Missing => 12,
+        // vbUserDefinedType. Unmeasurable for the same reason as above.
+        Value::Record(_) => 36,
     }
 }
 
@@ -7176,6 +7401,7 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Nothing => Err("object variable or With block variable not set".to_string()),
         Value::Array(_) => Err("type mismatch converting array to number".to_string()),
+        Value::Record(_) => Err("type mismatch converting a record to number".to_string()),
         Value::Object(_) => Err("type mismatch converting object to number".to_string()),
     }
 }
@@ -7194,6 +7420,7 @@ fn truthy(value: &Value) -> Result<bool, String> {
             .map(|number| number != 0.0)
             .map_err(|_| "type mismatch converting String to Boolean".to_string()),
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
+        Value::Record(_) => Err("type mismatch converting a record to Boolean".to_string()),
         Value::Error(_) => Err("type mismatch converting Error to Boolean".to_string()),
         Value::Object(_) => Err("type mismatch converting object to Boolean".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
@@ -7545,6 +7772,9 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
+        Value::Record(_) => {
+            return Err("type mismatch converting a record to String".to_string())
+        }
         Value::Object(_) => return Err("type mismatch converting object to String".to_string()),
     })
 }
@@ -7796,6 +8026,136 @@ mod tests {
     fn run(source: &str, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         let module = parse_module(source).unwrap();
         execute(&module, name, args)
+    }
+
+    /// A `Type ... End Type` variable, as Excel answers for each of these.
+    ///
+    /// Excel cannot be asked what `TypeName` makes of the record ITSELF --
+    /// handing one to a Variant parameter is a compile error there -- so only
+    /// the fields are measured, and each reads back as the type it was
+    /// declared with.
+    #[test]
+    fn a_user_type_holds_its_fields() {
+        let source = "Public Type Point\n\
+                        x As Long\n\
+                        label As String\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim spot As Point\n\
+                        spot.x = 3\n\
+                        spot.label = \"here\"\n\
+                        Ask = spot.x & \"/\" & spot.label\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("3/here".to_string())
+        );
+    }
+
+    /// Records are copied, not shared: Excel answers `1/99`.
+    #[test]
+    fn a_user_type_is_copied_on_assignment() {
+        let source = "Public Type Point\n\
+                        x As Long\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim first As Point\n\
+                        Dim second As Point\n\
+                        first.x = 1\n\
+                        second = first\n\
+                        second.x = 99\n\
+                        Ask = first.x & \"/\" & second.x\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("1/99".to_string())
+        );
+    }
+
+    #[test]
+    fn a_user_type_names_its_fields() {
+        let source = "Public Type Point\n\
+                        x As Long\n\
+                        label As String\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim spot As Point\n\
+                        Ask = TypeName(spot.x) & \"/\" & TypeName(spot.label)\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("Long/String".to_string())
+        );
+    }
+
+    #[test]
+    fn an_array_of_a_user_type() {
+        let source = "Public Type Point\n\
+                        x As Long\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim spots(1 To 2) As Point\n\
+                        spots(1).x = 10\n\
+                        spots(2).x = 20\n\
+                        Ask = spots(1).x & \"/\" & spots(2).x\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("10/20".to_string())
+        );
+    }
+
+    /// Every field starts at the default for its own declared type.
+    #[test]
+    fn a_user_type_field_starts_empty() {
+        let source = "Public Type Point\n\
+                        x As Long\n\
+                        label As String\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim spot As Point\n\
+                        Ask = spot.x & \"/[\" & spot.label & \"]/\" & Len(spot.label)\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("0/[]/0".to_string())
+        );
+    }
+
+    /// A field that is itself a record, and one that is an array, both reached
+    /// through the same walk.
+    #[test]
+    fn a_user_type_nested_inside_another() {
+        let source = "Public Type Inner\n\
+                        depth As Long\n\
+                      End Type\n\
+                      Public Type Outer\n\
+                        inside As Inner\n\
+                        marks(1 To 3) As Long\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim box As Outer\n\
+                        box.inside.depth = 5\n\
+                        box.marks(2) = 7\n\
+                        Ask = box.inside.depth & \"/\" & box.marks(2) & \"/\" & UBound(box.marks)\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("5/7/3".to_string())
+        );
+    }
+
+    #[test]
+    fn a_field_that_was_never_declared() {
+        let source = "Public Type Point\n\
+                        x As Long\n\
+                      End Type\n\
+                      Public Function Ask() As String\n\
+                        Dim spot As Point\n\
+                        Ask = CStr(spot.y)\n\
+                      End Function\n";
+        let failure = run(source, "Ask", vec![]).unwrap_err();
+        assert_eq!(failure.kind, RuntimeErrorKind::UndefinedVariable);
     }
 
     #[test]
