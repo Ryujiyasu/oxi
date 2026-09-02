@@ -18704,6 +18704,34 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 cursor.cursor_y + break_threshold + s1248_after - s835_fn_relief
                     > effective_break_bottom + s967_tol
             };
+            // Opt-in trace of the natural-break arithmetic. Every term of this
+            // one comparison decides which page a line lands on, and reading
+            // them off a running document is otherwise a matter of guessing
+            // which of `break_threshold` / `s1248_after` / `effective_break_bottom`
+            // is the odd one out.
+            if std::env::var("OXI_DBG_BREAK").is_ok() {
+                eprintln!(
+                    "[BREAK] line={}/{} y={:.2} thr={:.2} after={:.2} relief={:.2} bottom={:.2} tol={:.2} -> {} lh={:.2} text={:?}",
+                    line_idx,
+                    lines.len(),
+                    cursor.cursor_y,
+                    break_threshold,
+                    s1248_after,
+                    s835_fn_relief,
+                    effective_break_bottom,
+                    s967_tol,
+                    natural_needs_page_break,
+                    line_height,
+                    lines[line_idx]
+                        .fragments
+                        .iter()
+                        .map(|f| f.text.as_str())
+                        .collect::<String>()
+                        .chars()
+                        .take(18)
+                        .collect::<String>()
+                );
+            }
             // S916 (2026-07-18, opt-out OXI_S916_DISABLE): force the split at
             // lines.len()-2 for a multi-line keepNext paragraph (the keepNext
             // lookahead requested s916_tail_split). This keeps n-2 head lines on
