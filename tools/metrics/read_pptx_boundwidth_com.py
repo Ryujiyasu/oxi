@@ -95,18 +95,29 @@ def main() -> None:
                 if not sh.HasTextFrame or not sh.TextFrame.HasText:
                     continue
                 text = sh.TextFrame.TextRange.Text.strip()
-                if text == WORD:
+                if WORD in text:
                     arms.append(sh)
                 else:
                     labels.append((sh.Left, sh.Top, text))
             for sh in arms:
                 tr = sh.TextFrame.TextRange
+                # ★The measured paragraph, not the shape's first line: an arm
+                # may put the word after another paragraph, and that is the
+                # difference being tested.
+                para = None
+                for pi in range(1, tr.Paragraphs().Count + 1):
+                    cand = tr.Paragraphs(pi)
+                    if cand.Text.strip() == WORD:
+                        para = cand
+                        break
+                if para is None:
+                    continue
                 above = [(t, n) for (x, t, n) in labels
                          if abs(x - sh.Left) < 1.0 and t < sh.Top]
                 label = max(above)[1] if above else f"x={sh.Left:.0f}"
-                rows.append((label, sh.Left, sh.Top, tr.Lines(1).BoundWidth,
-                             float(tr.Font.Size), bool(tr.Font.Bold == -1),
-                             bool(tr.Font.Italic == -1)))
+                rows.append((label, sh.Left, sh.Top, para.Lines(1).BoundWidth,
+                             float(para.Font.Size), bool(para.Font.Bold == -1),
+                             bool(para.Font.Italic == -1)))
         finally:
             pres.Saved = True
             pres.Close()

@@ -54,6 +54,15 @@ ARMS = [
     ("bigger", {"size": 28}),
     ("bold", {"bold": True}),
     ("italic", {"italic": True}),
+    # ★The structural difference between this probe and the corpus lines that
+    # would not explain themselves: those paragraphs are not alone in their
+    # shape. d09 s9's 'Yellow' is the FIRST of two paragraphs, and its box
+    # measures 3.4pt wider than the sum of PowerPoint's own character steps --
+    # while every arm above measures narrower than the pen, as an ink box
+    # should.
+    ("twopara_1st", {"tail": "Is the color of gold, butter and ripe lemons."}),
+    ("twopara_2nd", {"head": "Yellow"}),
+    ("bold_twopara", {"bold": True, "tail": "Is the color of gold, butter."}),
 ]
 
 
@@ -81,7 +90,16 @@ def build(path: Path) -> None:
         if opt.get("inset"):
             tf.margin_left = Pt(18)
             tf.margin_right = Pt(18)
-        p = tf.paragraphs[0]
+        # A paragraph before the measured one, when the arm asks for it.
+        if opt.get("head"):
+            first = tf.paragraphs[0]
+            r0 = first.add_run()
+            r0.text = opt["head"]
+            r0.font.size = Pt(opt.get("size", 14))
+            r0.font.name = FACE
+            p = tf.add_paragraph()
+        else:
+            p = tf.paragraphs[0]
         if opt.get("align"):
             p.alignment = opt["align"]
         run = p.add_run()
@@ -90,6 +108,13 @@ def build(path: Path) -> None:
         run.font.name = FACE
         run.font.bold = bool(opt.get("bold"))
         run.font.italic = bool(opt.get("italic"))
+        # A paragraph after it, likewise.
+        if opt.get("tail"):
+            nxt = tf.add_paragraph()
+            r1 = nxt.add_run()
+            r1.text = opt["tail"]
+            r1.font.size = Pt(opt.get("size", 14))
+            r1.font.name = FACE
     prs.save(str(path))
 
 

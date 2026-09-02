@@ -65,32 +65,32 @@ mismeasured, the top line is s1's 'we help' at **+62.02pt (+10.9%)** -- 223pt,
 `b="1"`, in a family with no bold. So the number can find a real width defect,
 which is what makes the near-zero medians elsewhere evidence.
 
-★What the MEDIAN hides, and how to read a positive one. `--dump-widths`
-writes every compared pair; over decks 9, d32 and 34 (332 lines) 155 agree to
-under 0.05pt and 64 are 2pt or more out, carrying a per-line CONSTANT of about
-3pt rather than an error that grows with the line.
+★What the box IS, settled by `gen_pptx_boundwidth.py` (one word, one face,
+one size, one property changed per arm):
 
-`gen_pptx_boundwidth.py` then asked what the box is, one word in one face with
-one property changed per arm:
+    alone in its shape          box - pen = -1.27pt at 14pt, -2.42 at 28
+                                (an ink box: the end glyphs' bearings)
+    autofit / nowrap / centre /
+    right / insets              all identical to the hundredth -- 39.97pt
+    a SECOND paragraph present  box - pen = **+2.60pt**, first or second
+                                paragraph, bold or not
 
-    Arial 'Yellow' 14pt   design pen 41.24   BoundWidth 39.97   engine 41.25
-                          28pt   design 82.48   BoundWidth 80.06  engine 82.63
-    autofit / nowrap / centre / right / insets   all 39.97, to the hundredth
+The step between those two is 3.87pt and Arial's space at 14pt is 3.889pt: in a
+multi-paragraph shape the box takes in the PARAGRAPH MARK. That was the whole of
+the "19% of lines sit 2pt out" class -- including d09 s9's 'Yellow' and d32 s1's
++62pt, neither of which is a defect. With single-paragraph shapes only:
 
-So `BoundWidth` is an INK box -- pen minus the first glyph's left and the last
-glyph's right bearing, -1.27pt at 14pt and -2.42pt at 28 -- and NO box property
-moves it. The engine, meanwhile, reproduces the design pen exactly (+0.01).
+    9 / d32 / 34    232 lines, median -0.00pt, slope under 0.7 per mille,
+                    **0 lines over 2%**
 
-★A healthy line therefore reads slightly NEGATIVE -- the bearings -- and not
-zero, which is already worth knowing. But the sign does NOT settle the 64 on
-its own, and the case that says so is d09 s9's Raleway 'Yellow': its box is
-50.25 while PowerPoint's own per-character steps (`pptx_char_pos_com.py 9 9
-Yellow`: 9.25 + 8.375 + 4.5 + 4.5 + 8.5 and a 'w') sum to the engine's 46.56.
-The application agrees with the engine about where every character goes and
-still reports a box 3.7pt wider than the characters occupy. So the box carries
-something on that line that the plain probe's box does not, and what that is
-remains the open question -- reading the 64 as "the engine measures narrow"
-would be believing one of PowerPoint's two answers over the other.
+★But this number has NO POSITIVE CONTROL YET, and until it has one, read it as
+"the instrument could not tell them apart" rather than "the advances are right".
+`OXI_CLOUDADV_DISABLE`, `OXI_SLOTFACE_DISABLE`, `OXI_FDSYNTH_DISABLE`,
+`OXI_BOLDADV_DISABLE` and `OXI_HMTXSTYLE_DISABLE` all leave deck 9's figure
+identical to the hundredth -- because `line_w` is measured by `per_run` /
+`runtime_width_px`, a different chain from the break test's `advance_em`, and
+those flags steer the break chain. Finding a lever that moves this number is the
+next thing this file needs.
 
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
@@ -475,9 +475,23 @@ def audit(doc) -> dict | None:
                                 # error. The trimmed space is not in
                                 # `line_texts` either, so it cannot be filtered
                                 # by looking at them.
+                                # ★And only in a shape that holds ONE
+                                # paragraph. `gen_pptx_boundwidth.py` settles
+                                # why: the same word in the same face and size
+                                # measures `box - pen = -1.27pt` alone in its
+                                # shape -- an ink box, narrower than the pen by
+                                # the end bearings -- and `+2.60pt` as soon as
+                                # the shape holds a second paragraph, first or
+                                # second, bold or not. The step is 3.87pt, and
+                                # Arial's space at 14pt is 3.889pt: the box
+                                # takes in the paragraph mark. That is the whole
+                                # of the "19% of lines are 2pt out" class, d09
+                                # s9's 'Yellow' included, and none of it is the
+                                # engine.
+                                single = len(c["paras"]) == 1
                                 last = min(len(cw), len(ew)) - 1
                                 for j, (a, b) in enumerate(zip(cw, ew)):
-                                    if j != last:
+                                    if j != last or not single:
                                         continue
                                     if b > 40.0:
                                         wide.append((b, a - b))
