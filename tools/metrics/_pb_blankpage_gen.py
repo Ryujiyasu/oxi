@@ -51,6 +51,44 @@ CASES = [
 # ids whose cover section spans two pages (a page break inside the cover)
 TWO_PAGE_COVER = {"b7_2pg_restart2", "b8_2pg_restart1"}
 
+# 2026-09-02 — does the rule compare LOGICAL parity to PHYSICAL parity, or does
+# it preserve the alternation the document's FIRST page established?
+#
+# Every b-case above restarts sect0 at 1 on physical 1, where odd<->odd makes
+# the two readings identical -- so the b-round could not tell them apart.
+# reference__0b6f3b32 is the discriminator: sect0 restarts at 272 (EVEN) on
+# physical 1, sect1 restarts at 272 again, and Word blanks page 2. Under
+# "logical parity == physical parity" (what S957 implements) 272 onto physical
+# 2 MATCHES and no pad is due; under "keep alternating" it does not.
+#
+#   c1  S957 says no blank   | alternation says blank      <- decides it
+#   c2  S957 says blank      | alternation says no blank   <- decides it, other way
+#   c3  control: no evenAndOddHeaders, so neither pads
+#   c4  control: odd cover, the classic case, both agree -> blank
+CASES += [
+    ("c1_evencover_restart_even", True, 'w:start="272"', 'w:start="272"', True, True),
+    ("c2_evencover_restart_odd",  True, 'w:start="272"', 'w:start="273"', True, True),
+    ("c3_noeoh_evencover",        False, 'w:start="272"', 'w:start="272"', True, True),
+    ("c4_oddcover_restart_odd",   True, 'w:start="271"', 'w:start="271"', True, True),
+]
+
+# Three-section arms: what does `oddPage` count -- physical pages, or LOGICAL
+# ones? In 0b6f3b32 the oddPage section restarts at 273 (odd) and Word puts it
+# on physical page 4 (EVEN), which a physical reading cannot produce. Fixing the
+# blank-page rule without settling this one would make S732 insert a WRONG blank
+# right after the newly-correct one.
+#   (id, eoh, sect0_pgnum, sect1_pgnum, sect2_type, sect2_pgnum)
+CASES3 = [
+    ("e1_evencover_oddpage_r273", True, 'w:start="272"', 'w:start="272"',
+     "oddPage", 'w:start="273"'),
+    ("e2_evencover_oddpage_norestart", True, 'w:start="272"', 'w:start="272"',
+     "oddPage", None),
+    ("e3_oddcover_oddpage_norestart", True, 'w:start="1"', None,
+     "oddPage", None),
+    ("e4_evencover_evenpage_norestart", True, 'w:start="272"', 'w:start="272"',
+     "evenPage", None),
+]
+
 CT = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -96,9 +134,12 @@ PGSZ = ('<w:pgSz w:w="11906" w:h="16838"/>'
         ' w:header="720" w:footer="720" w:gutter="0"/>')
 
 
-def sect(pgnum, titlepg, inner=True):
+def sect(pgnum, titlepg, inner=True, stype=None):
     """A sectPr; `inner` wraps it in the trailing paragraph of the section."""
-    body = PGSZ
+    body = ""
+    if stype:
+        body += f'<w:type w:val="{stype}"/>'   # must precede pgSz per the schema
+    body += PGSZ
     if pgnum:
         body += f'<w:pgNumType {pgnum}/>'
     if titlepg:
@@ -124,15 +165,29 @@ def gen():
         doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
                f'<w:body>{body}</w:body></w:document>')
-        with zipfile.ZipFile(os.path.join(OUTDIR, cid + ".docx"), "w",
-                             zipfile.ZIP_DEFLATED) as z:
-            z.writestr("[Content_Types].xml", CT)
-            z.writestr("_rels/.rels", RELS)
-            z.writestr("word/_rels/document.xml.rels", DOCRELS)
-            z.writestr("word/document.xml", doc)
-            z.writestr("word/styles.xml", STYLES)
-            z.writestr("word/settings.xml", settings_xml(eoh))
+        write(cid, doc, eoh)
         print("gen", cid)
+    for (cid, eoh, pg0, pg1, s2type, pg2) in CASES3:
+        body = (para("COVER PAGE") + sect(pg0, True)
+                + para("SECTION2 FIRST LINE") + sect(pg1, True)
+                + para("SECTION3 FIRST LINE")
+                + sect(pg2, True, inner=False, stype=s2type))
+        doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+               f'<w:body>{body}</w:body></w:document>')
+        write(cid, doc, eoh)
+        print("gen", cid)
+
+
+def write(cid, doc, eoh):
+    with zipfile.ZipFile(os.path.join(OUTDIR, cid + ".docx"), "w",
+                         zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", CT)
+        z.writestr("_rels/.rels", RELS)
+        z.writestr("word/_rels/document.xml.rels", DOCRELS)
+        z.writestr("word/document.xml", doc)
+        z.writestr("word/styles.xml", STYLES)
+        z.writestr("word/settings.xml", settings_xml(eoh))
 
 
 def measure():
@@ -154,19 +209,52 @@ def measure():
 
 def read():
     import fitz
-    print(f"{'case':<22} {'pages':>5}  {'sect2 on':>8}  blanks")
+    print(f"{'case':<32} {'pages':>5}  {'sect2':>5} {'sect3':>5}  blanks")
     for path in sorted(glob.glob(os.path.join(OUTDIR, "*.pdf"))):
         doc = fitz.open(path)
-        blanks, where = [], None
+        blanks, where, where3 = [], None, None
         for i, pg in enumerate(doc):
             t = pg.get_text().strip()
             if not t:
                 blanks.append(i + 1)
             if "SECTION2" in t and where is None:
                 where = i + 1
-        print(f"{os.path.basename(path)[:-4]:<22} {len(doc):>5}  {str(where):>8}  {blanks}")
+            if "SECTION3" in t and where3 is None:
+                where3 = i + 1
+        print(f"{os.path.basename(path)[:-4]:<32} {len(doc):>5}  {str(where):>5} "
+              f"{str(where3):>5}  {blanks}")
+
+
+def oxi():
+    """The same census off Oxi's own layout, so the two read identically."""
+    import json, subprocess, tempfile
+    exe = os.environ.get("OXI_GDI_EXE") or os.path.join(
+        REPO, "tools", "oxi-gdi-renderer", "target", "release", "oxi-gdi-renderer.exe")
+    print(f"{'case':<32} {'pages':>5}  {'sect2':>5} {'sect3':>5}  blanks")
+    for path in sorted(glob.glob(os.path.join(OUTDIR, "*.docx"))):
+        with tempfile.TemporaryDirectory() as t:
+            dj = os.path.join(t, "l.json")
+            r = subprocess.run([exe, os.path.abspath(path), os.path.join(t, "p"),
+                                "--dump-layout=" + dj], capture_output=True, timeout=180)
+            if r.returncode != 0 or not os.path.exists(dj):
+                print(f"{os.path.basename(path)[:-5]:<32}  RENDER FAIL")
+                continue
+            with open(dj, encoding="utf-8") as f:
+                dump = json.load(f)
+        blanks, where, where3 = [], None, None
+        for i, pg in enumerate(dump["pages"], 1):
+            t2 = "".join(e.get("text") or "" for e in pg["elements"]
+                         if e.get("type") == "text").strip()
+            if not t2:
+                blanks.append(i)
+            if "SECTION2" in t2 and where is None:
+                where = i
+            if "SECTION3" in t2 and where3 is None:
+                where3 = i
+        print(f"{os.path.basename(path)[:-5]:<32} {len(dump['pages']):>5}  "
+              f"{str(where):>5} {str(where3):>5}  {blanks}")
 
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "gen"
-    {"gen": gen, "measure": measure, "read": read}[cmd]()
+    {"gen": gen, "measure": measure, "read": read, "oxi": oxi}[cmd]()

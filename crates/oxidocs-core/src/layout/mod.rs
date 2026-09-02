@@ -2844,6 +2844,30 @@ impl LayoutEngine {
                     || Self::s1174_has_ref(&p.footer_even)
             });
         S1174_ACTIVE.with(|c| c.set(s1174_doc_active));
+        // S1291 needs a TRUSTWORTHY logical page number, and there is one case
+        // where Oxi cannot produce it: a CONTINUOUS section that carries its own
+        // `<w:pgNumType w:start>`. The S560 merge folds that section into the
+        // previous IR page and the restart, which happens partway down a page,
+        // has nowhere to live (S912 documents the same residual for the PAGE
+        // field). Where that happened, the running count below is wrong, so the
+        // logical rules stand down and the old physical-parity behaviour runs.
+        // reference__0ea3ec86 is the specimen — sections 2 and 3 are continuous
+        // and restart at 90 and 88 — and applying the logical rule to its bad
+        // numbers moved it 0.7315 -> 0.2344. This is a precondition on the
+        // rule's INPUT, not an exception to the rule: the 12-arm repro and
+        // reference__0b6f3b32 (which has no such section) pin the rule itself.
+        // Carrying a mid-page restart through the merge, as `column_runs` does
+        // for columns, is the fix that would lift the guard. 13/450 corpus docs
+        // trip it.
+        let s1291_usable = std::env::var("OXI_S1291_DISABLE").is_err()
+            && !doc_resolved.pages.iter().any(|p| p.dropped_pgnum_restart);
+
+        // S1291: the logical page number of the LAST physical page emitted.
+        // The blank-filler rules below are stated in logical numbers, and a
+        // filler consumes one itself, so it has to be tracked as pages are
+        // pushed rather than recomputed afterwards (S912's `page_numbers` is a
+        // post-pass and does not exist yet here).
+        let mut logical_prev: u32 = 0;
         for (ir_idx, page) in doc_resolved.pages.iter().enumerate() {
             // S816: sections after the first count as "page 2+" for the
             // page-top space-before suppression.
@@ -2851,46 +2875,81 @@ impl LayoutEngine {
                 S816_PAST_FIRST_SECTION.with(|c| c.set(true));
             }
             // S732 (2026-07-03): an evenPage/oddPage section starts on the
-            // next physical page of that parity — Word inserts a BLANK page
-            // when the parity mismatches (probexeo2: content sections at
-            // p1-2 / p4-5 / p7 with pages 3 and 6 blank; Oxi ignored the
-            // type → everything landed 2 pages early, score 0.36). Insert an
-            // empty LayoutPage carrying the new section's geometry. Corpus
-            // has ZERO evenPage/oddPage sections (scan) → byte-identical.
+            // next page of that parity — Word inserts a BLANK page when the
+            // parity mismatches (probexeo2: content sections at p1-2 / p4-5 /
+            // p7 with pages 3 and 6 blank; Oxi ignored the type → everything
+            // landed 2 pages early, score 0.36). Insert an empty LayoutPage
+            // carrying the new section's geometry.
+            //
+            // S1291 (2026-09-02, opt-out OXI_S1291_DISABLE): the parity is the
+            // LOGICAL page number's, not the physical page index's. S732 and
+            // S957 both compared against `pages.len() + 1`, which is only the
+            // same thing while the document's numbering happens to start at 1
+            // on page 1 — every arm of the original 8-case round did, so that
+            // round could not tell the two readings apart. Twelve arms of
+            // `_pb_blankpage_gen.py` now separate them (Word PDF page census):
+            //
+            //   c1  cover start=272 (EVEN) on p1, sec2 restarts 272
+            //         -> Word BLANKS p2, sec2 on p3   (physical parity: no pad)
+            //   c2  same cover, sec2 restarts 273
+            //         -> Word pads NOTHING, sec2 on p2 (physical parity: pad)
+            //   c3  the same as c1 without evenAndOddHeaders -> no pad
+            //   c4  cover start=271 (ODD), sec2 restarts 271 -> blank p2
+            //   e1  even cover, sec3 oddPage + restart 273 -> sec3 on p4 (EVEN)
+            //   e2  even cover, sec3 oddPage, no restart    -> sec3 on p4 (EVEN)
+            //   e3  odd  cover, sec3 oddPage, no restart    -> sec3 on p3, no pad
+            //   e4  even cover, sec3 evenPage, no restart   -> sec3 on p5,
+            //                                                  blanks [2, 4]
+            //
+            // c1/c2 flip the answer between the two readings, and e1/e2/e4 put
+            // an `oddPage` section on a physically EVEN page, which a physical
+            // reading cannot produce at all. Both rules are about keeping the
+            // odd/even HEADER alternation honest, so both count the number the
+            // header machinery uses: the logical one.
+            //
+            //   parity rule      the section's first logical number must be
+            //                    odd (oddPage) / even (evenPage)
+            //   alternation rule with <w:evenAndOddHeaders/>, a section that
+            //                    RESTARTS at N must not repeat the parity of
+            //                    the page before it (that would put two
+            //                    same-parity pages in a row)
+            //
+            // The real anchor is reference__0b6f3b32 (start=272 on p1, sec2
+            // restarts 272, sec3 is oddPage + restart 273): Word blanks p2 and
+            // puts sec3 on physical 4. Oxi produced no blank at all, so 1465 of
+            // its 1789 paragraphs sat exactly one page early.
+            // A blank filler takes the next logical number itself, so each pass
+            // flips the parity and the loop adds at most one page.
             if std::env::var("OXI_S732_DISABLE").is_err() && !pages.is_empty() {
-                let next_no = pages.len() + 1; // 1-based physical page number
-                let need_blank = match page.section_start_type.as_deref() {
-                    Some("evenPage") => next_no % 2 == 1,
-                    Some("oddPage") => next_no % 2 == 0,
-                    // S957 (2026-07-20): with <w:evenAndOddHeaders/> in force, a
-                    // section that DECLARES pgNumType w:start must begin on a
-                    // physical page whose parity matches the declared logical
-                    // number — Word pads with one blank page otherwise, so that
-                    // the odd/even header alternation stays consistent.
-                    // DERIVED (tools/metrics/_pb_blankpage_gen.py, 8 cases,
-                    // Word PDF page census; legal__0010437a's blank page 2):
-                    //   evenAndOddHeaders + start=1 (odd) onto physical 2 -> blank p2
-                    //   NO evenAndOddHeaders, same restart                -> no blank
-                    //   evenAndOddHeaders, no pgNumType on the section    -> no blank
-                    //   evenAndOddHeaders + start=2 (even) onto physical 2 -> no blank
-                    //   titlePg removed from both sections                -> unchanged
-                    //   2-page cover, start=2 (EVEN) onto physical 3      -> blank p3
-                    //   2-page cover, start=1 (ODD)  onto physical 3      -> no blank
-                    // The last two are the discriminator: an EVEN restart pads
-                    // too, so the rule is parity MATCHING, not "odd restarts
-                    // only". CONTINUOUS sections cannot trigger it — S560 merges
-                    // them into the previous IR page and drops their pgNumType,
-                    // so their start never reaches a section-first page here.
-                    // Opt-out OXI_S957_DISABLE.
-                    _ => {
-                        std::env::var("OXI_S957_DISABLE").is_err()
-                            && page.even_odd_hf
-                            && page
-                                .page_number_start
-                                .map_or(false, |st| (st % 2) != (next_no as u32 % 2))
+                let s1291 = s1291_usable;
+                let s957_on = std::env::var("OXI_S957_DISABLE").is_err();
+                for _ in 0..2 {
+                    // The logical number this section's first page would take.
+                    let cand = if s1291 {
+                        page.page_number_start.unwrap_or(logical_prev + 1)
+                    } else {
+                        (pages.len() + 1) as u32
+                    };
+                    let parity_bad = match page.section_start_type.as_deref() {
+                        Some("evenPage") => cand % 2 == 1,
+                        Some("oddPage") => cand % 2 == 0,
+                        _ => false,
+                    };
+                    // S957, re-derived: the restart must CONTINUE the
+                    // alternation, i.e. differ in parity from the page before.
+                    // The old form asked it to MATCH the physical index.
+                    let alternation_bad = s957_on
+                        && page.even_odd_hf
+                        && page.page_number_start.map_or(false, |st| {
+                            if s1291 {
+                                st % 2 == logical_prev % 2
+                            } else {
+                                (st % 2) != ((pages.len() + 1) as u32 % 2)
+                            }
+                        });
+                    if !(parity_bad || alternation_bad) {
+                        break;
                     }
-                };
-                if need_blank {
                     dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {
                         width: page.size.width,
@@ -2898,6 +2957,10 @@ impl LayoutEngine {
                         elements: Vec::new(),
                     });
                     layout_to_ir_page.push(ir_idx);
+                    logical_prev += 1;
+                    if !s1291 {
+                        break; // pre-S1291 behaviour: at most one filler
+                    }
                 }
             }
             let laid_out = self.layout_page(page);
@@ -2909,6 +2972,12 @@ impl LayoutEngine {
                     laid_out.len(),
                     pages.len()
                 );
+            }
+            // S1291: this section's own pages take its restart (if any) and
+            // then increment, matching S912's post-pass exactly.
+            if !laid_out.is_empty() {
+                logical_prev = page.page_number_start.unwrap_or(logical_prev + 1)
+                    + (laid_out.len() as u32 - 1);
             }
             for _ in &laid_out {
                 layout_to_ir_page.push(ir_idx);

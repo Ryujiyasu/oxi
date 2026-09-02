@@ -380,6 +380,14 @@ impl OoxmlParser {
                 // table rendered in the trailing 2-col 記載心得 context).
                 last.column_runs
                     .push((last.blocks.len(), section.properties.columns.clone()));
+                // S1291: note (do not drop silently) a continuous section that
+                // restarts page numbering. The merge has nowhere to put a
+                // restart that happens mid-page, so the document's logical
+                // page numbers are unreliable from here on and the
+                // logical-parity blank-page rules must stand down.
+                if section.properties.page_number_start.is_some() {
+                    last.dropped_pgnum_restart = true;
+                }
                 // S729: parallel per-section margin run (left, right).
                 last.margin_runs.push((
                     last.blocks.len(),
@@ -514,6 +522,7 @@ impl OoxmlParser {
                     shapes: section.shapes,
                     columns: section.properties.columns,
                     column_runs,
+                    dropped_pgnum_restart: false,
                     margin_runs,
                     vertical_runs,
                     grid_runs,

@@ -214,6 +214,15 @@ pub struct Page {
     /// whole page (single-section / non-parser constructions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub column_runs: Vec<(usize, Option<ColumnLayout>)>,
+    /// S1291 (2026-09-02): a CONTINUOUS section merged into this page declared
+    /// its own `<w:pgNumType w:start>`, which the merge cannot represent (the
+    /// restart happens partway down a page, not at a page boundary). This is
+    /// S912's documented residual, recorded rather than silently dropped:
+    /// the running LOGICAL page number is wrong from here on, so the rules
+    /// that are stated in logical numbers must not be applied to this
+    /// document. 13/450 corpus docs set it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dropped_pgnum_restart: bool,
     /// S729 (2026-07-03): per-section HORIZONTAL margins for merged
     /// continuous sections — (block_start_index, margin_left, margin_right).
     /// The S560 merge kept only the first section's margins, so a continuous
