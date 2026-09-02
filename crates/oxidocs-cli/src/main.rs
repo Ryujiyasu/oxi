@@ -806,10 +806,17 @@ fn font_index() -> &'static fontidx::FontIndex {
 /// skipped because the subsetter addresses files, not collection entries.
 fn resolve_face_path(family: &str, bold: bool, italic: bool) -> Option<String> {
     let index = font_index();
+    // The `index == 0` test belongs to each candidate, not to the pair: a
+    // family that only exists deeper in a collection should still let the
+    // bundled stand-in be tried, rather than taking the whole lookup down.
     index
         .find(family, bold, italic)
-        .or_else(|| substitute_for(family).and_then(|s| index.find(s, bold, italic)))
         .filter(|face| face.index == 0)
+        .or_else(|| {
+            substitute_for(family)
+                .and_then(|s| index.find(s, bold, italic))
+                .filter(|face| face.index == 0)
+        })
         .map(|face| face.path.to_string_lossy().to_string())
 }
 
@@ -2464,15 +2471,18 @@ fn embed_document_faces(
             missing.push(family.clone());
             continue;
         };
-        // The subsetter reads a path, not a collection member, so a face that
-        // is not the first in its TTC cannot be addressed yet. Leaving it to
-        // the fallback is honest; embedding the wrong member would not be.
-        if face.index != 0 {
-            missing.push(family.clone());
-            continue;
-        }
         let path = face.path.to_string_lossy().to_string();
-        match subset_font_file(&path, &chars, &key) {
+        // The external subsetter addresses files, not collection members, so a
+        // face past the first in its .ttc goes out whole instead. macOS ships
+        // most of its families that way — Times.ttc holds roman, bold, italic
+        // and bold-italic as members 0..3 — so refusing them would leave every
+        // emphasised run on that platform drawn by a viewer substitute.
+        let embedded = if face.index == 0 {
+            subset_font_file(&path, &chars, &key)
+        } else {
+            embed_collection_member(&path, face.index, &key)
+        };
+        match embedded {
             Some(embedded) => {
                 if let Some(sub) = substituted {
                     eprintln!(
@@ -2706,6 +2716,24 @@ fn embed_latin_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut 
 /// subset is kilobytes -- but it is a correct PDF with real outlines and a
 /// real width table, which a base-14 name is not. Being unable to find Python
 /// must not decide how a document looks.
+/// Embed one member of a font collection whole. Used where the family lives
+/// past the first face of a `.ttc`, which the path-addressed subsetter cannot
+/// name.
+fn embed_collection_member(font_path: &str, face: u32, label: &str) -> Option<EmbeddedFont> {
+    let data = fs::read(font_path).ok()?;
+    let font = oxipdf_core::font_util::embedded_font_from_face(&data, face);
+    if font.unicode_to_gid.is_empty() {
+        return None;
+    }
+    eprintln!(
+        "Embedding {} whole from collection member {} ({} bytes)",
+        label,
+        face,
+        font.data.len()
+    );
+    Some(font)
+}
+
 fn embed_whole_font(font_path: &str, label: &str) -> Option<EmbeddedFont> {
     let data = fs::read(font_path).ok()?;
     let font = oxipdf_core::font_util::embedded_font_from_ttf(&data);
