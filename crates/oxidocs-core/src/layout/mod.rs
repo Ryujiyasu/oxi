@@ -2859,8 +2859,13 @@ impl LayoutEngine {
         // Carrying a mid-page restart through the merge, as `column_runs` does
         // for columns, is the fix that would lift the guard. 13/450 corpus docs
         // trip it.
+        // S1294 (opt-in) lifts the precondition: a continuous section's restart
+        // now survives the merge in `page_number_runs`, so the running logical
+        // number is trustworthy where one exists. While S1294 is off the guard
+        // stays armed.
         let s1291_usable = std::env::var("OXI_S1291_DISABLE").is_err()
-            && !doc_resolved.pages.iter().any(|p| p.dropped_pgnum_restart);
+            && (std::env::var("OXI_S1294").ok().as_deref() == Some("1")
+                || !doc_resolved.pages.iter().any(|p| p.dropped_pgnum_restart));
 
         // S1291: the logical page number of the LAST physical page emitted.
         // The blank-filler rules below are stated in logical numbers, and a
@@ -2963,7 +2968,7 @@ impl LayoutEngine {
                     }
                 }
             }
-            let laid_out = self.layout_page(page);
+            let laid_out = self.layout_page(page, &mut logical_prev);
             if std::env::var("OXI_DBG_IRPAGES").is_ok() {
                 eprintln!(
                     "[IRPAGE] ir={} blocks={} pages={} (cum_before={})",
@@ -2973,12 +2978,10 @@ impl LayoutEngine {
                     pages.len()
                 );
             }
-            // S1291: this section's own pages take its restart (if any) and
-            // then increment, matching S912's post-pass exactly.
-            if !laid_out.is_empty() {
-                logical_prev = page.page_number_start.unwrap_or(logical_prev + 1)
-                    + (laid_out.len() as u32 - 1);
-            }
+            // S1294: `layout_page` now advances `logical_prev` itself -- it has
+            // to, because a merged continuous section can RESTART numbering
+            // partway through the pages this one call emits, which the old
+            // "start + len - 1" arithmetic here could not express.
             for _ in &laid_out {
                 layout_to_ir_page.push(ir_idx);
             }
@@ -4604,10 +4607,31 @@ h_tw={} pitch_tw={} cells={} text={:?}",
     }
 
     #[allow(unused_assignments)]
-    fn layout_page(&self, page: &Page) -> Vec<LayoutPage> {
+    /// `logical` carries the LOGICAL page number across IR pages: in = the
+    /// number of the last page emitted before this one (0 if none), out = the
+    /// number of the last page this call emits. S1291/S1294 state their rules
+    /// in that number, and there is exactly one caller, so a scalar in/out is
+    /// enough (S912's `page_numbers` recomputes the same walk as a post-pass).
+    fn layout_page(&self, page: &Page, logical: &mut u32) -> Vec<LayoutPage> {
+        // S1294: the logical number of this IR page's FIRST layout page, and
+        // the base such that logical(i) = logical_base + i. A restart moves the
+        // base rather than every page's number.
+        // S1294 is HELD OPT-IN (`OXI_S1294=1`), not because the law is in doubt
+        // but because a SECOND defect was cancelling it. With the blank page in
+        // its right place `reference__0ea3ec86` reads Word pages 1-14 exactly
+        // (they were all one page early before), and then a page-15 table that
+        // Oxi breaks early sends the rest +1: the doc's score goes 0.7315 ->
+        // 0.2822 and the gate reads WORSE. The missing blank and the early
+        // table break were compensating, and only one of them is fixed. Turn
+        // this on together with the page-15 fix.
+        let s1294_on = std::env::var("OXI_S1294").ok().as_deref() == Some("1");
+        let first_logical = page.page_number_start.unwrap_or(*logical + 1);
+        let mut logical_base: i64 = first_logical as i64;
         // Vertical writing (tategaki) section: route to the dedicated path.
         if page.vertical_section && std::env::var("OXI_VERTICAL_DISABLE").is_err() {
-            return self.layout_page_vertical(page);
+            let out = self.layout_page_vertical(page);
+            *logical = (logical_base + out.len() as i64 - 1).max(0) as u32;
+            return out;
         }
         // R-05b: reduce body content width when the document has comments —
         // makes room for the right-margin balloon column. Header / footer /
@@ -6603,6 +6627,45 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                     }
                 }
             }
+            // S1294 (2026-09-03, opt-out OXI_S1294_DISABLE): a merged CONTINUOUS
+            // section that declares `<w:pgNumType w:start>` and BEGINS a page is
+            // subject to the same alternation rule as any other section start
+            // (S1291). Whether it is `continuous` is not the question -- whether
+            // it starts a page is.
+            //
+            // Derived by taking `reference__0ea3ec86480140c2` apart one attribute
+            // at a time (`_pb_0ea3_bisect.py`, Word PDF page census): its blank
+            // page 2 needs evenAndOddHeaders AND section 1's start=88, and
+            // section 2's own start only MOVES the blank. Then the h arms of
+            // `_pb_blankpage_gen.py` swept the cover length:
+            //
+            //   cover 48 lines (fits page 1)   conflict -> no pad, sec2 mid-page
+            //   cover 50 lines (FILLS page 1)  conflict -> blank p2, sec2 on p3
+            //   cover 50 lines                 agree    -> no blank, sec2 on p2
+            //   cover 52 lines (overflows)     either   -> no pad, sec2 mid-page 2
+            //
+            // Only the 50-line arm discriminates. A restart landing MID-page is
+            // ignored outright -- Word's own logical numbers say so: 0ea3ec86's
+            // section 3 restarts at 88 and its page still reports 90, the number
+            // of the section that STARTED it.
+            //
+            // The decision is taken AFTER the block is laid out (see the end of
+            // this loop): "does this section begin a page" is not knowable
+            // before, because the section's own first block is what pushes the
+            // page. 0ea3ec86's section 1 fills page 1 exactly and section 2's
+            // first block overflows onto page 2 -- checking beforehand reads
+            // "mid-page" and pads nothing.
+            let s1294_restart: Option<u32> = if s1294_on && block_idx > 0 {
+                page.page_number_runs
+                    .iter()
+                    .find(|(b, st)| *b == block_idx && st.is_some())
+                    .and_then(|(_, st)| *st)
+            } else {
+                None
+            };
+            let s1294_pages_before = pages.len();
+            let s1294_at_top_before =
+                elements.is_empty() && cursor.cursor_y <= start_y + 0.01;
             // S469: record the NATURAL (pre-wrap) Y for anchor resolution by
             // subtracting any accumulated wrap-below advance on this page.
             block_y_positions.push(cursor.cursor_y - anchor_flow_offset);
@@ -10882,6 +10945,38 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                 }
             }
+            // S1294: now that the block is placed, ask whether its section
+            // opened a page, and pad if the restart would repeat the previous
+            // page's parity. The blank is pushed BEFORE the in-flight elements,
+            // which have not been pushed yet, so it lands between the two with
+            // no reflow -- the section's content is already at a page top.
+            if let Some(n) = s1294_restart {
+                let began_page =
+                    s1294_at_top_before || pages.len() > s1294_pages_before;
+                if began_page {
+                    let here = pages.len() as i64; // the in-flight page's index
+                    let prev_logical = logical_base + here - 1;
+                    if page.even_odd_hf
+                        && here > 0
+                        && (n as i64).rem_euclid(2) == prev_logical.rem_euclid(2)
+                    {
+                        dbg_page_push(pages.len(), 0);
+                        pages.push(LayoutPage {
+                            width: page.size.width,
+                            height: page.size.height,
+                            elements: Vec::new(),
+                        });
+                        current_page_idx += 1;
+                        if let Some(v) = block_page_indices.last_mut() {
+                            *v = current_page_idx;
+                        }
+                        if let Some(v) = block_start_page_indices.last_mut() {
+                            *v = current_page_idx;
+                        }
+                    }
+                    logical_base = n as i64 - pages.len() as i64;
+                }
+            }
             // S560: record the deepest column-bottom reached on this page so a
             // following column-section (heterogeneous path) starts below it.
             if heterogeneous {
@@ -12468,6 +12563,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             );
         }
         S1073_PREV_SECTION_AFTER.with(|c| c.set(s1073_tail));
+
+        // S1294: hand the caller the logical number of the LAST page emitted.
+        // `logical_base` has already absorbed any mid-page restart, so this is
+        // the same walk S912's post-pass does, just carried forward live.
+        if !pages.is_empty() {
+            *logical = (logical_base + pages.len() as i64 - 1).max(0) as u32;
+        }
 
         pages
     }

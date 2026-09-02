@@ -214,6 +214,14 @@ pub struct Page {
     /// whole page (single-section / non-parser constructions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub column_runs: Vec<(usize, Option<ColumnLayout>)>,
+    /// S1294 (2026-09-03): per-section `<w:pgNumType w:start>` for merged
+    /// continuous sections -- (block_start_index, start). Parallel to
+    /// `column_runs`, populated by the same parser sites. The S560 merge used
+    /// to drop a continuous section's restart entirely (S912's documented
+    /// RESIDUAL), which cost `reference__0ea3ec86` the blank page Word pads
+    /// before its section 2. Empty = single-section / non-parser construction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_number_runs: Vec<(usize, Option<u32>)>,
     /// S1291 (2026-09-02): a CONTINUOUS section merged into this page declared
     /// its own `<w:pgNumType w:start>`, which the merge cannot represent (the
     /// restart happens partway down a page, not at a page boundary). This is

@@ -383,6 +383,12 @@ impl OoxmlParser {
                 // table rendered in the trailing 2-col 記載心得 context).
                 last.column_runs
                     .push((last.blocks.len(), section.properties.columns.clone()));
+                // S1294: carry this continuous section's page-number restart
+                // across the merge. It decides whether Word pads a blank page
+                // when the section BEGINS one (see the archive note), and until
+                // now it was dropped here and the decision could not be made.
+                last.page_number_runs
+                    .push((last.blocks.len(), section.properties.page_number_start));
                 // S1291: note (do not drop silently) a continuous section that
                 // restarts page numbering. The merge has nowhere to put a
                 // restart that happens mid-page, so the document's logical
@@ -479,6 +485,8 @@ impl OoxmlParser {
                 // section's column layout at block 0. Continuous sections merged
                 // later append their own (block_start, columns) entries.
                 let column_runs = vec![(0usize, section.properties.columns.clone())];
+                // S1294: seed with this (first) section's own restart at block 0.
+                let page_number_runs = vec![(0usize, section.properties.page_number_start)];
                 // S729: seed the margin-run list with the first section's margins.
                 let margin_runs = vec![(
                     0usize,
@@ -525,6 +533,7 @@ impl OoxmlParser {
                     shapes: section.shapes,
                     columns: section.properties.columns,
                     column_runs,
+                    page_number_runs,
                     dropped_pgnum_restart: false,
                     margin_runs,
                     vertical_runs,
