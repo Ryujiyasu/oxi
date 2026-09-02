@@ -10,12 +10,14 @@ use oxidocs_common::archive::OoxmlArchive;
 use oxivba_core::fingerprint::{
     compare, fingerprint_module, ModuleFingerprint, Similarity, Strength,
 };
+use oxihanko::attest::{clearance, digest_project, Attestation, Clearance};
 use oxivba_core::safety::{assess, Capability, SafetyReport};
 use oxivba_core::{analyse, parse_module, Analysis, Class};
 use serde_json::json;
 
 struct ModuleReport {
     name: String,
+    source: String,
     analysis: Analysis,
     fingerprint: ModuleFingerprint,
     safety: SafetyReport,
@@ -100,6 +102,48 @@ pub(crate) fn safety(input: &str) -> Result<bool, String> {
     println!("Modules: {}", report.modules.len());
     println!();
 
+    let sealed = read_attestation(Path::new(input))?;
+    let digest = digest_project(
+        report
+            .modules
+            .iter()
+            .map(|module| (module.name.as_str(), module.source.as_str())),
+    );
+    // No verifier is wired in yet, so this can never reach Cleared. That is
+    // the honest state of things and the report says which it is.
+    match clearance(&digest, sealed.as_ref(), None) {
+        Clearance::Cleared { signer, note } => {
+            println!("Sealed by {signer}: {note}");
+            println!("Nothing to read: this exact code has been cleared.");
+            return Ok(false);
+        }
+        Clearance::MatchesButUnsigned => {
+            println!("A seal beside this file matches the code, but NOTHING SIGNED IT.");
+            println!("Anyone who can edit the workbook can write that file, so it");
+            println!("clears nothing. Read on.");
+            println!();
+        }
+        Clearance::SignatureRejected { why } => {
+            println!("A seal beside this file did NOT verify: {why}");
+            println!();
+        }
+        Clearance::Stale(changed) => {
+            println!("A seal beside this file is over OLDER code. What moved since:");
+            for name in &changed.edited {
+                println!("  edited  {name}");
+            }
+            for name in &changed.added {
+                println!("  added   {name}");
+            }
+            for name in &changed.removed {
+                println!("  removed {name}");
+            }
+            println!("Only these need reading again.");
+            println!();
+        }
+        Clearance::NotSealed => {}
+    }
+
     let mut whole = SafetyReport::default();
     let mut opens: Vec<(&str, &str)> = Vec::new();
     for module in &report.modules {
@@ -173,6 +217,22 @@ pub(crate) fn safety(input: &str) -> Result<bool, String> {
         );
     }
     Ok(whole.needs_a_reader() || !opens.is_empty())
+}
+
+/// The seal that belongs to a workbook, if one is beside it: the same path
+/// with `.hanko.json` appended, so it travels with the file.
+fn read_attestation(workbook: &Path) -> Result<Option<Attestation>, String> {
+    let mut name = workbook.as_os_str().to_os_string();
+    name.push(".hanko.json");
+    let beside = PathBuf::from(name);
+    if !beside.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&beside)
+        .map_err(|error| format!("cannot read {}: {error}", beside.display()))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| format!("cannot read the seal {}: {error}", beside.display()))
 }
 
 pub(crate) fn inventory(input: &str) -> Result<(), String> {
@@ -378,6 +438,7 @@ fn inspect_project(path: &Path) -> Result<ProjectReport, String> {
         let safety = assess(&module, &analysis);
         modules.push(ModuleReport {
             name: module_info.name.clone(),
+            source,
             analysis,
             fingerprint: fingerprint_module(&module, Strength::Standard),
             safety,
