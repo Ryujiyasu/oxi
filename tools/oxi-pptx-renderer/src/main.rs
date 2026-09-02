@@ -113,7 +113,7 @@ fn main() {
 
     if let Some(path) = dump_layout {
         #[cfg(windows)]
-        dump_layout_json_gdi(&pres, &path);
+        dump_layout_json_gdi(&pres, &path, dpi, supersample);
         #[cfg(not(windows))]
         dump_layout_json_plain(&pres, &path);
         eprintln!("Layout dumped to {}", path);
@@ -164,8 +164,18 @@ fn dump_layout_json_plain(pres: &Presentation, path: &str) {
 /// Slide-level layout JSON in points, computed with GDI font metrics so that
 /// each text paragraph also carries its wrapped line baselines (slide-absolute
 /// y in points) — the Oxi-side target for the text-frame layout spec.
+///
+/// ★It measures at the SAME scale the renderer would draw at, which is why
+/// `dpi` and `supersample` are parameters. The break test is scale-free only
+/// while `master_units` can answer; when it declines the wrap falls back to
+/// GDI's own extent, and that is measured in device pixels at whatever scale
+/// it was handed. Dumping at 1.0 while the picture is drawn at
+/// `dpi * supersample / 72` audits a layout the renderer never produces --
+/// blind 31 s21 read one line here and was DRAWN as two, because its
+/// 'Open Sauce' answers no advance at all (`cloud`, `hmtx` and `precise` all
+/// None under `OXI_LINE_DEBUG`) and the fallback is all there is.
 #[cfg(windows)]
-fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
+fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: u32) {
     use windows::Win32::Foundation::*;
     use windows::Win32::Graphics::Gdi::*;
 
@@ -197,7 +207,12 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str) {
                             ShapeContent::TextBox { .. } | ShapeContent::AutoShape { .. }
                         );
                         if text_shape {
-                            let scale = 1.0; // points
+                            // The renderer's own measuring scale, so this dump
+                            // is the layout that gets drawn (see above). The
+                            // JSON stays in POINTS either way -- scale sets the
+                            // resolution the widths are measured at, and
+                            // `layout_paragraph_baselines` divides it back out.
+                            let scale = (dpi * supersample.max(1)) as f64 / 72.0;
                             let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
                             if let Some(paragraphs) = p.get_mut("paragraphs") {
                                 if let Some(arr) = paragraphs.as_array_mut() {
