@@ -334,6 +334,18 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
         },
         "slides": slides,
     });
+    if kern_census() {
+        KERN_TALLY.with(|t| {
+            let t = t.borrow();
+            eprintln!(
+                "KERN {} lines, {} carry a pair ({:.1}%), {:.2}pt in all, worst {:.2}pt: {} \
+                 [{} faces keep their pairs in GPOS, where this cannot see them]",
+                t.0, t.1,
+                if t.0 > 0 { 100.0 * t.1 as f64 / t.0 as f64 } else { 0.0 },
+                t.2, t.3, t.4, t.5
+            );
+        });
+    }
     let text = serde_json::to_string_pretty(&json).expect("Cannot serialize layout");
     std::fs::write(path, text).expect("Cannot write layout JSON");
 }
@@ -13617,6 +13629,139 @@ fn boldfamily_on() -> bool {
     std::env::var("OXI_BOLDFAMILY_DISABLE").is_err()
 }
 
+/// The kern PowerPoint applies between two characters, in EM units.
+///
+/// DERIVED 2026-09-03 (`gen_pptx_kern.py`, Arial, PowerPoint's own
+/// `Characters(k,1).BoundLeft` steps against the file's design advances):
+///
+///     'AV' 40pt, no attribute      -3.025pt   the pair kerns by default
+///     'nn' 40pt, the control       +0.004pt   a non-pair does not move
+///     'AV' 40pt, `kern="1200"`     -3.025pt   at or above the size: kerned
+///     'AV' 40pt, `kern="9600"`     -0.055pt   above the size: NOT kerned
+///     'AV' 40pt, `kern="0"`        -0.055pt   zero means off, not always
+///     'To' 40pt                    -4.494pt   and 'oT' does not move
+///
+/// So `a:rPr/@kern` is a MINIMUM SIZE in hundredths of a point, kerning is on
+/// when the attribute is absent, and which pairs move is the font's own data.
+/// The -0.055pt in the unkerned arms is the two glyphs' side bearings, which
+/// is what the `kern0` and `kern9600` arms are for: without them a bearing
+/// difference reads as a kern.
+///
+/// This is the LOOKUP only. Nothing applies it yet -- `OXI_KERN_CENSUS` counts
+/// what it would move before anything moves.
+#[cfg(windows)]
+fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: char) -> f32 {
+    use windows::Win32::Graphics::Gdi::*;
+
+    thread_local! {
+        static KERN_CACHE: std::cell::RefCell<
+            std::collections::HashMap<(String, i32, bool),
+                                      std::collections::HashMap<(u16, u16), i32>>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    // GDI answers in the units of the font it was asked for, so the face is
+    // created at a known em and the amount divided back out.
+    const KERN_PROBE_EM: i32 = 2048;
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    let (a, b) = (first as u32, second as u32);
+    if a > u16::MAX as u32 || b > u16::MAX as u32 {
+        return 0.0;
+    }
+    KERN_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let fresh = !cache.contains_key(&(face.clone(), weight, italic));
+        let table = cache.entry((face.clone(), weight, italic)).or_insert_with(|| {
+            let mut out = std::collections::HashMap::new();
+            let dc = probe_dc();
+            let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                let font = CreateFontW(
+                    -KERN_PROBE_EM, 0, 0, 0, weight, u32::from(italic), 0, 0,
+                    DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32, DEFAULT_QUALITY.0 as u32,
+                    (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                    windows::core::PCWSTR(wide.as_ptr()),
+                );
+                if font.is_invalid() {
+                    return out;
+                }
+                let old = SelectObject(dc, font);
+                let n = GetKerningPairsW(dc, None);
+                if n > 0 {
+                    let mut buf = vec![KERNINGPAIR::default(); n as usize];
+                    let got = GetKerningPairsW(dc, Some(&mut buf));
+                    for kp in buf.iter().take(got as usize) {
+                        if kp.iKernAmount != 0 {
+                            out.insert((kp.wFirst, kp.wSecond), kp.iKernAmount);
+                        }
+                    }
+                }
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+            }
+            out
+        });
+        // ★Whether the pairs are REACHABLE, per face, once. GDI's
+        // `GetKerningPairsW` reports nothing for a privately loaded embedded
+        // font -- the census found pairs only in the two decks whose face is
+        // installed -- so the same face is asked a second way, through the font
+        // data Oxi already reads tables from. A `kern` table present while GDI
+        // stays silent means the pairs have to be parsed, not asked for.
+        if fresh && kern_census() {
+            let dc = probe_dc();
+            let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+            let (has_kern, has_gpos) = unsafe {
+                let font = CreateFontW(
+                    -2048, 0, 0, 0, weight, u32::from(italic), 0, 0,
+                    DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32, DEFAULT_QUALITY.0 as u32,
+                    (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                    windows::core::PCWSTR(wide.as_ptr()),
+                );
+                if font.is_invalid() {
+                    (false, false)
+                } else {
+                    let old = SelectObject(dc, font);
+                    let k = font_table(dc, b"kern").is_some();
+                    let g = font_table(dc, b"GPOS").is_some();
+                    SelectObject(dc, old);
+                    let _ = DeleteObject(font);
+                    (k, g)
+                }
+            };
+            if table.is_empty() && !has_kern && has_gpos {
+                KERN_TALLY.with(|t| t.borrow_mut().5 += 1);
+            }
+            eprintln!(
+                "KERNFACE {face:?} w={weight} gdi_pairs={} kern_table={has_kern} gpos={has_gpos}",
+                table.len()
+            );
+        }
+        table
+            .get(&(a as u16, b as u16))
+            .map(|v| *v as f32 / KERN_PROBE_EM as f32)
+            .unwrap_or(0.0)
+    })
+}
+
+/// Counts what kerning WOULD move, printed per deck when `OXI_KERN_CENSUS` is
+/// set. Measuring the exposure before changing the arithmetic.
+#[cfg(windows)]
+fn kern_census() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_KERN_CENSUS").is_ok())
+}
+
+#[cfg(windows)]
+thread_local! {
+    /// (lines seen, lines with a kern pair, total kern in points, worst line).
+    /// (lines, lines with a pair, total pt, worst pt, worst line, faces whose
+    /// pairs are OUT OF REACH -- GPOS-only, which GDI's pair API does not
+    /// report). The last field is why a zero in this census is not an answer.
+    static KERN_TALLY: std::cell::RefCell<(u64, u64, f64, f64, String, u64)> =
+        const { std::cell::RefCell::new((0, 0, 0.0, 0.0, String::new(), 0)) };
+}
+
 fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
     use windows::Win32::Graphics::Gdi::*;
 
@@ -15870,6 +16015,33 @@ fn layout_paragraph_baselines(
         let ink = line.trim_end_matches('\n');
         // S-RUNALIGN: measure the line the way it is DRAWN -- each run at its
         // own size, weight and slant -- exactly as the wrap already does.
+        // What kerning WOULD move on this line, counted before anything moves.
+        // PowerPoint kerns by default (`kern_pair_em`), the engine does not, and
+        // the width gate's last offenders are lines where that shows -- d10 s8's
+        // 'To-do's' sets its apostrophe 7.75pt inside where the engine puts it.
+        if kern_census() {
+            let ink_line = line.trim_end_matches('\n').trim_end();
+            let chars: Vec<char> = ink_line.chars().collect();
+            let mut total = 0.0f64;
+            for w in chars.windows(2) {
+                total += (kern_pair_em(&family, bold, italic, w[0], w[1]) * fs) as f64;
+            }
+            KERN_TALLY.with(|t| {
+                let mut t = t.borrow_mut();
+                t.0 += 1;
+                if total.abs() > 1e-6 {
+                    t.1 += 1;
+                    t.2 += total.abs();
+                    if total.abs() > t.3 {
+                        t.3 = total.abs();
+                        t.4 = format!(
+                            "{:?} {} {:.1}pt",
+                            ink_line.chars().take(28).collect::<String>(), family, fs
+                        );
+                    }
+                }
+            });
+        }
         let per_run = if runalign_on() && para.runs.len() > 1 {
             line_width_pt_runs(
                 dc,
