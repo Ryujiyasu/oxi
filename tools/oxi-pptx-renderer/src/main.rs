@@ -16371,8 +16371,9 @@ fn layout_paragraph_baselines(
                                         para_spc(&para.runs))
                     .map(|px| px as f32 / scale as f32);
                 let g = gdi_measure_text_px(dc, line) as f32 / scale as f32;
+                let (sf, sw, si) = styled_face(&family, bold, italic);
                 eprintln!(
-                    "WIDTH {ink:?} fam={family:?} fs={fs} bold={bold} | per_run={per_run:?}                      hmtx={h:?} runtime={r:?} gdi_extent={g:.3} kern_w={kern_w:.3}"
+                    "WIDTH {ink:?} fam={family:?} fs={fs} bold={bold} -> face={sf:?} w={sw}                      i={si} | per_run={per_run:?} hmtx={h:?} runtime={r:?}                      gdi_extent={g:.3} kern_w={kern_w:.3}"
                 );
             }
         }
