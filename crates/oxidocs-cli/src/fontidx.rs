@@ -29,6 +29,10 @@ pub struct Face {
     /// Every name this face answers to: the typographic family and the legacy
     /// one, which differ on Apple's system fonts.
     pub aliases: Vec<String>,
+    /// `OS/2.usWeightClass`, 400 when the face carries no `OS/2` table. Two
+    /// faces of one family routinely land in the same style slot, and this is
+    /// what decides between them.
+    pub weight: u16,
     pub bold: bool,
     pub italic: bool,
 }
@@ -46,7 +50,13 @@ impl FontIndex {
     /// caller's cue to substitute or to warn.
     pub fn find(&self, family: &str, bold: bool, italic: bool) -> Option<&Face> {
         let key = family.trim().to_lowercase();
-        for (b, i) in [(bold, italic), (bold, false), (false, italic), (false, false)] {
+        // The usual degradations first, then any style at all. A family can
+        // exist in one style only -- Arial Black is bold by weight and has no
+        // upright sibling -- and answering ABSENT for it would send a family
+        // the machine actually holds to a viewer substitute.
+        let preferred = [(bold, italic), (bold, false), (false, italic), (false, false)];
+        let last_resort = [(true, false), (false, true), (true, true)];
+        for (b, i) in preferred.into_iter().chain(last_resort) {
             if let Some(face) = self.faces.get(&(key.clone(), b, i)) {
                 return Some(face);
             }
@@ -63,10 +73,11 @@ impl FontIndex {
     }
 
     /// Scan `extra` (the bundled fonts directory beside the executable)
-    /// followed by every platform font root. The first insert for a key
-    /// wins, so bundled substitutes are only reached when the real family is
-    /// missing -- callers pass the substitute under its own family name, not
-    /// under the name it stands in for.
+    /// followed by every platform font root. Bundled substitutes are only
+    /// reached when the real family is missing -- callers pass the substitute
+    /// under its own family name, not under the name it stands in for -- so
+    /// the two never contend for one key. Where faces of one family do
+    /// contend, `displaces` decides, not the order the directory came back in.
     pub fn build(extra: &[PathBuf]) -> FontIndex {
         let mut index = FontIndex::default();
         for dir in extra.iter().cloned().chain(system_font_dirs()) {
@@ -103,9 +114,14 @@ impl FontIndex {
             };
             for face in read_faces(&data, &path) {
                 for alias in face.aliases.clone() {
-                    self.faces
-                        .entry((alias.to_lowercase(), face.bold, face.italic))
-                        .or_insert_with(|| face.clone());
+                    let key = (alias.to_lowercase(), face.bold, face.italic);
+                    let keep = match self.faces.get(&key) {
+                        Some(held) => displaces(face.bold, held.weight, face.weight),
+                        None => true,
+                    };
+                    if keep {
+                        self.faces.insert(key, face.clone());
+                    }
                 }
             }
         }
@@ -190,6 +206,7 @@ fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Optio
     let num_tables = be16(data, table_dir + 4)? as usize;
     let mut name = None;
     let mut head = None;
+    let mut os2 = None;
     for i in 0..num_tables.min(512) {
         let rec = table_dir + 12 + i * 16;
         let tag = data.get(rec..rec + 4)?;
@@ -198,6 +215,7 @@ fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Optio
         match tag {
             b"name" => name = Some((offset, length)),
             b"head" => head = Some(offset),
+            b"OS/2" => os2 = Some(offset),
             _ => {}
         }
     }
@@ -209,8 +227,13 @@ fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Optio
     // head.macStyle bit 0 is bold, bit 1 is italic. The subfamily string is
     // the cross-check: some faces leave macStyle clear.
     let mac_style = head.and_then(|o| be16(data, o + 44)).unwrap_or(0);
+    // OS/2.usWeightClass sits four bytes into the table, after version and
+    // xAvgCharWidth. Apple's Japanese families leave macStyle clear on every
+    // weight and spell the weight only in the subfamily -- W0 through W9 --
+    // so the number is the only thing that separates Light from Heavy.
+    let weight = os2.and_then(|o| be16(data, o + 4)).unwrap_or(400);
     let sub = subfamily.to_lowercase();
-    let bold = mac_style & 0x1 != 0 || sub.contains("bold");
+    let bold = mac_style & 0x1 != 0 || sub.contains("bold") || weight >= 600;
     let italic = mac_style & 0x2 != 0 || sub.contains("italic") || sub.contains("oblique");
 
     Some(Face {
@@ -218,9 +241,32 @@ fn read_face_at(data: &[u8], table_dir: usize, path: &Path, index: u32) -> Optio
         index,
         family,
         aliases: families,
+        weight,
         bold,
         italic,
     })
+}
+
+/// The weight a style slot is nominally asking for.
+fn target_weight(bold: bool) -> u16 {
+    if bold {
+        700
+    } else {
+        400
+    }
+}
+
+/// Whether a candidate face should take a slot from the one already in it.
+///
+/// Apple ships Hiragino Sans as ten separate collections, W0 through W9, and
+/// every one of them reports the same typographic family with macStyle clear.
+/// They all land in the same slot, so keeping whichever arrived first made the
+/// choice depend on the order `read_dir` happened to return -- Heavy on this
+/// machine, Light on the next, from the same document. Nearest to the slot's
+/// nominal weight is the same answer everywhere.
+fn displaces(bold: bool, held: u16, candidate: u16) -> bool {
+    let target = i32::from(target_weight(bold));
+    (i32::from(candidate) - target).abs() < (i32::from(held) - target).abs()
 }
 
 /// How much a name record is worth as "the name a document would write".
@@ -380,5 +426,123 @@ mod tests {
         let (families, subfamily) = read_name_table(&table).expect("names");
         assert_eq!(families, vec!["Arial".to_string()]);
         assert_eq!(subfamily, "Bold");
+    }
+
+    /// An sfnt carrying just the three tables the index reads: `name`, `head`
+    /// for macStyle, and `OS/2` for usWeightClass.
+    fn synth_face(records: &[(u16, u16, u16, &str)], mac_style: u16, weight: u16) -> Vec<u8> {
+        let name = name_table(records);
+        let mut head = vec![0u8; 54];
+        head[44..46].copy_from_slice(&mac_style.to_be_bytes());
+        let mut os2 = vec![0u8; 78];
+        os2[4..6].copy_from_slice(&weight.to_be_bytes());
+
+        let tables: [(&[u8; 4], &Vec<u8>); 3] = [(b"OS/2", &os2), (b"head", &head), (b"name", &name)];
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // sfntVersion
+        out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+        out.extend_from_slice(&[0u8; 6]); // searchRange, entrySelector, rangeShift
+        let mut offset = 12 + tables.len() * 16;
+        let mut body = Vec::new();
+        for (tag, data) in tables {
+            out.extend_from_slice(tag);
+            out.extend_from_slice(&0u32.to_be_bytes()); // checksum
+            out.extend_from_slice(&(offset as u32).to_be_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            offset += data.len();
+            body.extend_from_slice(data);
+        }
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn hiragino(weight: u16) -> Vec<u8> {
+        let sub = format!("W{}", weight / 100);
+        synth_face(
+            &[
+                (3, 1033, 1, "Hiragino Sans"),
+                (3, 1033, 16, "Hiragino Sans"),
+                (3, 1033, 2, &sub),
+            ],
+            0,
+            weight,
+        )
+    }
+
+    /// Apple leaves macStyle clear on all ten weights of Hiragino Sans, so the
+    /// number in `OS/2` is the only thing separating W0 from W9.
+    #[test]
+    fn weight_class_is_read_when_mac_style_says_nothing() {
+        let faces = read_faces(&hiragino(800), Path::new("W8.ttc"));
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].weight, 800);
+        assert!(faces[0].bold, "800 is bold however clear macStyle is");
+
+        let light = read_faces(&hiragino(300), Path::new("W3.ttc"));
+        assert_eq!(light[0].weight, 300);
+        assert!(!light[0].bold, "300 must not land in the bold slot");
+    }
+
+    /// The regression this guards: ten files calling themselves `Hiragino
+    /// Sans` collided on one key, and whichever the directory listed first
+    /// won -- so the same document drew Heavy on one machine and Light on
+    /// another. Insert them in the worst order and the answer must not move.
+    #[test]
+    fn the_slot_goes_to_the_nearest_weight_not_the_first_scanned() {
+        for order in [
+            vec![800u16, 900, 100, 400, 300, 600, 700],
+            vec![400u16, 700, 800, 900, 100, 300, 600],
+            vec![900u16, 800, 700, 600, 400, 300, 100],
+        ] {
+            let mut index = FontIndex::default();
+            for weight in &order {
+                for face in read_faces(&hiragino(*weight), Path::new("x.ttc")) {
+                    for alias in face.aliases.clone() {
+                        let key = (alias.to_lowercase(), face.bold, face.italic);
+                        let keep = match index.faces.get(&key) {
+                            Some(held) => displaces(face.bold, held.weight, face.weight),
+                            None => true,
+                        };
+                        if keep {
+                            index.faces.insert(key, face.clone());
+                        }
+                    }
+                }
+            }
+            let regular = index.find("Hiragino Sans", false, false).expect("regular");
+            let bold = index.find("Hiragino Sans", true, false).expect("bold");
+            assert_eq!(regular.weight, 400, "regular slot, scanned as {order:?}");
+            assert_eq!(bold.weight, 700, "bold slot, scanned as {order:?}");
+        }
+    }
+
+    #[test]
+    fn displaces_prefers_the_nearer_weight_and_keeps_ties() {
+        assert!(displaces(false, 800, 400), "400 is nearer regular than 800");
+        assert!(!displaces(false, 400, 800));
+        assert!(displaces(true, 400, 700), "700 is nearer bold than 400");
+        assert!(!displaces(false, 400, 400), "a tie leaves the slot alone");
+    }
+
+    /// A family that exists in one style only must still resolve. Arial Black
+    /// is 900 with no upright sibling, and answering ABSENT would send a font
+    /// the machine holds to a viewer substitute.
+    #[test]
+    fn a_family_present_in_one_style_only_still_resolves() {
+        let mut index = FontIndex::default();
+        let data = synth_face(
+            &[(3, 1033, 1, "Arial Black"), (3, 1033, 2, "Regular")],
+            0,
+            900,
+        );
+        for face in read_faces(&data, Path::new("ArialBlack.ttf")) {
+            index
+                .faces
+                .insert(("arial black".into(), face.bold, face.italic), face);
+        }
+        assert!(
+            index.find("Arial Black", false, false).is_some(),
+            "a regular request must reach the only face there is"
+        );
     }
 }
