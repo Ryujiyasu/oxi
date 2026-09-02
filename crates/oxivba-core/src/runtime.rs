@@ -3824,42 +3824,56 @@ fn dictionary_missing_key_error(line: u32) -> RuntimeError {
     )
 }
 
+/// Which entry a subscript picks, and which number Excel raises when it picks
+/// none.
+///
+/// A number out of range is **9** and a key that is not there is **5**, except
+/// that a collection with nothing in it answers **5** to every number,
+/// including 0 and 1 — asked of Excel at `Item`, `Remove` and `Add Before`
+/// alike. A fraction is made whole first, half to the even side, which is why
+/// `Item(0.6)` and `Item(1.4)` both reach the first entry while `Item(2.6)` of
+/// two entries is out of range. A subscript written as text is always a KEY,
+/// never an index: over two entries, `Item("2")` raises 5.
 fn collection_index(
     entries: &[CollectionEntry],
     selector: &Value,
     line: u32,
 ) -> Result<usize, RuntimeError> {
-    let index = match selector {
-        Value::Integer(value) => usize::try_from(*value)
-            .ok()
-            .and_then(|value| value.checked_sub(1)),
-        Value::Double(value) if value.is_finite() && value.fract() == 0.0 => {
-            usize::try_from(*value as i64)
-                .ok()
-                .and_then(|value| value.checked_sub(1))
-        }
-        Value::String(key) => entries.iter().position(|entry| {
-            entry
-                .key
-                .as_ref()
-                .is_some_and(|existing| existing.eq_ignore_ascii_case(key))
-        }),
-        _ => {
-            return Err(error(
-                RuntimeErrorKind::TypeMismatch,
-                "Collection index must be a one-based number or String key",
-                Some(line),
-            ))
-        }
+    if let Value::String(key) = selector {
+        return entries
+            .iter()
+            .position(|entry| {
+                entry
+                    .key
+                    .as_ref()
+                    .is_some_and(|existing| existing.eq_ignore_ascii_case(key))
+            })
+            .ok_or_else(|| collection_subscript_error(5, line));
+    }
+    if matches!(
+        selector,
+        Value::Empty | Value::Null | Value::Missing | Value::Nothing | Value::Array(_)
+    ) {
+        return Err(error(
+            RuntimeErrorKind::TypeMismatch,
+            "Collection index must be a one-based number or String key",
+            Some(line),
+        ));
+    }
+    let index = index_from(selector, line)?;
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_sub(1))
+        .filter(|index| *index < entries.len())
+        .ok_or_else(|| collection_subscript_error(if entries.is_empty() { 5 } else { 9 }, line))
+}
+
+fn collection_subscript_error(number: i64, line: u32) -> RuntimeError {
+    let description = match number {
+        9 => "subscript out of range",
+        _ => "invalid procedure call or argument",
     };
-    index.filter(|index| *index < entries.len()).ok_or_else(|| {
-        raised_error(
-            5,
-            "Collection".to_string(),
-            "invalid procedure call or argument".to_string(),
-            line,
-        )
-    })
+    raised_error(number, "Collection".to_string(), description.to_string(), line)
 }
 
 /// What one index means: a number, rounded the way VBA rounds a subscript.
@@ -8156,6 +8170,84 @@ mod tests {
                       End Function\n";
         let failure = run(source, "Ask", vec![]).unwrap_err();
         assert_eq!(failure.kind, RuntimeErrorKind::UndefinedVariable);
+    }
+
+    /// Which number a Collection subscript raises, as Excel raises it.
+    #[test]
+    fn a_collection_subscript_out_of_range() {
+        let ask = |body: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim box As New Collection\n\
+                   Dim complaint As Long\n\
+                   Dim answer As Variant\n\
+                   {body}\n\
+                   Ask = \"err\" & complaint\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        let attempt = "On Error Resume Next\n\
+                       answer = box(INDEX)\n\
+                       complaint = Err.Number\n\
+                       On Error GoTo 0";
+        let two = format!("box.Add \"a\"\nbox.Add \"b\"\n{attempt}");
+        // Out of range over entries that exist is 9.
+        assert_eq!(ask(&two.replace("INDEX", "0")), "err9");
+        assert_eq!(ask(&two.replace("INDEX", "3")), "err9");
+        assert_eq!(ask(&two.replace("INDEX", "-1")), "err9");
+        // A collection with nothing in it answers 5 to every number.
+        assert_eq!(ask(&attempt.replace("INDEX", "0")), "err5");
+        assert_eq!(ask(&attempt.replace("INDEX", "1")), "err5");
+        assert_eq!(ask(&attempt.replace("INDEX", "5")), "err5");
+        // A key that is not there is 5, and text is always a key.
+        assert_eq!(ask(&two.replace("INDEX", "\"missing\"")), "err5");
+        assert_eq!(ask(&two.replace("INDEX", "\"2\"")), "err5");
+    }
+
+    /// A fractional subscript is made whole first, half to the even side.
+    #[test]
+    fn a_fractional_collection_subscript() {
+        let source = "Public Function Ask() As String\n\
+                        Dim box As New Collection\n\
+                        box.Add \"a\"\n\
+                        box.Add \"b\"\n\
+                        Ask = box(1.4) & box(0.6) & box(1.5) & box(1.7) & box(2.4)\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("aabbb".to_string())
+        );
+    }
+
+    /// Remove and `Add Before` read a subscript the same way Item does.
+    #[test]
+    fn removing_by_a_subscript_that_is_not_there() {
+        let ask = |body: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim box As New Collection\n\
+                   Dim complaint As Long\n\
+                   box.Add \"a\", \"first\"\n\
+                   On Error Resume Next\n\
+                   {body}\n\
+                   complaint = Err.Number\n\
+                   On Error GoTo 0\n\
+                   Ask = \"err\" & complaint & \"/\" & box.Count\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("box.Remove 5"), "err9/1");
+        assert_eq!(ask("box.Remove 0"), "err9/1");
+        assert_eq!(ask("box.Remove \"missing\""), "err5/1");
+        assert_eq!(ask("box.Add \"b\", , 9"), "err9/1");
     }
 
     #[test]
