@@ -4469,25 +4469,32 @@ fn call_builtin(
             }
             // The places are read and judged BEFORE the value is looked at,
             // so `Round(vbNullString, -2.5)` is a bad argument (5) rather
-            // than a type mismatch (13). And there is no upper bound:
-            // `Round(1.5, 16)` answers 1.5. Both asked of Excel.
+            // than a type mismatch (13).
+            //
+            // They reach as far as 22 and no further: asked of Excel,
+            // `Round(1.5, 22)` answers 1.5 and `Round(1.5, 23)` is error 5.
+            // Not 15, which is where the digits stop mattering, and not
+            // unbounded, which is what one measurement at 16 suggested.
             let places = match args.get(1) {
                 None | Some(Value::Missing) => 0,
                 Some(value) => integer_argument(value, line)?,
             };
-            if places < 0 {
+            if !(0..=22).contains(&places) {
                 return Err(invalid_procedure_call(
-                    "Round decimal places cannot be negative".to_string(),
+                    "Round decimal places must be between 0 and 22".to_string(),
                     line,
                 ));
             }
             let value = number(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             if places > 15 {
-                return Ok(numeric_literal(value));
+                return Ok(keep_rank(value, &args[0]).unwrap_or(Value::Double(value)));
             }
+            // The answer keeps the type it was handed: asked of Excel,
+            // `VarType(Round(aDate, 2))` is 7, still a Date.
             let scale = 10_f64.powi(places as i32);
-            return Ok(numeric_literal((value * scale).round_ties_even() / scale));
+            let rounded = (value * scale).round_ties_even() / scale;
+            return Ok(keep_rank(rounded, &args[0]).unwrap_or(Value::Double(rounded)));
         }
         if matches!(name.as_str(), "hex" | "oct") {
             if args.len() != 1 {
@@ -5765,7 +5772,10 @@ fn format_value(
     first_day: i64,
     first_week: i64,
 ) -> Result<String, String> {
-    if matches!(value, Value::Null) {
+    // Neither Null nor Empty is written by a picture: asked of Excel,
+    // `Format(Empty, "000")` is the empty string, the same as
+    // `Format(Empty, "abz")`, so the picture is never even looked at.
+    if matches!(value, Value::Null | Value::Empty) {
         return Ok(String::new());
     }
     if pattern.is_empty() {
@@ -8485,10 +8495,20 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Int16(value) => value.to_string(),
         Value::Integer(value) => value.to_string(),
         Value::Byte(value) => value.to_string(),
-        Value::Single(value) => vba_number_text(*value as f64),
+        // A Single says only as many digits as a Single holds: asked of
+        // Excel, a Single of 0.7055475 writes back as 0.7055475, where
+        // widening it to a Double first would say 0.705547511577606.
+        Value::Single(value) => vba_number_text(single_text_value(*value)),
         Value::Double(value) => vba_number_text(*value),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
-        Value::Date(value) => vba_number_text(*value),
+        // A Date says itself as a date, not as the serial underneath:
+        // asked of Excel, `CStr(#1/2/2003#)` is `1/2/2003`, a time alone
+        // is `12:00:00 PM`, and the two together are both. The same as the
+        // named General Date, which is what `&` gives too.
+        Value::Date(value) => match serial_date_parts(*value) {
+            Ok(parts) => general_date(*value, parts),
+            Err(_) => vba_number_text(*value),
+        },
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
@@ -8497,6 +8517,15 @@ fn text(value: &Value) -> Result<String, String> {
         }
         Value::Object(_) => return Err("type mismatch converting object to String".to_string()),
     })
+}
+
+/// A Single as a Double that says the same thing: seven significant digits,
+/// which is all a Single carries.
+fn single_text_value(value: f32) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value as f64;
+    }
+    format!("{:.6e}", value).parse().unwrap_or(value as f64)
 }
 
 /// A Double written the way VBA writes one.
@@ -9334,6 +9363,90 @@ mod tests {
 
     /// `Round` reads the number of places BEFORE it looks at the value, and
     /// puts no ceiling on them.
+    /// `Round` keeps the type it was handed, and its places reach 22.
+    ///
+    /// Both numbers here were got wrong first by generalising from one
+    /// measurement: 16 places working was read as "no ceiling", and a Date
+    /// surviving was read as "keeps the type" before a Single had been asked.
+    /// The second guess turned out right and the first did not.
+    #[test]
+    fn round_keeps_its_type_and_stops_at_twenty_two_places() {
+        let ask = |setup: &str, expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim aSingle As Single\n\
+                   Dim aDouble As Double\n\
+                   Dim anInteger As Integer\n\
+                   Dim aLong As Long\n\
+                   Dim aCurrency As Currency\n\
+                   Dim aDate As Date\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   {setup}\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = CStr(answer)\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        let plain = "aSingle = 0.7055475: aDouble = 0.7055475: anInteger = 2: \
+                     aLong = 2: aCurrency = 1.5: aDate = #1/2/2003#";
+
+        // 2 Integer, 3 Long, 4 Single, 5 Double, 6 Currency, 7 Date
+        assert_eq!(ask(plain, "VarType(Round(aSingle, 2))"), "4");
+        assert_eq!(ask(plain, "VarType(Round(aDouble, 2))"), "5");
+        assert_eq!(ask(plain, "VarType(Round(anInteger, 2))"), "2");
+        assert_eq!(ask(plain, "VarType(Round(aCurrency, 2))"), "6");
+        assert_eq!(ask(plain, "VarType(Round(aDate, 2))"), "7");
+        assert_eq!(ask(plain, "VarType(Round(2, 2))"), "2");
+
+        // The ceiling is 22, not 15 and not absent.
+        assert_eq!(ask(plain, "Round(1.5, 22)"), "1.5");
+        assert_eq!(ask(plain, "Round(1.5, 23)"), "err5");
+    }
+
+    /// A Single says only as many digits as a Single holds.
+    ///
+    /// Widening it to a Double first turns 0.7055475 into
+    /// 0.705547511577606. Nothing caught this until `Round` began handing
+    /// Singles back.
+    #[test]
+    fn a_single_says_only_what_a_single_holds() {
+        let source = "Public Function Ask() As String\n\
+                        Dim aSingle As Single\n\
+                        aSingle = 0.7055475\n\
+                        Ask = CStr(aSingle) & \"/\" & CStr(Round(aSingle, 7))\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("0.7055475/0.7055475".to_string())
+        );
+    }
+
+    /// A Date says itself as a date, and Empty says nothing whatever picture
+    /// it is given.
+    #[test]
+    fn a_date_says_itself_as_a_date() {
+        let source = "Public Function Ask() As String\n\
+                        Ask = CStr(#1/2/2003#) & \"|\" & CStr(#12:00:00 PM#) & \"|\" & \
+                              CStr(#1/2/2003 3:04:05 PM#) & \"|\" & (#1/2/2003# & \"\") & \"|\" & \
+                              \"[\" & Format(Empty, \"000\") & \"]\" & \"[\" & Format(Empty, \"abz\") & \"]\"\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String(
+                "1/2/2003|12:00:00 PM|1/2/2003 3:04:05 PM|1/2/2003|[][]".to_string()
+            )
+        );
+    }
+
     #[test]
     fn round_judges_its_places_first() {
         let ask = |expression: &str| {
