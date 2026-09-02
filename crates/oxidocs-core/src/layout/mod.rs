@@ -4103,6 +4103,12 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                 *band += 1;
                 if *band >= num_bands {
                     push_separators(elements);
+                    // 2026-09-02: the vertical (tbRl) writer wraps pages here,
+                    // NOT through the sites `dbg_page_push` already covers -- a
+                    // 14-page tbRl document logged ZERO pushes, which read as
+                    // "no page breaks happen" instead of "this instrument does
+                    // not watch this path".
+                    dbg_page_push(pages_out.len(), elements.len());
                     pages_out.push(LayoutPage {
                         width: page_w,
                         height: page_h,
@@ -4182,6 +4188,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
         // unless the document produced no pages at all).
         if !elements.is_empty() || pages_out.is_empty() {
             push_separators(&mut elements);
+            dbg_page_push(pages_out.len(), elements.len());
             pages_out.push(LayoutPage {
                 width: page_w,
                 height: page_h,

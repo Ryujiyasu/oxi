@@ -307,10 +307,19 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
         return [p for p in range(1, (n_pages or 0) + 1) if p not in seen]
 
     oxi_blank = _blank_pages(oxi.get("n_pages"), oxi.get("pages"))
+    # The two sides must be counted the SAME way. `aggregate_dump` keeps only
+    # TEXT elements, so a Word page holding nothing but empty paragraphs has to
+    # count as blank too -- otherwise every such page reads as "Word had content
+    # here, Oxi went blank".
+    #
+    # educational__015355870669f8d3 is the specimen: Word's pages 9-11 carry 18
+    # paragraphs each and not one of them has text. Counting records instead of
+    # text reported blank_page_delta=+2 for a document where Oxi actually emits
+    # FEWER blank pages than Word (2 against 3).
     word_pages_by_str: dict[str, list] = {}
     for wp in word_paras:
         pg = wp.get("page")
-        if pg is not None:
+        if pg is not None and (wp.get("text") or "").strip():
             word_pages_by_str.setdefault(str(pg), []).append(wp)
     word_blank = _blank_pages(word.get("n_pages"), word_pages_by_str)
 
