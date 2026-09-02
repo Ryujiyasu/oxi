@@ -822,11 +822,11 @@ const SUBSTITUTES: &[(&str, &str)] = &[
     ("cambria", "Caladea"),
     ("arial", "Liberation Sans"),
     ("helvetica", "Liberation Sans"),
-    // Helvetica Neue is not width-identical to Helvetica, but the base-14
-    // Helvetica it would otherwise fall to is not either — and that one
-    // arrives with no outlines and no width table, leaving the viewer to
-    // choose both. Naming a face we embed is the lesser guess.
-    ("helvetica neue", "Liberation Sans"),
+    // Helvetica Neue deliberately has no entry. Substituting Liberation Sans
+    // for it was measured on the blind corpus and came out *worse* than
+    // letting it fall to base-14 Helvetica — a reminder that a substitute is
+    // only worth making when its metrics are known to match, not when the
+    // families merely look alike.
     ("times new roman", "Liberation Serif"),
     ("times", "Liberation Serif"),
     ("courier new", "Liberation Mono"),
