@@ -175,6 +175,10 @@ pub enum RuntimeErrorKind {
     /// `Val(Null)`, `Sqr(Null)` and a dozen more all raise 94, where a plain
     /// type mismatch such as `CDbl("abc")` raises 13.
     InvalidNull,
+    /// A `Like` pattern Excel refuses: a range written backwards, or a `[`
+    /// with no `]` after it. VBA numbers this 93, and only raises it if the
+    /// match actually reaches the malformed set.
+    InvalidPattern,
     Unsupported,
     StepLimit,
     CallDepth,
@@ -3620,6 +3624,7 @@ fn runtime_error_number(failure: &RuntimeError) -> i64 {
         RuntimeErrorKind::UserDefined => 513,
         RuntimeErrorKind::DivisionByZero => 11,
         RuntimeErrorKind::InvalidNull => 94,
+        RuntimeErrorKind::InvalidPattern => 93,
         RuntimeErrorKind::Unsupported => 445,
         RuntimeErrorKind::StepLimit => 6,
         RuntimeErrorKind::CallDepth => 28,
@@ -7611,14 +7616,11 @@ fn binary(
             })
         }
         Is => unreachable!(),
-        Like => Ok(Value::Boolean(
-            like_pattern(
-                &text(&lhs).map_err(mismatch)?,
-                &text(&rhs).map_err(mismatch)?,
-                option_compare_text,
-            )
-            .map_err(|message| (RuntimeErrorKind::TypeMismatch, message))?,
-        )),
+        Like => Ok(Value::Boolean(like_pattern(
+            &text(&lhs).map_err(mismatch)?,
+            &text(&rhs).map_err(mismatch)?,
+            option_compare_text,
+        )?)),
     }
 }
 
@@ -7628,20 +7630,36 @@ enum LikeToken {
     AnyOne,
     AnyMany,
     Digit,
+    /// `[]`, a set with nothing in it. Excel does NOT refuse one: it matches
+    /// no characters at all, so `"ab" Like "a[]b"` and `"" Like "[]"` are both
+    /// True while `"a" Like "[]"` is False.
+    Nothing,
+    /// A `[` with no `]` after it. Refused with 93 -- but only if the match
+    /// reaches it, which is why `"b" Like "[a-c][x"` is False and raises
+    /// nothing while `"b" Like "*[x"` raises.
+    Unterminated,
     Class {
         negated: bool,
+        /// Kept as written. A range is only judged when the match arrives at
+        /// it, and the walk stops at the first range that holds the character:
+        /// `"a" Like "[a-cz-x]"` is True, where `"y" Like "[z-xa-c]"` raises.
         ranges: Vec<(char, char)>,
     },
 }
 
-fn like_pattern(value: &str, pattern: &str, text_compare: bool) -> Result<bool, String> {
-    let tokens = parse_like_pattern(pattern)?;
+fn like_pattern(
+    value: &str,
+    pattern: &str,
+    text_compare: bool,
+) -> Result<bool, (RuntimeErrorKind, String)> {
+    let tokens = parse_like_pattern(pattern);
     let value = value.chars().collect::<Vec<_>>();
     let mut memo = BTreeMap::new();
-    Ok(like_matches(&value, &tokens, 0, 0, text_compare, &mut memo))
+    like_matches(&value, &tokens, 0, 0, text_compare, &mut memo)
+        .map_err(|message| (RuntimeErrorKind::InvalidPattern, message))
 }
 
-fn parse_like_pattern(pattern: &str) -> Result<Vec<LikeToken>, String> {
+fn parse_like_pattern(pattern: &str) -> Vec<LikeToken> {
     let characters = pattern.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut index = 0;
@@ -7651,25 +7669,32 @@ fn parse_like_pattern(pattern: &str) -> Result<Vec<LikeToken>, String> {
             '*' => tokens.push(LikeToken::AnyMany),
             '#' => tokens.push(LikeToken::Digit),
             '[' => {
-                let close = characters[index + 1..]
+                let Some(close) = characters[index + 1..]
                     .iter()
                     .position(|character| *character == ']')
                     .map(|offset| index + 1 + offset)
-                    .ok_or_else(|| "invalid Like pattern: missing ]".to_string())?;
+                else {
+                    tokens.push(LikeToken::Unterminated);
+                    break;
+                };
                 let mut cursor = index + 1;
-                let negated = cursor < close && characters[cursor] == '!';
+                // The `!` only turns the set over while something follows it:
+                // `[!]` is a set holding `!` (`"!" Like "[!]"` is True), where
+                // `[!!]` is every character but `!`.
+                let negated = cursor + 1 < close && characters[cursor] == '!';
                 if negated {
                     cursor += 1;
                 }
                 if cursor == close {
-                    return Err("invalid Like pattern: empty character list".to_string());
+                    tokens.push(LikeToken::Nothing);
+                    index = close + 1;
+                    continue;
                 }
                 let mut ranges = Vec::new();
                 while cursor < close {
                     let start = characters[cursor];
                     if cursor + 2 < close && characters[cursor + 1] == '-' {
-                        let end = characters[cursor + 2];
-                        ranges.push((start, end));
+                        ranges.push((start, characters[cursor + 2]));
                         cursor += 3;
                     } else {
                         ranges.push((start, start));
@@ -7683,7 +7708,7 @@ fn parse_like_pattern(pattern: &str) -> Result<Vec<LikeToken>, String> {
         }
         index += 1;
     }
-    Ok(tokens)
+    tokens
 }
 
 fn like_matches(
@@ -7693,12 +7718,20 @@ fn like_matches(
     pattern_index: usize,
     text_compare: bool,
     memo: &mut BTreeMap<(usize, usize), bool>,
-) -> bool {
+) -> Result<bool, String> {
     if let Some(result) = memo.get(&(value_index, pattern_index)) {
-        return *result;
+        return Ok(*result);
     }
     let result = match pattern.get(pattern_index) {
         None => value_index == value.len(),
+        Some(LikeToken::Nothing) => like_matches(
+            value,
+            pattern,
+            value_index,
+            pattern_index + 1,
+            text_compare,
+            memo,
+        )?,
         Some(LikeToken::AnyMany) => {
             like_matches(
                 value,
@@ -7707,7 +7740,7 @@ fn like_matches(
                 pattern_index + 1,
                 text_compare,
                 memo,
-            ) || (value_index < value.len()
+            )? || (value_index < value.len()
                 && like_matches(
                     value,
                     pattern,
@@ -7715,7 +7748,7 @@ fn like_matches(
                     pattern_index,
                     text_compare,
                     memo,
-                ))
+                )?)
         }
         Some(token) if value_index < value.len() => {
             let character = value[value_index];
@@ -7725,16 +7758,28 @@ fn like_matches(
                 }
                 LikeToken::AnyOne => true,
                 LikeToken::Digit => character.is_ascii_digit(),
+                LikeToken::Unterminated => {
+                    return Err("invalid Like pattern: missing ]".to_string())
+                }
                 LikeToken::Class { negated, ranges } => {
-                    let found = ranges.iter().any(|(start, end)| {
-                        let character = like_fold(character, text_compare);
-                        let start = like_fold(*start, text_compare);
-                        let end = like_fold(*end, text_compare);
-                        start <= character && character <= end
-                    });
+                    let mut found = false;
+                    for (start, end) in ranges {
+                        if start > end {
+                            return Err(format!(
+                                "invalid Like pattern: the range {start}-{end} runs backwards"
+                            ));
+                        }
+                        let folded = like_fold(character, text_compare);
+                        if like_fold(*start, text_compare) <= folded
+                            && folded <= like_fold(*end, text_compare)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
                     found != *negated
                 }
-                LikeToken::AnyMany => unreachable!(),
+                LikeToken::AnyMany | LikeToken::Nothing => unreachable!(),
             };
             matches
                 && like_matches(
@@ -7744,12 +7789,12 @@ fn like_matches(
                     pattern_index + 1,
                     text_compare,
                     memo,
-                )
+                )?
         }
         Some(_) => false,
     };
     memo.insert((value_index, pattern_index), result);
-    result
+    Ok(result)
 }
 
 fn like_character_equal(left: char, right: char, text_compare: bool) -> bool {
@@ -8248,6 +8293,83 @@ mod tests {
         assert_eq!(ask("box.Remove 0"), "err9/1");
         assert_eq!(ask("box.Remove \"missing\""), "err5/1");
         assert_eq!(ask("box.Add \"b\", , 9"), "err9/1");
+    }
+
+    /// What a `Like` pattern Excel refuses looks like, and — just as much of
+    /// the rule — when it declines to refuse it.
+    ///
+    /// Both faults are judged LAZILY, only where the match arrives at the set:
+    /// `"b" Like "[a-c][x"` is False and raises nothing, because after `[a-c]`
+    /// has taken the only character there is nothing left to test `[x`
+    /// against. Put a star in front of the same set and it is reached, and
+    /// raises.
+    #[test]
+    fn a_like_pattern_excel_refuses() {
+        let ask = |subject: &str, pattern: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim complaint As Long\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   answer = \"{subject}\" Like \"{pattern}\"\n\
+                   complaint = Err.Number\n\
+                   On Error GoTo 0\n\
+                   Ask = \"[\" & answer & \"]/err\" & complaint\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        // A range written backwards, and a set nobody closed.
+        assert_eq!(ask("a", "[c-a]"), "[]/err93");
+        assert_eq!(ask("b", "[b-a]"), "[]/err93");
+        assert_eq!(ask("a", "[abc"), "[]/err93");
+        assert_eq!(ask("[", "["), "[]/err93");
+        // Reached through a star or a question mark, and still refused.
+        assert_eq!(ask("b", "*[x"), "[]/err93");
+        assert_eq!(ask("abc", "*[c-a]"), "[]/err93");
+        assert_eq!(ask("abc", "?[c-a]"), "[]/err93");
+        assert_eq!(ask("ab", "[a-c][c-a]"), "[]/err93");
+        // Never reached, so never refused.
+        assert_eq!(ask("b", "[a-c][x"), "[False]/err0");
+        assert_eq!(ask("b", "[a-c][z-x]"), "[False]/err0");
+        assert_eq!(ask("", "[c-a]"), "[False]/err0");
+        assert_eq!(ask("", "[x"), "[False]/err0");
+        assert_eq!(ask("a", "a*[c-a]"), "[False]/err0");
+        // A set is walked in order and stops at the first range that holds the
+        // character, so a good range in front of a bad one hides it.
+        assert_eq!(ask("a", "[a-cz-x]"), "[True]/err0");
+        assert_eq!(ask("y", "[z-xa-c]"), "[]/err93");
+    }
+
+    /// An empty set is NOT refused: it matches no characters at all.
+    #[test]
+    fn a_like_pattern_with_an_empty_set() {
+        let ask = |subject: &str, pattern: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Ask = CStr(\"{subject}\" Like \"{pattern}\")\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("", "[]"), "True");
+        assert_eq!(ask("a", "[]"), "False");
+        assert_eq!(ask("ab", "a[]b"), "True");
+        assert_eq!(ask("ab", "ab[]"), "True");
+        // The `!` only turns a set over while something follows it.
+        assert_eq!(ask("!", "[!]"), "True");
+        assert_eq!(ask("a", "[!]"), "False");
+        assert_eq!(ask("a", "[!!]"), "True");
+        assert_eq!(ask("!", "[!!]"), "False");
+        // A set ends at the first `]`, so `[[]` holds an opening bracket.
+        assert_eq!(ask("[", "[[]"), "True");
+        assert_eq!(ask("a", "[[]"), "False");
     }
 
     #[test]
