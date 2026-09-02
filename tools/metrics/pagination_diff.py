@@ -172,7 +172,24 @@ def diff_doc(doc_id: str, word: dict, oxi: dict) -> dict:
     matches: list[dict] = []
     word_paras = word.get("paragraphs", [])
     for wp in word_paras:
-        wt = normalize_text(wp["text"])
+        # The placeholder has to be found BEFORE normalize_text, which
+        # strips control characters (that is why an earlier attempt looking
+        # for it in the normalized string found nothing).
+        _raw = wp["text"] or ""
+        _ruby = _raw.find("")
+        wt = normalize_text(_raw[:_ruby] if _ruby > 0 else _raw)
+        # 2026-09-02: Word's Range.Text collapses a RUBY BASE to a single
+        # , so the Word side reads "男もすなるというものを" where Oxi
+        # carries the base itself ("男もすなる日記というものを"). Prefix equality
+        # then fails on the first differing character and the paragraph drops
+        # out of the gate entirely -- educational__015355870669f8d3 reported
+        # match_rate 0.806 with 20 unmatched paragraphs, 19 of them in ruby
+        # paragraphs, and NONE of it was an Oxi defect.
+        #
+        # Cut the comparison at the placeholder: what precedes it is real text
+        # on both sides. A paragraph that STARTS with the placeholder keeps its
+        # old behaviour (the base is the first thing Oxi draws, so there is no
+        # common prefix to salvage).
         if len(wt) < MIN_MATCH_LEN:
             continue
         wpage = wp.get("page")
