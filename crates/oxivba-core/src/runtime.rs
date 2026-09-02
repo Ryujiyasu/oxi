@@ -6033,43 +6033,290 @@ fn group_number(value: &str) -> String {
     result
 }
 
+/// A number written the way a `Format` picture asks for it.
+///
+/// The picture language, measured against Excel across four values and every
+/// shape below:
+///
+/// * `;` cuts the picture into up to four sections — positive, negative, zero,
+///   and one for text that never sees a number. A negative number with no
+///   section of its own is written by the FIRST section with a minus in front;
+///   a section that is there but empty counts as absent, so `"0;"` still
+///   answers `-1`.
+/// * `0` is a digit that is always written, `#` one that is dropped where it
+///   would be a leading or trailing zero. `Format(0, "###")` is therefore the
+///   empty string, and `Format(0, "#.##")` is a lone point.
+/// * The value is rounded away from zero to as many decimals as the picture
+///   asks for, so -0.5 with `"000"` is `-001`.
+/// * A `,` among the whole digits groups them in threes.
+/// * `%` multiplies by a hundred and writes itself.
+/// * `E+` or `E-` (either case) switches to an exponent, the digits before it
+///   sizing the mantissa and those after it the exponent.
+/// * `\x` writes `x`, `"..."` writes what is inside, and anything else the
+///   picture does not use writes itself.
+/// * The minus goes in front of the WHOLE answer, literals included: `-ab1`,
+///   not `ab-1`.
+fn number_picture(value: f64, picture: &str) -> String {
+    let sections = picture_sections(picture);
+    let negative = value < 0.0;
+    let zero = value == 0.0;
+
+    let (section, sign) = if zero && sections.len() > 2 && !sections[2].is_empty() {
+        (sections[2].as_str(), false)
+    } else if negative && sections.len() > 1 && !sections[1].is_empty() {
+        (sections[1].as_str(), false)
+    } else {
+        (sections[0].as_str(), negative)
+    };
+
+    let tokens = picture_tokens(section);
+    let scale = if tokens.iter().any(|t| matches!(t, Token::Percent)) {
+        100.0
+    } else {
+        1.0
+    };
+    let exponent_at = tokens
+        .iter()
+        .position(|t| matches!(t, Token::Exponent { .. }));
+
+    let magnitude = value.abs() * scale;
+    let written = match exponent_at {
+        Some(at) => exponent_form(magnitude, &tokens, at),
+        None => plain_form(magnitude, &tokens),
+    };
+    if sign {
+        format!("-{written}")
+    } else {
+        written
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Token {
+    /// A digit that is always written.
+    Zero,
+    /// A digit dropped where it would be a leading or trailing zero.
+    Hash,
+    Point,
+    Comma,
+    Percent,
+    Exponent { plus: bool, upper: bool },
+    Literal(String),
+}
+
+/// Cuts a picture on its semicolons, leaving those inside quotes or behind a
+/// backslash alone.
+fn picture_sections(picture: &str) -> Vec<String> {
+    let mut sections = vec![String::new()];
+    let mut characters = picture.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                sections.last_mut().unwrap().push('\\');
+                if let Some(escaped) = characters.next() {
+                    sections.last_mut().unwrap().push(escaped);
+                }
+            }
+            '"' => {
+                sections.last_mut().unwrap().push('"');
+                for quoted in characters.by_ref() {
+                    sections.last_mut().unwrap().push(quoted);
+                    if quoted == '"' {
+                        break;
+                    }
+                }
+            }
+            ';' => sections.push(String::new()),
+            _ => sections.last_mut().unwrap().push(character),
+        }
+    }
+    sections
+}
+
+fn picture_tokens(section: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut characters = section.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '0' => tokens.push(Token::Zero),
+            '#' => tokens.push(Token::Hash),
+            '.' => tokens.push(Token::Point),
+            ',' => tokens.push(Token::Comma),
+            '%' => tokens.push(Token::Percent),
+            'E' | 'e' if matches!(characters.peek(), Some('+') | Some('-')) => {
+                let plus = characters.next() == Some('+');
+                tokens.push(Token::Exponent {
+                    plus,
+                    upper: character == 'E',
+                });
+            }
+            '\\' => {
+                if let Some(escaped) = characters.next() {
+                    tokens.push(Token::Literal(escaped.to_string()));
+                }
+            }
+            '"' => {
+                let mut quoted = String::new();
+                for inside in characters.by_ref() {
+                    if inside == '"' {
+                        break;
+                    }
+                    quoted.push(inside);
+                }
+                tokens.push(Token::Literal(quoted));
+            }
+            other => tokens.push(Token::Literal(other.to_string())),
+        }
+    }
+    tokens
+}
+
+/// How many digits the picture asks for on each side of the point.
+fn digit_places(tokens: &[Token], upto: usize) -> (usize, usize, usize, usize, bool) {
+    let (mut whole, mut whole_required) = (0, 0);
+    let (mut fraction, mut fraction_required) = (0, 0);
+    let mut grouped = false;
+    let mut past_point = false;
+    for token in tokens.iter().take(upto) {
+        match token {
+            Token::Point => past_point = true,
+            Token::Comma if !past_point => grouped = true,
+            Token::Zero | Token::Hash => {
+                let required = matches!(token, Token::Zero);
+                if past_point {
+                    fraction += 1;
+                    fraction_required += usize::from(required);
+                } else {
+                    whole += 1;
+                    whole_required += usize::from(required);
+                }
+            }
+            _ => {}
+        }
+    }
+    (whole, whole_required, fraction, fraction_required, grouped)
+}
+
+/// The digits of a magnitude, laid into the places the picture asked for.
+fn laid_out(magnitude: f64, whole: usize, whole_required: usize, fraction: usize,
+            fraction_required: usize, grouped: bool) -> (String, String) {
+    let scaled = 10_f64.powi(fraction as i32);
+    let rounded = (magnitude * scaled).abs().round() / scaled;
+    let text = format!("{rounded:.*}", fraction);
+    let (integer_text, fraction_text) = match text.split_once('.') {
+        Some((left, right)) => (left.to_string(), right.to_string()),
+        None => (text, String::new()),
+    };
+
+    let mut digits = integer_text.trim_start_matches('0').to_string();
+    while digits.len() < whole_required {
+        digits.insert(0, '0');
+    }
+    if digits.is_empty() && whole_required == 0 && whole > 0 {
+        // Every whole place was a `#`, and there is nothing to show in them.
+        digits = String::new();
+    }
+    if grouped && digits.len() > 3 {
+        let mut grouped_digits = String::new();
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index) % 3 == 0 {
+                grouped_digits.push(',');
+            }
+            grouped_digits.push(digit);
+        }
+        digits = grouped_digits;
+    }
+
+    let mut decimals = fraction_text;
+    while decimals.len() > fraction_required && decimals.ends_with('0') {
+        decimals.pop();
+    }
+    (digits, decimals)
+}
+
+fn plain_form(magnitude: f64, tokens: &[Token]) -> String {
+    let (whole, whole_required, fraction, fraction_required, grouped) =
+        digit_places(tokens, tokens.len());
+    let (digits, decimals) =
+        laid_out(magnitude, whole, whole_required, fraction, fraction_required, grouped);
+    write_out(tokens, &digits, &decimals, None)
+}
+
+fn exponent_form(magnitude: f64, tokens: &[Token], at: usize) -> String {
+    let (whole, whole_required, fraction, fraction_required, grouped) = digit_places(tokens, at);
+    let mantissa_places = whole.max(1);
+    let power = if magnitude == 0.0 {
+        0
+    } else {
+        let raw = magnitude.log10().floor() as i32;
+        raw - (mantissa_places as i32 - 1)
+    };
+    let mantissa = if magnitude == 0.0 {
+        0.0
+    } else {
+        magnitude / 10_f64.powi(power)
+    };
+    let (digits, decimals) =
+        laid_out(mantissa, whole, whole_required.max(1), fraction, fraction_required, grouped);
+
+    let (exponent_whole, exponent_required, _, _, _) =
+        digit_places(&tokens[at + 1..], tokens.len() - at - 1);
+    let mut exponent_digits = power.abs().to_string();
+    while exponent_digits.len() < exponent_required.max(exponent_whole) {
+        exponent_digits.insert(0, '0');
+    }
+    let Token::Exponent { plus, upper } = &tokens[at] else {
+        unreachable!()
+    };
+    let marker = if *upper { 'E' } else { 'e' };
+    let sign = if power < 0 {
+        "-"
+    } else if *plus {
+        "+"
+    } else {
+        ""
+    };
+    let exponent = format!("{marker}{sign}{exponent_digits}");
+    write_out(&tokens[..at], &digits, &decimals, Some(&exponent))
+}
+
+/// Walks the picture once more, dropping the digits into the places they
+/// belong and writing everything else as it stands.
+fn write_out(tokens: &[Token], digits: &str, decimals: &str, exponent: Option<&str>) -> String {
+    let mut out = String::new();
+    let mut written_whole = false;
+    let mut fraction_left = decimals.chars();
+    let mut past_point = false;
+    for token in tokens {
+        match token {
+            Token::Zero | Token::Hash => {
+                if past_point {
+                    if let Some(digit) = fraction_left.next() {
+                        out.push(digit);
+                    }
+                } else if !written_whole {
+                    out.push_str(digits);
+                    written_whole = true;
+                }
+            }
+            Token::Point => {
+                past_point = true;
+                out.push('.');
+            }
+            Token::Comma => {}
+            Token::Percent => out.push('%'),
+            Token::Exponent { .. } => {}
+            Token::Literal(text) => out.push_str(text),
+        }
+    }
+    if let Some(exponent) = exponent {
+        out.push_str(exponent);
+    }
+    out
+}
+
 fn custom_number(value: f64, pattern: &str) -> String {
-    let percent = pattern.contains('%');
-    let decimal = pattern.find('.');
-    let digits = decimal
-        .map(|index| {
-            pattern[index + 1..]
-                .chars()
-                .filter(|c| matches!(c, '0' | '#'))
-                .count()
-        })
-        .unwrap_or(0);
-    let required = decimal
-        .map(|index| pattern[index + 1..].chars().filter(|c| *c == '0').count())
-        .unwrap_or(0);
-    let whole_pattern = &pattern[..decimal.unwrap_or(pattern.len())];
-    let mut result = fixed_number(
-        value * if percent { 100.0 } else { 1.0 },
-        digits,
-        whole_pattern.contains(','),
-        whole_pattern.contains('0'),
-        false,
-    );
-    let mut displayed_digits = digits;
-    while displayed_digits > required && result.ends_with('0') && result.contains('.') {
-        result.pop();
-        displayed_digits -= 1;
-    }
-    if result.ends_with('.') {
-        result.pop();
-    }
-    if percent {
-        result.push('%');
-    }
-    if pattern.starts_with('$') {
-        result.insert(0, '$');
-    }
-    result
+    number_picture(value, pattern)
 }
 
 fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -8859,6 +9106,62 @@ mod tests {
     /// eight, and anything that arrives as a Double — including every number
     /// read out of a cell — is sixteen. Only tellable once the interpreter
     /// keeps the types apart.
+    /// What a `Format` picture asks for, measured against Excel over four
+    /// values and every shape of picture below.
+    ///
+    /// The engine before this counted the digits AFTER the point and merely
+    /// asked whether there was a `0` before it, so `Format(-0.5, "000")`
+    /// answered `-0` instead of `-001` and no literal in a picture was ever
+    /// written at all.
+    #[test]
+    fn a_number_written_the_way_its_picture_asks() {
+        let ask = |value: &str, picture: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n  Ask = Format({value}, \"{picture}\")\nEnd Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+
+        // `0` is always written, `#` is dropped where it would be a leading or
+        // trailing zero — so a zero written with hashes is nothing at all.
+        assert_eq!(ask("-0.5", "000"), "-001");
+        assert_eq!(ask("-0.5", "0"), "-1");
+        assert_eq!(ask("-0.5", "###"), "-1");
+        assert_eq!(ask("0", "000"), "000");
+        assert_eq!(ask("0", "###"), "");
+        assert_eq!(ask("0", "#0"), "0");
+        assert_eq!(ask("0", "#.##"), ".");
+        assert_eq!(ask("1234.567", "000"), "1235");
+
+        // Rounded away from zero, to as many decimals as the picture asks.
+        assert_eq!(ask("-1234.5", "0"), "-1235");
+        assert_eq!(ask("1234.567", "0.0"), "1234.6");
+        assert_eq!(ask("1234.567", "0.00"), "1234.57");
+
+        // Grouping, percent, and the exponent.
+        assert_eq!(ask("-1234.5", "#,##0"), "-1,235");
+        assert_eq!(ask("-0.5", "0%"), "-50%");
+        assert_eq!(ask("1234.567", "0E+00"), "1E+03");
+        assert_eq!(ask("-0.5", "0E+00"), "-5E-01");
+        assert_eq!(ask("0", "0E+00"), "0E+00");
+        assert_eq!(ask("-0.5", "0e+00"), "-5e-01");
+
+        // Sections: positive; negative; zero. A negative with a section of its
+        // own carries no minus, and an empty section counts as absent.
+        assert_eq!(ask("-1234.5", "0;(0)"), "(1235)");
+        assert_eq!(ask("1234.567", "0;(0)"), "1235");
+        assert_eq!(ask("0", "0;(0);zero"), "zero");
+        assert_eq!(ask("-0.5", "0;"), "-1");
+
+        // Literals, and the minus in front of the WHOLE answer.
+        assert_eq!(ask("-0.5", "0 yen"), "-1 yen");
+        assert_eq!(ask("-0.5", "\\0 0"), "-0 1");
+        assert_eq!(ask("1234.567", "\\0 0"), "0 1235");
+    }
+
     #[test]
     fn hex_and_oct_write_as_wide_as_their_argument() {
         let ask = |setup: &str, expression: &str| {
