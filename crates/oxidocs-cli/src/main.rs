@@ -786,6 +786,11 @@ const SUBSTITUTES: &[(&str, &str)] = &[
     ("cambria", "Caladea"),
     ("arial", "Liberation Sans"),
     ("helvetica", "Liberation Sans"),
+    // Helvetica Neue is not width-identical to Helvetica, but the base-14
+    // Helvetica it would otherwise fall to is not either — and that one
+    // arrives with no outlines and no width table, leaving the viewer to
+    // choose both. Naming a face we embed is the lesser guess.
+    ("helvetica neue", "Liberation Sans"),
     ("times new roman", "Liberation Serif"),
     ("times", "Liberation Serif"),
     ("courier new", "Liberation Mono"),
@@ -2769,6 +2774,17 @@ fn embed_latin_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut 
 /// subset is kilobytes -- but it is a correct PDF with real outlines and a
 /// real width table, which a base-14 name is not. Being unable to find Python
 /// must not decide how a document looks.
+/// Remove what the subsetter wrote. Called on every way out of
+/// `subset_font_file`, not just the successful one: `font.save()` happens
+/// before the step that can fail, so a failing face still left three files
+/// behind — 88 of them after thirty documents.
+fn clear_scratch(widths_path: &str, cidmap_path: &str, subset_path: &str) {
+    let _ = fs::remove_file(subset_path);
+    let _ = fs::remove_file(cidmap_path);
+    let _ = fs::remove_file(format!("{widths_path}.psname"));
+    let _ = fs::remove_file(widths_path);
+}
+
 /// Embed one member of a font collection whole. Used where the family lives
 /// past the first face of a `.ttc`, which the path-addressed subsetter cannot
 /// name.
@@ -2804,6 +2820,12 @@ fn embed_whole_font(font_path: &str, label: &str) -> Option<EmbeddedFont> {
 /// Subset a single font file and return EmbeddedFont. Falls back to embedding
 /// the whole file when the external subsetter is unavailable or fails.
 fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, label: &str) -> Option<EmbeddedFont> {
+    // Nothing to draw, so nothing to embed. Subsetting to zero glyphs strips
+    // the cmap and the subsetter dies reading it back; a document whose only
+    // block is an empty table used to take every Latin face down that way.
+    if chars.is_empty() {
+        return None;
+    }
     let char_string: String = chars.iter()
         .filter(|c| { let cp = **c as u32; !(0xD800..=0xDFFF).contains(&cp) })
         .collect();
@@ -2835,6 +2857,22 @@ else:
 
 chars = sys.stdin.read()
 chars = ''.join(c for c in chars if ord(c) < 0xD800 or ord(c) > 0xDFFF)
+
+# Read the PostScript name BEFORE subsetting. Apple ships collections whose
+# nameID 6 lives only on platform 1, and the subsetter's defaults
+# (name_legacy=False, name_languages=[1033]) prune exactly that record -- so
+# reading it afterwards returned nothing and the PDF went out carrying our
+# internal handle as its BaseFont. Reading first needs no option tuning and
+# survives whatever a future fontTools decides to drop.
+ps_name = None
+for record in font['name'].names:
+    if record.nameID == 6:
+        try:
+            ps_name = record.toUnicode()
+            break
+        except Exception:
+            pass
+
 opts = Options()
 subsetter = Subsetter(options=opts)
 subsetter.populate(text=chars)
@@ -2875,14 +2913,6 @@ with open("{cidmap_path}", 'w') as f:
 with open("{widths_path}", 'w') as f:
     json.dump(cid_widths, f)
 
-ps_name = None
-for record in font['name'].names:
-    if record.nameID == 6:
-        try:
-            ps_name = record.toUnicode()
-            break
-        except:
-            pass
 if ps_name:
     with open("{widths_path}.psname", 'w') as f:
         f.write(ps_name)
@@ -2908,19 +2938,24 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
             let output = child.wait_with_output().ok()?;
             if !output.status.success() {
                 eprintln!("Font subsetting ({}) failed: {}", label, String::from_utf8_lossy(&output.stderr));
+                clear_scratch(&widths_path, &cidmap_path, &subset_path);
                 return embed_whole_font(font_path, label);
             }
             eprintln!("Font subset ({}): {}", label, String::from_utf8_lossy(&output.stdout).trim());
         }
         Err(e) => {
             eprintln!("Python not available for {} subsetting: {}", label, e);
+            clear_scratch(&widths_path, &cidmap_path, &subset_path);
             return embed_whole_font(font_path, label);
         }
     }
 
     let otf_data = match fs::read(&subset_path) {
         Ok(data) => data,
-        Err(_) => return embed_whole_font(font_path, label),
+        Err(_) => {
+            clear_scratch(&widths_path, &cidmap_path, &subset_path);
+            return embed_whole_font(font_path, label);
+        }
     };
     let unicode_to_gid = if let Ok(json_str) = fs::read_to_string(&cidmap_path) {
         parse_cidmap_json(&json_str)
@@ -2941,17 +2976,7 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
         eprintln!("PostScript name: {}", psn);
     }
 
-    // Everything the subsetter wrote has been read; leaving it behind fills the
-    // machine's scratch directory a face at a time (372 files after 30
-    // documents on the Linux run that found this).
-    for path in [
-        subset_path.clone(),
-        cidmap_path.clone(),
-        widths_path.clone(),
-        format!("{}.psname", &widths_path),
-    ] {
-        let _ = fs::remove_file(path);
-    }
+    clear_scratch(&widths_path, &cidmap_path, &subset_path);
 
     let is_cff = otf_data.starts_with(b"OTTO") || has_cff_table(&otf_data);
     if is_cff {
