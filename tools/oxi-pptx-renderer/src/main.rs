@@ -236,7 +236,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
                                     for (i, para_json) in arr.iter_mut().enumerate() {
                                         if let Some(para) = sh_para(&sh.content, i) {
                                             let def_family = resolve_font(pres, sh);
-                                            let (bases, marker, mfam, mbold) =
+                                            let (bases, marker, mfam, mbold, space_pt) =
                                                 layout_paragraph_baselines(
                                                 dc,
                                                 para,
@@ -294,6 +294,12 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
                                             // reader check WHERE the break fell
                                             // rather than only how many there
                                             // were.
+                                            // See `space_pt` in
+                                            // `layout_paragraph_baselines`: the
+                                            // audit subtracts it where the shape
+                                            // holds more than one paragraph.
+                                            para_json["space_pt"] =
+                                                json!((space_pt * 1000.0).round() / 1000.0);
                                             para_json["line_texts"] = json!(
                                                 bases
                                                     .iter()
@@ -4910,7 +4916,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             } else {
                                 None
                             };
-                            let (lines, marker, _mfam, _mbold) =
+                            let (lines, marker, _mfam, _mbold, _space) =
                                 layout_paragraph_baselines(
                                 mem_dc,
                                 p,
@@ -15495,7 +15501,7 @@ fn layout_paragraph_baselines(
     wrap_text: bool,
     // `a:bodyPr/@spcFirstLastPara` -- keep the first paragraph's space.
     spc_first_last: bool,
-) -> (Vec<(String, f32, f32, f32)>, Option<MarkerInfo>, String, bool) {
+) -> (Vec<(String, f32, f32, f32)>, Option<MarkerInfo>, String, bool, f32) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
@@ -15830,6 +15836,20 @@ fn layout_paragraph_baselines(
         Vec::new()
     };
 
+    // ★One space in the face this paragraph is measured with. It is not used
+    // for layout at all -- it is stated for the AUDIT, because PowerPoint's
+    // `Lines(j).BoundWidth` takes in the paragraph mark whenever the shape
+    // holds more than one paragraph, and the mark is exactly a space wide
+    // (`gen_pptx_boundwidth.py`: -1.27pt alone in the shape, +2.60pt with a
+    // second paragraph, a step of 3.87 against Arial's 3.889pt space at 14pt).
+    // Without it the audit has to drop every multi-paragraph shape, which is
+    // most of the corpus.
+    let space_pt = hmtx_width_styled(" ", fs, &family, bold, italic, 0.0)
+        .or_else(|| {
+            runtime_width_px(dc, " ", fs, &family, bold, italic, scale, 0.0)
+                .map(|px| px as f32 / scale as f32)
+        })
+        .unwrap_or(0.0);
     let mut out = Vec::with_capacity(n_lines);
     let mut align_at = 0usize; // char offset of this line within the paragraph
     for (i, line) in lines.iter().enumerate() {
@@ -15926,7 +15946,7 @@ fn layout_paragraph_baselines(
     // positions but never said what produced them, so every disagreement had to
     // be reasoned back to a face -- six hypotheses died on d47 for want of this
     // one string, and it settled the question in a single run.
-    (out, marker, family, bold)
+    (out, marker, family, bold, space_pt)
 }
 
 /// Render an auto-number marker string for a buAutoNum `kind` at count `n`

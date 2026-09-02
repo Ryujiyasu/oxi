@@ -84,7 +84,13 @@ one size, one property changed per arm):
                                 paragraph, bold or not
 
 The step between those two is 3.87pt and Arial's space at 14pt is 3.889pt: in a
-multi-paragraph shape the box takes in the PARAGRAPH MARK. That was the whole of
+multi-paragraph shape the box takes in the PARAGRAPH MARK. It scales, too --
+the 28pt arm steps 7.74pt against a 7.778pt space -- so the engine now states
+that space per paragraph (`space_pt`) and `--mark-correct` will subtract it.
+That stays OPT-IN: a real deck does not apply the mark as predictably as the
+probe does (deck 9's single-line 'THREATS', inside a multi-paragraph
+placeholder, reads -3.31pt once corrected, which says its box never had one), so
+the gate keeps the population whose null it can account for. That was the whole of
 the "19% of lines sit 2pt out" class -- including d09 s9's 'Yellow' and d32 s1's
 +62pt, neither of which is a defect. With single-paragraph shapes only:
 
@@ -137,6 +143,9 @@ ROTATED = True
 # When set, every compared line's width pair is collected here and written out.
 # Four examples in a console are a hypothesis; a distribution is a finding.
 WIDTH_ROWS: list | None = None
+
+# Whether to compare multi-paragraph shapes by subtracting the paragraph mark.
+MARK_CORRECT = False
 
 REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / "pipeline_data" / "pptx_benchmark"
@@ -230,7 +239,8 @@ def engine_paras(dump: dict) -> dict[int, list]:
                 rows.append((len(p.get("line_x_offsets") or []),
                              p.get("line_x_offsets") or [], text,
                              p.get("line_baselines") or [], widths,
-                             p.get("measured_family") or ""))
+                             p.get("measured_family") or "",
+                             float(p.get("space_pt") or 0.0)))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -420,7 +430,7 @@ def audit(doc) -> dict | None:
                     quart = round(rot / 90.0) * 90 % 360
                     axis = (None if abs(rot - quart) > 0.5
                             else (0 if quart in (0, 180) else 1))
-                    for (cn, cx, ctext, cy, cw, chh, cface),                             (en, ex, etext, ey, ew, eface) in zip(
+                    for (cn, cx, ctext, cy, cw, chh, cface),                             (en, ex, etext, ey, ew, eface, espace) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -524,11 +534,44 @@ def audit(doc) -> dict | None:
                                 # of the "19% of lines are 2pt out" class, d09
                                 # s9's 'Yellow' included, and none of it is the
                                 # engine.
-                                single = len(c["paras"]) == 1
+                                # ★A shape with more than one paragraph has
+                                # the paragraph MARK inside its box, and the
+                                # mark is exactly one space wide. The engine
+                                # states that space (`space_pt`), so those
+                                # shapes are compared with it taken off rather
+                                # than dropped -- which is most of the corpus.
+                                # ...but only in the arrangement the probe
+                                # actually measured: a SINGLE-LINE paragraph in
+                                # a multi-paragraph shape. Applying it to a
+                                # WRAPPED paragraph's last line turned deck 9's
+                                # clean sheet into 19 lines out by exactly one
+                                # space in the other direction, which says the
+                                # mark is not there. Those are left uncompared
+                                # rather than corrected by a rule that was never
+                                # measured for them.
+                                # ★DEFAULT: only a shape that holds ONE
+                                # paragraph is compared, because that is the
+                                # arrangement whose null is known. The mark
+                                # correction is real -- it is one space and it
+                                # doubles with the size (`gen_pptx_boundwidth.py`
+                                # 14pt +2.60 against -1.27, 28pt +5.32 against
+                                # -2.42) -- but a deck does not apply it as
+                                # predictably as the probe does: deck 9's
+                                # single-line 'THREATS' in a multi-paragraph
+                                # placeholder reads -3.31pt once corrected,
+                                # which says the mark was not there. So the
+                                # correction lives behind `--mark-correct`
+                                # until a rule for its presence is derived,
+                                # and the gate keeps the population it can
+                                # account for.
+                                many = len(c["paras"]) > 1
+                                mark = espace if (MARK_CORRECT and many and cn == 1) else 0.0
+                                skip = many and (not MARK_CORRECT or cn > 1)
                                 box = cw if axis == 0 else chh
                                 last = min(len(box), len(ew)) - 1
                                 for j, (a, b) in enumerate(zip(box, ew)):
-                                    if j != last or not single or axis is None:
+                                    a -= mark
+                                    if j != last or axis is None or skip:
                                         continue
                                     if b > 40.0:
                                         wide.append((b, a - b))
@@ -628,9 +671,13 @@ def main() -> None:
                     help="drop turned shapes entirely, as this did before")
     ap.add_argument("--dump-widths", default="",
                     help="write every compared line's width pair to this JSONL")
+    ap.add_argument("--mark-correct", action="store_true",
+                    help="also compare single-line paragraphs in multi-paragraph "
+                         "shapes, taking the paragraph mark off the box")
     args = ap.parse_args()
-    global ROTATED, WIDTH_ROWS
+    global ROTATED, WIDTH_ROWS, MARK_CORRECT
     ROTATED = not args.no_rotated
+    MARK_CORRECT = args.mark_correct
     if args.dump_widths:
         WIDTH_ROWS = []
     docs = args.docs

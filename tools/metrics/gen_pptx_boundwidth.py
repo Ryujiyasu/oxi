@@ -63,6 +63,10 @@ ARMS = [
     ("twopara_1st", {"tail": "Is the color of gold, butter and ripe lemons."}),
     ("twopara_2nd", {"head": "Yellow"}),
     ("bold_twopara", {"bold": True, "tail": "Is the color of gold, butter."}),
+    # Does the mark scale with the text? A space is 3.889pt at 14 and 7.778 at
+    # 28, so a step that doubles says "space" and one that does not says
+    # something else wearing a space's clothes at one size.
+    ("twopara_28", {"size": 28, "tail": "Is the color of gold, butter."}),
 ]
 
 
