@@ -795,6 +795,14 @@ const SUBSTITUTES: &[(&str, &str)] = &[
     ("times", "Liberation Serif"),
     ("courier new", "Liberation Mono"),
     ("courier", "Liberation Mono"),
+    // Liberation Sans Narrow matches Arial Narrow exactly — measured
+    // 2026-09-02, all 95 printable ASCII widths identical, hhea identical.
+    // It is NOT in `fonts/` and must not be added there: Narrow is still
+    // Liberation 1.x, which is GPLv2-with-font-exception, and this project
+    // ships only MPL-2.0-compatible third-party files. Mapping to it costs
+    // nothing and redistributes nothing — it is used when the machine already
+    // has it, which most Linux distributions do.
+    ("arial narrow", "Liberation Sans Narrow"),
 ];
 
 /// The machine's font index, built once. Every path that needs a font file
