@@ -2076,6 +2076,29 @@ fn parse_slide(
                             });
                         }
                     }
+                    // `<a:br/>` carries `<a:rPr>` only when something styles the
+                    // break, and `rPr` is optional in the schema -- so the same
+                    // element reaches Start in one file and Empty in another.
+                    // Every deck in the corpus writes the Start form (149 of
+                    // them, 0 self-closing), which is why this never showed
+                    // there; a deck written by python-pptx is all Empty, and
+                    // its paragraphs came back as ONE line with the breaks
+                    // silently gone. Found by a probe that could not tell its
+                    // seven arms apart.
+                    "br" if in_paragraph && s_softbreak => {
+                        para_runs.push(SlideRun {
+                            text: "\n".to_string(),
+                            font_size: run_font_size,
+                            bold: None,
+                            italic: false,
+                            underline: false,
+                            color: None,
+                            color_alpha: None,
+                            highlight: None,
+                            font_family: run_font_family.clone(),
+                            spacing: run_spacing,
+                        });
+                    }
                     // `<a:endParaRPr sz="1400"/>` normally has no children, so it
                     // arrives here and never in the Start arm. The Start arm has
                     // its own copy for the form that wraps an a:solidFill.
