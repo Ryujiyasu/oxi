@@ -81,11 +81,16 @@ So `BoundWidth` is an INK box -- pen minus the first glyph's left and the last
 glyph's right bearing, -1.27pt at 14pt and -2.42pt at 28 -- and NO box property
 moves it. The engine, meanwhile, reproduces the design pen exactly (+0.01).
 
-★That gives the sign its meaning: **ink can never exceed the pen, so a POSITIVE
-delta is the engine measuring too narrow.** d09 s9's Raleway 'Yellow' reads ink
-50.25 against the engine's 46.56, so PowerPoint's own pen is at least 50.25 and
-the engine is 8% short on that line. The 64 are real, and a healthy line reads
-slightly NEGATIVE (the bearings), not zero.
+★A healthy line therefore reads slightly NEGATIVE -- the bearings -- and not
+zero, which is already worth knowing. But the sign does NOT settle the 64 on
+its own, and the case that says so is d09 s9's Raleway 'Yellow': its box is
+50.25 while PowerPoint's own per-character steps (`pptx_char_pos_com.py 9 9
+Yellow`: 9.25 + 8.375 + 4.5 + 4.5 + 8.5 and a 'w') sum to the engine's 46.56.
+The application agrees with the engine about where every character goes and
+still reports a box 3.7pt wider than the characters occupy. So the box carries
+something on that line that the plain probe's box does not, and what that is
+remains the open question -- reading the 64 as "the engine measures narrow"
+would be believing one of PowerPoint's two answers over the other.
 
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
