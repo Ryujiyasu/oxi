@@ -1868,18 +1868,23 @@ fn embedded_face_name(typeface: &str, bold: bool, italic: bool) -> String {
 ///                lines over 3pt from PowerPoint's own left edge, 6 -> 4
 ///                SSIM 0.974247 -> 0.974413, MIN 0.9515 -> 0.9539, 2 up 0 down
 ///
-/// ★That deck is NOT what makes this right, and this note is here so its
-/// number is never read as more than it is. PowerPoint REFUSES blind 31's
-/// CFF-outlined 'Open Sauce' part and sets the text in Calibri -- its own PDF
-/// says so on pages 15, 21 and 23 (`pptx_cff_part_census.py`) -- while Oxi
-/// still draws the refused part. Landing on PowerPoint's line count out of the
-/// wrong face's advances is a coincidence, not a fix.
+/// ★And that deck says something sharper than "it improved". PowerPoint
+/// REFUSES its CFF-outlined 'Open Sauce' part and DRAWS the text in Calibri --
+/// its own PDF says so on pages 15, 21 and 23 (`pptx_cff_part_census.py`) --
+/// but it does not BREAK it in Calibri. Page 21 sets 'communication tools' in
+/// Calibri at 24pt, which measures 152.33 + 48.24pt plus a space, about 206pt,
+/// inside boxes of 220.4 / 225.4 / 241.1 / 243.6pt. It fits four times over,
+/// and PowerPoint breaks it anyway -- because 'Open Sauce' does not fit. The
+/// part is used for the METRICS and refused only for the RASTER, so the design
+/// table this flag reads is the right quantity even where the face is not the
+/// one drawn. (Which is also why dropping the part outright cost -0.0199 on
+/// this deck in 2026-08-28's `_cffskip_ab.log`: it threw away the metrics too.)
 ///
-/// What makes it right is the mechanism. `precise_advance_em` answers None for
-/// that face (`GetCharABCWidthsW` refuses it), so with the design table blocked
-/// the wrap has nothing left but GDI's device-pixel extent -- and that is
-/// measured at whatever scale the caller hands it, which is 1.0 for the dump
-/// and dpi*supersample/72 for the picture:
+/// The mechanism underneath. `precise_advance_em` answers None for that face
+/// (`GetCharABCWidthsW` refuses it), so with the design table blocked the wrap
+/// has nothing left but GDI's device-pixel extent -- and that is measured at
+/// whatever scale the caller hands it, which is 1.0 for the dump and
+/// dpi*supersample/72 for the picture:
 ///
 ///     blind 31, 72 vs 150 DPI, OXI_FDBREAK_DISABLE=1   2 paragraphs differ
 ///     blind 31, 72 vs 150 DPI, default                 0
