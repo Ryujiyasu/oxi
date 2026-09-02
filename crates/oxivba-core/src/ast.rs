@@ -33,6 +33,8 @@ pub struct TypeName {
     pub suffix: Option<char>,
     /// `String * 20`, used by fixed-width records and legacy file formats.
     pub fixed_length: Option<Expr>,
+    /// `As Byte()`: a Function or Property Get that returns an array.
+    pub is_array: bool,
 }
 
 impl TypeName {
@@ -42,6 +44,7 @@ impl TypeName {
             is_new: false,
             suffix: None,
             fixed_length: None,
+            is_array: false,
         }
     }
 }
@@ -90,6 +93,14 @@ pub enum ModuleItem {
         span: Span,
     },
     Procedure(Procedure),
+    /// The preamble the VBE writes at the top of an exported `.cls` or `.frm`
+    /// (`VERSION 1.0 CLASS` / `BEGIN ... END`, or a form's
+    /// `Begin {GUID} Name ... End` designer block). Not VBA, so not counted
+    /// as unparsed; kept verbatim so a re-export can put it back.
+    DesignerHeader {
+        text: String,
+        span: Span,
+    },
     /// A line the parser did not understand, kept verbatim so that nothing is
     /// silently dropped and the count of unparsed input can be reported.
     Unknown {

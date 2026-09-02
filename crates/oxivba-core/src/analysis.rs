@@ -969,7 +969,7 @@ impl Walker {
                 ModuleItem::Option(..) => {}
                 ModuleItem::DefType(_) => {}
                 ModuleItem::Attribute { .. } => {}
-                ModuleItem::Comment { .. } => {}
+                ModuleItem::Comment { .. } | ModuleItem::DesignerHeader { .. } => {}
                 ModuleItem::Directive { text, span } => {
                     self.findings.push(Finding {
                         what: text.clone(),
