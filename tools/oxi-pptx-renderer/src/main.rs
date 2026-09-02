@@ -2305,9 +2305,20 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                     });
                 let ok = !font.italic && honest && load_font_as(&font.data, &slot);
                 if sf_debug() {
+                    // ★`upright` and `installed` are WHY `honest` came out as it
+                    // did, and neither can be measured from outside this process:
+                    // the renderer has already loaded the cloud cache privately,
+                    // so a standalone probe asking GDI what this machine has
+                    // answers a different question. d31's 20 Canva parts are all
+                    // refused for `upright == 1` (Canva files each weight under
+                    // its own family name), and whether relaxing that is safe
+                    // depends on whether d35's Bebas Neue and Gruppo are served
+                    // here -- which only this line can say.
                     eprintln!(
-                        "INSTALL typeface={:?} bold={} italic={} face={:?} slot={slot:?} honest={honest} loaded={ok}",
-                        font.typeface, font.bold, font.italic, face_dbg
+                        "INSTALL typeface={:?} bold={} italic={} face={:?} slot={slot:?} honest={honest} loaded={ok} upright={} installed={}",
+                        font.typeface, font.bold, font.italic, face_dbg,
+                        upright_parts.get(font.typeface.as_str()).copied().unwrap_or(0),
+                        family_installed(&font.typeface)
                     );
                 }
                 if ok {
