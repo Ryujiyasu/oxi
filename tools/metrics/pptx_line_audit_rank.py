@@ -60,6 +60,7 @@ def parse(text: str) -> list[dict]:
                 "adv_p95": None,
                 "adv_over": 0,
                 "para_count_mismatch": 0,
+                "turned_paras": int(m["turned"] or 0),
             }
             decks.append(cur)
             continue
