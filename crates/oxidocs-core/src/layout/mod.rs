@@ -3890,6 +3890,10 @@ impl LayoutEngine {
             .map(|c| c.num.max(1) as usize)
             .unwrap_or(1);
         let band_space = page.columns.as_ref().and_then(|c| c.space).unwrap_or(0.0);
+        if std::env::var("OXI_DBG_BANDS").is_ok() {
+            eprintln!("[BANDS] num_bands={} space={:.1} columns={:?}", num_bands, band_space,
+                page.columns.as_ref().map(|c| (c.num, c.space)));
+        }
         let content_h = (bottom - top).max(0.0);
         let band_h = ((content_h - band_space * num_bands.saturating_sub(1) as f32)
             / num_bands as f32)
