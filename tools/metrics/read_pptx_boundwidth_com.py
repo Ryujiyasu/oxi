@@ -29,6 +29,7 @@ from fontTools.ttLib import TTFont
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "metrics"))
 from pptx_gdi_face_audit import registry_file  # noqa: E402
+from gen_pptx_boundwidth import ARMS  # noqa: E402
 
 DECK = REPO / "pipeline_data" / "pptx_probes" / "boundwidth" / "boundwidth.pptx"
 EXE = REPO / "tools" / "oxi-pptx-renderer" / "target" / "release" / "oxi-pptx-renderer.exe"
@@ -39,9 +40,31 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def design_width(size: float, bold: bool = False, italic: bool = False) -> float | None:
-    name = FACE + (" Bold" if bold and not italic else "")
-    path = registry_file(name) or registry_file(FACE)
+def cloud_file(family: str):
+    """A face the machine serves from the Office cloud cache, whose files are
+    named by number -- `registry_file` cannot see them."""
+    import os
+    from pathlib import Path as _P
+    root = _P(os.environ["LOCALAPPDATA"]) / "Microsoft" / "FontCache" / "4" / "CloudFonts"
+    if not root.exists():
+        return None
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            f = TTFont(str(p), lazy=True)
+            if (f["name"].getDebugName(1) or "").lower() == family.lower():
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def design_width(size: float, bold: bool = False, italic: bool = False,
+                 face: str | None = None) -> float | None:
+    fam = face or FACE
+    name = fam + (" Bold" if bold and not italic else "")
+    path = registry_file(name) or registry_file(fam) or cloud_file(fam)
     if path is None:
         return None
     font = TTFont(str(path))
@@ -127,8 +150,9 @@ def main() -> None:
     print(f"{WORD!r} in {FACE}\n")
     print(f"{'arm':<10}{'size':>6}{'design':>9}{'BoundWidth':>12}{'engine':>9}"
           f"{'box-design':>12}{'engine-design':>15}")
+    faces = {label: opt.get("face") for label, opt in ARMS}
     for label, left, top, bw, size, bold, italic in sorted(rows, key=lambda r: (r[2], r[1])):
-        d = design_width(size, bold, italic)
+        d = design_width(size, bold, italic, faces.get(label))
         e = mine.get((round(left, 1), round(top, 1)))
         if d is None:
             print(f"{label:<10}{size:>6.0f}   (no font file for {FACE})")

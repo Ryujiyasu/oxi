@@ -16359,6 +16359,23 @@ fn layout_paragraph_baselines(
         } else {
             0.0
         };
+        // ★Which stage answered for this line's WIDTH, and with what. The
+        // width chain is not the break chain (`per_run` / `hmtx_width_styled` /
+        // `runtime_width_px` / the GDI extent, against `advance_em`), so a line
+        // that disagrees with PowerPoint says nothing about which of them to
+        // look at until this prints.
+        if let Ok(want) = std::env::var("OXI_WIDTH_DEBUG") {
+            if ink.contains(want.as_str()) {
+                let h = hmtx_width_styled(ink, fs, &family, bold, italic, para_spc(&para.runs));
+                let r = runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale,
+                                        para_spc(&para.runs))
+                    .map(|px| px as f32 / scale as f32);
+                let g = gdi_measure_text_px(dc, line) as f32 / scale as f32;
+                eprintln!(
+                    "WIDTH {ink:?} fam={family:?} fs={fs} bold={bold} | per_run={per_run:?}                      hmtx={h:?} runtime={r:?} gdi_extent={g:.3} kern_w={kern_w:.3}"
+                );
+            }
+        }
         let line_w = per_run
             .or_else(|| hmtx_width_styled(ink, fs, &family, bold, italic, pspc))
             .or_else(|| {

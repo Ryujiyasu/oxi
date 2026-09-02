@@ -67,6 +67,20 @@ ARMS = [
     # 28, so a step that doubles says "space" and one that does not says
     # something else wearing a space's clothes at one size.
     ("twopara_28", {"size": 28, "tail": "Is the color of gold, butter."}),
+    # ★The remaining width offenders are all last lines of BOLD paragraphs in
+    # families whose bold PowerPoint has to synthesise (Rubik, Gruppo,
+    # Montserrat Medium), so the obvious guess was that a synthesised bold
+    # widens the advance and the engine keeps the regular one. These two arms
+    # say NO: Bebas Neue has no bold and is in the cloud cache, and at 14pt
+    #
+    #     synth_base   design 33.63   box 33.76   engine 33.76
+    #     synth_bold   design 33.63   box **33.01**   engine 32.96
+    #
+    # PowerPoint's synthesised bold measures NARROWER than the regular design,
+    # not wider, and the engine follows it to 0.05pt. So the offenders' cause is
+    # still open -- and it is not this.
+    ("synth_base", {"face": "Bebas Neue"}),
+    ("synth_bold", {"face": "Bebas Neue", "bold": True}),
 ]
 
 
@@ -109,7 +123,7 @@ def build(path: Path) -> None:
         run = p.add_run()
         run.text = WORD
         run.font.size = Pt(opt.get("size", 14))
-        run.font.name = FACE
+        run.font.name = opt.get("face", FACE)
         run.font.bold = bool(opt.get("bold"))
         run.font.italic = bool(opt.get("italic"))
         # A paragraph after it, likewise.
