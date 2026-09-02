@@ -101,11 +101,18 @@ pub fn parse_cmap_table(font_data: &[u8]) -> HashMap<u32, u16> {
         ]) as usize;
 
         let priority = match (platform, encoding) {
-            (3, 10) => 4, // Windows UCS-4 (best, supports all Unicode)
-            (0, 4) => 3,  // Unicode full
-            (3, 1) => 2,  // Windows BMP
-            (0, 3) => 2,  // Unicode BMP
-            (0, _) => 1,  // Any Unicode platform
+            (3, 10) => 5, // Windows UCS-4 (best, supports all Unicode)
+            (0, 4) => 4,  // Unicode full
+            (3, 1) => 3,  // Windows BMP
+            (0, 3) => 3,  // Unicode BMP
+            (0, _) => 2,  // Any Unicode platform
+            // Windows symbol encoding. Wingdings, Symbol and their relatives
+            // carry only this one, mapping the F000..F0FF private-use block —
+            // which is exactly what a .docx asks for when it uses them. Ranked
+            // last so a font that has both is still read as Unicode, but
+            // reachable, because otherwise these families have no cmap at all
+            // and their glyphs never get embedded.
+            (3, 0) => 1,
             _ => 0,
         };
 

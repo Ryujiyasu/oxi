@@ -825,6 +825,53 @@ fn resolve_face_path(family: &str, bold: bool, italic: bool) -> Option<String> {
         .map(|face| face.path.to_string_lossy().to_string())
 }
 
+/// Split a trailing weight or slope word off a family name, as in
+/// `Trebuchet MS Bold` or `Calibri Light`. Some producers write the full face
+/// name where the family belongs, and the shortened name is often one we can
+/// resolve or substitute when the long one is not.
+///
+/// Only weight and slope are stripped. Width is not: `Arial Narrow` is its own
+/// family with its own advances, and turning it into `Arial` would silently
+/// change every line length — the same mistake as substituting a face that
+/// merely looks similar.
+fn split_style_suffix(family: &str) -> Option<(String, bool, bool)> {
+    const WEIGHTS: &[&str] = &[
+        "Thin", "ExtraLight", "UltraLight", "Light", "Regular", "Book",
+        "Medium", "Semibold", "SemiBold", "Demibold", "DemiBold", "Bold",
+        "ExtraBold", "UltraBold", "Black", "Heavy",
+    ];
+    const SLOPES: &[&str] = &["Italic", "Oblique"];
+
+    let mut words: Vec<&str> = family.split_whitespace().collect();
+    let mut bold = false;
+    let mut italic = false;
+    let mut stripped = false;
+    while words.len() > 1 {
+        let last = words[words.len() - 1];
+        if SLOPES.iter().any(|s| s.eq_ignore_ascii_case(last)) {
+            italic = true;
+        } else if WEIGHTS.iter().any(|w| w.eq_ignore_ascii_case(last)) {
+            // "Bold" and the heavier names are a weight we can ask for; the
+            // lighter ones just are not this family's regular face, and asking
+            // for regular is the closest we can honestly get.
+            if last.eq_ignore_ascii_case("Bold")
+                || last.eq_ignore_ascii_case("Black")
+                || last.eq_ignore_ascii_case("Heavy")
+            {
+                bold = true;
+            }
+        } else {
+            break;
+        }
+        words.pop();
+        stripped = true;
+    }
+    if !stripped {
+        return None;
+    }
+    Some((words.join(" "), bold, italic))
+}
+
 fn substitute_for(family: &str) -> Option<&'static str> {
     let key = family.trim().to_lowercase();
     SUBSTITUTES
@@ -1115,7 +1162,19 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     // font. Without an embedded face there is no cmap to ask,
                     // so the codepoint test remains the fallback.
                     let latin_face = embedded_fonts.get(&font_name);
+                    // Only divert to a font that was actually loaded. The
+                    // decision to load one is made from the document's text;
+                    // this decision was made per character, and the two
+                    // disagreed — a bullet or a non-breaking hyphen missing
+                    // from the Latin subset sent a run to OxiCJK in a document
+                    // with no East Asian text in it, naming a font the PDF
+                    // never carried, and taking the ordinary English after it
+                    // along for the ride.
+                    let cjk_loaded = embedded_fonts.contains_key("OxiCJK-Regular");
                     let needs_cjk = |c: char| {
+                        if !cjk_loaded {
+                            return false;
+                        }
                         // A tab carries no glyph and is in no font's cmap, so
                         // "the face does not cover it" is true of every face —
                         // which used to hand a plain English document to the
@@ -2451,15 +2510,23 @@ fn is_cjk_char(c: char) -> bool {
 /// the emitter's ASCII/CJK segment split, which keys off the returned name)
 /// keeps working unchanged.
 fn is_cjk_family(base: &str) -> bool {
-    matches!(
-        base,
-        "ＭＳ ゴシック" | "MS ゴシック" | "MS Gothic" |
-        "ＭＳ Ｐゴシック" | "MS PGothic" |
-        "ＭＳ 明朝" | "MS 明朝" | "MS Mincho" |
-        "ＭＳ Ｐ明朝" | "MS PMincho"
-    ) || base.contains("Gothic") || base.contains("Mincho") || base.contains("游")
-        || base.contains("ＭＳ") || base.contains("ゴシック") || base.contains("明朝")
-        || base.contains("メイリオ") || base.contains("ヒラギノ")
+    // A family name written in Japanese is East Asian whatever else it says.
+    if base.chars().any(is_cjk_char) {
+        return true;
+    }
+    // Romanized names have to be matched on words, not substrings. "Gothic"
+    // alone was the test, and it is a Latin word: Century Gothic, Franklin
+    // Gothic and News Gothic are all Latin families that were being handed to
+    // the East Asian path and drawn with MS Gothic.
+    let lower = base.to_lowercase();
+    const EAST_ASIAN: &[&str] = &[
+        "ms gothic", "ms pgothic", "ms mincho", "ms pmincho",
+        "yu gothic", "yu mincho", "meiryo", "hiragino", "noto sans cjk",
+        "noto serif cjk", "source han", "pingfang", "heiti", "songti",
+        "kaiti", "fangsong", "simsun", "simhei", "nsimsun", "batang",
+        "gulim", "dotum", "malgun", "nanum",
+    ];
+    EAST_ASIAN.iter().any(|name| lower.starts_with(name))
 }
 
 /// Resolve every (family, weight, slope) the laid-out document asks for to a
@@ -2518,10 +2585,26 @@ fn embed_document_faces(
                 .insert((family.trim().to_lowercase(), bold, italic), key);
             continue;
         }
-        let (face, substituted) = match index.find(&family, bold, italic) {
-            Some(face) => (Some(face), None),
-            None => match substitute_for(&family).and_then(|s| index.find(s, bold, italic)) {
-                Some(face) => (Some(face), substitute_for(&family)),
+        // The family itself, then its stand-in, then the same pair again with
+        // a weight or slope word taken off the end — `Calibri Light` is a
+        // Calibri a document wrote the long way, and it is the only handle we
+        // have on the face it means.
+        let lookup = |name: &str, bold: bool, italic: bool| {
+            index
+                .find(name, bold, italic)
+                .map(|face| (face, None))
+                .or_else(|| {
+                    substitute_for(name)
+                        .and_then(|s| index.find(s, bold, italic))
+                        .map(|face| (face, substitute_for(name)))
+                })
+        };
+        let (face, substituted) = match lookup(&family, bold, italic) {
+            Some((face, sub)) => (Some(face), sub),
+            None => match split_style_suffix(&family)
+                .and_then(|(base, b, i)| lookup(&base, bold || b, italic || i))
+            {
+                Some((face, sub)) => (Some(face), sub),
                 None => (None, None),
             },
         };
@@ -2880,7 +2963,16 @@ subsetter.subset(font)
 
 font.save("{subset_path}")
 
-cmap = font.getBestCmap()
+# A subset that kept no glyph has no cmap left, and getBestCmap() returns
+# None rather than an empty map. That happens whenever none of the requested
+# characters exist in this face -- a symbol font asked for Latin, say -- and
+# it used to raise on the next line and take the whole face down.
+try:
+    cmap = font.getBestCmap()
+except Exception:
+    cmap = None
+if cmap is None:
+    cmap = {{}}
 unicode_to_cid = {{}}
 cid_widths = {{}}
 
@@ -2957,10 +3049,20 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
             return embed_whole_font(font_path, label);
         }
     };
-    let unicode_to_gid = if let Ok(json_str) = fs::read_to_string(&cidmap_path) {
-        parse_cidmap_json(&json_str)
-    } else {
-        parse_cmap_table(&otf_data)
+    let unicode_to_gid = {
+        let from_subsetter = fs::read_to_string(&cidmap_path)
+            .map(|json| parse_cidmap_json(&json))
+            .unwrap_or_default();
+        if from_subsetter.is_empty() {
+            // The subsetter reports through `getBestCmap()`, which knows only
+            // Unicode cmaps and answers None for a symbol font — Wingdings and
+            // Symbol carry a (3,0) table and nothing else. Reading the subset
+            // ourselves finds it, so the glyphs a document actually asked for
+            // are embedded instead of being dropped for having no mapping.
+            parse_cmap_table(&otf_data)
+        } else {
+            from_subsetter
+        }
     };
     let cid_widths = if let Ok(json_str) = fs::read_to_string(&widths_path) {
         parse_cidwidths_json(&json_str)
