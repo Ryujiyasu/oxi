@@ -16,6 +16,8 @@ SSIM の採点は含まない（真値が Word の PDF なので Windows が要�
 
 Microsoft の書体は1つも無い機械なので、同梱フォントと代替の経路がそのまま出る。
 
+フォント事情が正反対の機械での同じ計測は [font-resolution-macos.md](font-resolution-macos.md)。
+
 ---
 
 # Oxi docx→PDF Linux 実測結果
