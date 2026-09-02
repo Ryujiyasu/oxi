@@ -14,6 +14,7 @@ So this asks PowerPoint directly and compares against the engine's own
 `--dump-layout`:
 
     line count per paragraph   the BREAK -- categorical, cause-attributable
+    the WORDS on each line     the same count can still break in other places
     line left edge             the ALIGNMENT, as a secondary number
     line width                 the ADVANCES, which is what is left once the
                                breaks agree (`Lines(j).BoundWidth`)
@@ -72,6 +73,19 @@ bearing, which does not). Cleaned up, deck 9 reads median +0.03pt and deck 34
 mismeasured, the top line is s1's 'we help' at **+62.02pt (+10.9%)** -- 223pt,
 `b="1"`, in a family with no bold. So the number can find a real width defect,
 which is what makes the near-zero medians elsewhere evidence.
+
+★THE MARK, and where it is visible. `Paragraphs().Count` does not enumerate a
+trailing empty paragraph, so a shape whose text is `NAME` + a mark counts as ONE
+paragraph and walked straight past a `len(paras) == 1` guard. d05 s13 settles it
+with four identical shapes: same words, same face, same size, same character
+steps, and
+
+    'NAME'    box 40.88      the engine says 40.80
+    'NAME'  box **43.87**  the same 40.80, and Rubik's space at 14pt is 2.99
+
+So the mark is taken off wherever PowerPoint's own LINE TEXT carries it, which
+is the only place it shows. That accounted for 8 of the 12 lines this gate had
+outstanding -- 2 in deck 5 and 6 in deck 35 -- and both decks now read 0 over 2%.
 
 ★What the box IS, settled by `gen_pptx_boundwidth.py` (one word, one face,
 one size, one property changed per arm):
@@ -155,6 +169,11 @@ EXE = REPO / "tools" / "oxi-pptx-renderer" / "target" / "release" / "oxi-pptx-re
 # answer in points from the slide's top left, so this only absorbs the rounding
 # each side does on the way out.
 NEAR = 0.75
+
+# The paragraph mark PowerPoint puts at the end of a line that ends a
+# paragraph. Named because an escaped one has been eaten by three
+# generations of edit scripts.
+MARK = chr(13)
 
 
 def wait_for_powerpoint_to_exit(limit: float = 60.0) -> None:
@@ -240,7 +259,7 @@ def engine_paras(dump: dict) -> dict[int, list]:
                              p.get("line_x_offsets") or [], text,
                              p.get("line_baselines") or [], widths,
                              p.get("measured_family") or "",
-                             float(p.get("space_pt") or 0.0)))
+                             float(p.get("space_pt") or 0.0), texts))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -310,6 +329,11 @@ def com_shapes(shape, acc: list) -> None:
                          # line's WIDTH is what `BoundHeight` reports.
                          [round(para.Lines(j).BoundHeight, 2)
                           for j in range(1, n + 1)],
+                         # ★The WORDS on each line, not just how many lines
+                         # there are. Two layouts can agree on the count and
+                         # still break in different places, and a count is all
+                         # this compared for its first day.
+                         [para.Lines(j).Text for j in range(1, n + 1)],
                          # What the RUN asks for. Beside the family the engine
                          # actually measured, this says whether a width
                          # disagreement is about advances or about which face
@@ -354,7 +378,7 @@ def audit(doc) -> dict | None:
 
     app = win32com.client.Dispatch("PowerPoint.Application")
     got = {"paras": 0, "same": 0, "diff": 0, "shapes": 0, "unmatched": 0,
-           "para_count": 0, "turned_paras": 0, "trailing_br": 0}
+           "para_count": 0, "turned_paras": 0, "trailing_br": 0, "split": 0}
     worst: list = []
     offs: list[float] = []
     far: list = []
@@ -364,6 +388,7 @@ def audit(doc) -> dict | None:
     # (engine's pen width, PowerPoint's ink width minus it) per line.
     wide: list[tuple[float, float]] = []
     wfar: list = []
+    split: list = []
     try:
         pres = app.Presentations.Open(str(src.resolve()), WithWindow=False)
         try:
@@ -430,7 +455,7 @@ def audit(doc) -> dict | None:
                     quart = round(rot / 90.0) * 90 % 360
                     axis = (None if abs(rot - quart) > 0.5
                             else (0 if quart in (0, 180) else 1))
-                    for (cn, cx, ctext, cy, cw, chh, cface),                             (en, ex, etext, ey, ew, eface, espace) in zip(
+                    for (cn, cx, ctext, cy, cw, chh, clines, cface),                             (en, ex, etext, ey, ew, eface, espace, elines) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -450,6 +475,15 @@ def audit(doc) -> dict | None:
                             got["trailing_br"] += 1
                         if cn == en:
                             got["same"] += 1
+                            # Same count, different words on them. The width
+                            # gate cannot mean anything on such a line, and the
+                            # break gate was calling it a pass.
+                            for ct, et in zip(clines, elines):
+                                a_, b_ = ct.strip(), et.strip()
+                                if a_ and b_ and a_ != b_:
+                                    got["split"] += 1
+                                    split.append((si, a_[:34], b_[:34]))
+                                    break
                             # Where PowerPoint put the line's left edge against
                             # where the engine put it.
                             #
@@ -564,8 +598,24 @@ def audit(doc) -> dict | None:
                                 # until a rule for its presence is derived,
                                 # and the gate keeps the population it can
                                 # account for.
+                                # ★The mark shows in PowerPoint's own line
+                                # TEXT, which is the only place it is visible:
+                                # `Paragraphs().Count` does not enumerate a
+                                # trailing empty paragraph, so a shape holding
+                                # 'NAME
+                                # text is NAME plus a mark counts as one
+                                # paragraph and slipped
+                                # past a `len(paras) == 1` guard. d05 s13 has
+                                # four identical 'NAME' shapes in Rubik 14pt
+                                # with identical character steps; the two whose
+                                # text ends in the mark report a box 2.99pt
+                                # wider, and Rubik's space at 14pt is 2.99pt.
+                                # So the mark is taken off wherever the line
+                                # carries it, and shapes with more paragraphs
+                                # than that stay out until their rule is known.
                                 many = len(c["paras"]) > 1
-                                mark = espace if (MARK_CORRECT and many and cn == 1) else 0.0
+                                ends_mark = bool(clines) and clines[-1].endswith(MARK)
+                                mark = espace if ends_mark else 0.0
                                 skip = many and (not MARK_CORRECT or cn > 1)
                                 box = cw if axis == 0 else chh
                                 last = min(len(box), len(ew)) - 1
@@ -627,6 +677,13 @@ def audit(doc) -> dict | None:
               f"{len(vfar)} over 0.5pt", flush=True)
         for si, d, t in sorted(vfar, key=lambda r: -abs(r[1]))[:4]:
             print(f"        s{si:<3} {d:+7.2f}pt  {t!r}", flush=True)
+    if got["split"]:
+        print(f"      SAME COUNT, DIFFERENT WORDS on {got['split']} paragraphs "
+              f"-- the break agrees on how many lines and not on where",
+              flush=True)
+        for si, ct, et in split[:5]:
+            print(f"        s{si:<3} PowerPoint {ct!r}", flush=True)
+            print(f"             engine {et!r}", flush=True)
     if wide:
         deltas = sorted(d for _, d in wide)
         med = deltas[len(deltas) // 2]
