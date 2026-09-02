@@ -935,6 +935,15 @@ pub struct Analysis {
     pub external_declares: Vec<String>,
     /// Every `CreateObject` / `GetObject` in the module, in source order.
     pub late_bindings: Vec<LateBinding>,
+    /// How many arguments each called name is given, and how often it is
+    /// written that way: `Left` -> `{2: 31}`.
+    ///
+    /// Worth keeping because VBA settles a builtin's argument count when it
+    /// COMPILES, so a count seen in source is one VBA accepted. That makes
+    /// this the only place to learn a call's real shape without asking a
+    /// running Excel, which cannot be asked: a wrong count there is a
+    /// compile error, and a compile error stops the whole project.
+    pub call_shapes: BTreeMap<String, BTreeMap<usize, usize>>,
 }
 
 pub fn analyse(module: &Module) -> Analysis {
@@ -948,6 +957,7 @@ struct Walker {
     metrics: Metrics,
     procedures: Vec<ProcedureFacts>,
     api_names: BTreeMap<String, usize>,
+    call_shapes: BTreeMap<String, BTreeMap<usize, usize>>,
     late_bindings: Vec<LateBinding>,
     findings: Vec<Finding>,
     needs_formula_engine: bool,
@@ -1415,12 +1425,14 @@ impl Walker {
 
     fn walk_expr(&mut self, expr: &Expr) {
         let mut names = Vec::new();
-        let with_subject = self.with_subjects.last().and_then(|name| name.as_deref());
+        let with_subject = self.with_subjects.last().cloned().flatten();
+        let with_subject = with_subject.as_deref();
         collect_names(expr, with_subject, &mut names);
         for (name, line) in names {
             self.record_name(&name, line);
         }
         collect_late_bindings(expr, &mut self.late_bindings);
+        collect_call_shapes(expr, with_subject, &mut self.call_shapes);
     }
 
     fn record_name(&mut self, name: &str, line: u32) {
@@ -1829,6 +1841,7 @@ impl Walker {
             metrics: self.metrics,
             procedures: self.procedures,
             api_names: self.api_names,
+            call_shapes: self.call_shapes,
             late_bindings: self.late_bindings,
             findings: self.findings,
             class,
@@ -2008,6 +2021,27 @@ fn collect_names(expr: &Expr, with_subject: Option<&str>, out: &mut Vec<(String,
     }
 }
 
+/// How many arguments each call in an expression is given.
+///
+/// A subscript into an array looks the same as a call in VBA and is counted
+/// the same way, because at this level they ARE the same: the language does
+/// not distinguish them either.
+fn collect_call_shapes(
+    expr: &Expr,
+    with_subject: Option<&str>,
+    out: &mut BTreeMap<String, BTreeMap<usize, usize>>,
+) {
+    expr.visit(&mut |node| {
+        let Expr::Index { target, args, .. } = node else {
+            return;
+        };
+        let Some(name) = resolve_expr_name(target, with_subject) else {
+            return;
+        };
+        *out.entry(name).or_default().entry(args.len()).or_default() += 1;
+    });
+}
+
 /// `CreateObject("Scripting.FileSystemObject")` and its computed cousins,
 /// anywhere in an expression. Walks the whole tree rather than the call chain,
 /// because the interesting one is often an argument to something else.
@@ -2094,9 +2128,37 @@ mod tests {
     use super::*;
     use crate::parse_module;
 
+
     fn analyse_src(src: &str) -> Analysis {
         analyse(&parse_module(src).expect("should parse"))
     }
+
+    /// How a name is called, not just that it was. VBA settles a builtin's
+    /// argument count when it compiles, so a count seen in source is one VBA
+    /// accepted — which makes this the only way to learn a call's real shape
+    /// without asking a running Excel, where a wrong count is a compile error
+    /// that stops the whole project.
+    #[test]
+    fn how_many_arguments_each_call_is_given() {
+        let analysis = analyse_src(
+            "Sub T()
+               Dim a As Variant
+               a = Left(\"abc\", 1)
+               a = Mid(\"abc\", 2)
+               a = Mid(\"abc\", 2, 1)
+               If Len(a) > 0 Then a = Trim(a)
+             End Sub
+",
+        );
+        // Reached through an If condition and a call statement alike, because
+        // this rides the walk every expression already takes.
+        assert_eq!(analysis.call_shapes["Left"][&2], 1);
+        assert_eq!(analysis.call_shapes["Mid"][&2], 1);
+        assert_eq!(analysis.call_shapes["Mid"][&3], 1);
+        assert_eq!(analysis.call_shapes["Len"][&1], 1);
+        assert_eq!(analysis.call_shapes["Trim"][&1], 1);
+    }
+
 
     #[test]
     fn plain_cell_arithmetic_is_class_b() {
