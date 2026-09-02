@@ -852,12 +852,26 @@ fn font_key(family: &str, bold: bool, italic: bool) -> String {
 /// `target/release` binary run from the source tree finds them too.
 fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            dirs.push(dir.join("fonts"));
-        }
+    let exe = std::env::current_exe().ok();
+    if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
+        dirs.push(dir.join("fonts"));
     }
-    dirs.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fonts"));
+
+    // `CARGO_MANIFEST_DIR` is an absolute path baked in at compile time, so a
+    // binary handed to someone else keeps reading the build machine's working
+    // directory — a path that by then may hold nothing, or somebody else's
+    // fonts. Use it only when the running binary is still inside that source
+    // tree, which is the case it exists for: `cargo run` and `target/release`
+    // during development.
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let in_source_tree = manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .zip(exe.as_ref())
+        .is_some_and(|(root, exe)| exe.starts_with(root));
+    if in_source_tree {
+        dirs.push(manifest.join("fonts"));
+    }
     dirs
 }
 
@@ -1096,9 +1110,21 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
                     // font. Without an embedded face there is no cmap to ask,
                     // so the codepoint test remains the fallback.
                     let latin_face = embedded_fonts.get(&font_name);
-                    let needs_cjk = |c: char| match latin_face {
-                        Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
-                        None => c as u32 > 0x7F,
+                    let needs_cjk = |c: char| {
+                        // A tab carries no glyph and is in no font's cmap, so
+                        // "the face does not cover it" is true of every face —
+                        // which used to hand a plain English document to the
+                        // East Asian font on the strength of one indent.
+                        if (c as u32) < 0x20 {
+                            return false;
+                        }
+                        match latin_face {
+                            Some(face) => !face.unicode_to_gid.contains_key(&(c as u32)),
+                            // With no face to ask, only real East Asian text is
+                            // worth diverting; a curly quote or an accented
+                            // letter is representable where it already is.
+                            None => is_cjk_char(c),
+                        }
                     };
 
                     let mut raw_segments: Vec<(String, String, f64)> = Vec::new();
@@ -2388,6 +2414,33 @@ const CJK_FONT_PATHS_BOLD: &[&str] = &[
 /// Path to Python3 for font subsetting (requires fonttools)
 const PYTHON3: &str = "python3";
 
+/// True for characters that actually need an East Asian face.
+///
+/// The test used to be `c > 0x7F`, which is true of a curly quote, an en dash
+/// and every accented Latin letter. One smart quote in an English document was
+/// enough to decide it "needs CJK" and pull a whole East Asian font into the
+/// PDF — 15MB of Noto on Linux, for a document with no East Asian text in it.
+fn is_cjk_char(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x2FFF   // radicals and Kangxi
+        | 0x3000..=0x303F // CJK symbols and punctuation
+        | 0x3040..=0x30FF // hiragana, katakana
+        | 0x3100..=0x312F // bopomofo
+        | 0x3130..=0x318F // hangul compatibility jamo
+        | 0x3190..=0x319F // kanbun
+        | 0x31F0..=0x31FF // katakana phonetic extensions
+        | 0x3400..=0x4DBF // unified ideographs extension A
+        | 0x4E00..=0x9FFF // unified ideographs
+        | 0xA960..=0xA97F // hangul jamo extended-A
+        | 0xAC00..=0xD7AF // hangul syllables
+        | 0xF900..=0xFAFF // compatibility ideographs
+        | 0xFE30..=0xFE4F // CJK compatibility forms
+        | 0xFF00..=0xFFEF // halfwidth and fullwidth forms
+        | 0x1100..=0x11FF // hangul jamo
+        | 0x20000..=0x3FFFF // ideograph extensions B and later
+    )
+}
+
 /// True for the East Asian families the CJK embedding path owns. The generic
 /// face pass leaves these alone so the existing per-family CJK handling (and
 /// the emitter's ASCII/CJK segment split, which keys off the returned name)
@@ -2888,6 +2941,18 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
         eprintln!("PostScript name: {}", psn);
     }
 
+    // Everything the subsetter wrote has been read; leaving it behind fills the
+    // machine's scratch directory a face at a time (372 files after 30
+    // documents on the Linux run that found this).
+    for path in [
+        subset_path.clone(),
+        cidmap_path.clone(),
+        widths_path.clone(),
+        format!("{}.psname", &widths_path),
+    ] {
+        let _ = fs::remove_file(path);
+    }
+
     let is_cff = otf_data.starts_with(b"OTTO") || has_cff_table(&otf_data);
     if is_cff {
         if let Some(cff) = extract_cff_from_otf(&otf_data) {
@@ -2939,7 +3004,7 @@ fn collect_cjk_fonts_from_block(block: &Block, needs_cjk: &mut bool, font_names:
     match block {
         Block::Paragraph(para) => {
             for run in &para.runs {
-                if run.text.chars().any(|c| c as u32 > 0x7F) {
+                if run.text.chars().any(is_cjk_char) {
                     *needs_cjk = true;
                 }
                 if let Some(ref family) = run.style.font_family {
@@ -2983,146 +3048,11 @@ fn find_and_subset_cjk_font(used_chars: &std::collections::BTreeSet<char>) -> Op
 fn find_and_subset_cjk_font_bold(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
     let font_path = CJK_FONT_PATHS_BOLD.iter().find(|p| std::path::Path::new(p).exists())?;
     eprintln!("Found CJK Bold font: {}", font_path);
-
-    let char_string: String = used_chars.iter()
-        .filter(|c| { let cp = **c as u32; !(0xD800..=0xDFFF).contains(&cp) })
-        .collect();
-
-    let subset_path = "/tmp/oxi-font-subset-bold.otf";
-    let cidmap_path = "/tmp/oxi-font-cidmap-bold.json";
-    let widths_path = "/tmp/oxi-font-widths-bold.json";
-    let font_path_escaped = font_path.replace('\\', "\\\\");
-    let python_script = format!(
-        r#"
-import sys, json
-sys.stdin.reconfigure(encoding='utf-8', errors='replace')
-from fontTools.ttLib import TTCollection, TTFont
-from fontTools.subset import Subsetter, Options
-
-font_path = "{font_path_escaped}"
-data = open(font_path, 'rb').read()
-
-if data[:4] == b'ttcf':
-    ttc = TTCollection(font_path)
-    font = ttc[0]
-else:
-    font = TTFont(font_path)
-
-chars = sys.stdin.read()
-chars = ''.join(c for c in chars if ord(c) < 0xD800 or ord(c) > 0xDFFF)
-opts = Options()
-subsetter = Subsetter(options=opts)
-subsetter.populate(text=chars)
-subsetter.subset(font)
-
-font.save("{subset_path}")
-
-cmap = font.getBestCmap()
-unicode_to_cid = {{}}
-cid_widths = {{}}
-
-upem = font['head'].unitsPerEm
-hmtx = font['hmtx']
-
-for unicode_val, glyph_name in cmap.items():
-    cid = None
-    if glyph_name.startswith('cid'):
-        cid = int(glyph_name[3:])
-    elif glyph_name == '.notdef':
-        continue
-    else:
-        glyph_order = font.getGlyphOrder()
-        try:
-            cid = glyph_order.index(glyph_name)
-        except ValueError:
-            continue
-
-    if cid is not None:
-        unicode_to_cid[unicode_val] = cid
-        if glyph_name in hmtx.metrics:
-            advance, _ = hmtx.metrics[glyph_name]
-            w = int(advance * 1000 / upem)
-            cid_widths[cid] = w
-
-with open("{cidmap_path}", 'w') as f:
-    json.dump(unicode_to_cid, f)
-
-with open("{widths_path}", 'w') as f:
-    json.dump(cid_widths, f)
-
-ps_name = None
-for record in font['name'].names:
-    if record.nameID == 6:
-        try:
-            ps_name = record.toUnicode()
-            break
-        except:
-            pass
-if ps_name:
-    with open("{widths_path}.psname", 'w') as f:
-        f.write(ps_name)
-
-print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
-"#
-    );
-
-    let result = std::process::Command::new(PYTHON3)
-        .arg("-c")
-        .arg(&python_script)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-
-    match result {
-        Ok(mut child) => {
-            if let Some(ref mut stdin) = child.stdin {
-                use std::io::Write;
-                let _ = stdin.write_all(char_string.as_bytes());
-            }
-            let output = child.wait_with_output().ok()?;
-            if !output.status.success() {
-                eprintln!("Bold font subsetting failed: {}", String::from_utf8_lossy(&output.stderr));
-                return None;
-            }
-            eprintln!("Font subset (Bold): {}", String::from_utf8_lossy(&output.stdout).trim());
-        }
-        Err(e) => {
-            eprintln!("Python not available for bold font subsetting: {}", e);
-            return None;
-        }
-    }
-
-    let otf_data = fs::read(subset_path).ok()?;
-    let unicode_to_gid = if let Ok(json_str) = fs::read_to_string(cidmap_path) {
-        parse_cidmap_json(&json_str)
-    } else {
-        parse_cmap_table(&otf_data)
-    };
-    let cid_widths = if let Ok(json_str) = fs::read_to_string(widths_path) {
-        parse_cidwidths_json(&json_str)
-    } else {
-        HashMap::new()
-    };
-
-    let is_cff = otf_data.starts_with(b"OTTO") || has_cff_table(&otf_data);
-    if is_cff {
-        if let Some(cff) = extract_cff_from_otf(&otf_data) {
-            return Some(EmbeddedFont { ps_name: None,
-                data: cff,
-                format: FontFormat::OpenTypeCff,
-                unicode_to_gid,
-                cid_widths,
-            });
-        }
-    }
-
-    Some(EmbeddedFont { ps_name: None,
-        data: otf_data,
-        format: FontFormat::TrueType,
-        unicode_to_gid,
-        cid_widths,
-    })
+    // Was a 144-line copy of the subsetter with its own hardcoded scratch
+    // paths and no way out when the subsetter was missing, so bold CJK text
+    // simply vanished on a machine without fontTools -- and on Windows the
+    // "/tmp/..." it wrote to means C:	mp\, which need not exist at all.
+    subset_font_file(font_path, used_chars, "cjk-bold")
 }
 
 /// Fallback: load the full font without subsetting.
