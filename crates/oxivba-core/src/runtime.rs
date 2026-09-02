@@ -4003,15 +4003,18 @@ fn builtin_reads_values(name: &str) -> bool {
     )
 }
 
-fn call_builtin(
-    name: &str,
-    args: &[Value],
-    line: Option<u32>,
-    option_compare_text: bool,
-) -> Option<Result<Value, RuntimeError>> {
-    let name = name.to_ascii_lowercase();
-    let known = matches!(
-        name.as_str(),
+/// Whether VBA itself carries a function of this name.
+///
+/// The question a reader of somebody else's macros keeps asking: is this
+/// the language, or something the host has to supply? `Left` is VBA's own
+/// and works anywhere; `Cells` is Excel's and needs a workbook underneath.
+///
+/// The name is matched without regard to case, as VBA matches it. This is
+/// the same list the interpreter dispatches on, so it cannot drift from
+/// what actually runs.
+pub fn is_builtin_function(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
         "abs"
             | "array"
             | "asc"
@@ -4120,8 +4123,17 @@ fn call_builtin(
             | "weekday"
             | "weekdayname"
             | "year"
-    );
-    if !known {
+    )
+}
+
+fn call_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+    option_compare_text: bool,
+) -> Option<Result<Value, RuntimeError>> {
+    let name = name.to_ascii_lowercase();
+    if !is_builtin_function(&name) {
         return None;
     }
     Some((|| {
@@ -8370,6 +8382,24 @@ mod tests {
         // A set ends at the first `]`, so `[[]` holds an opening bracket.
         assert_eq!(ask("[", "[[]"), "True");
         assert_eq!(ask("a", "[[]"), "False");
+    }
+
+    /// The question a reader of somebody else's macros keeps asking, and the
+    /// one a host has to answer before it can say what it must supply.
+    #[test]
+    fn the_language_is_told_apart_from_the_host() {
+        // VBA's own, so they work with no workbook underneath.
+        for name in ["Left", "CStr", "IsNumeric", "Split", "Format", "Round"] {
+            assert!(is_builtin_function(name), "{name} is VBA's own");
+        }
+        // Matched the way VBA matches it.
+        assert!(is_builtin_function("lEfT"));
+        // Excel's, so a host has to supply them.
+        for name in ["Cells", "Range", "Worksheets", "ActiveSheet", "Selection"] {
+            assert!(!is_builtin_function(name), "{name} is the host's");
+        }
+        // A control, so a test that passed by saying yes to everything fails.
+        assert!(!is_builtin_function("NotAFunctionAtAll12345"));
     }
 
     #[test]
