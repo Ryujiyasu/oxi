@@ -21,6 +21,69 @@ thread_local! {
 static OXI_GOTHIC: &[u8] = include_bytes!("../../oxidocs-cli/fonts/OxiGothic.ttf");
 static OXI_MINCHO: &[u8] = include_bytes!("../../oxidocs-cli/fonts/OxiMincho.ttf");
 
+/// Latin faces shipped with the build. A browser cannot read the machine's
+/// font files, so a PDF exported here can only embed what travels with the
+/// code -- and without an embedded face the writer falls back to a base-14
+/// name, leaving the viewer to choose both the outlines and the advances.
+///
+/// These five families are the free faces whose advance widths match their
+/// Microsoft counterparts: Carlito for Calibri, the three Liberation faces
+/// for Arial / Times New Roman / Courier New (measured 2026-09-02: identical
+/// on all 95 printable ASCII characters, so substituting moves no glyph).
+/// Caladea stands in for Cambria on shape alone -- its widths differ, by up
+/// to 0.19 em, so a Cambria document reflows within the line.
+static LATIN_FACE_DATA: &[(&str, &[u8])] = &[
+    ("Carlito", include_bytes!("../../oxidocs-cli/fonts/Carlito-Regular.ttf")),
+    ("Carlito-B", include_bytes!("../../oxidocs-cli/fonts/Carlito-Bold.ttf")),
+    ("Carlito-I", include_bytes!("../../oxidocs-cli/fonts/Carlito-Italic.ttf")),
+    ("Carlito-BI", include_bytes!("../../oxidocs-cli/fonts/Carlito-BoldItalic.ttf")),
+    ("LiberationSans", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-Regular.ttf")),
+    ("LiberationSans-B", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-Bold.ttf")),
+    ("LiberationSans-I", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-Italic.ttf")),
+    ("LiberationSans-BI", include_bytes!("../../oxidocs-cli/fonts/LiberationSans-BoldItalic.ttf")),
+    ("LiberationSerif", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-Regular.ttf")),
+    ("LiberationSerif-B", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-Bold.ttf")),
+    ("LiberationSerif-I", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-Italic.ttf")),
+    ("LiberationSerif-BI", include_bytes!("../../oxidocs-cli/fonts/LiberationSerif-BoldItalic.ttf")),
+    ("LiberationMono", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-Regular.ttf")),
+    ("LiberationMono-B", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-Bold.ttf")),
+    ("LiberationMono-I", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-Italic.ttf")),
+    ("LiberationMono-BI", include_bytes!("../../oxidocs-cli/fonts/LiberationMono-BoldItalic.ttf")),
+    ("Caladea", include_bytes!("../../oxidocs-cli/fonts/Caladea-Regular.ttf")),
+    ("Caladea-B", include_bytes!("../../oxidocs-cli/fonts/Caladea-Bold.ttf")),
+    ("Caladea-I", include_bytes!("../../oxidocs-cli/fonts/Caladea-Italic.ttf")),
+    ("Caladea-BI", include_bytes!("../../oxidocs-cli/fonts/Caladea-BoldItalic.ttf")),
+];
+
+/// Which bundled family stands in for a requested one. Anything not listed
+/// keeps its own name and goes out unembedded, exactly as before.
+fn latin_stand_in(base_font: &str) -> Option<&'static str> {
+    Some(match base_font {
+        "Calibri" => "Carlito",
+        "Arial" | "Helvetica" | "Segoe UI" | "Tahoma" | "Verdana" => "LiberationSans",
+        "Times New Roman" | "Times" | "Georgia" => "LiberationSerif",
+        "Courier New" | "Courier" | "Consolas" => "LiberationMono",
+        "Cambria" | "Century" => "Caladea",
+        _ => return None,
+    })
+}
+
+/// Parse one bundled face on first use and keep it. Parsing is cheap next to
+/// the PDF write, but a document with many runs asks for the same face over
+/// and over.
+fn latin_face(key: &str) -> Option<&'static oxipdf_core::ir::EmbeddedFont> {
+    static CACHE: OnceLock<
+        std::collections::HashMap<&'static str, oxipdf_core::ir::EmbeddedFont>,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        LATIN_FACE_DATA
+            .iter()
+            .map(|(name, data)| (*name, oxipdf_core::font_util::embedded_font_from_ttf(data)))
+            .collect()
+    });
+    cache.get(key)
+}
+
 fn get_cjk_fonts() -> &'static (oxipdf_core::ir::EmbeddedFont, oxipdf_core::ir::EmbeddedFont) {
     static FONTS: OnceLock<(oxipdf_core::ir::EmbeddedFont, oxipdf_core::ir::EmbeddedFont)> = OnceLock::new();
     FONTS.get_or_init(|| {
@@ -1476,13 +1539,13 @@ fn layout_to_pdf(
         for elem in &lp.elements {
             match &elem.content {
                 oxidocs_core::layout::LayoutContent::Text {
-                    text, font_size, font_family, bold, color, character_spacing, ..
+                    text, font_size, font_family, bold, italic, color, character_spacing, ..
                 } => {
                     if text.is_empty() {
                         continue;
                     }
                     let base_font = font_family.as_deref().unwrap_or("Helvetica");
-                    let font_name = resolve_wasm_font(base_font, *bold, text);
+                    let font_name = resolve_wasm_font(base_font, *bold, *italic, text);
 
                     let fill_color = color.as_ref()
                         .and_then(|c| parse_hex_color(c))
@@ -1606,6 +1669,27 @@ fn layout_to_pdf(
         }
     }
 
+    // Embed only the bundled Latin faces this document actually names, so a
+    // one-page memo does not carry five families' worth of outlines.
+    let mut used_latin: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for page in &pages {
+        for element in &page.contents {
+            if let ContentElement::Text(span) = element {
+                if let Some((name, _)) = LATIN_FACE_DATA
+                    .iter()
+                    .find(|(name, _)| *name == span.font_name.as_str())
+                {
+                    used_latin.insert(name);
+                }
+            }
+        }
+    }
+    for name in used_latin {
+        if let Some(face) = latin_face(name) {
+            embedded_fonts.insert(name.to_string(), face.clone());
+        }
+    }
+
     PdfDocument {
         version: PdfVersion::new(1, 7),
         info: DocumentInfo {
@@ -1619,7 +1703,7 @@ fn layout_to_pdf(
     }
 }
 
-fn resolve_wasm_font(base_font: &str, bold: bool, text: &str) -> String {
+fn resolve_wasm_font(base_font: &str, bold: bool, italic: bool, text: &str) -> String {
     // Check if font is a known CJK family
     let is_cjk_font = matches!(base_font,
         "ＭＳ ゴシック" | "MS ゴシック" | "MS Gothic" | "ＭＳ Ｐゴシック" | "MS PGothic"
@@ -1641,20 +1725,26 @@ fn resolve_wasm_font(base_font: &str, bold: bool, text: &str) -> String {
         return "OxiCJK-Gothic".to_string();
     }
 
-    // Standard PDF fonts
+    // A bundled stand-in carries real outlines and a real width table, so it
+    // beats naming a base-14 font and letting the viewer decide.
+    if let Some(family) = latin_stand_in(base_font) {
+        return match (bold, italic) {
+            (false, false) => family.to_string(),
+            (true, false) => format!("{family}-B"),
+            (false, true) => format!("{family}-I"),
+            (true, true) => format!("{family}-BI"),
+        };
+    }
+
+    // Unknown family: keep the old base-14 naming, which at least names a font
+    // every viewer has.
     if bold {
         match base_font {
-            "Helvetica" | "Calibri" | "Arial" => "Helvetica-Bold".to_string(),
-            "Times New Roman" => "Times-Bold".to_string(),
-            "Courier New" | "Courier" => "Courier-Bold".to_string(),
+            "Helvetica" => "Helvetica-Bold".to_string(),
             _ => base_font.to_string(),
         }
     } else {
-        match base_font {
-            "Times New Roman" => "Times-Roman".to_string(),
-            "Courier New" => "Courier".to_string(),
-            _ => base_font.to_string(),
-        }
+        base_font.to_string()
     }
 }
 

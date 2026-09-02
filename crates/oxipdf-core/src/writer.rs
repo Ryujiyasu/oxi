@@ -161,15 +161,23 @@ impl PdfWriter {
             for el in &page.contents {
                 if let ContentElement::Text(span) = el {
                     let name = escape_name(&span.font_name);
-                    if span.text.chars().any(|c| c as u32 > 0x7F) {
+                    // Check for embedded font with GID mapping
+                    let gid_map = doc.embedded_fonts.get(&span.font_name)
+                        .or_else(|| {
+                            doc.embedded_fonts.iter()
+                                .find(|(k, _)| escape_name(k) == name)
+                                .map(|(_, v)| v)
+                        });
+                    // A face with font data goes out as a composite font whatever
+                    // its text says. The old test was "does this span contain a
+                    // non-ASCII character", which meant a pure-ASCII English run
+                    // never got its own font embedded: it was written as a bare
+                    // /Type1 with no file and no /Widths, and the viewer picked
+                    // both the outlines and the advances. That is why the same
+                    // paragraph could come out right in one document (a curly
+                    // quote somewhere pulled the font in) and wrong in the next.
+                    if gid_map.is_some() || span.text.chars().any(|c| c as u32 > 0x7F) {
                         let entry = cid_font_chars.entry(name.clone()).or_default();
-                        // Check for embedded font with GID mapping
-                        let gid_map = doc.embedded_fonts.get(&span.font_name)
-                            .or_else(|| {
-                                doc.embedded_fonts.iter()
-                                    .find(|(k, _)| escape_name(k) == name)
-                                    .map(|(_, v)| v)
-                            });
                         if let Some(ef) = gid_map {
                             if !ef.unicode_to_gid.is_empty() {
                                 let tounicode = cid_to_unicode.entry(name).or_default();
@@ -1054,6 +1062,66 @@ mod tests {
         // Helvetica should be Type1, MSGothic should be Type0
         assert!(s.contains("/Subtype /Type1"), "expected Type1 for ASCII font");
         assert!(s.contains("/Subtype /Type0"), "expected Type0 for CJK font");
+    }
+
+    /// A face we hold font data for must be embedded even when its text is
+    /// pure ASCII. Writing it as a bare /Type1 leaves the viewer to pick the
+    /// outlines *and* the advances, which is how English documents used to
+    /// come out spaced by whatever font the reader happened to substitute.
+    #[test]
+    fn test_ascii_run_with_embedded_font_is_composite() {
+        let mut unicode_to_gid = HashMap::new();
+        let mut cid_widths = HashMap::new();
+        for (i, ch) in "Hello".chars().enumerate() {
+            let gid = (i + 1) as u16;
+            unicode_to_gid.insert(ch as u32, gid);
+            // Anything but the 1000 default, so it must reach the /W array.
+            cid_widths.insert(gid, 500 + gid);
+        }
+        let mut embedded_fonts = HashMap::new();
+        embedded_fonts.insert(
+            "FArial".to_string(),
+            EmbeddedFont {
+                data: b"not-a-real-font".to_vec(),
+                format: FontFormat::TrueType,
+                unicode_to_gid,
+                cid_widths,
+                ps_name: Some("ArialMT".to_string()),
+            },
+        );
+
+        let doc = PdfDocument {
+            version: PdfVersion::new(1, 7),
+            info: DocumentInfo::default(),
+            pages: vec![Page {
+                width: 612.0,
+                height: 792.0,
+                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                crop_box: None,
+                contents: vec![ContentElement::Text(TextSpan {
+                    x: 72.0,
+                    y: 72.0,
+                    text: "Hello".into(),
+                    font_name: "FArial".into(),
+                    font_size: 12.0,
+                    fill_color: Color::Gray(0.0),
+                    character_spacing: 0.0,
+                })],
+                rotation: 0,
+            }],
+            outline: Vec::new(),
+            embedded_fonts,
+        };
+        let bytes = write_pdf(&doc);
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("/Subtype /Type0"), "embedded ASCII face must be composite");
+        assert!(s.contains("/Subtype /CIDFontType2"), "expected a CIDFont descendant");
+        assert!(s.contains("/BaseFont /ArialMT"), "expected the face's PostScript name");
+        assert!(s.contains("/W ["), "expected a per-glyph width array");
+        assert!(
+            !s.contains("/Subtype /Type1"),
+            "an embedded face must not also go out as a bare Type1"
+        );
     }
 
     #[test]
