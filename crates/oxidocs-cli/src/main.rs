@@ -3092,14 +3092,26 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
         if from_subsetter.is_empty() {
             // The subsetter reports through `getBestCmap()`, which knows only
             // Unicode cmaps and answers None for a symbol font — Wingdings and
-            // Symbol carry a (3,0) table and nothing else. Reading the subset
-            // ourselves finds it, so the glyphs a document actually asked for
-            // are embedded instead of being dropped for having no mapping.
+            // Symbol carry a (3,0) table and nothing else. Read the subset
+            // ourselves instead of trusting the report.
             parse_cmap_table(&otf_data)
         } else {
             from_subsetter
         }
     };
+
+    if unicode_to_gid.is_empty() {
+        // Still nothing: the subset kept no glyph we can address, so embedding
+        // it would put a font in the file that draws nothing — a PDF that
+        // passes every structural check and shows blank where the bullets
+        // were. The whole font has the mapping the subset lost.
+        eprintln!(
+            "Font subset ({}) mapped no glyph; embedding the whole font instead",
+            label
+        );
+        clear_scratch(&widths_path, &cidmap_path, &subset_path);
+        return embed_whole_font(font_path, label);
+    }
     let cid_widths = if let Ok(json_str) = fs::read_to_string(&widths_path) {
         parse_cidwidths_json(&json_str)
     } else {
