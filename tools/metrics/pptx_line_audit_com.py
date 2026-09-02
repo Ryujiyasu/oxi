@@ -65,23 +65,27 @@ mismeasured, the top line is s1's 'we help' at **+62.02pt (+10.9%)** -- 223pt,
 `b="1"`, in a family with no bold. So the number can find a real width defect,
 which is what makes the near-zero medians elsewhere evidence.
 
-★OPEN: what the MEDIAN hides. `--dump-widths` writes every compared pair, and
-over decks 9, d32 and 34 (332 lines) the distribution is not one population:
+★What the MEDIAN hides, and how to read a positive one. `--dump-widths`
+writes every compared pair; over decks 9, d32 and 34 (332 lines) 155 agree to
+under 0.05pt and 64 are 2pt or more out, carrying a per-line CONSTANT of about
+3pt rather than an error that grows with the line.
 
-    155 lines (47%)   agree to under 0.05pt
-    113 lines         under 2pt
-    64 lines (19%)    2pt or more out, ratio ink/pen median 1.031
+`gen_pptx_boundwidth.py` then asked what the box is, one word in one face with
+one property changed per arm:
 
-The 64 are NOT proportional to the line: deck 9 s2 reads +3.00pt on a 136pt
-line and +2.87pt on a 570pt one, in the same shape. A per-line CONSTANT of
-about 3pt, then -- and it is not the face (every face has both exact and
-constant-carrying lines: Inter 53 of 120 exact, Raleway 36 of 99, Arial 43 of
-51), not a trailing space (no big-delta line's text ends in one), and not
-whether the paragraph wrapped. Until that discriminator is found the median is
-the number to read and the 19% is a queue, not a defect count. `pptx_char_pos_com.py`
-on d09 s9 'Yellow' says PowerPoint's own per-character steps sum to the
-engine's 46.56pt, so whatever the 3.69pt is, it is in the BOX and not in the
-advances.
+    Arial 'Yellow' 14pt   design pen 41.24   BoundWidth 39.97   engine 41.25
+                          28pt   design 82.48   BoundWidth 80.06  engine 82.63
+    autofit / nowrap / centre / right / insets   all 39.97, to the hundredth
+
+So `BoundWidth` is an INK box -- pen minus the first glyph's left and the last
+glyph's right bearing, -1.27pt at 14pt and -2.42pt at 28 -- and NO box property
+moves it. The engine, meanwhile, reproduces the design pen exactly (+0.01).
+
+★That gives the sign its meaning: **ink can never exceed the pen, so a POSITIVE
+delta is the engine measuring too narrow.** d09 s9's Raleway 'Yellow' reads ink
+50.25 against the engine's 46.56, so PowerPoint's own pen is at least 50.25 and
+the engine is 8% short on that line. The 64 are real, and a healthy line reads
+slightly NEGATIVE (the bearings), not zero.
 
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
