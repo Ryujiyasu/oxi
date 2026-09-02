@@ -37,8 +37,16 @@ measure at the scale the picture is drawn at): **7620 paragraphs over 48 decks,
 
 So the remaining pptx gap is entirely WITHIN the line on this corpus. Two of
 this tool's own blind spots were closed on the way: turned shapes were dropped
-whole (2.8% of the corpus's text shapes) and are now compared for their breaks,
-and the trailing break above.
+whole (2.8% of the corpus's text shapes) and are now compared for their breaks
+AND their widths, and the trailing break above.
+
+★A turned shape's WIDTH is comparable even though its left edge is not: the
+length of a line does not depend on which way the shape faces, only on which of
+the box's two axes reports it. 169 of the corpus's 252 turned text shapes sit at
+exactly 90 or 270 degrees (`BoundHeight` carries the width there) and most of
+the rest at 180 (`BoundWidth`, as usual); anything off a right angle mixes the
+axes and is left out. On d39 that takes the width comparison from 63 lines to
+103, and the 40 it adds agree (median +0.03pt, 0 over 2%).
 
 ★THE WIDTH, added once the breaks were clean (2026-09-02). PowerPoint's
 `BoundWidth` is an INK box and the engine's `line_w` is a PEN advance, so the
@@ -236,6 +244,7 @@ def engine_paras(dump: dict) -> dict[int, list]:
             shapes.append({"x": sh["x"], "y": sh["y"], "w": sh["w"],
                            "text_left": sh.get("text_left", sh["x"]),
                            "turned": turned,
+                           "rot": float(sh.get("rotation") or 0.0),
                            "paras": rows})
         out[si] = shapes
     return out
@@ -285,13 +294,20 @@ def com_shapes(shape, acc: list) -> None:
                          # where an advance error lives.
                          [round(para.Lines(j).BoundWidth, 2)
                           for j in range(1, n + 1)],
+                         # ★And the box's other axis, because a quarter turn
+                         # swaps them: 169 of the corpus's 252 turned text
+                         # shapes sit at exactly 90 or 270 degrees, where the
+                         # line's WIDTH is what `BoundHeight` reports.
+                         [round(para.Lines(j).BoundHeight, 2)
+                          for j in range(1, n + 1)],
                          # What the RUN asks for. Beside the family the engine
                          # actually measured, this says whether a width
                          # disagreement is about advances or about which face
                          # answered -- the two need different fixes.
                          (para.Font.Name or "")))
         acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width,
-                    "turned": turned, "paras": rows})
+                    "turned": turned, "rot": float(shape.Rotation or 0.0),
+                    "paras": rows})
     except Exception as e:
         # Loud, not silent: a shape this cannot read is a hole in the audit's
         # coverage, and a coverage hole that prints nothing reads as a pass.
@@ -396,7 +412,15 @@ def audit(doc) -> dict | None:
                     # into the other would make this audit depend on arithmetic
                     # it is supposed to be checking.
                     geom = not (c.get("turned") or m.get("turned"))
-                    for (cn, cx, ctext, cy, cw, cface),                             (en, ex, etext, ey, ew, eface) in zip(
+                    # Which of PowerPoint's two box axes carries the line's
+                    # WIDTH at this shape's turn. A quarter turn swaps them, a
+                    # half turn keeps them, and anything else mixes the two and
+                    # is left out.
+                    rot = (c.get("rot", 0.0) or 0.0) % 360.0
+                    quart = round(rot / 90.0) * 90 % 360
+                    axis = (None if abs(rot - quart) > 0.5
+                            else (0 if quart in (0, 180) else 1))
+                    for (cn, cx, ctext, cy, cw, chh, cface),                             (en, ex, etext, ey, ew, eface) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -456,6 +480,14 @@ def audit(doc) -> dict | None:
                                     offs.append(d)
                                     if abs(d) > 3.0:
                                         far.append((si, round(d, 2), ctext[:40]))
+                            if axis is not None:
+                                # ★The width is compared for a TURNED shape too,
+                                # unlike the two numbers above: a line's length
+                                # does not depend on which way the shape faces,
+                                # only on which of the box's axes reports it,
+                                # and `axis` has just decided that. The left edge
+                                # and the line advance stay out because they are
+                                # stated in two different frames.
                                 # The line's WIDTH, which is the only number
                                 # here that grows with the error it carries: a
                                 # side bearing is the same on a 20pt line and a
@@ -493,9 +525,10 @@ def audit(doc) -> dict | None:
                                 # s9's 'Yellow' included, and none of it is the
                                 # engine.
                                 single = len(c["paras"]) == 1
-                                last = min(len(cw), len(ew)) - 1
-                                for j, (a, b) in enumerate(zip(cw, ew)):
-                                    if j != last or not single:
+                                box = cw if axis == 0 else chh
+                                last = min(len(box), len(ew)) - 1
+                                for j, (a, b) in enumerate(zip(box, ew)):
+                                    if j != last or not single or axis is None:
                                         continue
                                     if b > 40.0:
                                         wide.append((b, a - b))
@@ -523,7 +556,7 @@ def audit(doc) -> dict | None:
     print(f"{str(doc):>4}: {got['paras']:5} paragraphs  {rate:6.2f}% break agreement  "
           f"({got['diff']} differ)  shapes {got['shapes']} "
           f"({got['unmatched']} unmatched, {got['turned_paras']} paragraphs "
-          f"turned -- breaks only, {got['trailing_br']} end in a break)", flush=True)
+          f"turned -- no left edge, {got['trailing_br']} end in a break)", flush=True)
     for si, cn, en, t in worst[:6]:
         print(f"      s{si:<3} PowerPoint {cn} lines, engine {en}  {t!r}", flush=True)
     if offs:
