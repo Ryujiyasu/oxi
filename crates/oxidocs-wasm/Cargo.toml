@@ -22,9 +22,14 @@ js-sys = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
+oxidocs-common = { version = "0.8.0", path = "../oxidocs-common", optional = true }
+ovba = { version = "0.7.1", optional = true }
+serde_json = "1.0.151"
 
 [features]
 default = []
 # Full-suite bindings (spreadsheet/presentation/generic-PDF/hanko) used by the
 # in-repo web editor; the published npm package is the default docs-only build.
-suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko"]
+suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba"]
+oxidocs-common = ["dep:oxidocs-common"]
+ovba = ["dep:ovba"]

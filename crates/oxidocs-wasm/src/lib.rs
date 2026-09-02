@@ -4,6 +4,10 @@ use std::sync::OnceLock;
 use std::cell::RefCell;
 
 #[cfg(feature = "suite")]
+mod macro_safety;
+#[cfg(feature = "suite")]
+pub use macro_safety::{read_macro_safety, read_macro_safety_native};
+#[cfg(feature = "suite")]
 mod spreadsheet_vba;
 #[cfg(feature = "suite")]
 pub use spreadsheet_vba::{list_spreadsheet_vba_procedures, run_spreadsheet_vba};
