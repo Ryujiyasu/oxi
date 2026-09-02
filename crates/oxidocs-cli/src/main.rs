@@ -41,6 +41,28 @@ fn main() {
                 }
             }
         }
+        Some("hanko-keygen") => {
+            let path = args
+                .get(2)
+                .expect("Usage: oxi hanko-keygen <key.pk8>");
+            if let Err(error) = vba::keygen(path) {
+                eprintln!("Key generation failed: {error}");
+                std::process::exit(2);
+            }
+        }
+        Some("vba-seal") => {
+            let input = args
+                .get(2)
+                .expect("Usage: oxi vba-seal <input.xlsm> <key.pk8> [note]");
+            let key = args
+                .get(3)
+                .expect("Usage: oxi vba-seal <input.xlsm> <key.pk8> [note]");
+            let note = args.get(4).map(String::as_str).unwrap_or("");
+            if let Err(error) = vba::seal(input, key, note) {
+                eprintln!("VBA sealing failed: {error}");
+                std::process::exit(2);
+            }
+        }
         Some("vba-inventory") => {
             let input = args
                 .get(2)
@@ -66,6 +88,8 @@ fn main() {
             eprintln!("  oxi docx-to-pdf <input.docx> <output.pdf>");
             eprintln!("  oxi vba-analyze <input.xlsm>");
             eprintln!("  oxi vba-safety <input.xlsm>");
+            eprintln!("  oxi vba-seal <input.xlsm> <key.pk8> [note]");
+            eprintln!("  oxi hanko-keygen <key.pk8>");
             eprintln!("  oxi vba-inventory <file-or-directory>");
             eprintln!("  oxi vba-inventory-json <file-or-directory>");
             std::process::exit(1);

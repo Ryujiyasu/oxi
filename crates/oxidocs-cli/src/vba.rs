@@ -11,6 +11,10 @@ use oxivba_core::fingerprint::{
     compare, fingerprint_module, ModuleFingerprint, Similarity, Strength,
 };
 use oxihanko::attest::{clearance, digest_project, Attestation, Clearance};
+use oxihanko::verify::TrustedSigners;
+use ring::rand::SystemRandom;
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use oxihanko::attest::SignatureVerifier;
 use oxivba_core::safety::{assess, Capability, SafetyReport};
 use oxivba_core::{analyse, parse_module, Analysis, Class};
 use serde_json::json;
@@ -109,9 +113,18 @@ pub(crate) fn safety(input: &str) -> Result<bool, String> {
             .iter()
             .map(|module| (module.name.as_str(), module.source.as_str())),
     );
-    // No verifier is wired in yet, so this can never reach Cleared. That is
-    // the honest state of things and the report says which it is.
-    match clearance(&digest, sealed.as_ref(), None) {
+    let trusted = trusted_signers(Path::new(input))?;
+    if sealed.is_some() && trusted.is_none() {
+        println!("There is a seal beside this file, but nobody has been named as");
+        println!("trusted to place one. Put the signers in oxi-hanko-signers.txt");
+        println!("beside the workbook, or point OXI_HANKO_SIGNERS at the list.");
+        println!();
+    }
+    match clearance(
+        &digest,
+        sealed.as_ref(),
+        trusted.as_ref().map(|signers| signers as &dyn SignatureVerifier),
+    ) {
         Clearance::Cleared { signer, note } => {
             println!("Sealed by {signer}: {note}");
             println!("Nothing to read: this exact code has been cleared.");
@@ -121,6 +134,12 @@ pub(crate) fn safety(input: &str) -> Result<bool, String> {
             println!("A seal beside this file matches the code, but NOTHING SIGNED IT.");
             println!("Anyone who can edit the workbook can write that file, so it");
             println!("clears nothing. Read on.");
+            println!();
+        }
+        Clearance::MatchesButNobodyChecked => {
+            println!("A seal beside this file matches the code and is signed, but");
+            println!("nobody here is trusted to place one, so whose signature it is");
+            println!("has not been established. Read on.");
             println!();
         }
         Clearance::SignatureRejected { why } => {
@@ -233,6 +252,142 @@ fn read_attestation(workbook: &Path) -> Result<Option<Attestation>, String> {
     serde_json::from_str(&text)
         .map(Some)
         .map_err(|error| format!("cannot read the seal {}: {error}", beside.display()))
+}
+
+/// Writes a new Ed25519 signing key, and prints the public half to put in
+/// the trusted-signers list.
+///
+/// The private key is written with no passphrase, because a passphrase this
+/// tool invents would be a passphrase nobody keeps. Whoever holds this file
+/// can seal macros in their name.
+pub(crate) fn keygen(path: &str) -> Result<(), String> {
+    if Path::new(path).exists() {
+        return Err(format!("{path} already exists; refusing to overwrite a key"));
+    }
+    let random = SystemRandom::new();
+    let document = Ed25519KeyPair::generate_pkcs8(&random)
+        .map_err(|_| "cannot generate a key".to_string())?;
+    let key = Ed25519KeyPair::from_pkcs8(document.as_ref())
+        .map_err(|_| "the generated key did not read back".to_string())?;
+    fs::write(path, document.as_ref())
+        .map_err(|error| format!("cannot write {path}: {error}"))?;
+    println!("Wrote {path}. Keep it; anyone holding it can seal in your name.");
+    println!();
+    println!("Add this line to oxi-hanko-signers.txt, with your own name:");
+    println!("<your name>\t{}", key_fingerprint(&key));
+    Ok(())
+}
+
+/// The people trusted to seal macros, from `OXI_HANKO_SIGNERS` or from
+/// `oxi-hanko-signers.txt` beside the workbook.
+///
+/// Returning `None` is not a failure: it means nobody has been named yet, and
+/// the report says so rather than quietly clearing nothing.
+fn trusted_signers(workbook: &Path) -> Result<Option<TrustedSigners>, String> {
+    let listed = match std::env::var("OXI_HANKO_SIGNERS") {
+        Ok(path) => PathBuf::from(path),
+        Err(_) => {
+            let beside = workbook
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("oxi-hanko-signers.txt");
+            if !beside.is_file() {
+                return Ok(None);
+            }
+            beside
+        }
+    };
+    let text = fs::read_to_string(&listed)
+        .map_err(|error| format!("cannot read {}: {error}", listed.display()))?;
+    let signers = TrustedSigners::from_list(&text)
+        .map_err(|error| format!("{}: {error}", listed.display()))?;
+    Ok(Some(signers))
+}
+
+/// Writes a seal beside a workbook, signed with an Ed25519 key in PKCS#8.
+///
+/// The signer's NAME is not taken from here; it comes from whichever trusted
+/// key verifies at read time. What is written down is what was read and when,
+/// in the sealer's words.
+pub(crate) fn seal(input: &str, key_path: &str, note: &str) -> Result<(), String> {
+    let report = inspect_project(Path::new(input))?;
+    let digest = digest_project(
+        report
+            .modules
+            .iter()
+            .map(|module| (module.name.as_str(), module.source.as_str())),
+    );
+    let key_bytes = fs::read(key_path)
+        .map_err(|error| format!("cannot read the key {key_path}: {error}"))?;
+    // PKCS#8 v2 carries the public key beside the private one and v1 does
+    // not. `ring` generates v2 and checks it; OpenSSL and Python's
+    // cryptography write v1. Refusing v1 would mean refusing most keys
+    // anyone already has, so both are read.
+    let key = Ed25519KeyPair::from_pkcs8(&key_bytes)
+        .or_else(|_| Ed25519KeyPair::from_pkcs8_maybe_unchecked(&key_bytes))
+        .map_err(|_| format!("{key_path} is not an Ed25519 private key in PKCS#8"))?;
+
+    let mut attestation = Attestation {
+        digest,
+        signer: String::new(),
+        sealed_at: today(),
+        note: note.to_string(),
+        signature: None,
+        certificate: None,
+    };
+    attestation.signer = key_fingerprint(&key);
+    let signature = key.sign(&attestation.signed_bytes());
+    attestation.signature = Some(signature.as_ref().to_vec());
+
+    let mut name = Path::new(input).as_os_str().to_os_string();
+    name.push(".hanko.json");
+    let beside = PathBuf::from(name);
+    let text = serde_json::to_string_pretty(&attestation)
+        .map_err(|error| format!("cannot write the seal: {error}"))?;
+    fs::write(&beside, text)
+        .map_err(|error| format!("cannot write {}: {error}", beside.display()))?;
+    println!("Sealed {} module(s) as {}", report.modules.len(), beside.display());
+    println!("Project digest: {}", attestation.digest.project);
+    println!();
+    println!("This seal clears the file only for readers who trust the key that");
+    println!("signed it. Add its public key to oxi-hanko-signers.txt as");
+    println!("  <name><TAB>{}", key_fingerprint(&key));
+    Ok(())
+}
+
+fn key_fingerprint(key: &Ed25519KeyPair) -> String {
+    key.public_key()
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The date, from the system clock, as `YYYY-MM-DD`. Written by whoever seals
+/// and never checked when reading, so it is a note to a human rather than a
+/// fact the seal rests on.
+fn today() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0);
+    let days = now.div_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Howard Hinnant's days-to-civil-date, which needs no calendar crate.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 pub(crate) fn inventory(input: &str) -> Result<(), String> {

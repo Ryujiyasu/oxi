@@ -30,7 +30,8 @@
 //!
 //! A digest on its own proves nothing about who wrote it: anyone who can edit
 //! the workbook can edit an unsigned attestation beside it. So an unsigned
-//! match is its own answer, [`Clearance::MatchesButUnsigned`], and reaching
+//! match is its own answer, [`Clearance::MatchesButUnsigned`]; so is a signed
+//! seal nobody checked, [`Clearance::MatchesButNobodyChecked`]. Reaching
 //! [`Clearance::Cleared`] requires a [`SignatureVerifier`] that actually
 //! checked the signature. The type is the guard rail — no caller can treat a
 //! file someone dropped in a folder as a clearance by accident.
@@ -146,9 +147,13 @@ pub enum Clearance {
     /// Signed, verified, and over exactly this code. The only answer that
     /// earns silence.
     Cleared { signer: String, note: String },
-    /// The digest matches, but nothing verified who sealed it. Anyone who can
-    /// edit the workbook can write this file, so it clears nothing.
+    /// The digest matches and nobody signed it. Anyone who can edit the
+    /// workbook can write this file, so it clears nothing.
     MatchesButUnsigned,
+    /// The digest matches and a signature is there, but no verifier was
+    /// supplied, so nobody has said whose it is. Not the same as unsigned,
+    /// and telling a reader otherwise would be untrue.
+    MatchesButNobodyChecked,
     /// There is a seal, but the code has moved since. Carries what moved, so a
     /// reviewer reads the difference rather than the project.
     Stale(Changed),
@@ -198,7 +203,7 @@ pub fn clearance(
         return Clearance::MatchesButUnsigned;
     };
     let Some(verifier) = verifier else {
-        return Clearance::MatchesButUnsigned;
+        return Clearance::MatchesButNobodyChecked;
     };
     match verifier.verify(
         &attestation.signed_bytes(),
@@ -294,6 +299,18 @@ mod tests {
             Clearance::Cleared { signer, .. } => assert_eq!(signer, "Someone In Accounts"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Signed but unchecked is not the same as unsigned, and a report that
+    /// said "nothing signed it" about a signed seal would be lying.
+    #[test]
+    fn signed_but_unchecked_is_its_own_answer() {
+        let modules = [("A", "Sub Go()\nEnd Sub")];
+        let attestation = sealed(&modules, Some(b"good"));
+        assert_eq!(
+            clearance(&digest_project(modules.iter().copied()), Some(&attestation), None),
+            Clearance::MatchesButNobodyChecked
+        );
     }
 
     /// A digest match with nobody's name behind it is not a clearance, because

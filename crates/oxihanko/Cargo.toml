@@ -11,3 +11,7 @@ thiserror = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10.9"
+ring = { version = "0.17.14", optional = true }
+
+[features]
+ring = ["dep:ring"]

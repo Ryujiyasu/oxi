@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod attest;
+#[cfg(feature = "ring")]
+pub mod verify;
 pub mod stamp;
 pub mod signer;
 
