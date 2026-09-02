@@ -3741,7 +3741,17 @@ impl<'a> WorkbookHost<'a> {
                     column_step as usize
                 };
                 let Some(value) = block.at(from_row, from_column) else {
-                    self.set_cell_value(address, CellValue::Error("#N/A".to_string()))?;
+                    // An array with NOTHING in it leaves the cell empty.
+                    // Asked of Excel, `Range("E1").Value = Array()` raises
+                    // nothing and the cell holds nothing afterwards — where
+                    // an array that merely does not reach as far as the
+                    // range still fills what is left with #N/A.
+                    let missing = if block.values.is_empty() {
+                        CellValue::Empty
+                    } else {
+                        CellValue::Error("#N/A".to_string())
+                    };
+                    self.set_cell_value(address, missing)?;
                     continue;
                 };
                 match cell_input(value)? {

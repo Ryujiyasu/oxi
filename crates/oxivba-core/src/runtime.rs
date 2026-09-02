@@ -4467,17 +4467,24 @@ fn call_builtin(
             if matches!(args[0], Value::Null) {
                 return Ok(Value::Null);
             }
-            let value = number(&args[0])
-                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+            // The places are read and judged BEFORE the value is looked at,
+            // so `Round(vbNullString, -2.5)` is a bad argument (5) rather
+            // than a type mismatch (13). And there is no upper bound:
+            // `Round(1.5, 16)` answers 1.5. Both asked of Excel.
             let places = match args.get(1) {
                 None | Some(Value::Missing) => 0,
                 Some(value) => integer_argument(value, line)?,
             };
-            if !(0..=15).contains(&places) {
+            if places < 0 {
                 return Err(invalid_procedure_call(
-                    "Round decimal places must be between 0 and 15".to_string(),
+                    "Round decimal places cannot be negative".to_string(),
                     line,
                 ));
+            }
+            let value = number(&args[0])
+                .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
+            if places > 15 {
+                return Ok(numeric_literal(value));
             }
             let scale = 10_f64.powi(places as i32);
             return Ok(numeric_literal((value * scale).round_ties_even() / scale));
@@ -4496,18 +4503,37 @@ fn call_builtin(
             let value = number(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?
                 .round_ties_even();
-            if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
+            // How many digits a negative number turns into follows the TYPE
+            // it was given, not the number itself. Asked of Excel:
+            // `Hex(-2)` is FFFE because `2` is an Integer, `Hex(-aLong)`
+            // is eight digits, and `Hex(-2.5)` — or anything out of a cell,
+            // which arrives as a Double — is sixteen.
+            let width = match &args[0] {
+                Value::Byte(_) | Value::Int16(_) | Value::Boolean(_) => 16,
+                Value::Integer(_) => 32,
+                _ => 64,
+            };
+            let limit = match width {
+                16 => i16::MAX as f64,
+                32 => i32::MAX as f64,
+                _ => i64::MAX as f64,
+            };
+            if !value.is_finite() || value < -limit - 1.0 || value > limit {
                 return Err(error(
                     RuntimeErrorKind::Overflow,
                     format!("overflow converting value with {name}"),
                     line,
                 ));
             }
-            let value = value as i32;
+            let bits = match width {
+                16 => (value as i16) as u64 & 0xFFFF,
+                32 => (value as i32) as u64 & 0xFFFF_FFFF,
+                _ => (value as i64) as u64,
+            };
             return Ok(Value::String(if name == "hex" {
-                format!("{:X}", value as u32)
+                format!("{bits:X}")
             } else {
-                format!("{:o}", value as u32)
+                format!("{bits:o}")
             }));
         }
         if name == "val" {
@@ -4668,8 +4694,16 @@ fn call_builtin(
                     }))
                 }
             },
+            // An EMPTY STRING is a type mismatch, where Empty itself is False.
+            //
+            // `truthy` reads "" as false for the sake of `If x Then`, but the
+            // conversion is stricter than the test: asked of Excel, `CBool("")`
+            // is error 13 while `CBool(Empty)` is False.
             "cbool" => match value {
                 Value::Null => Err(invalid_null(line)),
+                Value::String(text) if text.is_empty() => Err(mismatch(
+                    "type mismatch converting an empty String to Boolean".to_string(),
+                )),
                 _ => Ok(Value::Boolean(truthy(value).map_err(mismatch)?)),
             },
             // A Boolean converts by its BITS, not by its value: asked of
@@ -6793,21 +6827,25 @@ fn call_string_builtin(
             if !(2..=4).contains(&args.len()) {
                 return Err(wrong_count("2 to 4 arguments"));
             }
-            let (start, source_index, needle_index, compare_index) = if args.len() == 2 {
-                (0, 0, 1, None)
+            let (source_index, needle_index, compare_index) = if args.len() == 2 {
+                (0, 1, None)
             } else {
-                (
-                    positive_position(&args[0], line)?,
-                    1,
-                    2,
-                    (args.len() == 4).then_some(3),
-                )
+                (1, 2, (args.len() == 4).then_some(3))
             };
+            // A Null anywhere wins over a start position out of range.
+            // Asked of Excel, `InStr(False, False, Null)` is Null, where
+            // `InStr(0, "abc", "b")` — the same bad start with no Null in
+            // sight — is error 5.
             let Some(source) = nullable_text(&args[source_index])? else {
                 return Ok(Value::Null);
             };
             let Some(needle) = nullable_text(&args[needle_index])? else {
                 return Ok(Value::Null);
+            };
+            let start = if args.len() == 2 {
+                0
+            } else {
+                positive_position(&args[0], line)?
             };
             let compare = compare_mode(
                 compare_index.map(|index| &args[index]),
@@ -8813,6 +8851,133 @@ mod tests {
         assert_eq!(kind("aByte = 200", "aByte + aByte"), "err6");
     }
 
+    /// How wide `Hex` and `Oct` write a negative number follows the TYPE they
+    /// were given, not the number.
+    ///
+    /// Found twice over by generated cases and then asked of Excel across the
+    /// types: `Hex(-2)` is four digits because `2` is an Integer, a Long is
+    /// eight, and anything that arrives as a Double — including every number
+    /// read out of a cell — is sixteen. Only tellable once the interpreter
+    /// keeps the types apart.
+    #[test]
+    fn hex_and_oct_write_as_wide_as_their_argument() {
+        let ask = |setup: &str, expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim anInteger As Integer\n\
+                   Dim aLong As Long\n\
+                   Dim aByte As Byte\n\
+                   Dim aCurrency As Currency\n\
+                   {setup}\n\
+                   Ask = CStr({expression})\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        let plain = "anInteger = 2: aLong = 70000: aByte = 2: aCurrency = 2";
+        assert_eq!(ask(plain, "Hex(anInteger)"), "2");
+        assert_eq!(ask(plain, "Hex(-anInteger)"), "FFFE");
+        assert_eq!(ask(plain, "Hex(aLong)"), "11170");
+        assert_eq!(ask(plain, "Hex(-aLong)"), "FFFEEE90");
+        assert_eq!(ask(plain, "Hex(-2)"), "FFFE");
+        assert_eq!(ask(plain, "Hex(-2.5)"), "FFFFFFFFFFFFFFFE");
+        assert_eq!(ask(plain, "Hex(-aCurrency)"), "FFFFFFFFFFFFFFFE");
+        assert_eq!(ask(plain, "Oct(-2)"), "177776");
+        assert_eq!(ask(plain, "Oct(-2.5)"), "1777777777777777777776");
+    }
+
+    /// `Round` reads the number of places BEFORE it looks at the value, and
+    /// puts no ceiling on them.
+    #[test]
+    fn round_judges_its_places_first() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = CStr(answer)\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        // Places out of range wins over a value that is not a number.
+        assert_eq!(ask("Round(vbNullString, -2.5)"), "err5");
+        assert_eq!(ask("Round(1.5, -1)"), "err5");
+        // With the places in order, the value is judged next.
+        assert_eq!(ask("Round(vbNullString, 2)"), "err13");
+        assert_eq!(ask("Round(1.5, \"x\")"), "err13");
+        // And there is no upper bound on the places.
+        assert_eq!(ask("Round(1.5, 16)"), "1.5");
+        assert_eq!(ask("Round(Empty, 2)"), "0");
+    }
+
+    /// An empty String will not convert to a Boolean, though `Empty` will.
+    #[test]
+    fn cbool_refuses_an_empty_string() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = CStr(answer)\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("CBool(\"\")"), "err13");
+        assert_eq!(ask("CBool(Empty)"), "False");
+        assert_eq!(ask("CBool(\"abc\")"), "err13");
+        assert_eq!(ask("CBool(\"1\")"), "True");
+    }
+
+    /// A Null anywhere in `InStr` wins over a start position out of range.
+    #[test]
+    fn instr_answers_null_before_it_refuses_a_start() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = TypeName(answer)\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        // The same bad start, with and without a Null beside it.
+        assert_eq!(ask("InStr(False, False, Null)"), "Null");
+        assert_eq!(ask("InStr(0, \"abc\", \"b\")"), "err5");
+        assert_eq!(ask("InStr(1, \"abc\", Null)"), "Null");
+        assert_eq!(ask("InStr(1, Null, \"b\")"), "Null");
+        assert_eq!(ask("InStr(Null, \"abc\", \"b\")"), "err94");
+    }
+
     #[test]
     fn a_boolean_reaches_byte_by_its_bits() {
         let ask = |expression: &str| {
@@ -10440,7 +10605,7 @@ mod tests {
         assert_eq!(
             value,
             Value::String(
-                "2|4|0.1234|-9|-8|-1|0|1|9|1CB|FFFFFFFF|713|37777777777|-1|1615198|-1250"
+                "2|4|0.1234|-9|-8|-1|0|1|9|1CB|FFFF|713|177777|-1|1615198|-1250"
                     .to_string()
             )
         );
