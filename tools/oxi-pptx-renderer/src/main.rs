@@ -263,13 +263,41 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
                                             para_json["line_baselines"] = json!(
                                                 bases
                                                     .iter()
-                                                    .map(|(_, b, _)| (b * 100.0).round() / 100.0)
+                                                    .map(|(_, b, _, _)| (b * 100.0).round() / 100.0)
                                                     .collect::<Vec<_>>()
                                             );
                                             para_json["line_x_offsets"] = json!(
                                                 bases
                                                     .iter()
-                                                    .map(|(_, _, x)| (x * 100.0).round() / 100.0)
+                                                    .map(|(_, _, x, _)| (x * 100.0).round() / 100.0)
+                                                    .collect::<Vec<_>>()
+                                            );
+                                            // The width the engine measured for
+                                            // each line, so an audit can ask
+                                            // PowerPoint what IT set the same
+                                            // line at (`Lines(j).BoundWidth`)
+                                            // without measuring the text again
+                                            // through the metrics under test.
+                                            para_json["line_widths"] = json!(
+                                                bases
+                                                    .iter()
+                                                    .map(|(_, _, _, w)| (w * 100.0).round() / 100.0)
+                                                    .collect::<Vec<_>>()
+                                            );
+                                            // The text of each line, which is
+                                            // what makes the widths comparable:
+                                            // `line_w` is measured on the line
+                                            // TRIMMED of its trailing space and
+                                            // PowerPoint's `BoundWidth` is not,
+                                            // so an audit has to know which
+                                            // lines end in one. It also lets a
+                                            // reader check WHERE the break fell
+                                            // rather than only how many there
+                                            // were.
+                                            para_json["line_texts"] = json!(
+                                                bases
+                                                    .iter()
+                                                    .map(|(t, _, _, _)| t.clone())
                                                     .collect::<Vec<_>>()
                                             );
                                         }
@@ -4939,7 +4967,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     "LINES slide={} shape=({:.1},{:.1}) para={} fs={:.2} n={} lnSpc={:?}",
                                     slide.index, sh.x, sh.y, pi, fs, n_lines, p.line_spacing
                                 );
-                                for (li, (t, b, xo)) in lines.iter().enumerate() {
+                                for (li, (t, b, xo, _)) in lines.iter().enumerate() {
                                     eprintln!(
                                         "  L{:<2} baseline={:.2}pt x_off={:.2} {:?}",
                                         li,
@@ -5006,7 +5034,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     r.spacing != p.runs[0].spacing
                                                 })))));
                             let mut line_off = 0usize;
-                            for (i, (line_text, baseline, x_off)) in
+                            for (i, (line_text, baseline, x_off, _)) in
                                 lines.into_iter().enumerate()
                             {
                                 let this_off = line_off;
@@ -15467,7 +15495,7 @@ fn layout_paragraph_baselines(
     wrap_text: bool,
     // `a:bodyPr/@spcFirstLastPara` -- keep the first paragraph's space.
     spc_first_last: bool,
-) -> (Vec<(String, f32, f32)>, Option<MarkerInfo>, String, bool) {
+) -> (Vec<(String, f32, f32, f32)>, Option<MarkerInfo>, String, bool) {
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
@@ -15874,7 +15902,11 @@ fn layout_paragraph_baselines(
                 mk.align_off = if ctrbullet_on() { align_off } else { 0.0 };
             }
         }
-        out.push((line.clone(), baseline, base_off + align_off));
+        // ★The width is carried out with the line because nothing outside can
+        // recompute it honestly: an audit that measures the same text with the
+        // same metrics can never catch those metrics being wrong, which is the
+        // reason `text_left` is stated too.
+        out.push((line.clone(), baseline, base_off + align_off, line_w));
     }
     let _ = unsafe { SelectObject(dc, old_font) };
     // Leaving the paragraph, the cursor stops at the last line box's bottom --

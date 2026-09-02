@@ -15,6 +15,8 @@ So this asks PowerPoint directly and compares against the engine's own
 
     line count per paragraph   the BREAK -- categorical, cause-attributable
     line left edge             the ALIGNMENT, as a secondary number
+    line width                 the ADVANCES, which is what is left once the
+                               breaks agree (`Lines(j).BoundWidth`)
 
 It is the pptx analogue of the docx pagination gate: a signal, not an outcome.
 
@@ -37,6 +39,31 @@ So the remaining pptx gap is entirely WITHIN the line on this corpus. Two of
 this tool's own blind spots were closed on the way: turned shapes were dropped
 whole (2.8% of the corpus's text shapes) and are now compared for their breaks,
 and the trailing break above.
+
+★THE WIDTH, added once the breaks were clean (2026-09-02). PowerPoint's
+`BoundWidth` is an INK box and the engine's `line_w` is a PEN advance, so the
+pair is only comparable after three confounders are taken out, each of which
+first appeared as a fat defect:
+
+    a MARKER paragraph      PowerPoint's box takes in the bullet, the engine's
+                            width is the text alone -- d09's '1.' read +39.6%
+    a TRAILING SPACE        the engine trims, `BoundWidth` runs past it --
+                            d09 s7's 'BIG ' read +12.94pt, and a 52pt Playfair
+                            space is 13pt
+    a SHORT line            a side bearing is a large share of 20pt and none of
+                            200pt, so short lines are listed but kept out of the
+                            fit, which would otherwise read the intercept as a
+                            slope
+
+What is left is reported as a fit: `ink - pen = a * width + b`, with `a` in per
+mille (the advance error, which grows with the line) and `b` in points (the
+bearing, which does not). Cleaned up, deck 9 reads median +0.03pt and deck 34
++0.00pt -- the engine's advances agree with PowerPoint's.
+
+★And its own control: pointed at d32, whose Bebas Neue was already on record as
+mismeasured, the top line is s1's 'we help' at **+62.02pt (+10.9%)** -- 223pt,
+`b="1"`, in a family with no bold. So the number can find a real width defect,
+which is what makes the near-zero medians elsewhere evidence.
 
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
@@ -139,9 +166,27 @@ def engine_paras(dump: dict) -> dict[int, list]:
             rows = []
             for p in paras:
                 text = "".join(r.get("text", "") for r in p.get("runs", []))
+                # ★A paragraph with a MARKER is left out of the width
+                # comparison: PowerPoint's line box takes in the bullet or the
+                # number, the engine's `line_w` is the text alone, and the
+                # difference is the marker rather than any advance. d09's '1.'
+                # read +8.94pt (+39.6%) that way, which is a bullet, not a
+                # defect. The line count and the left edge are unaffected.
+                marked = bool(p.get("marker"))
+                # ★A line whose text ends in a space is left out of the width
+                # comparison as well: the engine measures `line_w` on the line
+                # TRIMMED and PowerPoint's `BoundWidth` runs to the pen after
+                # the space, so the pair differs by a space and not by anything
+                # either side got wrong. d09 s7's 'BIG ' read +12.94pt that way
+                # -- a 52pt Playfair space is 13pt.
+                widths = [] if marked else (p.get("line_widths") or [])
+                texts = p.get("line_texts") or []
+                if widths and len(texts) == len(widths):
+                    widths = [w if not (t.endswith(" ") or t.endswith("\n")) else 0.0
+                              for w, t in zip(widths, texts)]
                 rows.append((len(p.get("line_x_offsets") or []),
                              p.get("line_x_offsets") or [], text,
-                             p.get("line_baselines") or []))
+                             p.get("line_baselines") or [], widths))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -195,6 +240,14 @@ def com_shapes(shape, acc: list) -> None:
                           for j in range(1, n + 1)],
                          para.Text.rstrip("\r"),
                          [round(para.Lines(j).BoundTop, 2)
+                          for j in range(1, n + 1)],
+                         # ★What PowerPoint set the line AT. `BoundWidth` is an
+                         # ink box and the engine's number is a pen advance, so
+                         # the two differ by the first and last glyph's side
+                         # bearings -- a constant that cancels out of the SPREAD
+                         # and out of the slope against line length, which is
+                         # where an advance error lives.
+                         [round(para.Lines(j).BoundWidth, 2)
                           for j in range(1, n + 1)]))
         acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width,
                     "turned": turned, "paras": rows})
@@ -241,6 +294,9 @@ def audit(doc) -> dict | None:
     vadv: list[float] = []
     vfar: list = []
     pfar: list = []
+    # (engine's pen width, PowerPoint's ink width minus it) per line.
+    wide: list[tuple[float, float]] = []
+    wfar: list = []
     try:
         pres = app.Presentations.Open(str(src.resolve()), WithWindow=False)
         try:
@@ -299,7 +355,7 @@ def audit(doc) -> dict | None:
                     # into the other would make this audit depend on arithmetic
                     # it is supposed to be checking.
                     geom = not (c.get("turned") or m.get("turned"))
-                    for (cn, cx, ctext, cy), (en, ex, etext, ey) in zip(
+                    for (cn, cx, ctext, cy, cw), (en, ex, etext, ey, ew) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -359,6 +415,22 @@ def audit(doc) -> dict | None:
                                     offs.append(d)
                                     if abs(d) > 3.0:
                                         far.append((si, round(d, 2), ctext[:40]))
+                                # The line's WIDTH, which is the only number
+                                # here that grows with the error it carries: a
+                                # side bearing is the same on a 20pt line and a
+                                # 200pt one, an advance that is 1% wrong is not.
+                                # Short lines are dropped from the FIT, not
+                                # from the listing: a side bearing is a large
+                                # share of a 20pt line and none of a 200pt one,
+                                # so leaving them in lets the intercept masquerade
+                                # as a slope.
+                                for a, b in zip(cw, ew):
+                                    if b > 40.0:
+                                        wide.append((b, a - b))
+                                        if abs(a - b) / b > 0.02 and abs(a - b) > 1.0:
+                                            wfar.append((si, round(a - b, 2),
+                                                         round(100.0 * (a - b) / b, 1),
+                                                         ctext[:36]))
                         else:
                             got["diff"] += 1
                             worst.append((si, cn, en, ctext[:44]))
@@ -399,6 +471,29 @@ def audit(doc) -> dict | None:
               f"{len(vfar)} over 0.5pt", flush=True)
         for si, d, t in sorted(vfar, key=lambda r: -abs(r[1]))[:4]:
             print(f"        s{si:<3} {d:+7.2f}pt  {t!r}", flush=True)
+    if wide:
+        deltas = sorted(d for _, d in wide)
+        med = deltas[len(deltas) // 2]
+        # ★The SLOPE is the advance error and the INTERCEPT is the bearing: fit
+        # `ink - pen = a * width + b` and read them apart, because a deck can
+        # have a large median from side bearings alone and still measure every
+        # advance correctly. Reported in per mille, since 1% on a 200pt line is
+        # two points and shows in the picture.
+        n = len(wide)
+        sw = sum(w for w, _ in wide)
+        sd = sum(d for _, d in wide)
+        sww = sum(w * w for w, _ in wide)
+        swd = sum(w * d for w, d in wide)
+        den = n * sww - sw * sw
+        slope = (n * swd - sw * sd) / den if abs(den) > 1e-9 else 0.0
+        icept = (sd - slope * sw) / n
+        got["width_slope_permille"] = slope * 1000.0
+        got["width_intercept_pt"] = icept
+        print(f"      line width: {n} lines, PowerPoint's ink minus the engine's pen "
+              f"median {med:+.2f}pt; fit = {slope * 1000.0:+.2f} per mille of the "
+              f"line + {icept:+.2f}pt, {len(wfar)} over 2%", flush=True)
+        for si, d, pct, t in sorted(wfar, key=lambda r: -abs(r[2]))[:4]:
+            print(f"        s{si:<3} {d:+7.2f}pt ({pct:+.1f}%)  {t!r}", flush=True)
     return got
 
 
