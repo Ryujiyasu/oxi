@@ -4655,7 +4655,14 @@ fn call_builtin(
                 Value::Null => Err(invalid_null(line)),
                 _ => Ok(Value::Boolean(truthy(value).map_err(mismatch)?)),
             },
-            "cbyte" => Ok(Value::Integer(convert_integer(value, 0, 255, line)?)),
+            // A Boolean converts by its BITS, not by its value: asked of
+            // Excel, `CByte(True)` is 255 where `CByte(-1)` overflows, and
+            // `CByte(False)` is 0. Every other shape goes by value.
+            "cbyte" => match value {
+                Value::Boolean(true) => Ok(Value::Integer(255)),
+                Value::Boolean(false) => Ok(Value::Integer(0)),
+                _ => Ok(Value::Integer(convert_integer(value, 0, 255, line)?)),
+            },
             "ccur" => {
                 let value = number(value).map_err(mismatch)?;
                 const LIMIT: f64 = 922_337_203_685_477.6;
@@ -6726,16 +6733,39 @@ fn call_string_builtin(
             let Some(value) = nullable_text(&args[0])? else {
                 return Ok(Value::Null);
             };
-            let start = positive_position(&args[1], line)?;
+            // Every argument is made a number BEFORE any of them is judged,
+            // and before the string is looked at. Asked of Excel:
+            // `Mid(-1, -1, " a ")` is a type mismatch (13) rather than a bad
+            // position (5), because the third argument is not a number; and
+            // `Mid(0, 32767, anArray)` is refused rather than answered with
+            // "", which is what a start past the end used to return before
+            // the third argument had been looked at at all.
+            let wanted_start = integer_argument(&args[1], line)?;
+            let wanted_length = match args.get(2) {
+                Some(argument) => Some(integer_argument(argument, line)?),
+                None => None,
+            };
+            if wanted_start < 1 {
+                return Err(invalid_procedure_call(
+                    "String position must be positive".to_string(),
+                    line,
+                ));
+            }
+            if wanted_length.is_some_and(|length| length < 0) {
+                return Err(invalid_procedure_call(
+                    "String length cannot be negative".to_string(),
+                    line,
+                ));
+            }
+            let start = usize::try_from(wanted_start - 1).unwrap_or(usize::MAX);
             let units = value.encode_utf16().collect::<Vec<_>>();
             if start > units.len() {
                 return Ok(Value::String(String::new()));
             }
             let available = units.len() - start;
-            let length = if args.len() == 3 {
-                nonnegative_length(&args[2], line)?.min(available)
-            } else {
-                available
+            let length = match wanted_length {
+                Some(length) => usize::try_from(length).unwrap_or(0).min(available),
+                None => available,
             };
             Ok(Value::String(String::from_utf16_lossy(
                 &units[start..start + length],
@@ -6805,6 +6835,14 @@ fn call_string_builtin(
                 }
             };
             let compare = compare_mode(args.get(3), option_compare_text, line)?;
+            // An empty needle answers with the start position ITSELF, not the
+            // position after it. Asked of Excel: `InStrRev("abcd", "")` is 4
+            // where the string is four long, `InStrRev("abcd", "", 2)` is 2,
+            // and `InStrRev("", "")` is 0. Every non-empty needle keeps the
+            // one-based answer a found offset gives.
+            if needle.is_empty() {
+                return Ok(Value::Integer(start.min(source.len()) as i64));
+            }
             Ok(Value::Integer(
                 utf16_rfind(&source, &needle, start, compare)
                     .map(|offset| offset as i64 + 1)
@@ -8386,6 +8424,101 @@ mod tests {
 
     /// The question a reader of somebody else's macros keeps asking, and the
     /// one a host has to answer before it can say what it must supply.
+    /// A Boolean reaches Byte by its BITS; everything else by its value.
+    ///
+    /// Found by a generated case and then asked of Excel in nine shapes, which
+    /// is what separates the rule from the one case: `CByte(-1)` overflows
+    /// just as it did before, so "True is -1, and -1 is 255" would have been
+    /// the wrong law.
+    #[test]
+    fn a_boolean_reaches_byte_by_its_bits() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim answer As Variant\n\
+                   On Error Resume Next\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = CStr(answer)\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("CByte(True)"), "255");
+        assert_eq!(ask("CByte(False)"), "0");
+        assert_eq!(ask("CByte(-1)"), "err6");
+        assert_eq!(ask("CByte(255)"), "255");
+        assert_eq!(ask("CByte(256)"), "err6");
+        assert_eq!(ask("CByte(255.5)"), "err6");
+        // Half to the even side, as everywhere else.
+        assert_eq!(ask("CByte(0.5)"), "0");
+        assert_eq!(ask("CByte(1.5)"), "2");
+        assert_eq!(ask("CByte(\"12\")"), "12");
+    }
+
+    /// An empty needle answers with the start position itself.
+    #[test]
+    fn instrrev_with_an_empty_needle() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n  Ask = CStr({expression})\nEnd Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("InStrRev(\"abcd\", \"\")"), "4");
+        assert_eq!(ask("InStrRev(\"abcd\", \"\", 2)"), "2");
+        assert_eq!(ask("InStrRev(\"\", \"\")"), "0");
+        // A needle that is there keeps the one-based answer it always gave.
+        assert_eq!(ask("InStrRev(\"abcd\", \"c\")"), "3");
+        assert_eq!(ask("InStrRev(\"abcd\", \"a\")"), "1");
+        assert_eq!(ask("InStrRev(\"abcd\", \"z\")"), "0");
+    }
+
+    /// Mid makes every argument a number before it judges any of them, so an
+    /// argument that is not a number is a type mismatch even when another
+    /// argument is also out of range, and a start past the end of the string
+    /// no longer hides a third argument nobody looked at.
+    #[test]
+    fn mid_judges_its_arguments_in_excels_order() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim answer As Variant\n\
+                   Dim things As Variant\n\
+                   things = Array(1, 2)\n\
+                   On Error Resume Next\n\
+                   answer = {expression}\n\
+                   If Err.Number <> 0 Then\n\
+                     Ask = \"err\" & Err.Number\n\
+                   Else\n\
+                     Ask = \"[\" & CStr(answer) & \"]\"\n\
+                   End If\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("Mid(-1, -1, \" a \")"), "err13");
+        assert_eq!(ask("Mid(0, 32767, things)"), "err13");
+        assert_eq!(ask("Mid(\"abc\", 0)"), "err5");
+        assert_eq!(ask("Mid(\"abc\", -1)"), "err5");
+        assert_eq!(ask("Mid(\"abc\", 1, -1)"), "err5");
+        // What it always did, kept.
+        assert_eq!(ask("Mid(\"abcdef\", 2, 3)"), "[bcd]");
+        assert_eq!(ask("Mid(\"abc\", 9)"), "[]");
+    }
+
     #[test]
     fn the_language_is_told_apart_from_the_host() {
         // VBA's own, so they work with no workbook underneath.
