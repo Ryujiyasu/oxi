@@ -1061,7 +1061,10 @@ fn canonical_module_declarations(module: &Module, norm: Normalization) -> String
     };
     for item in &module.items {
         match item {
-            ModuleItem::Option(..) | ModuleItem::DefType(_) | ModuleItem::Comment { .. } => {}
+            ModuleItem::Option(..)
+            | ModuleItem::DefType(_)
+            | ModuleItem::Comment { .. }
+            | ModuleItem::DesignerHeader { .. } => {}
             ModuleItem::Directive { text, .. } => {
                 entries.push(format!("directive {}", text.to_ascii_lowercase()));
             }

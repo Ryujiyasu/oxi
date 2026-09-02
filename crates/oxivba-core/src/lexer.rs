@@ -398,6 +398,20 @@ impl<'a> Lexer<'a> {
             }
             end += 1;
         }
+        // Read with the quotes honoured, nothing closed it. A bracketed NAME
+        // is opaque to the VBE -- std-vba writes `sb.[symbols like " ' # !]`
+        // and it compiles -- so try again treating the quotes as plain
+        // characters and ending at the first `]`. Only taken when the strict
+        // read would have failed, so no input that lexed before lexes
+        // differently now. Which of the two the VBE really applies to an
+        // Evaluate shortcut holding a quoted `]` has not been measured.
+        if let Some(close) = self.bytes[start + 1..].iter().position(|byte| *byte == b']') {
+            let close = start + 1 + close;
+            let value = self.src[start + 1..close].to_string();
+            self.push_here(TokenKind::BracketExpr(value), start, close + 1);
+            self.pos = close + 1;
+            return Ok(());
+        }
         Err(LexError::UnterminatedBracketExpr { line: self.line })
     }
 

@@ -31,7 +31,29 @@ use crate::ast::*;
 use crate::lexer::{tokenize, LexError, Punct, Span, Token, TokenKind};
 
 pub fn parse_module(source: &str) -> Result<Module, LexError> {
-    let tokens = tokenize(source)?;
+    // A form's designer block carries a `{GUID}` the lexer has no token for,
+    // and a class's `BEGIN ... END` block is not VBA either. Blank the region
+    // out -- same length, same newlines, so every span still points into
+    // `source` -- and hand it back as one item at the front.
+    let header = designer_header(source);
+    let blanked;
+    let code = match &header {
+        Some((_, span)) => {
+            blanked = source
+                .char_indices()
+                .map(|(index, ch)| {
+                    if index < span.end && ch != '\n' && ch != '\r' {
+                        ' '
+                    } else {
+                        ch
+                    }
+                })
+                .collect::<String>();
+            blanked.as_str()
+        }
+        None => source,
+    };
+    let tokens = tokenize(code)?;
     let mut parser = Parser {
         src: source,
         tokens,
@@ -39,7 +61,68 @@ pub fn parse_module(source: &str) -> Result<Module, LexError> {
         terminated: true,
         pending_next_counters: Vec::new(),
     };
-    Ok(parser.parse_module())
+    let mut module = parser.parse_module();
+    if let Some((text, span)) = header {
+        module.items.insert(0, ModuleItem::DesignerHeader { text, span });
+    }
+    Ok(module)
+}
+
+/// The VBE's export preamble, if the source starts with one: a `VERSION` line
+/// followed by a `Begin`/`BEGIN` block, closed by the matching `End`/`END` on
+/// a line of its own. Forms nest control blocks inside, so depth is counted.
+fn designer_header(source: &str) -> Option<(String, Span)> {
+    let mut lines = source.split_inclusive('\n').peekable();
+    let mut offset = 0usize;
+    let mut line_number = 0u32;
+    // First non-blank line must be `VERSION ...`.
+    let mut first = None;
+    while let Some(line) = lines.peek() {
+        line_number += 1;
+        if !line.trim().is_empty() {
+            first = Some(*line);
+            break;
+        }
+        offset += line.len();
+        lines.next();
+    }
+    let first = first?;
+    if !first.trim_start().starts_with("VERSION ") {
+        return None;
+    }
+    let start = offset;
+    let start_line = line_number;
+    offset += first.len();
+    lines.next();
+    // Then a Begin.
+    let mut depth = 0usize;
+    let mut seen_begin = false;
+    for line in lines {
+        let trimmed = line.trim();
+        let word = trimmed.split_whitespace().next().unwrap_or("");
+        if word.eq_ignore_ascii_case("begin") {
+            depth += 1;
+            seen_begin = true;
+        } else if !seen_begin && !trimmed.is_empty() {
+            return None;
+        } else if trimmed.eq_ignore_ascii_case("end") {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                let end = offset + line.trim_end_matches(['\r', '\n']).len();
+                let text = source[start..end].to_string();
+                return Some((
+                    text,
+                    Span {
+                        line: start_line,
+                        start,
+                        end,
+                    },
+                ));
+            }
+        }
+        offset += line.len();
+    }
+    None
 }
 
 struct Parser<'a> {
@@ -445,10 +528,26 @@ impl<'a> Parser<'a> {
             if self.at_eof() || self.at_block_end(&["end type"]) {
                 break;
             }
+            // A comment on its own line, or one trailing a field. The module
+            // and statement loops step over these; this loop did not, and
+            // `end_statement` stops AT a comment rather than past it, so a
+            // field written `x As Long ' what it holds` spun forever. Found
+            // on the fifth real-world file the parser was ever pointed at.
+            if matches!(self.kind(), TokenKind::Comment(_) | TokenKind::Directive(_)) {
+                self.pos += 1;
+                self.end_statement();
+                continue;
+            }
+            let before = self.pos;
             if let Some(item) = self.parse_var_item() {
                 fields.push(item);
             }
             self.end_statement();
+            if self.pos == before {
+                // Whatever this line is, it is not a field and nothing read
+                // it. Step past it rather than look at it again.
+                self.consume_line();
+            }
         }
         self.consume_line();
         Some(ModuleItem::Type(TypeDef {
@@ -607,11 +706,25 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // `As Byte()` on a Function or Property Get: it returns an array. Only
+        // an EMPTY pair is taken, so a parameter's `As Long)` closing the
+        // parameter list is left alone.
+        let is_array = if self.at_punct(Punct::LParen)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Punct(Punct::RParen))
+            ) {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
         Some(TypeName {
             name,
             is_new,
             suffix: None,
             fixed_length,
+            is_array,
         })
     }
 
@@ -1624,8 +1737,12 @@ impl<'a> Parser<'a> {
             .unwrap_or(Expr::Literal(Literal::Empty, span));
         self.eat_kw("then");
 
-        // A one-line `If` has its body on the same line and no `End If`.
-        if !self.at_eol() {
+        // A one-line `If` has its body on the same line and no `End If`. A
+        // comment after `Then` is not a body: `If x Then    ' why` opens a
+        // block, and reading it as one-line left every `Else` and `End If`
+        // below it orphaned -- a quarter of all the lines the parser could not
+        // read in a corpus of real modules came from this one shape.
+        if !self.at_eol() && !matches!(self.kind(), TokenKind::Comment(_)) {
             let mut then_body = Vec::new();
             let mut else_body = None;
             while self.span().line == span.line && !self.at_eol() && !self.at_kw("else") {
@@ -2439,6 +2556,7 @@ fn type_name_from_suffix(suffix: char) -> TypeName {
         is_new: false,
         suffix: Some(suffix),
         fixed_length: None,
+        is_array: false,
     }
 }
 
@@ -3243,6 +3361,68 @@ mod tests {
                 if matches!(decl.items[0].type_name.fixed_length.as_ref(),
                     Some(Expr::Literal(Literal::Number(4.0), _)))
         ));
+    }
+
+    /// A comment beside a field, or on a line of its own between fields, is
+    /// how every real record is written. The loop used to sit on the comment
+    /// token without moving and never come back.
+    #[test]
+    fn type_fields_may_carry_comments() {
+        let m = module(
+            "Private Type UserRec\n\
+             ' the two halves of the buffer\n\
+             bMach(1 To 32) As Byte  ' 1st 32 bytes hold machine name\n\
+             bUser(1 To 32) As Byte  ' 2nd 32 bytes hold user name\n\
+             \n\
+             count As Long ' trailing\n\
+             End Type\n\
+             Sub T()\n\
+             End Sub",
+        );
+        let ModuleItem::Type(type_def) = &m.items[0] else {
+            panic!("expected type declaration")
+        };
+        let names: Vec<&str> = type_def.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["bMach", "bUser", "count"]);
+        assert!(type_def.fields[0].array_bounds.is_some());
+        assert!(matches!(&m.items[1], ModuleItem::Procedure(_)));
+    }
+
+    /// A line inside a Type that is not a field must not stall the loop
+    /// either -- it is stepped past, and the fields around it survive.
+    #[test]
+    fn type_block_steps_past_a_line_it_cannot_read() {
+        let m = module(
+            "Private Type Odd\n\
+             first As Long\n\
+             123 not a field\n\
+             last As Long\n\
+             End Type\n",
+        );
+        let ModuleItem::Type(type_def) = &m.items[0] else {
+            panic!("expected type declaration")
+        };
+        let names: Vec<&str> = type_def.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["first", "last"]);
+    }
+
+    /// Enum members already survived a trailing comment through a different
+    /// route; pinned here so the two blocks cannot drift apart.
+    #[test]
+    fn enum_members_may_carry_comments() {
+        let m = module(
+            "Public Enum Shade\n\
+             Red = 1 ' warm\n\
+             ' the cool ones\n\
+             Green\n\
+             Blue ' cold\n\
+             End Enum\n",
+        );
+        let ModuleItem::Enum(enum_def) = &m.items[0] else {
+            panic!("expected enum declaration")
+        };
+        let names: Vec<&str> = enum_def.members.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["Red", "Green", "Blue"]);
     }
 
     #[test]
