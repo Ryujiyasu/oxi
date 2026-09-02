@@ -13352,6 +13352,98 @@ fn fontdata_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Opti
 /// recovers the design advance exactly instead of to the render probe's
 /// 1/2048.
 #[cfg(windows)]
+/// The family GDI files this family's BOLD under, when asking for weight 700
+/// does not actually get it.
+///
+/// ★GDI answers `tmWeight=700` for `"Caladea"` and hands back the REGULAR
+/// advances, having synthesised the weight: this machine files the real bold as
+/// the separate family `"Caladea Bold"`. Measured on one 48-character line at
+/// 2048/em -- `"Caladea"` w=700 gives 240.176pt where `"Caladea Bold"` by name
+/// gives 264.234pt, against the font file's own 264.125pt. Arial does NOT do
+/// this (700 -> 282.691 vs 262.846), so it is per-family registration.
+///
+/// d47 s2 then measures its bold body at 1918 master units (239.75pt), fits a
+/// 258.76pt box, and keeps a line PowerPoint breaks -- 4 paragraphs of that deck
+/// come out one line short.
+///
+/// ★The test is the ADVANCES, not `style_installed`: GDI enumerates a bold for
+/// the family whether or not it has one, so asking "is a bold installed" answers
+/// yes for exactly the families this is meant to catch. Asking "does asking for
+/// bold change anything" cannot be fooled that way.
+#[cfg(windows)]
+fn synthetic_bold_alias(family: &str, italic: bool) -> Option<String> {
+    use windows::Win32::Graphics::Gdi::*;
+    thread_local! {
+        static SEEN: std::cell::RefCell<
+            std::collections::HashMap<(String, bool), Option<String>>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if !boldfamily_on() {
+        return None;
+    }
+    let key = (family.to_string(), italic);
+    if let Some(hit) = SEEN.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    // One probe glyph is enough: a synthesised bold leaves the advance alone.
+    let probe = |name: &str, weight: i32| -> Option<i32> {
+        let dc = probe_dc();
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let font = CreateFontW(
+                -2048, 0, 0, 0, weight, u32::from(italic), 0, 0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if font.is_invalid() {
+                return None;
+            }
+            let old = SelectObject(dc, font);
+            // ★Did GDI give us what we ASKED for? When `"X Bold"` does not
+            // exist it substitutes silently -- deck 03's Inter and Kalam are
+            // not installed, `"Inter Bold"` comes back as ARIAL, and reading
+            // Arial's advance as "a real bold exists" fired this on two decks
+            // that have no such face (-0.0013 on 03). Asking for a name is not
+            // the same as getting it.
+            let mut got = [0u16; 64];
+            let n = GetTextFaceW(dc, Some(&mut got));
+            let got = String::from_utf16_lossy(&got[..(n as usize).saturating_sub(1)]);
+            let mut abc = ABC::default();
+            let ok = GetCharABCWidthsW(dc, 0x6E, 0x6E, &mut abc).as_bool();
+            SelectObject(dc, old);
+            let _ = DeleteObject(font);
+            (ok && got.eq_ignore_ascii_case(name))
+                .then(|| abc.abcA + abc.abcB as i32 + abc.abcC)
+        }
+    };
+    let alias = format!("{family} Bold");
+    // ★Not exact equality: a synthesised bold DOES nudge the advance a little
+    // (the whole d47 line moves 239.895 -> 240.176pt), so `asked == reg` never
+    // fires and the first version of this silently did nothing. What separates
+    // the two is the SCALE of the change -- a real bold face is a different set
+    // of outlines, a synthesised one is the same ones smeared.
+    let answer = match (probe(family, 400), probe(family, 700), probe(&alias, 700)) {
+        (Some(reg), Some(asked), Some(aliased)) if reg > 0 => {
+            let nudge = (asked - reg).abs() as f32 / reg as f32;
+            let real = (aliased - reg).abs() as f32 / reg as f32;
+            (nudge < 0.01 && real > 0.02).then_some(alias)
+        }
+        _ => None,
+    };
+    SEEN.with(|c| c.borrow_mut().insert(key, answer.clone()));
+    answer
+}
+
+/// A bold GDI only synthesises is looked up by its own family name unless this
+/// is set.
+fn boldfamily_on() -> bool {
+    std::env::var("OXI_BOLDFAMILY_DISABLE").is_err()
+}
+
 fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
     use windows::Win32::Graphics::Gdi::*;
 
@@ -13360,6 +13452,14 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     let weight = if bold { 700 } else { 400 };
     let key = (family.to_string(), weight, italic);
     let (face, weight, italic) = styled_face(family, bold, italic);
+    // A weight GDI only pretends to serve: ask for the face that has it.
+    let (face, weight) = match (weight >= 700)
+        .then(|| synthetic_bold_alias(&face, italic))
+        .flatten()
+    {
+        Some(alias) => (alias, 700),
+        None => (face, weight),
+    };
     // S-BOLDADV, the break-test half: a bold run served by a non-bold face is
     // measured at that face's own advances, because PowerPoint sets it there.
     // See `runtime_advance_em` for the seven-string derivation. Both halves are
