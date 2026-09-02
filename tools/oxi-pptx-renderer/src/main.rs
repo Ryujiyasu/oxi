@@ -14856,6 +14856,53 @@ fn font_has_all_glyphs(family: &str, bold: bool, italic: bool, text: &str) -> bo
     }
 }
 
+/// Which characters of `text` this face has no glyph for -- the same question
+/// `font_has_all_glyphs` answers with a yes or no, printed so a line that falls
+/// off the measured path can say WHICH character pushed it off.
+#[cfg(windows)]
+fn font_missing_glyphs(family: &str, bold: bool, italic: bool, text: &str) -> Vec<char> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let dc = probe_dc();
+    let (face, weight, italic) = styled_face(family, bold, italic);
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut out = Vec::new();
+    unsafe {
+        let font = CreateFontW(
+            -ADVANCE_PROBE_EM, 0, 0, 0, weight, u32::from(italic), 0, 0,
+            DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return out;
+        }
+        let old = SelectObject(dc, font);
+        for ch in text.chars() {
+            let w: Vec<u16> = ch.to_string().encode_utf16().collect();
+            if w.len() != 1 {
+                continue;
+            }
+            let wz: Vec<u16> = w.iter().copied().chain(std::iter::once(0)).collect();
+            let mut idx = [0u16; 1];
+            let n = GetGlyphIndicesW(
+                dc,
+                windows::core::PCWSTR(wz.as_ptr()),
+                1,
+                idx.as_mut_ptr(),
+                GGI_MARK_NONEXISTING_GLYPHS,
+            );
+            if n == GDI_ERROR as u32 || idx[0] == 0xFFFF {
+                out.push(ch);
+            }
+        }
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+    }
+    out
+}
+
 /// Per-character device advances for `text` at the design metrics, or None
 /// when any character has no advance in this font (then the caller keeps the
 /// GDI path rather than mixing two metric sources within one line).
@@ -15177,7 +15224,8 @@ fn gdi_wrap_lines(
             let c0 = text.chars().next().unwrap_or('n');
             let (sf, sw, si) = styled_face(family, bold, italic);
             eprintln!(
-                "   WHY has_all_glyphs={all} no_advance={miss:?} | cloud={:?} hmtx={:?} fontdata={:?} precise={:?} | styled_face={sf:?} w={sw} i={si}",
+                "   WHY has_all_glyphs={all} missing={:?} no_advance={miss:?} | cloud={:?} hmtx={:?} fontdata={:?} precise={:?} | styled_face={sf:?} w={sw} i={si}",
+                font_missing_glyphs(family, bold, italic, text),
                 cloud_advance_em(family, bold, italic, c0),
                 font_adv::hmtx_advance_em(family, c0),
                 fontdata_advance_em(family, bold, italic, c0),
