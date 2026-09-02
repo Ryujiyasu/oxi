@@ -78,6 +78,37 @@ CASES += [
 # blank-page rule without settling this one would make S732 insert a WRONG blank
 # right after the newly-correct one.
 #   (id, eoh, sect0_pgnum, sect1_pgnum, sect2_type, sect2_pgnum)
+
+# 2026-09-03 -- a CONTINUOUS section that declares its own pgNumType start.
+# reference__0ea3ec86 has two (sec2 start=90, sec3 start=88) and Word blanks
+# its page 2, so the parity rule fires for a continuous section too. What is
+# NOT known from that document alone is whether such a section always begins a
+# PAGE (a page can only carry one number, so a restart cannot take effect
+# mid-page) or only does so when the parity padding forces it.
+#   g1  parity CONFLICTS -> expect a blank page and sec2 at the top of page 3
+#   g2  parity AGREES    -> the discriminator: does sec2 still open page 2, or
+#                           does its content continue mid-page 1?
+CASES_CONT = [
+    ("g1_cont_restart_conflict", True, 'w:start="1"', 'w:start="1"'),
+    ("g2_cont_restart_agree",    True, 'w:start="1"', 'w:start="2"'),
+    ("g3_cont_restart_noeoh",    False, 'w:start="1"', 'w:start="1"'),
+]
+
+# 2026-09-03 -- the g arms above padded NOTHING, yet reference__0ea3ec86 (whose
+# sec2 is also continuous with a restart) gets a blank page 2. The difference is
+# that 0ea3ec86's cover FILLS page 1, so its continuous section has to BEGIN a
+# page; in the g arms the cover is one line and the section just continues on
+# it, so no page ever starts and no parity question is asked.
+#   h arms: the cover is padded to fill page 1, so sec2 must open page 2.
+#   h1  conflict -> expect a blank page 2, sec2 on page 3
+#   h2  agree    -> expect no blank, sec2 on page 2
+# Sweep the cover length instead of guessing it: the arm that matters is the
+# first one where the cover fills page 1, and 46 lines of 12pt Arial did not.
+CASES_FILL = ([(f"h1c{n}_conflict", True, 'w:start="1"', 'w:start="3"', n)
+               for n in range(46, 58, 2)]
+              + [(f"h2c{n}_agree", True, 'w:start="1"', 'w:start="2"', n)
+                 for n in range(46, 58, 2)])
+
 CASES3 = [
     ("e1_evencover_oddpage_r273", True, 'w:start="272"', 'w:start="272"',
      "oddPage", 'w:start="273"'),
@@ -162,6 +193,27 @@ def gen():
         body = (cover + sect(pg0, tp0)
                 + para("SECTION2 FIRST LINE") + para("more text")
                 + sect(pg1, tp1, inner=False))
+        doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+               f'<w:body>{body}</w:body></w:document>')
+        write(cid, doc, eoh)
+        print("gen", cid)
+    for (cid, eoh, pg0, pg1, nfill) in CASES_FILL:
+        cover = "".join(para(f"COVERLINE{i:02d}") for i in range(nfill))
+        body = (cover + sect(pg0, True)
+                + para("SECTION2 FIRST LINE") + para("more text")
+                + sect(pg1, True, inner=False, stype="continuous"))
+        doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+               f'<w:body>{body}</w:body></w:document>')
+        write(cid, doc, eoh)
+        print("gen", cid)
+    for (cid, eoh, pg0, pg1) in CASES_CONT:
+        # sec2 is CONTINUOUS and restarts numbering. Its marker paragraph is
+        # SECTION2 so `read` reports which page it landed on.
+        body = (para("COVER PAGE") + sect(pg0, True)
+                + para("SECTION2 FIRST LINE") + para("more text")
+                + sect(pg1, True, inner=False, stype="continuous"))
         doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
                f'<w:body>{body}</w:body></w:document>')
