@@ -65,6 +65,24 @@ mismeasured, the top line is s1's 'we help' at **+62.02pt (+10.9%)** -- 223pt,
 `b="1"`, in a family with no bold. So the number can find a real width defect,
 which is what makes the near-zero medians elsewhere evidence.
 
+★OPEN: what the MEDIAN hides. `--dump-widths` writes every compared pair, and
+over decks 9, d32 and 34 (332 lines) the distribution is not one population:
+
+    155 lines (47%)   agree to under 0.05pt
+    113 lines         under 2pt
+    64 lines (19%)    2pt or more out, ratio ink/pen median 1.031
+
+The 64 are NOT proportional to the line: deck 9 s2 reads +3.00pt on a 136pt
+line and +2.87pt on a 570pt one, in the same shape. A per-line CONSTANT of
+about 3pt, then -- and it is not the face (every face has both exact and
+constant-carrying lines: Inter 53 of 120 exact, Raleway 36 of 99, Arial 43 of
+51), not a trailing space (no big-delta line's text ends in one), and not
+whether the paragraph wrapped. Until that discriminator is found the median is
+the number to read and the 19% is a queue, not a defect count. `pptx_char_pos_com.py`
+on d09 s9 'Yellow' says PowerPoint's own per-character steps sum to the
+engine's 46.56pt, so whatever the 3.69pt is, it is in the BOX and not in the
+advances.
+
 ★And the NEGATIVE CONTROL, because a 100% from an instrument that cannot fail
 is worth nothing: with `OXI_MASTERUNIT_DISABLE=1` the same run reports
 `09 s2  PowerPoint 3 lines, engine 4` on the template-instructions paragraph.
@@ -94,6 +112,10 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # Whether shapes that carry a rotation are audited at all (breaks only).
 ROTATED = True
+
+# When set, every compared line's width pair is collected here and written out.
+# Four examples in a console are a hypothesis; a distribution is a finding.
+WIDTH_ROWS: list | None = None
 
 REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / "pipeline_data" / "pptx_benchmark"
@@ -186,7 +208,8 @@ def engine_paras(dump: dict) -> dict[int, list]:
                               for w, t in zip(widths, texts)]
                 rows.append((len(p.get("line_x_offsets") or []),
                              p.get("line_x_offsets") or [], text,
-                             p.get("line_baselines") or [], widths))
+                             p.get("line_baselines") or [], widths,
+                             p.get("measured_family") or ""))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -248,7 +271,12 @@ def com_shapes(shape, acc: list) -> None:
                          # and out of the slope against line length, which is
                          # where an advance error lives.
                          [round(para.Lines(j).BoundWidth, 2)
-                          for j in range(1, n + 1)]))
+                          for j in range(1, n + 1)],
+                         # What the RUN asks for. Beside the family the engine
+                         # actually measured, this says whether a width
+                         # disagreement is about advances or about which face
+                         # answered -- the two need different fixes.
+                         (para.Font.Name or "")))
         acc.append({"x": shape.Left, "y": shape.Top, "w": shape.Width,
                     "turned": turned, "paras": rows})
     except Exception as e:
@@ -355,7 +383,7 @@ def audit(doc) -> dict | None:
                     # into the other would make this audit depend on arithmetic
                     # it is supposed to be checking.
                     geom = not (c.get("turned") or m.get("turned"))
-                    for (cn, cx, ctext, cy, cw), (en, ex, etext, ey, ew) in zip(
+                    for (cn, cx, ctext, cy, cw, cface),                             (en, ex, etext, ey, ew, eface) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -424,13 +452,38 @@ def audit(doc) -> dict | None:
                                 # share of a 20pt line and none of a 200pt one,
                                 # so leaving them in lets the intercept masquerade
                                 # as a slope.
-                                for a, b in zip(cw, ew):
+                                #
+                                # ★And only the LAST line of a paragraph is
+                                # compared at all. Every earlier line broke AT a
+                                # space, the wrap trims it (`WrapOpts
+                                # .trim_trailing_space`) and PowerPoint's box
+                                # does not -- so those pairs differ by one space
+                                # and nothing else. It shows as the same
+                                # ABSOLUTE delta repeated across unrelated texts
+                                # in a deck (+11.19pt on 'Add a' and on 'Icons',
+                                # +4.19pt on 'Add a' and on 'Black'), which is a
+                                # constant, and a constant is not an advance
+                                # error. The trimmed space is not in
+                                # `line_texts` either, so it cannot be filtered
+                                # by looking at them.
+                                last = min(len(cw), len(ew)) - 1
+                                for j, (a, b) in enumerate(zip(cw, ew)):
+                                    if j != last:
+                                        continue
                                     if b > 40.0:
                                         wide.append((b, a - b))
+                                        if WIDTH_ROWS is not None:
+                                            WIDTH_ROWS.append({
+                                                "slide": si, "text": ctext[:60],
+                                                "engine_pen": b, "ppt_ink": a,
+                                                "delta": round(a - b, 3),
+                                                "asks": cface, "measured": eface,
+                                                "lines_in_para": cn,
+                                            })
                                         if abs(a - b) / b > 0.02 and abs(a - b) > 1.0:
                                             wfar.append((si, round(a - b, 2),
                                                          round(100.0 * (a - b) / b, 1),
-                                                         ctext[:36]))
+                                                         ctext[:28], cface, eface))
                         else:
                             got["diff"] += 1
                             worst.append((si, cn, en, ctext[:44]))
@@ -492,8 +545,14 @@ def audit(doc) -> dict | None:
         print(f"      line width: {n} lines, PowerPoint's ink minus the engine's pen "
               f"median {med:+.2f}pt; fit = {slope * 1000.0:+.2f} per mille of the "
               f"line + {icept:+.2f}pt, {len(wfar)} over 2%", flush=True)
-        for si, d, pct, t in sorted(wfar, key=lambda r: -abs(r[2]))[:4]:
-            print(f"        s{si:<3} {d:+7.2f}pt ({pct:+.1f}%)  {t!r}", flush=True)
+        for si, d, pct, t, cf, ef in sorted(wfar, key=lambda r: -abs(r[2]))[:6]:
+            # An EMPTY name is COM declining to answer (a line whose runs
+            # disagree), not a mismatch -- flagging it as one turned d32's
+            # whole listing into a false "different face".
+            same = ("" if not cf or cf.lower() == ef.lower()
+                    else "   <-- measured a different face")
+            print(f"        s{si:<3} {d:+7.2f}pt ({pct:+.1f}%)  {t!r}  "
+                  f"asks {cf!r}, measured {ef!r}{same}", flush=True)
     return got
 
 
@@ -507,9 +566,13 @@ def main() -> None:
     # pre-2026-09-02 population for comparing against an older run.
     ap.add_argument("--no-rotated", action="store_true",
                     help="drop turned shapes entirely, as this did before")
+    ap.add_argument("--dump-widths", default="",
+                    help="write every compared line's width pair to this JSONL")
     args = ap.parse_args()
-    global ROTATED
+    global ROTATED, WIDTH_ROWS
     ROTATED = not args.no_rotated
+    if args.dump_widths:
+        WIDTH_ROWS = []
     docs = args.docs
     if args.all:
         manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
@@ -526,6 +589,11 @@ def main() -> None:
         if g:
             for k in tot:
                 tot[k] += g[k]
+    if WIDTH_ROWS is not None and args.dump_widths:
+        with open(args.dump_widths, "w", encoding="utf-8") as fh:
+            for row in WIDTH_ROWS:
+                fh.write(json.dumps(row) + "\n")
+        print(f"wrote {len(WIDTH_ROWS)} width pairs to {args.dump_widths}")
     if tot["paras"]:
         print(f"\n{tot['paras']} paragraphs over {len(docs)} decks: "
               f"{100.0 * tot['same'] / tot['paras']:.2f}% break agreement, "
