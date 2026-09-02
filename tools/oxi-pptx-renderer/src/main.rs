@@ -2320,6 +2320,18 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                         upright_parts.get(font.typeface.as_str()).copied().unwrap_or(0),
                         family_installed(&font.typeface)
                     );
+                    // The part's OWN header, beside the slot it was filed in.
+                    // `upright == 1` refuses d31's 20 Canva parts and d35's two
+                    // alike, so the discriminator has to come from somewhere
+                    // else -- and Canva files a weight in the FAMILY name
+                    // ("Montserrat Extra-Bold") while d35's Bebas Neue is a
+                    // plain family. If the header weights differ, that is the
+                    // separation; printing it costs one render to find out.
+                    if let Some((efam, eweight, eital)) = eot_identity(&font.data) {
+                        eprintln!(
+                            "   EOT family={efam:?} weight={eweight} italic={eital}"
+                        );
+                    }
                 }
                 if ok {
                     EMBEDDED_FACES.with(|f| f.borrow_mut().insert(slot.clone()));
