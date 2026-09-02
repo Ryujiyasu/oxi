@@ -904,6 +904,18 @@ pub struct ProcedureFacts {
     pub line: u32,
 }
 
+/// A `CreateObject` / `GetObject` call, and what it asks for.
+///
+/// `target` is `None` when the ProgID is computed rather than written down,
+/// which is a fact about the code and not a gap in the reading: what such a
+/// call reaches cannot be known without running it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LateBinding {
+    pub callee: String,
+    pub target: Option<String>,
+    pub line: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analysis {
     pub metrics: Metrics,
@@ -921,6 +933,8 @@ pub struct Analysis {
     pub blanket_error_handlers: usize,
     pub has_option_explicit: bool,
     pub external_declares: Vec<String>,
+    /// Every `CreateObject` / `GetObject` in the module, in source order.
+    pub late_bindings: Vec<LateBinding>,
 }
 
 pub fn analyse(module: &Module) -> Analysis {
@@ -934,6 +948,7 @@ struct Walker {
     metrics: Metrics,
     procedures: Vec<ProcedureFacts>,
     api_names: BTreeMap<String, usize>,
+    late_bindings: Vec<LateBinding>,
     findings: Vec<Finding>,
     needs_formula_engine: bool,
     blanket_error_handlers: usize,
@@ -1405,6 +1420,7 @@ impl Walker {
         for (name, line) in names {
             self.record_name(&name, line);
         }
+        collect_late_bindings(expr, &mut self.late_bindings);
     }
 
     fn record_name(&mut self, name: &str, line: u32) {
@@ -1813,6 +1829,7 @@ impl Walker {
             metrics: self.metrics,
             procedures: self.procedures,
             api_names: self.api_names,
+            late_bindings: self.late_bindings,
             findings: self.findings,
             class,
             needs_formula_engine: self.needs_formula_engine,
@@ -1989,6 +2006,40 @@ fn collect_names(expr: &Expr, with_subject: Option<&str>, out: &mut Vec<(String,
         }
         Expr::Literal(..) => {}
     }
+}
+
+/// `CreateObject("Scripting.FileSystemObject")` and its computed cousins,
+/// anywhere in an expression. Walks the whole tree rather than the call chain,
+/// because the interesting one is often an argument to something else.
+fn collect_late_bindings(expr: &Expr, out: &mut Vec<LateBinding>) {
+    expr.visit(&mut |node| {
+        let Expr::Index {
+            target, args, span, ..
+        } = node
+        else {
+            return;
+        };
+        let Some(callee) = resolve_expr_name(target, None) else {
+            return;
+        };
+        let leaf = callee
+            .rsplit('.')
+            .next()
+            .unwrap_or(&callee)
+            .to_ascii_lowercase();
+        if !matches!(leaf.as_str(), "createobject" | "getobject") {
+            return;
+        }
+        let target = match args.first().and_then(|argument| argument.value.as_ref()) {
+            Some(Expr::Literal(Literal::Str(name), _)) => Some(name.clone()),
+            _ => None,
+        };
+        out.push(LateBinding {
+            callee,
+            target,
+            line: span.line,
+        });
+    });
 }
 
 /// A call can hide inside a chain: `Sheets(Name).Range(Addr)`. The chain's own
