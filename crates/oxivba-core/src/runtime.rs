@@ -5717,6 +5717,48 @@ fn tristate(value: Option<&Value>, default: bool, line: Option<u32>) -> Result<b
     }
 }
 
+/// Which of Format's two languages a picture is written in.
+///
+/// Read left to right, stepping over what is quoted or escaped: the FIRST
+/// character that is either a digit placeholder or a date code settles it.
+///
+/// Measured against Excel, and it has to be the first one rather than "does it
+/// hold a date code anywhere": `"0 yen"` is a number picture even though it
+/// holds a `y` and an `n`, because the `0` comes first — while `"JPY 0"` is a
+/// date picture, its `Y` being the day of the year, and its `0` then just a
+/// character to write out. `"False"` is a date picture too, which is why
+/// `Format(-0.5, "False")` answers `Fal0e`: the `s` is seconds.
+///
+/// The named formats are matched before this is asked, or `Currency` would be
+/// read as a date for its `c` and `Fixed` for its `d`.
+fn reads_as_date(pattern: &str) -> bool {
+    let mut characters = pattern.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                characters.next();
+            }
+            '"' => {
+                for quoted in characters.by_ref() {
+                    if quoted == '"' {
+                        break;
+                    }
+                }
+            }
+            '0' | '#' => return false,
+            _ if matches!(
+                character.to_ascii_lowercase(),
+                'd' | 'h' | 'm' | 'n' | 's' | 'y' | 'q' | 'w' | 'c'
+            ) =>
+            {
+                return true
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn format_value(
     value: &Value,
     pattern: &str,
@@ -5740,14 +5782,19 @@ fn format_value(
             | "medium time"
             | "short time"
     );
-    let custom_date = lower.contains("yyyy")
-        || lower.contains("ddd")
-        || lower.contains("am/pm")
-        || lower.contains("hh")
-        || lower.contains("nn")
-        || (lower.contains('/') && lower.contains('d'))
-        || (lower.contains(':') && lower.contains('h'));
-    if named_date || custom_date {
+    let named_number = matches!(
+        lower.as_str(),
+        "general number"
+            | "currency"
+            | "fixed"
+            | "standard"
+            | "percent"
+            | "scientific"
+            | "yes/no"
+            | "true/false"
+            | "on/off"
+    );
+    if named_date || (!named_number && reads_as_date(pattern)) {
         return format_date(value_date_serial(value)?, pattern, first_day, first_week);
     }
     if let Value::String(value) = value {
@@ -5783,19 +5830,7 @@ fn format_date(
     let lower = pattern.to_ascii_lowercase();
     match lower.as_str() {
         "general date" => {
-            let has_date = serial.floor() != 0.0;
-            let has_time = serial.rem_euclid(1.0) != 0.0;
-            return Ok(match (has_date, has_time) {
-                (true, true) => format!(
-                    "{}/{}/{} {}",
-                    parts.month,
-                    parts.day,
-                    parts.year,
-                    clock(parts, true)
-                ),
-                (false, true) => clock(parts, true),
-                _ => format!("{}/{}/{}", parts.month, parts.day, parts.year),
-            });
+            return Ok(general_date(serial, parts));
         }
         "long date" => {
             return Ok(format!(
@@ -5872,7 +5907,7 @@ fn format_date(
         } else if remaining.starts_with("ww") {
             (
                 2,
-                week_of_year(serial.floor() as i64, parts.year, first_day, first_week)?.to_string(),
+                week_of_year(serial.trunc() as i64, parts.year, first_day, first_week)?.to_string(),
             )
         } else if remaining.starts_with("mm") {
             let value = if after_hour {
@@ -5896,7 +5931,7 @@ fn format_date(
                     value.to_string()
                 }
                 'd' => parts.day.to_string(),
-                'y' => (serial.floor() as i64 - date_serial(parts.year, 1, 1)?.floor() as i64 + 1)
+                'y' => (serial.trunc() as i64 - date_serial(parts.year, 1, 1)?.trunc() as i64 + 1)
                     .to_string(),
                 'h' => {
                     after_hour = true;
@@ -5904,7 +5939,10 @@ fn format_date(
                 }
                 'n' => parts.minute.to_string(),
                 's' => parts.second.to_string(),
-                'w' => weekday_number(serial.floor() as i64, first_day).to_string(),
+                'w' => weekday_number(serial.trunc() as i64, first_day).to_string(),
+                // The one code that stands for a whole format rather than
+                // a field: the same as the named General Date.
+                'c' => general_date(serial, parts),
                 _ => {
                     output.push(pattern[cursor..].chars().next().unwrap());
                     cursor += pattern[cursor..].chars().next().unwrap().len_utf8();
@@ -5917,6 +5955,26 @@ fn format_date(
         cursor += length;
     }
     Ok(output)
+}
+
+/// The whole date and time, as the named General Date and the lone code `c`
+/// both write it: the date alone when there is no time of day, the time alone
+/// when there is no date, and both when there are both.
+fn general_date(serial: f64, parts: DateParts) -> String {
+    let (day, time) = serial_day_and_time(serial);
+    match (day != 0.0, time != 0.0) {
+        (true, true) => format!(
+            "{}/{}/{} {}",
+            parts.month,
+            parts.day,
+            parts.year,
+            clock(parts, true)
+        ),
+        (true, false) => format!("{}/{}/{}", parts.month, parts.day, parts.year),
+        // No day and no time is still written as a time: asked of
+        // Excel, `Format(0, "c")` is 12:00:00 AM.
+        _ => clock(parts, true),
+    }
 }
 
 fn month_name(month: u32) -> &'static str {
@@ -6636,8 +6694,20 @@ fn parse_time_text(source: &str) -> Result<f64, String> {
     Ok((hour * 3_600 + values[1] * 60 + values.get(2).copied().unwrap_or(0)) as f64 / 86_400.0)
 }
 
+/// The day an OLE serial names, and the time of day within it.
+///
+/// A serial keeps its DATE in the whole part and its TIME in the fraction, and
+/// the fraction is read as a time of day whichever side of zero the serial is
+/// on. So -0.5 is noon on day zero, not midnight on day minus one: asked of
+/// Excel, `Format(-0.5, "d")` is 30 — the thirtieth of December 1899, which is
+/// day zero — and `Format(-1234.5, "c")` is the thirteenth of August 1896 at
+/// noon. Reading it with `floor` puts every negative serial a day early.
+fn serial_day_and_time(serial: f64) -> (f64, f64) {
+    (serial.trunc(), serial.fract().abs())
+}
+
 fn serial_date_parts(serial: f64) -> Result<DateParts, String> {
-    let whole_days = serial.floor();
+    let (whole_days, time) = serial_day_and_time(serial);
     if whole_days < i64::MIN as f64 || whole_days > i64::MAX as f64 {
         return Err("Date value is outside the supported range".to_string());
     }
@@ -6648,7 +6718,7 @@ fn serial_date_parts(serial: f64) -> Result<DateParts, String> {
     if !(100..=9_999).contains(&year) {
         return Err("Date year must be between 100 and 9999".to_string());
     }
-    let seconds = ((serial - whole_days) * 86_400.0).round() as i64;
+    let seconds = (time * 86_400.0).round() as i64;
     if seconds == 86_400 {
         let (year, month, day) = civil_from_days(days + 1);
         return Ok(DateParts {
@@ -9113,6 +9183,76 @@ mod tests {
     /// asked whether there was a `0` before it, so `Format(-0.5, "000")`
     /// answered `-0` instead of `-001` and no literal in a picture was ever
     /// written at all.
+    /// Which of Format's two languages a picture is written in, and the
+    /// surprise that settles it: the FIRST placeholder or date code wins, not
+    /// merely the presence of one.
+    #[test]
+    fn a_picture_is_read_in_the_language_its_first_code_names() {
+        let ask = |value: &str, picture: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n  Ask = Format({value}, \"{picture}\")\nEnd Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+
+        // -0.5 is noon on day zero: the thirtieth of December 1899.
+        assert_eq!(ask("-0.5", "ad"), "a30");
+        assert_eq!(ask("-0.5", "as"), "a0");
+        assert_eq!(ask("-0.5", "ah"), "a12");
+        assert_eq!(ask("-0.5", "ay"), "a364");
+        assert_eq!(ask("-0.5", "aq"), "a4");
+        assert_eq!(ask("-0.5", "aw"), "a7");
+        assert_eq!(ask("-0.5", "ac"), "a12:00:00 PM");
+
+        // A single `s` is enough, which is the whole of why this answers so
+        // oddly: the s is seconds and the rest are just characters.
+        assert_eq!(ask("-0.5", "False"), "Fal0e");
+        // No code and no placeholder at all: written out, with the sign.
+        assert_eq!(ask("-0.5", "True"), "-True");
+        assert_eq!(ask("-0.5", "abz"), "-abz");
+
+        // The first one wins. `0 yen` holds a y and an n and is still a
+        // number; `JPY 0` is a date, and its 0 is then just a character.
+        assert_eq!(ask("-0.5", "0 yen"), "-1 yen");
+        assert_eq!(ask("-0.5", "JPY 0"), "JP364 0");
+        assert_eq!(ask("-0.5", "a0z"), "-a1z");
+
+        // The named formats are matched before any of this, or Currency would
+        // be read as a date for its c and Fixed for its d.
+        assert_eq!(ask("1234.567", "Fixed"), "1234.57");
+        assert_eq!(ask("1234.567", "Standard"), "1,234.57");
+        assert_eq!(ask("0", "Yes/No"), "No");
+        assert_eq!(ask("1", "True/False"), "True");
+    }
+
+    /// A serial keeps its date whole and its time fractional, and the fraction
+    /// is a time of day on either side of zero.
+    #[test]
+    fn a_negative_serial_is_a_time_on_its_own_day() {
+        let ask = |value: &str, picture: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n  Ask = Format({value}, \"{picture}\")\nEnd Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        // Noon on day zero, not midnight on day minus one.
+        assert_eq!(ask("-0.5", "c"), "12:00:00 PM");
+        assert_eq!(ask("-1234.5", "c"), "8/13/1896 12:00:00 PM");
+        assert_eq!(ask("-1234.5", "ad"), "a13");
+        assert_eq!(ask("-1234.5", "aw"), "a5");
+        // Neither a day nor a time is still written as a time.
+        assert_eq!(ask("0", "c"), "12:00:00 AM");
+        // Positive serials are unmoved.
+        assert_eq!(ask("1234.567", "c"), "5/18/1903 1:36:29 PM");
+        assert_eq!(ask("1234.567", "ad"), "a18");
+    }
+
     #[test]
     fn a_number_written_the_way_its_picture_asks() {
         let ask = |value: &str, picture: &str| {
