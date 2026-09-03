@@ -2861,14 +2861,16 @@ impl<'a> Runtime<'a> {
                 line,
             ));
         }
-        let value = match name.to_ascii_lowercase().as_str() {
-            "now" => self.current_time,
-            "date" => self.current_time.floor(),
-            "time" => self.current_time.rem_euclid(1.0),
-            "timer" => self.current_time.rem_euclid(1.0) * 86_400.0,
+        // Timer is the odd one out: seconds since midnight rather than a
+        // moment, and asked of Excel `VarType(Timer)` is 4, a Single, where
+        // Now, Date and Time are all 7.
+        Ok(match name.to_ascii_lowercase().as_str() {
+            "now" => Value::Date(self.current_time),
+            "date" => Value::Date(self.current_time.floor()),
+            "time" => Value::Date(self.current_time.rem_euclid(1.0)),
+            "timer" => Value::Single((self.current_time.rem_euclid(1.0) * 86_400.0) as f32),
             _ => unreachable!(),
-        };
-        Ok(Value::Double(value))
+        })
     }
 
     fn eval_object(
@@ -4040,6 +4042,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "cbool"
             | "cbyte"
             | "cdate"
+            | "cvdate"
             | "ccur"
             | "cdec"
             | "cdbl"
@@ -4218,6 +4221,7 @@ fn call_builtin(
         if matches!(
             name.as_str(),
             "cdate"
+                | "cvdate"
                 | "dateadd"
                 | "datediff"
                 | "datepart"
@@ -5739,6 +5743,11 @@ fn tristate(value: Option<&Value>, default: bool, line: Option<u32>) -> Result<b
 /// The named formats are matched before this is asked, or `Currency` would be
 /// read as a date for its `c` and `Fixed` for its `d`.
 fn reads_as_date(pattern: &str) -> bool {
+    // `a/p` is a date picture even though it carries none of the letters that
+    // name a field: asked of Excel, `Format(#3:04 PM#, "a/p")` is `p`, where
+    // reading it as a number picture would leave it `a/p` untouched. It is the
+    // whole three-character token that says so, never a lone `a`.
+    let mut bare = String::with_capacity(pattern.len());
     let mut characters = pattern.chars();
     while let Some(character) = characters.next() {
         match character {
@@ -5760,10 +5769,10 @@ fn reads_as_date(pattern: &str) -> bool {
             {
                 return true
             }
-            _ => {}
+            _ => bare.push(character.to_ascii_lowercase()),
         }
     }
-    false
+    bare.contains("a/p")
 }
 
 fn format_value(
@@ -5889,10 +5898,25 @@ fn format_date(
             continue;
         }
         let remaining = &lower[cursor..];
+        // The FIRST letter of the picture settles the case of the answer and
+        // nothing after it does. Asked of Excel about a 3:04 PM: `am/pm`
+        // gives `pm`, `AM/PM` gives `PM`, `Am/Pm` gives `PM` and `aM/pM`
+        // gives `pm`. The shorter `a/p` follows the same rule.
+        let shouted = pattern[cursor..]
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_uppercase());
+        let said = |word: &str| {
+            if shouted {
+                word.to_ascii_uppercase()
+            } else {
+                word.to_string()
+            }
+        };
         let (length, replacement) = if remaining.starts_with("am/pm") {
-            (5, if parts.hour < 12 { "AM" } else { "PM" }.to_string())
+            (5, said(if parts.hour < 12 { "am" } else { "pm" }))
         } else if remaining.starts_with("a/p") {
-            (3, if parts.hour < 12 { "A" } else { "P" }.to_string())
+            (3, said(if parts.hour < 12 { "a" } else { "p" }))
         } else if remaining.starts_with("yyyy") {
             (4, format!("{:04}", parts.year))
         } else if remaining.starts_with("mmmm") {
@@ -6418,9 +6442,9 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
                 Ok((parts[0] * 3_600 + parts[1] * 60 + parts[2]) as f64 / 86_400.0)
             }
             .map_err(|message| invalid_procedure_call(message, line))?;
-            Ok(Value::Double(serial))
+            Ok(Value::Date(serial))
         }
-        "cdate" | "datevalue" | "timevalue" | "isdate" => {
+        "cdate" | "cvdate" | "datevalue" | "timevalue" | "isdate" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
             }
@@ -6436,8 +6460,16 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
                 // which arrives here as a serial.
                 return Ok(Value::Boolean(parsed.is_ok()));
             }
+            // Everything that makes a MOMENT hands back a Date. Asked of
+            // Excel, `VarType` is 7 for CDate, CVDate, DateValue, TimeValue,
+            // DateSerial, TimeSerial, DateAdd, Now, Date and Time alike, and
+            // stays 7 through arithmetic: `VarType(Now - 1)` is 7 too.
+            //
+            // The two neighbours that are NOT moments keep their own types:
+            // DateDiff, being a count of intervals, is a Long, and Timer,
+            // being seconds since midnight, is a Single.
             let serial = parsed.map_err(mismatch)?;
-            Ok(Value::Double(match name {
+            Ok(Value::Date(match name {
                 "datevalue" => serial.floor(),
                 "timevalue" => serial.rem_euclid(1.0),
                 _ => serial,
@@ -6447,15 +6479,18 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
             }
+            // A PIECE of a date is an Integer, not a Long: asked of Excel,
+            // `VarType` of Year, Weekday and DatePart is 2 for every one of
+            // them. They all fit, the largest being a year of 9999.
             let serial = value_date_serial(&args[0]).map_err(mismatch)?;
             let parts = serial_date_parts(serial).map_err(mismatch)?;
-            Ok(Value::Integer(match name {
-                "year" => parts.year,
-                "month" => i64::from(parts.month),
-                "day" => i64::from(parts.day),
-                "hour" => i64::from(parts.hour),
-                "minute" => i64::from(parts.minute),
-                "second" => i64::from(parts.second),
+            Ok(Value::Int16(match name {
+                "year" => parts.year as i16,
+                "month" => parts.month as i16,
+                "day" => parts.day as i16,
+                "hour" => parts.hour as i16,
+                "minute" => parts.minute as i16,
+                "second" => parts.second as i16,
                 _ => unreachable!(),
             }))
         }
@@ -6467,7 +6502,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             let amount = integer_argument(&args[1], line)?;
             let serial = value_date_serial(&args[2]).map_err(mismatch)?;
             date_add(&interval, amount, serial)
-                .map(Value::Double)
+                .map(Value::Date)
                 .map_err(|message| invalid_procedure_call(message, line))
         }
         "datediff" => {
@@ -6502,7 +6537,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             let first_day = first_day_of_week(args.get(2), line)?;
             let first_week = first_week_of_year(args.get(3), line)?;
             date_part(&interval, serial, first_day, first_week)
-                .map(Value::Integer)
+                .map(|piece| Value::Int16(piece as i16))
                 .map_err(|message| invalid_procedure_call(message, line))
         }
         "weekday" => {
@@ -6511,10 +6546,9 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             }
             let serial = value_date_serial(&args[0]).map_err(mismatch)?;
             let first_day = first_day_of_week(args.get(1), line)?;
-            Ok(Value::Integer(weekday_number(
-                serial.floor() as i64,
-                first_day,
-            )))
+            Ok(Value::Int16(
+                weekday_number(serial.floor() as i64, first_day) as i16
+            ))
         }
         _ => unreachable!(),
     }
@@ -8372,23 +8406,41 @@ fn keep_rank(number: f64, was: &Value) -> Result<Value, String> {
 /// 32768 as a Long, and an Integer times an Integer that will not fit is error
 /// 6 rather than a Long.
 ///
-/// A Date is not on the ladder: it wins against anything that is not a Date,
-/// so `aDate + 1` is a Date, while two Dates give the plain number of days
-/// between them.
+/// A Date is not on the ladder, and which operator was used decides whether it
+/// survives at all. Swept against Excel across every operator and every kind of
+/// right-hand side:
+///
+/// - `+` gives a Date whenever EITHER side is one, two Dates included.
+/// - `-` gives a Date when exactly ONE side is, and a Double for `aDate -
+///   anotherDate`, which is a span of days rather than a moment.
+/// - `*`, `/` and `^` give a Double however the Date is placed.
+/// - `\\`, `Mod` and the bitwise operators never reach here; they are whole
+///   numbers by their own rule.
+///
+/// The asymmetry between `+` and `-` is Excel's, not a simplification: a moment
+/// plus a moment stays a Date there even though nothing sensible is being
+/// added.
 fn arithmetic_result(
     answer: f64,
     lhs: &Value,
     rhs: &Value,
-    _op: BinaryOp,
+    op: BinaryOp,
 ) -> Result<Value, (RuntimeErrorKind, String)> {
     let dates = (
         matches!(lhs, Value::Date(_)),
         matches!(rhs, Value::Date(_)),
     );
-    match dates {
-        (true, true) => return Ok(Value::Double(answer)),
-        (true, _) | (_, true) => return Ok(Value::Date(answer)),
-        _ => {}
+    if dates.0 || dates.1 {
+        let moment = match op {
+            BinaryOp::Add => true,
+            BinaryOp::Sub => !(dates.0 && dates.1),
+            _ => false,
+        };
+        return Ok(if moment {
+            Value::Date(answer)
+        } else {
+            Value::Double(answer)
+        });
     }
     match (NumRank::of(lhs), NumRank::of(rhs)) {
         (Some(left), Some(right)) => left.max(right).hold(answer, None),
@@ -8527,6 +8579,16 @@ fn text(value: &Value) -> Result<String, String> {
             Ok(parts) => general_date(*value, parts),
             Err(_) => vba_number_text(*value),
         },
+        // The ONE string on this whole surface that follows the Office UI
+        // language rather than always being US English. Measured against a
+        // Japanese Excel: the month names, the weekday names, Long Date,
+        // Currency, the decimal point, Yes/No, True/False and On/Off all
+        // still come back English there, and only this one says an
+        // 8-character Japanese `error 0`.
+        //
+        // Written the en-US way, which is right for an en-US Office and the
+        // only answer available in a browser, where there is no Office to
+        // ask. A known limit rather than an oversight.
         Value::Error(value) => format!("Error {value}"),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
@@ -11819,6 +11881,149 @@ mod tests {
         assert_eq!(value, Value::String("5|6|5|13".to_string()));
     }
 
+    /// Everything that makes a moment is a Date, and its neighbours are not.
+    ///
+    /// `VarType` numbers: 2 Integer, 3 Long, 4 Single, 5 Double, 7 Date. Every
+    /// one of these was asked of Excel. The two that are NOT 7 are the
+    /// interesting ones: DateDiff counts intervals rather than naming a moment,
+    /// and Timer is seconds since midnight.
+    #[test]
+    fn everything_that_makes_a_moment_says_it_is_a_date() {
+        let kind = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Ask = CStr(VarType({expression}))\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{expression}: {other:?}"),
+            }
+        };
+
+        for expression in [
+            "CDate(\"3/4/2003\")",
+            "CVDate(\"3/4/2003\")",
+            "DateValue(\"3/4/2003\")",
+            "TimeValue(\"3:04 PM\")",
+            "DateSerial(2003, 3, 4)",
+            "TimeSerial(15, 4, 0)",
+            "DateAdd(\"d\", 1, #3/4/2003#)",
+            "DateAdd(\"n\", 30, #3/4/2003#)",
+            "Now",
+            "Date",
+            "Time",
+            "CDate(37684)",
+        ] {
+            assert_eq!(kind(expression), "7", "{expression}");
+        }
+
+        assert_eq!(kind("DateDiff(\"d\", #3/3/2003#, #3/4/2003#)"), "3");
+        assert_eq!(kind("Timer"), "4");
+        assert_eq!(kind("CDbl(#3/4/2003#)"), "5");
+    }
+
+    /// A piece cut out of a date is an Integer, not a Long.
+    #[test]
+    fn a_piece_of_a_date_is_an_integer() {
+        let source = "Public Function Ask() As String\n\
+                        Ask = VarType(Year(#3/4/2003#)) & \"|\" & \
+                              VarType(Weekday(#3/4/2003#)) & \"|\" & \
+                              VarType(DatePart(\"d\", #3/4/2003#)) & \"|\" & \
+                              TypeName(Year(#3/4/2003#)) & \"|\" & \
+                              Year(#12/31/9999#)\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("2|2|2|Integer|9999".to_string())
+        );
+    }
+
+    /// Which operator was used decides whether a Date survives it.
+    ///
+    /// Swept against Excel across every operator. `+` keeps the Date whenever
+    /// either side is one -- two Dates included, which is the odd case and is
+    /// Excel's, not a simplification. `-` keeps it only when exactly one side
+    /// is, because a moment less a moment is a span of days. Everything else
+    /// drops it.
+    #[test]
+    fn only_addition_and_subtraction_carry_a_date_through() {
+        let kind = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Dim aDate As Date\n\
+                   aDate = #3/4/2003#\n\
+                   Ask = CStr(VarType({expression}))\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{expression}: {other:?}"),
+            }
+        };
+
+        for expression in [
+            "aDate + 1",
+            "1 + aDate",
+            "aDate + #3/4/2003#",
+            "aDate - 1",
+            "1 - aDate",
+            "-aDate",
+            "aDate + Empty",
+            "aDate + True",
+            "aDate + \"1\"",
+        ] {
+            assert_eq!(kind(expression), "7", "{expression}");
+        }
+
+        for expression in ["aDate - #3/4/2003#", "aDate * 2", "2 * aDate", "aDate / 2", "aDate ^ 2"] {
+            assert_eq!(kind(expression), "5", "{expression}");
+        }
+
+        // The whole-number operators were never on this ladder.
+        for expression in ["aDate \\ 2", "aDate Mod 2", "aDate And 1"] {
+            assert_eq!(kind(expression), "3", "{expression}");
+        }
+    }
+
+    /// The first letter of an am/pm picture settles the case of the answer.
+    ///
+    /// And `a/p` is a date picture at all, which it was not: with none of the
+    /// letters that name a field in it, it was read as a number picture and
+    /// came back untouched.
+    #[test]
+    fn am_pm_keeps_the_case_its_picture_was_written_in() {
+        let said = |pattern: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Ask = Format(#3:04:00 PM#, \"{pattern}\")\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{pattern}: {other:?}"),
+            }
+        };
+
+        assert_eq!(said("am/pm"), "pm");
+        assert_eq!(said("AM/PM"), "PM");
+        assert_eq!(said("Am/Pm"), "PM");
+        assert_eq!(said("aM/pM"), "pm");
+        assert_eq!(said("a/p"), "p");
+        assert_eq!(said("A/P"), "P");
+        assert_eq!(said("a/P"), "p");
+        assert_eq!(said("h:nn am/pm"), "3:04 pm");
+
+        // And the same beside a date, which needs a literal carrying one.
+        let source = "Public Function Ask() As String\n\
+                        Ask = Format(#3/4/2003 3:04:00 PM#, \"m/d/yyyy h:nn AM/PM\")\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("3/4/2003 3:04 PM".to_string())
+        );
+    }
+
     #[test]
     fn executes_vba_date_serial_parsing_and_component_functions() {
         let value = run(
@@ -11834,9 +12039,14 @@ mod tests {
         )
         .unwrap();
 
+        // The two leading fields say a DATE now, not a serial: DateSerial hands
+        // back a Date, and `&` writes one as General Date. Asked of Excel,
+        // `DateSerial(1899, 12, 30) & ""` is `12:00:00 AM` -- a serial of 0 has
+        // no day to show, so only the midnight is written -- and
+        // `DateSerial(2024, 2, 29) & ""` is `2/29/2024`.
         assert_eq!(
             value,
-            Value::String("0|45351|2024-2-29 16:35:17|2024|16|29|12|False".to_string())
+            Value::String("12:00:00 AM|2/29/2024|2024-2-29 16:35:17|2024|16|29|12|False".to_string())
         );
     }
 
