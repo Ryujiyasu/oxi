@@ -273,12 +273,17 @@ def engine_paras(dump: dict) -> dict[int, list]:
                 if widths and len(texts) == len(widths):
                     widths = [w if not (t.endswith(" ") or t.endswith("\n")) else 0.0
                               for w, t in zip(widths, texts)]
+                # The paragraph's own size and space-before, for the step from
+                # the paragraph BEFORE it (see the cross-paragraph advance).
+                sizes = [float(r.get("font_size") or 0.0) for r in (p.get("runs") or [])]
                 rows.append((len(p.get("line_x_offsets") or []),
                              p.get("line_x_offsets") or [], text,
                              p.get("line_baselines") or [], widths,
                              p.get("measured_family") or "",
                              float(p.get("space_pt") or 0.0), texts,
-                             bool(p.get("faux_bold"))))
+                             bool(p.get("faux_bold")),
+                             max(sizes) if sizes else 0.0,
+                             float(p.get("space_before") or 0.0)))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -403,6 +408,8 @@ def audit(doc) -> dict | None:
     far: list = []
     vadv: list[float] = []
     vfar: list = []
+    padv: list[float] = []
+    pafar: list = []
     pfar: list = []
     # (engine's pen width, PowerPoint's ink width minus it) per line.
     wide: list[tuple[float, float]] = []
@@ -474,7 +481,11 @@ def audit(doc) -> dict | None:
                     quart = round(rot / 90.0) * 90 % 360
                     axis = (None if abs(rot - quart) > 0.5
                             else (0 if quart in (0, 180) else 1))
-                    for (cn, cx, ctext, cy, cw, chh, clines, cface),                             (en, ex, etext, ey, ew, eface, espace, elines, ebold) in zip(
+                    # The step from one PARAGRAPH to the next, which the
+                    # per-paragraph advance above never sees.
+                    prev_para = None
+                    for (cn, cx, ctext, cy, cw, chh, clines, cface),                             (en, ex, etext, ey, ew, eface, espace, elines, ebold,
+                             esize, ebefore) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -538,6 +549,37 @@ def audit(doc) -> dict | None:
                                     vadv.append(step)
                                     if abs(step) > 0.5:
                                         vfar.append((si, round(step, 2), ctext[:38]))
+                                # ★From the LAST line of the paragraph before to
+                                # the FIRST line of this one -- the step the loop
+                                # above cannot take, because it starts at k=2.
+                                #
+                                # It is a real gap, not a nicety: deck 40 s1's
+                                # title is TWO one-line paragraphs, so every step
+                                # in it is a paragraph step and the advance
+                                # number above is silent on the whole shape. The
+                                # pixels are not: the second line sits 1.96pt
+                                # high, which is 0.9% of a 216pt line.
+                                #
+                                # Two things must hold for the pair to be
+                                # comparable. `BoundTop` is an ink top and the
+                                # engine's is a baseline, so the FACE and the
+                                # SIZE have to match across the two paragraphs
+                                # for the ascent to cancel. And `Lines(1)`'s box
+                                # bounds the paragraph's space-before as well as
+                                # its text, so only a paragraph that declares
+                                # none is asked.
+                                if (prev_para is not None and esize > 0
+                                        and prev_para[2] == eface
+                                        and abs(prev_para[3] - esize) < 0.01
+                                        and abs(ebefore) < 0.01
+                                        and cy and ey):
+                                    pstep = ((cy[0] - prev_para[0])
+                                             - (ey[0] - prev_para[1]))
+                                    padv.append(pstep)
+                                    if abs(pstep) > 0.5:
+                                        pafar.append((si, round(pstep, 2), ctext[:38]))
+                                prev_para = ((cy[-1], ey[-1], eface, esize)
+                                             if cy and ey else None)
                                 for a, b in zip(cx, ex):
                                     d = (a + c["x"]) - (m["text_left"] + b)
                                     offs.append(d)
@@ -699,6 +741,14 @@ def audit(doc) -> dict | None:
         for si, cn, en, txt in pfar[:4]:
             print(f"        s{si:<3} PowerPoint {cn} paragraphs, engine {en}  {txt!r}",
                   flush=True)
+    if padv:
+        psr = sorted(abs(v) for v in padv)
+        got["padv_p95"] = psr[int(0.95 * (len(psr) - 1))]
+        print(f"      paragraph advance: {len(padv)} steps, |err| p50 "
+              f"{psr[len(psr) // 2]:.2f}pt p95 {got['padv_p95']:.2f}pt, "
+              f"{sum(1 for v in padv if abs(v) > 0.5)} over 0.5pt")
+        for si, v, t in sorted(pafar, key=lambda r: -abs(r[1]))[:6]:
+            print(f"        s{si:<5} {v:+.2f}pt  {t!r}")
     if vadv:
         srt = sorted(abs(v) for v in vadv)
         got["vadv_p95"] = srt[int(0.95 * (len(srt) - 1))]

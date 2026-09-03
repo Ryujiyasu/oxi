@@ -15888,6 +15888,10 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
             } else {
                 let old = SelectObject(dc, font);
                 let os2 = read_font_table(dc, b"OS/2");
+                // hhea, for the debug line only: a face whose hhea disagrees
+                // with its OS/2 is the one case where "which table" is a
+                // question that can be answered rather than assumed.
+                let hhea = read_font_table(dc, b"hhea");
                 SelectObject(dc, old);
                 let _ = DeleteObject(font);
                 os2.filter(|t| t.len() >= 78).and_then(|t| {
@@ -15914,6 +15918,14 @@ fn runtime_baseline_offset_em(family: &str) -> Option<f32> {
                             u16at(76),
                             1.2 * asc / (asc + desc),
                         );
+                        if let Some(h) = hhea.as_ref().filter(|h| h.len() >= 10) {
+                            let hi = |o: usize| i16::from_be_bytes([h[o], h[o + 1]]) as f32;
+                            let (ha, hd, hg) = (hi(4), -hi(6), hi(8));
+                            eprintln!(
+                                "         {family:24} hhea=({ha}, {hd}, gap {hg}) em={:.4}",
+                                1.2 * ha / (ha + hd),
+                            );
+                        }
                     }
                     if asc + desc > 0.0 {
                         Some(1.2 * asc / (asc + desc))
