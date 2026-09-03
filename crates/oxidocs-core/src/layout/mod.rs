@@ -3528,9 +3528,27 @@ impl LayoutEngine {
         // The mark's OWN w:lang is ignored in both directions; the document
         // default is what decides. Opt-out OXI_S956_DISABLE.
         let s956 = self.doc_latin_lang_cjk && std::env::var("OXI_S956_DISABLE").is_err();
+        // S1300 (2026-09-04, opt-out OXI_S1300_DISABLE): the ¶ mark takes the
+        // ASCII font's line EVEN WHEN that font is itself CJK-83/64. S707 kept
+        // the eastAsia metric in that case, but the two readings only ever
+        // differed when the EA slot resolved somewhere else -- and in a document
+        // whose docDefaults hands out ＭＳ 明朝 for both, they never do.
+        // MEASURED (`_pb_markea_gen.py`, Word PDF, an empty paragraph between two
+        // markers, 9pt, theme Jpan = 游明朝 so the two readings are 11.66 vs 15.00):
+        //     mark rFonts                ascii       Word
+        //     eastAsiaTheme=minorEastAsia ＭＳ 明朝     11.66   <- the ASCII line
+        //     eastAsiaTheme=minorEastAsia Century     10.82   <- Century's line
+        //     eastAsia="ＭＳ 明朝"          ＭＳ 明朝     11.66
+        //     (none)                      ＭＳ 明朝     11.66
+        // The Century arm is the discriminator: naming the EA theme outright does
+        // NOT buy the mark the theme's face. Real witness: f16f228a's two
+        // `<w:rFonts w:eastAsiaTheme="minorEastAsia"/>` marks in a table -- Word
+        // puts the following text 64.23pt below the previous line, which is the
+        // ＭＳ 明朝 reading (Oxi's eastAsia reading gives 70.61).
+        let s1300 = std::env::var("OXI_S1300_DISABLE").is_err();
         if prefer_ascii && !s956 && std::env::var("OXI_S707_DISABLE").is_err() {
             let ascii = self.metrics_for(run_style, para_style);
-            if !ascii.is_cjk_83_64_font() {
+            if s1300 || !ascii.is_cjk_83_64_font() {
                 return ascii;
             }
         }
