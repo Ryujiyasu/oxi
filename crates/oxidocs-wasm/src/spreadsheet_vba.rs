@@ -8001,6 +8001,19 @@ enum ShownAs {
 /// - Quoted runs and bracketed runs carry no fields at all, so `"d"0` is
 ///   plain, while `\dm` is a date -- the escape kills the `d` and the `m`
 ///   after it is still a month.
+/// How much of what follows an `a` spells out the rest of `AM/PM` or `A/P`,
+/// so the whole token can be stepped over as the one thing it is.
+fn meridiem_length(rest: &std::iter::Peekable<std::str::Chars<'_>>) -> usize {
+    let tail = rest.clone().take(4).collect::<String>().to_ascii_lowercase();
+    if tail.starts_with("m/pm") {
+        4
+    } else if tail.starts_with("/p") {
+        2
+    } else {
+        0
+    }
+}
+
 fn shown_as(format: Option<&str>) -> ShownAs {
     let Some(format) = format else {
         return ShownAs::Plain;
@@ -8032,6 +8045,15 @@ fn shown_as(format: Option<&str>) -> ShownAs {
                 }
             }
             '$' => money = true,
+            // `AM/PM` and `A/P` are one token apiece, not letters. Their `m`s
+            // are not months, and counting them as such made
+            // `h:mm:ss AM/PM` look like a date format -- which it is not: a
+            // cell under it hands its value back as a Double.
+            'a' | 'A' if meridiem_length(&characters) > 0 => {
+                for _ in 0..meridiem_length(&characters) {
+                    characters.next();
+                }
+            }
             _ => {
                 let letter = character.to_ascii_lowercase();
                 if matches!(letter, 'y' | 'd' | 'm' | 'h' | 's') {
@@ -9910,6 +9932,25 @@ fn cell_input(value: Value) -> Result<CellInput, String> {
         }
         return Ok(CellInput::Constant(CellValue::Empty, None));
     }
+    // A DATE dresses the cell it lands in, and the dress depends on the
+    // moment. Asked of Excel, after `Range("A1").Value = #1/2/2003#` the cell
+    // reads `m/d/yyyy`; a moment carrying a time as well reads
+    // `m/d/yyyy h:mm`; and a time alone reads `h:mm:ss AM/PM`.
+    //
+    // The last is the one that matters twice over: a cell under a time-only
+    // format hands its value back as a DOUBLE, not a Date, so writing a Date
+    // and reading it again does not always return one. A plain number gets no
+    // dress at all and stays General.
+    if let Value::Date(serial) = value {
+        let shown = if serial < 1.0 {
+            "h:mm:ss AM/PM"
+        } else if serial.fract() == 0.0 {
+            "m/d/yyyy"
+        } else {
+            "m/d/yyyy h:mm"
+        };
+        return to_cell_value(value).map(|cell| CellInput::Constant(cell, Some(shown)));
+    }
     to_cell_value(value).map(|cell| CellInput::Constant(cell, None))
 }
 
@@ -10336,6 +10377,58 @@ mod tests {
     /// and nothing else -- not the yen, euro or pound sign, and not a `$`
     /// behind an escape or inside a `[$...]` locale bracket, though one inside
     /// quotes does count.
+    /// A Date dresses the cell it lands in.
+    ///
+    /// Asked of Excel, after `Range("A1").Value = #1/2/2003#` the cell reads
+    /// `m/d/yyyy`; a moment carrying a time as well reads `m/d/yyyy h:mm`; a
+    /// time alone reads `h:mm:ss AM/PM`; and a plain number gets no dress at
+    /// all and stays General.
+    ///
+    /// The time-only case matters twice, because a cell under that format
+    /// hands its value back as a DOUBLE. Writing a Date and reading it again
+    /// does not always give one.
+    #[test]
+    fn a_date_dresses_the_cell_it_lands_in() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Range(\"A1\").Value = #1/2/2003#
+               Range(\"A2\").Value = #1/2/2003 3:04:05 PM#
+               Range(\"A3\").Value = #12:00:00 PM#
+               Range(\"A4\").Value = 37623
+               Ask = Range(\"A1\").NumberFormat & \"|\" & TypeName(Range(\"A1\").Value) & \"|\" &                      Range(\"A2\").NumberFormat & \"|\" & TypeName(Range(\"A2\").Value) & \"|\" &                      Range(\"A3\").NumberFormat & \"|\" & TypeName(Range(\"A3\").Value) & \"|\" &                      Range(\"A4\").NumberFormat & \"|\" & TypeName(Range(\"A4\").Value)
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "m/d/yyyy|Date|m/d/yyyy h:mm|Date|h:mm:ss AM/PM|Double|General|Double".to_string()
+            )
+        );
+    }
+
+    /// `AM/PM` is a token, not two `m`s waiting to be months.
+    ///
+    /// `h:mm:ss AM/PM` is a time-only format and so is not a date -- reading
+    /// its meridiem as a month made it one, and a cell under it started
+    /// handing back Dates. `h:mm AM/PM` never showed it, because there the
+    /// `mm` before it is a minute and the clock beside it settles the reading
+    /// by accident.
+    #[test]
+    fn a_meridiem_carries_no_months() {
+        for format in ["h:mm:ss AM/PM", "h:mm AM/PM", "AM/PM", "h A/P", "s AM/PM"] {
+            assert_eq!(shown_as(Some(format)), ShownAs::Plain, "{format}");
+        }
+        // A real date field beside one is still a date.
+        assert_eq!(shown_as(Some("m/d/yyyy h:mm AM/PM")), ShownAs::Moment);
+    }
+
     /// A cell cuts its text at the first NUL.
     ///
     /// Asked of Excel, `Range("A1").Value = "a" & Chr(0) & "b"` leaves the

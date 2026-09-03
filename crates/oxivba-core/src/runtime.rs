@@ -4980,7 +4980,7 @@ fn call_builtin(
         if matches!(value, Value::Error(_))
             && matches!(
                 name.as_str(),
-                "abs" | "sgn" | "int" | "fix" | "sqr" | "hex"
+                "abs" | "sgn" | "int" | "fix" | "sqr" | "hex" | "trim" | "ucase"
             )
         {
             return Err(mismatch(
@@ -5124,12 +5124,21 @@ fn call_builtin(
             "fix" | "int" => match value {
                 Value::Null => Ok(Value::Null),
                 _ => {
-                    let value = number(value).map_err(mismatch)?;
-                    Ok(Value::Double(if name == "int" {
-                        value.floor()
+                    // They keep the type, the way Abs and Round do. Asked of
+                    // Excel, `Int(#1/2/2003#)` is a Date and says `1/2/2003`,
+                    // `Int(CInt(5))` an Integer, `Int(CCur(1.5))` a Currency.
+                    //
+                    // Always answering Double looked right for a while, because
+                    // the one case measured was `Int(1.5)` -- where the input
+                    // is a Double and keeping the type and forcing one cannot
+                    // be told apart.
+                    let answer = number(value).map_err(mismatch)?;
+                    let answer = if name == "int" {
+                        answer.floor()
                     } else {
-                        value.trunc()
-                    }))
+                        answer.trunc()
+                    };
+                    Ok(keep_rank(answer, value).unwrap_or(Value::Double(answer)))
                 }
             },
             "exp" => match value {
@@ -7629,6 +7638,25 @@ fn call_string_builtin(
     option_compare_text: bool,
 ) -> Result<Value, RuntimeError> {
     let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    // An Error variant is not TEXT, any more than it is a number. Asked of
+    // Excel, `Left`, `Mid`, `UCase`, `Trim`, `Replace` and `Join` all answer
+    // error 13 when one reaches them, whether as the subject, an element or a
+    // separator -- while `CStr(CVErr(2042))` converts it happily.
+    //
+    // The conversions are the only door it fits through, in either direction.
+    let holds_an_error = |value: &Value| match value {
+        Value::Error(_) => true,
+        // Join and Filter write out an array's ELEMENTS, so one hiding in
+        // there is refused just the same: asked of Excel,
+        // `Join(Array("a", CVErr(2042)), ",")` is error 13.
+        Value::Array(array) => array.values.iter().any(|v| matches!(v, Value::Error(_))),
+        _ => false,
+    };
+    if args.iter().any(holds_an_error) {
+        return Err(mismatch(
+            "type mismatch converting Error to String".to_string(),
+        ));
+    }
     let wrong_count = |expected: &str| {
         error(
             RuntimeErrorKind::ArgumentCount,
@@ -13871,6 +13899,65 @@ mod tests {
         assert_eq!(ask("InStr(Empty, \"abc\", \"\")"), "0");
         assert_eq!(ask("InStr(True, \"abc\", \"\")"), "-1");
         assert_eq!(ask("InStr(\"2\", \"abc\", \"b\")"), "2");
+    }
+
+    /// `Int` and `Fix` keep the type they were handed.
+    ///
+    /// Asked of Excel, `Int(#1/2/2003#)` is a Date and says `1/2/2003`,
+    /// `Int(CInt(5))` an Integer, `Int(CCur(1.5))` a Currency. Always
+    /// answering Double looked right for a while, because the one case
+    /// measured was `Int(1.5)` -- where the input is a Double, and keeping the
+    /// type cannot be told apart from forcing one.
+    ///
+    /// And an Error variant is no more TEXT than it is a number: `Left`,
+    /// `Mid`, `UCase`, `Trim`, `Replace` and `Join` all refuse one, including
+    /// an element hiding inside an array, while `CStr` converts it.
+    #[test]
+    fn int_keeps_its_type_and_an_error_is_not_text() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        assert_eq!(ask("TypeName(Int(#1/2/2003#))"), "Date");
+        assert_eq!(ask("CStr(Int(#1/2/2003#))"), "1/2/2003");
+        assert_eq!(ask("TypeName(Fix(#1/2/2003#))"), "Date");
+        assert_eq!(ask("TypeName(Int(CInt(5)))"), "Integer");
+        assert_eq!(ask("TypeName(Int(CSng(1.5)))"), "Single");
+        assert_eq!(ask("TypeName(Int(CCur(1.5)))"), "Currency");
+        assert_eq!(ask("TypeName(Int(CByte(5)))"), "Byte");
+        assert_eq!(ask("TypeName(Int(1.5))"), "Double");
+
+        for call in [
+            "Left(CVErr(2042), 1)",
+            "Mid(CVErr(2042), 1, 1)",
+            "UCase(CVErr(2042))",
+            "Trim(CVErr(2042))",
+            "Replace(\"ab\", CVErr(2042), \"x\")",
+            "Join(Array(\"a\", \"b\"), CVErr(2042))",
+            "Join(Array(\"a\", CVErr(2042)), \",\")",
+        ] {
+            assert_eq!(ask(call), "err13", "{call}");
+        }
+        // The conversions are the one door it fits through.
+        assert_eq!(ask("CStr(CVErr(2042))"), "Error 2042");
+        // And a Join with nothing untoward in it still joins.
+        assert_eq!(ask("Join(Array(\"a\", \"b\"), 5)"), "a5b");
     }
 
     /// The written-date grammar, and the year it borrows when one is missing.
