@@ -7495,8 +7495,28 @@ fn call_string_builtin(
             let Some(needle) = nullable_text(&args[needle_index])? else {
                 return Ok(Value::Null);
             };
+            // An EMPTY string on either side settles the answer before the
+            // start is ever looked at, so a start that would otherwise be
+            // error 5 goes unremarked. Asked of Excel:
+            //
+            //     InStr(0, "abc", "b")   error 5
+            //     InStr(0, "abc", "")    0
+            //     InStr(0, "", "b")      0
+            //     InStr("-3.5", "", "x") 0
+            //     InStr(1, "abc", "")    1
+            //
+            // -- nothing to search, or nothing to search FOR, and the start
+            // is simply handed back. Both of those shapes turned up in
+            // generated macros, raising 5 here where Excel answered 0.
             let start = if args.len() == 2 {
                 0
+            } else if source.is_empty() {
+                return Ok(Value::Integer(0));
+            } else if needle.is_empty() {
+                // The start itself is the answer, whatever it is.
+                return Ok(Value::Integer(
+                    integer_argument(&args[0], line).unwrap_or(0),
+                ));
             } else {
                 positive_position(&args[0], line)?
             };
@@ -8266,7 +8286,14 @@ fn truthy(value: &Value) -> Result<bool, String> {
         Value::Double(value) => Ok(*value != 0.0),
         Value::Currency(value) => Ok(*value != 0),
         Value::Date(value) => Ok(*value != 0.0),
-        Value::String(value) if value.is_empty() => Ok(false),
+        // An EMPTY string is not a Boolean at all. Asked of Excel, both
+        // `CBool("")` and `IIf("", 1, 2)` are error 13, and so is `CBool(" ")`
+        // -- where `"0"` is False, `"1"` and `"True"` are True. Reading it as
+        // False looked harmless and made a generated macro answer 0 where
+        // Excel refused the whole line.
+        Value::String(value) if value.trim().is_empty() => {
+            Err("type mismatch converting String to Boolean".to_string())
+        }
         Value::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
         Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
         Value::String(value) => value
@@ -13365,6 +13392,94 @@ mod tests {
             Value::String("True|False|True|False|True|True|False|True".to_string())
         );
     }
+    /// `InStr` never looks at its start when a string is empty.
+    ///
+    /// A start below 1 is error 5 -- but only once there is something to
+    /// search and something to search for. Asked of Excel:
+    ///
+    ///     InStr(0, "abc", "b")    error 5
+    ///     InStr(0, "abc", "")     0
+    ///     InStr(0, "", "b")       0
+    ///     InStr("-3.5", "", "x")  0
+    ///     InStr(1, "abc", "")     1
+    ///     InStr(3, "abc", "")     3
+    ///
+    /// An empty needle hands the start straight back, whatever it is, and an
+    /// empty haystack answers 0. Both shapes turned up in generated macros,
+    /// raising 5 here where Excel answered.
+    #[test]
+    fn instr_does_not_judge_its_start_when_a_string_is_empty() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        assert_eq!(ask("InStr(1, \"abc\", \"b\")"), "2");
+        assert_eq!(ask("InStr(4, \"abc\", \"b\")"), "0");
+        assert_eq!(ask("InStr(\"abc\", \"b\")"), "2");
+        // A start below one, with both strings present.
+        assert_eq!(ask("InStr(0, \"abc\", \"b\")"), "err5");
+        assert_eq!(ask("InStr(-1, \"abc\", \"b\")"), "err5");
+        assert_eq!(ask("InStr(0.5, \"abc\", \"b\")"), "err5");
+        // ... and the same start, with one of them empty.
+        assert_eq!(ask("InStr(0, \"abc\", \"\")"), "0");
+        assert_eq!(ask("InStr(0, \"\", \"b\")"), "0");
+        assert_eq!(ask("InStr(\"-3.5\", \"\", \"False\")"), "0");
+        assert_eq!(ask("InStr(1, \"abc\", \"\")"), "1");
+        assert_eq!(ask("InStr(3, \"abc\", \"\")"), "3");
+    }
+
+    /// An empty string is not a Boolean.
+    ///
+    /// Asked of Excel, `CBool("")` and `IIf("", 1, 2)` are both error 13, and
+    /// so is `CBool(" ")` -- while `"0"` is False and `"1"` and `"True"` are
+    /// True. Reading the empty one as False looked harmless and made a
+    /// generated macro answer where Excel refused the line.
+    #[test]
+    fn an_empty_string_is_not_a_boolean() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        assert_eq!(ask("CBool(\"\")"), "err13");
+        assert_eq!(ask("CBool(\" \")"), "err13");
+        assert_eq!(ask("IIf(\"\", 1, 2)"), "err13");
+        assert_eq!(ask("IIf(\"0\", 1, 2)"), "2");
+        assert_eq!(ask("IIf(\"1\", 1, 2)"), "1");
+        assert_eq!(ask("IIf(\"True\", 1, 2)"), "1");
+    }
+
     /// `Format` leaves Null behind in the variable it was handed.
     ///
     /// Its first parameter is ByRef, and when what arrives is Empty it stores

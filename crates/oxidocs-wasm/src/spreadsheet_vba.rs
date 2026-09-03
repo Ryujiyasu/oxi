@@ -9492,7 +9492,20 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
         // measured here, so the number goes in and the dressing does not.
         Value::Date(value) => Ok(CellValue::Number(value)),
         Value::Double(value) => Ok(CellValue::Number(value)),
-        Value::Error(value) => Ok(CellValue::Error(spreadsheet_error_text(value).to_string())),
+        // Only a REAL error code may be put in a cell. Asked of Excel,
+        // `Range("A1").Value = CVErr(2042)` leaves #N/A, and so do 2000, 2007,
+        // 2015, 2023, 2029, 2036 and 2043 through 2049 -- while `CVErr(0)`,
+        // `CVErr(1)`, `CVErr(1999)`, `CVErr(2001)` and `CVErr(3000)` are all
+        // error 1004. It is a list, not a range: 2001 sits between two that
+        // are accepted and is refused.
+        //
+        // Writing #VALUE! for anything unrecognised was the quiet kind of
+        // wrong: the cell ended up holding an error that was never asked for,
+        // and the macro carried on believing the write had worked.
+        Value::Error(value) => match spreadsheet_error_text_exact(value) {
+            Some(text) => Ok(CellValue::Error(text.to_string())),
+            None => Err(format!("{value} is not a spreadsheet error value")),
+        },
         // An empty string does not leave an empty string in the cell: asked of
         // Excel, `Range("F1").Value = ""` leaves the cell Empty, and TypeName
         // says so.
@@ -10070,6 +10083,32 @@ fn spreadsheet_error_number(value: &str) -> i64 {
     }
 }
 
+/// The cell text for an error code, or `None` when the number names no error.
+///
+/// Separate from `spreadsheet_error_text` because that one answers #VALUE! for
+/// anything it does not know, which is the right reading when a number is
+/// already known to be an error and the wrong one when the question is whether
+/// it IS an error at all.
+fn spreadsheet_error_text_exact(value: i64) -> Option<&'static str> {
+    match value {
+        2000 => Some("#NULL!"),
+        2007 => Some("#DIV/0!"),
+        2015 => Some("#VALUE!"),
+        2023 => Some("#REF!"),
+        2029 => Some("#NAME?"),
+        2036 => Some("#NUM!"),
+        2042 => Some("#N/A"),
+        2043 => Some("#GETTING_DATA"),
+        2045 => Some("#SPILL!"),
+        2046 => Some("#CONNECT!"),
+        2047 => Some("#BLOCKED!"),
+        2048 => Some("#UNKNOWN!"),
+        2049 => Some("#FIELD!"),
+        2050 => Some("#CALC!"),
+        _ => None,
+    }
+}
+
 fn spreadsheet_error_text(value: i64) -> &'static str {
     match value {
         2000 => "#NULL!",
@@ -10268,6 +10307,51 @@ mod tests {
     /// and nothing else -- not the yen, euro or pound sign, and not a `$`
     /// behind an escape or inside a `[$...]` locale bracket, though one inside
     /// quotes does count.
+    /// Only a real error code may be put in a cell.
+    ///
+    /// Asked of Excel, `Range("A1").Value = CVErr(2042)` leaves #N/A, and so
+    /// do 2000, 2007, 2015, 2023, 2029, 2036 and 2043 through 2049 -- while
+    /// `CVErr(0)`, `CVErr(1)`, `CVErr(1999)`, `CVErr(2001)` and `CVErr(3000)`
+    /// are every one of them error 1004. It is a list and not a range: 2001
+    /// sits between two that are accepted and is refused.
+    ///
+    /// Writing #VALUE! for anything unrecognised was the quiet kind of wrong.
+    /// The cell held an error nobody asked for, and the macro carried on
+    /// believing its write had worked.
+    #[test]
+    fn a_cell_takes_only_a_real_error_code() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Dim out As String
+               Dim codes As Variant
+               Dim i As Long
+               codes = Array(0, 1, 1999, 2000, 2001, 2007, 2015, 2042, 2049, 3000)
+               On Error Resume Next
+               For i = LBound(codes) To UBound(codes)
+                 Err.Clear
+                 Cells(i + 1, 2).Value = CVErr(codes(i))
+                 out = out & codes(i) & \"=\" & Err.Number & \";\"
+               Next i
+               Err.Clear
+               Ask = out
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String(
+                "0=1004;1=1004;1999=1004;2000=0;2001=1004;2007=0;2015=0;2042=0;2049=0;3000=1004;"
+                    .to_string()
+            )
+        );
+    }
+
     #[test]
     fn a_display_format_says_what_kind_of_value_a_cell_holds() {
         for format in [
