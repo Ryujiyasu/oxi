@@ -6487,7 +6487,17 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             if !(2..=4).contains(&args.len()) {
                 return Err(wrong_count("2 to 4 arguments"));
             }
+            // The interval is judged BEFORE the date, so a name that is not
+            // an interval is a bad argument (5) rather than whatever the
+            // date turns out to be. Asked of Excel, `DatePart(2, "ABC")` is
+            // error 5 where `DatePart("d", "ABC")` is error 13.
             let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
+            if !is_date_interval(&interval) {
+                return Err(invalid_procedure_call(
+                    format!("unsupported Date interval: {interval}"),
+                    line,
+                ));
+            }
             let serial = value_date_serial(&args[1]).map_err(mismatch)?;
             let first_day = first_day_of_week(args.get(2), line)?;
             let first_week = first_week_of_year(args.get(3), line)?;
@@ -6799,6 +6809,14 @@ fn date_diff(interval: &str, first: f64, second: f64, first_day: i64) -> Result<
         "s" => (second * 86_400.0).round() as i64 - (first * 86_400.0).round() as i64,
         _ => return Err(format!("unsupported Date interval: {interval}")),
     })
+}
+
+/// The interval names a date is cut up by.
+fn is_date_interval(interval: &str) -> bool {
+    matches!(
+        interval,
+        "yyyy" | "q" | "m" | "y" | "d" | "w" | "ww" | "h" | "n" | "s"
+    )
 }
 
 fn date_part(interval: &str, serial: f64, first_day: i64, first_week: i64) -> Result<i64, String> {
@@ -9369,6 +9387,36 @@ mod tests {
     /// measurement: 16 places working was read as "no ceiling", and a Date
     /// surviving was read as "keeps the type" before a Single had been asked.
     /// The second guess turned out right and the first did not.
+    /// DatePart judges its interval before it looks at the date, so a name
+    /// that is not an interval is a bad argument rather than whatever the date
+    /// turns out to be.
+    #[test]
+    fn datepart_judges_its_interval_first() {
+        let ask = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim answer As Variant
+                   On Error Resume Next
+                   answer = {expression}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(answer)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask("DatePart(2, \"ABC\")"), "err5");
+        assert_eq!(ask("DatePart(2, 1)"), "err5");
+        assert_eq!(ask("DatePart(\"d\", \"ABC\")"), "err13");
+        assert_eq!(ask("DatePart(\"d\", #1/2/2003#)"), "2");
+    }
+
     #[test]
     fn round_keeps_its_type_and_stops_at_twenty_two_places() {
         let ask = |setup: &str, expression: &str| {
