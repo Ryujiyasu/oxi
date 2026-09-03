@@ -28898,6 +28898,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         Some((first, last, vis_max_fs))
     }
 
+    /// S1298: a fragment that paints no glyph. Whitespace-only (an ideographic
+    /// space included) or a tab — Word sizes a line by what it draws.
+    fn s1298_glyphless(frag: &LineFragment) -> bool {
+        !frag.text.is_empty() && frag.text.chars().all(|c| c.is_whitespace())
+    }
+
+    /// S1298: whether this line has anything to draw at all. A line that does
+    /// not keeps its own font (the S902 / empty-paragraph fallback), so the
+    /// exclusion only ever removes a fragment that has a visible neighbour.
+    fn s1298_has_visible(fragments: &[LineFragment]) -> bool {
+        std::env::var("OXI_S1298_DISABLE").is_err()
+            && fragments.iter().any(|f| {
+                f.tab_alignment.is_none() && f.text.chars().any(|c| !c.is_whitespace())
+            })
+    }
+
     /// True when fragment `i` must be excluded from a line-height fold under
     /// S1045 (see `s1045_height_drivers`).
     fn s1045_skip(
@@ -29241,7 +29257,32 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             // height (Word A/B: every baseline invariant at +0.000pt). Generalizes
             // S1015 to both edges and to any colour.
             let s1045 = self.s1045_height_drivers(&line.fragments, para_font_size);
+            // S1298 (2026-09-03, opt-out OXI_S1298_DISABLE): a fragment that
+            // paints NO GLYPH never drives the line height, whatever its size or
+            // position. S1015 / S1045 / S1054 are three carve-outs from that one
+            // class -- each excludes a whitespace-only fragment only when it is
+            // OVERSIZED against the visible fragments' font size, and only in a
+            // Latin document. That test is a proxy for "taller", and it misses
+            // the case where a same-size fragment is taller because its FACE is:
+            //
+            //   _pb_themerun_gen.py, Word truth, 11pt throughout (d1e8ac8's shape:
+            //   docDefaults names ＭＳ 明朝, one run points at the EA theme = 游明朝)
+            //     theme run 「　　」                            13.22
+            //     theme run 「　　」 + literal ＭＳ明朝 run 「殿」  14.30
+            //     literal   「　　」 + literal ＭＳ明朝 run 「殿」  14.30   <- identical
+            //     theme run 「本文」 + literal ＭＳ明朝 run 「殿」  18.50   <- visible: it DOES
+            //
+            // i.e. the ideographic-space run is worth exactly nothing next to a
+            // visible run of the same size, while the same run holding a real
+            // glyph raises the line by 4.2pt. Word sizes a line by what it draws.
+            // A line with no visible fragment at all keeps its own font (the S902
+            // / empty-paragraph fallback above), so this only ever removes a
+            // fragment that has a visible neighbour.
+            let s1298_vis = Self::s1298_has_visible(&line.fragments);
             for (s1015_fi, frag) in line.fragments.iter().enumerate() {
+                if s1298_vis && Self::s1298_glyphless(frag) {
+                    continue;
+                }
                 if s1019_has_visible
                     && (frag.tab_alignment.is_some()
                         || frag.text == TAB_STRING
@@ -29430,7 +29471,15 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 no_grid_max = lookup_no_grid(&metrics.family, font_size, formula);
             } else {
                 let mut has_latin = false;
+                // S1298: the no-grid fold is the one that decides a line in a
+                // document without a docGrid, so the glyphless exclusion has to
+                // be applied HERE too — wiring only the ascent/descent fold above
+                // left this arm unchanged and made the rule look inert.
+                let s1298_vis2 = Self::s1298_has_visible(&line.fragments);
                 for frag in &line.fragments {
+                    if s1298_vis2 && Self::s1298_glyphless(frag) {
+                        continue;
+                    }
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
                     let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                     let formula = metrics.word_line_height_no_grid(font_size);
@@ -29450,7 +29499,12 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                 // Only applies when the ASCII font is a CJK 83/64 font.
                 if has_latin {
                     // Use the first fragment's ASCII font (resolve via latin path)
-                    if let Some(frag) = line.fragments.first() {
+                    let first_vis = if s1298_vis2 {
+                        line.fragments.iter().find(|f| !Self::s1298_glyphless(f))
+                    } else {
+                        line.fragments.first()
+                    };
+                    if let Some(frag) = first_vis {
                         let font_size = frag.style.font_size.unwrap_or(para_font_size);
                         let latin_metrics = self.metrics_for(&frag.style, para_style);
                         if latin_metrics.is_cjk_83_64_font() {
