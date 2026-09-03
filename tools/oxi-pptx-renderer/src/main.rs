@@ -12879,9 +12879,10 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         && face.eq_ignore_ascii_case(family)
         && gdi_style_broken(family, weight >= 700, italic)
     {
-        if let Some(em) =
-            oxislides_core::font_adv_local::local_advance_em(family, weight >= 700, italic, ch)
-        {
+        let bold = weight >= 700;
+        if let Some(em) = regfile_advance_em(family, bold, italic, ch).or_else(|| {
+            oxislides_core::font_adv_local::local_advance_em(family, bold, italic, ch)
+        }) {
             return Some(em);
         }
     }
@@ -13230,6 +13231,174 @@ fn selectable_style(family: &str, bold: bool, italic: bool) -> bool {
         }
         !(got_italic && !italic) && !(got_bold && !bold)
     }
+}
+
+/// The font FILE the machine's registry names for `family` at this style.
+///
+/// The compiled-in tables in `font_adv_local` were measured from particular
+/// copies of seventeen families; this asks the machine which file it actually
+/// registered, so a family it does not know about, or a build that differs from
+/// the one measured, is answered correctly rather than approximately. This
+/// machine holds two Caladea builds -- `C:/Windows/Fonts` (Cambria-compatible,
+/// 'Y' = 0.570) and a newer one under `C:/tmp` ('Y' = 0.557) -- and only the
+/// registered one is what PowerPoint draws with.
+///
+/// Value names carry the style: `Caladea (TrueType)`, `Caladea Bold (TrueType)`,
+/// `Caladea Bold Italic (TrueType)`. Entries naming several faces at once
+/// (`Arial,Arial Black`, `... & ...`) are skipped: which file belongs to which
+/// name is not recoverable from the value.
+#[cfg(windows)]
+fn registry_font_file(family: &str, bold: bool, italic: bool) -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Registry::*;
+
+    let want = match (bold, italic) {
+        (false, false) => family.to_string(),
+        (true, false) => format!("{family} Bold"),
+        (false, true) => format!("{family} Italic"),
+        (true, true) => format!("{family} Bold Italic"),
+    };
+    let want = want.to_lowercase();
+    let sub: Vec<u16> = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let mut key = HKEY::default();
+        let opened = unsafe {
+            RegOpenKeyExW(
+                root,
+                windows::core::PCWSTR(sub.as_ptr()),
+                0,
+                KEY_READ,
+                &mut key,
+            )
+        };
+        if opened.is_err() {
+            continue;
+        }
+        let mut i = 0u32;
+        loop {
+            let mut name = [0u16; 256];
+            let mut name_len = name.len() as u32;
+            let mut data = [0u8; 1024];
+            let mut data_len = data.len() as u32;
+            let mut kind = REG_VALUE_TYPE::default();
+            let rc = unsafe {
+                RegEnumValueW(
+                    key,
+                    i,
+                    windows::core::PWSTR(name.as_mut_ptr()),
+                    &mut name_len,
+                    None,
+                    Some(&mut kind.0),
+                    Some(data.as_mut_ptr()),
+                    Some(&mut data_len),
+                )
+            };
+            if rc.is_err() {
+                break;
+            }
+            i += 1;
+            let entry = String::from_utf16_lossy(&name[..name_len as usize]);
+            // Trim the `(TrueType)` / `(OpenType)` suffix the installer adds.
+            let base = match entry.rfind(" (") {
+                Some(at) if entry.ends_with(')') => &entry[..at],
+                _ => entry.as_str(),
+            };
+            if base.contains(',') || base.contains('&') {
+                continue;
+            }
+            if base.to_lowercase() != want {
+                continue;
+            }
+            let bytes = &data[..data_len as usize];
+            let wide: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|c| *c != 0)
+                .collect();
+            let value = String::from_utf16_lossy(&wide);
+            if value.is_empty() {
+                continue;
+            }
+            let path = if value.contains(':') {
+                std::path::PathBuf::from(value)
+            } else {
+                let dir = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+                std::path::Path::new(&dir).join("Fonts").join(value)
+            };
+            let _ = unsafe { RegCloseKey(key) };
+            if sf_debug() {
+                eprintln!("REGFILE {family:?} bold={bold} italic={italic} -> {}", path.display());
+            }
+            return Some(path);
+        }
+        let _ = unsafe { RegCloseKey(key) };
+    }
+    None
+}
+
+/// The design advances of the file itself, the file counterpart of
+/// `read_face_advances`.
+#[cfg(windows)]
+fn read_file_advances(path: &std::path::Path) -> Option<FaceAdvances> {
+    // `sfnt_table` accepts only a lone face, so a collection (`ttcf`) declines
+    // here and the caller falls through to its table and then to GDI. Picking
+    // the right face out of a collection needs its `name` table.
+    let data = std::fs::read(path).ok()?;
+    let head = sfnt_table(&data, b"head")?;
+    let upem = f32::from(be16(head, 18)?);
+    if upem <= 0.0 {
+        return None;
+    }
+    let hhea = sfnt_table(&data, b"hhea")?;
+    let num_h = be16(hhea, 34)? as usize;
+    if num_h == 0 {
+        return None;
+    }
+    let hmtx = sfnt_table(&data, b"hmtx")?;
+    let cmap = sfnt_table(&data, b"cmap")?;
+    let mut by_cp = std::collections::HashMap::new();
+    for (cp, gid) in cmap_by_code_point(cmap)? {
+        let g = usize::from(gid).min(num_h - 1);
+        if let Some(a) = be16(hmtx, 4 * g) {
+            by_cp.insert(cp, a);
+        }
+    }
+    if by_cp.is_empty() {
+        return None;
+    }
+    Some(FaceAdvances { upem, by_cp })
+}
+
+/// S-REGADV: the advance this character has in the FILE the registry names for
+/// the face, for a family GDI cannot serve at the asked-for style.
+///
+/// The same repair as S-LOCALADV and preferred over it, because it reads the
+/// copy the machine actually registered instead of a table measured elsewhere.
+/// Memoised per face: a file read and a `cmap` walk per character would cost
+/// more than the render.
+#[cfg(windows)]
+fn regfile_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+    thread_local! {
+        static FILES: std::cell::RefCell<
+            std::collections::HashMap<(String, bool, bool), Option<FaceAdvances>>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    FILES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let face = cache
+            .entry((family.to_string(), bold, italic))
+            .or_insert_with(|| {
+                registry_font_file(family, bold, italic)
+                    .as_deref()
+                    .and_then(read_file_advances)
+            });
+        let face = face.as_ref()?;
+        let adv = *face.by_cp.get(&(ch as u32))?;
+        Some(f32::from(adv) / face.upem)
+    })
 }
 
 /// Whether this machine cannot serve `family` at this style, memoised for the
@@ -14439,9 +14608,13 @@ impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
             // answer a bold request from an upright face.
             .or_else(|| {
                 (localadv_on() && gdi_style_broken(family, bold, italic))
-                    .then(|| oxislides_core::font_adv_local::local_advance_em(
-                        family, bold, italic, ch,
-                    ))
+                    .then(|| {
+                        regfile_advance_em(family, bold, italic, ch).or_else(|| {
+                            oxislides_core::font_adv_local::local_advance_em(
+                                family, bold, italic, ch,
+                            )
+                        })
+                    })
                     .flatten()
             })
             .or_else(|| font_adv::hmtx_advance_em(family, ch))
