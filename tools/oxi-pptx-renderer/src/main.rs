@@ -5117,20 +5117,36 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 } else {
                                     let line_x = left_x
                                         + (x_off as f64 * scale).round() as i32;
-                                    draw_text_baseline_wiu(
-                                        mem_dc,
-                                        line_x,
-                                        baseline,
-                                        &line_text,
-                                        fs,
-                                        &family,
-                                        color.as_deref(),
-                                        scale,
-                                        para_weight,
-                                        para_italic,
-                                        para_ul,
-                                        ptrack,
-                                    );
+                                    // ★The SINGLE-STYLE path draws most of the
+                                    // corpus, and the missing-glyph split has to
+                                    // be here too: the first version put it only
+                                    // in `draw_line_runs`, the pixel gate came
+                                    // back with the same numbers to six decimals,
+                                    // and `OXI_DRAW_DEBUG` showed 'do’s' still
+                                    // painted as one Jua run. A rule that reaches
+                                    // one caller changes nothing.
+                                    let painted = missglyph_on()
+                                        && draw_line_missing_split(
+                                            mem_dc, line_x, baseline, &line_text, fs,
+                                            &family, color.as_deref(), scale,
+                                            para_weight, para_italic, para_ul, ptrack,
+                                        );
+                                    if !painted {
+                                        draw_text_baseline_wiu(
+                                            mem_dc,
+                                            line_x,
+                                            baseline,
+                                            &line_text,
+                                            fs,
+                                            &family,
+                                            color.as_deref(),
+                                            scale,
+                                            para_weight,
+                                            para_italic,
+                                            para_ul,
+                                            ptrack,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -12477,21 +12493,70 @@ unsafe fn draw_line_runs(
                 }
             }
         }
-        draw_text_baseline_wiu(
-            dc,
-            cursor_x,
-            baseline,
-            &seg,
-            fs,
-            family,
-            color,
-            scale,
-            weight,
-            run.italic || default_italic,
-            run.underline,
-            spc,
-        );
-        cursor_x += w;
+        // ★A character the face has no glyph for is PAINTED in
+        // `MISSING_GLYPH_FACE`, the way PowerPoint paints it -- four blind
+        // decks draw exactly one such character in a Times face while the rest
+        // of the line stays in the deck's own. Without this the width knows
+        // about the substitution and the ink does not, which moves a centred
+        // line by half the difference and is worse than either.
+        let chunks = if missglyph_on() {
+            let missing: std::collections::HashSet<char> =
+                font_missing_glyphs(family, bold, run.italic || default_italic, &seg)
+                    .into_iter()
+                    .collect();
+            if missing.is_empty() {
+                Vec::new()
+            } else {
+                let mut out: Vec<(String, bool)> = Vec::new();
+                for ch in seg.chars() {
+                    let gone = missing.contains(&ch);
+                    match out.last_mut() {
+                        Some((text, was)) if *was == gone => text.push(ch),
+                        _ => out.push((ch.to_string(), gone)),
+                    }
+                }
+                out
+            }
+        } else {
+            Vec::new()
+        };
+        if chunks.is_empty() {
+            draw_text_baseline_wiu(
+                dc,
+                cursor_x,
+                baseline,
+                &seg,
+                fs,
+                family,
+                color,
+                scale,
+                weight,
+                run.italic || default_italic,
+                run.underline,
+                spc,
+            );
+            cursor_x += w;
+        } else {
+            for (text, gone) in chunks {
+                let fam = if gone { MISSING_GLYPH_FACE } else { family };
+                let (wt, it) = if gone {
+                    (400, false)
+                } else {
+                    (weight, run.italic || default_italic)
+                };
+                let cw = runtime_width_px(dc, &text, fs, fam, gone.then_some(false)
+                        .unwrap_or(bold), it, scale, spc)
+                    .unwrap_or_else(|| {
+                        measure_text_width(dc, &text, fs, fam, bold && !gone, scale, spc).round()
+                            as i32
+                    });
+                draw_text_baseline_wiu(
+                    dc, cursor_x, baseline, &text, fs, fam, color, scale, wt, it,
+                    run.underline, spc,
+                );
+                cursor_x += cw;
+            }
+        }
     }
 }
 
@@ -14856,6 +14921,129 @@ fn font_has_all_glyphs(family: &str, bold: bool, italic: bool, text: &str) -> bo
     }
 }
 
+/// The face PowerPoint draws a character its own face has no glyph for.
+///
+/// DERIVED 2026-09-03 from the truth PDFs: four blind decks draw exactly one
+/// character in a Times face while everything around it is the deck's own --
+/// 09 and 32 a bullet, 21 a bullet and a white bullet, 10 a right single quote
+/// -- and in every case the size is the run's own. d10 s8 pins the arithmetic:
+/// PowerPoint steps its `’` by 11.625pt at 34.99pt, and Times New Roman's
+/// right quote is 0.3330 em, which is 11.668pt and 11.625 on the master unit.
+///
+/// This is NOT the face a missing FAMILY resolves to. That one is Calibri
+/// (`effective_family`, `gen_pptx_missfont.py`): a family PowerPoint cannot
+/// serve at all and a glyph a served family happens to lack are different
+/// questions with different answers.
+const MISSING_GLYPH_FACE: &str = "Times New Roman";
+
+/// The width of a line the face cannot draw whole, measured the way PowerPoint
+/// draws it: each character at its own face's advance, with the missing ones at
+/// `MISSING_GLYPH_FACE`.
+///
+/// Without this the engine hands the WHOLE line to GDI's text extent, and GDI
+/// font-links the missing character to something else entirely -- d10 s8's
+/// 'do’s' measures 77.12pt that way against PowerPoint's 63.4.
+#[cfg(windows)]
+fn mixed_width_pt(
+    text: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    spc: f32,
+) -> Option<f32> {
+    use oxislides_core::layout::FaceMetrics;
+
+    let missing: std::collections::HashSet<char> =
+        font_missing_glyphs(family, bold, italic, text).into_iter().collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let mut total = 0.0f32;
+    for ch in text.chars() {
+        let adv = if missing.contains(&ch) {
+            GdiFaceMetrics.advance_em(MISSING_GLYPH_FACE, false, false, ch)
+        } else {
+            GdiFaceMetrics.advance_em(family, bold, italic, ch)
+        }?;
+        total += adv * fs + spc;
+    }
+    Some(total)
+}
+
+/// Paint a line whose face lacks a glyph, one chunk per face, and say whether
+/// anything was painted. False means the line is whole and the caller should
+/// draw it in one go.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn draw_line_missing_split(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    baseline: f32,
+    text: &str,
+    fs: f32,
+    family: &str,
+    color: Option<&str>,
+    scale: f64,
+    weight: i32,
+    italic: bool,
+    underline: bool,
+    spc: f32,
+) -> bool {
+    let missing: std::collections::HashSet<char> =
+        font_missing_glyphs(family, weight >= 600, italic, text).into_iter().collect();
+    if missing.is_empty() {
+        return false;
+    }
+    let mut chunks: Vec<(String, bool)> = Vec::new();
+    for ch in text.chars() {
+        let gone = missing.contains(&ch);
+        match chunks.last_mut() {
+            Some((t, was)) if *was == gone => t.push(ch),
+            _ => chunks.push((ch.to_string(), gone)),
+        }
+    }
+    let mut cursor = x;
+    for (chunk, gone) in chunks {
+        let fam = if gone { MISSING_GLYPH_FACE } else { family };
+        let (wt, it) = if gone { (400, false) } else { (weight, italic) };
+        let w = runtime_width_px(dc, &chunk, fs, fam, wt >= 600, it, scale, spc)
+            .unwrap_or_else(|| {
+                measure_text_width(dc, &chunk, fs, fam, wt >= 600, scale, spc).round() as i32
+            });
+        draw_text_baseline_wiu(
+            dc, cursor, baseline, &chunk, fs, fam, color, scale, wt, it, underline, spc,
+        );
+        cursor += w;
+    }
+    true
+}
+
+/// A line whose face lacks a glyph is measured AND painted character by
+/// character, with the missing ones at `MISSING_GLYPH_FACE`, unless this is set.
+///
+/// Before it, one character the face did not have sent the WHOLE line to GDI's
+/// text extent, and GDI font-links to something else entirely: d10 s8's 'do’s'
+/// measured 77.12pt against PowerPoint's 63.4, and the line was painted with
+/// that substitute's glyph as well.
+///
+/// The population is small and known: 9 of the 48 blind decks hold a line whose
+/// face cannot draw it whole, 64 lines in all (`OXI_KERN_CENSUS` prints
+/// `MISSGLYPH` per line). Everything else is untouched by construction, which is
+/// why the gate below is those nine decks and not all 48.
+///
+///     width (`pptx_line_audit_com.py 10`)  1 line over 2% -> **0**,
+///                                          slope +0.52 -> +0.12 per mille
+///     layout (`pptx_dump_ab.py`, 114 decks) 1 paragraph of 48365 moves,
+///                                          no break changes
+///     pixels (`pptx_flag_ab.py`, the 9)    5 decks move, ALL up, 4 byte-identical
+///                                          10 +0.000140, 04 +0.000016, 09 +0.000014,
+///                                          21 +0.000013, 44 +0.000013
+///                                          **7 slides up, 0 down**
+fn missglyph_on() -> bool {
+    std::env::var("OXI_MISSGLYPH_DISABLE").is_err()
+}
+
 /// Which characters of `text` this face has no glyph for -- the same question
 /// `font_has_all_glyphs` answers with a yes or no, printed so a line that falls
 /// off the measured path can say WHICH character pushed it off.
@@ -16343,6 +16531,13 @@ fn layout_paragraph_baselines(
         let ink = line.trim_end_matches('\n');
         // S-RUNALIGN: measure the line the way it is DRAWN -- each run at its
         // own size, weight and slant -- exactly as the wrap already does.
+        // How many lines carry a character the face has no glyph for -- the
+        // population `MISSING_GLYPH_FACE` reaches. Counted so a pixel A/B can
+        // be pointed at the decks it can move instead of all 48.
+        if kern_census() && !font_missing_glyphs(&family, bold, italic, line).is_empty() {
+            KERN_TALLY.with(|t| t.borrow_mut().1 += 0);
+            eprintln!("MISSGLYPH {:?} fam={family:?}", line.chars().take(24).collect::<String>());
+        }
         // What kerning WOULD move on this line, counted before anything moves.
         // PowerPoint kerns by default (`kern_pair_em`), the engine does not, and
         // the width gate's last offenders are lines where that shows -- d10 s8's
@@ -16430,6 +16625,11 @@ fn layout_paragraph_baselines(
             .or_else(|| {
                 runtime_width_px(dc, ink.trim_end(), fs, &family, bold, italic, scale, pspc)
                     .map(|px| px as f32 / scale as f32)
+            })
+            .or_else(|| {
+                missglyph_on()
+                    .then(|| mixed_width_pt(ink.trim_end(), fs, &family, bold, italic, pspc))
+                    .flatten()
             })
             .unwrap_or_else(|| gdi_measure_text_px(dc, line) as f32 / scale as f32)
             + kern_w;
