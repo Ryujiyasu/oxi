@@ -4753,6 +4753,15 @@ fn call_builtin(
                     line,
                 ));
             }
+            // Not a conversion, so an Error is not its number:
+            // `Hex(CVErr(2042))` is error 13.
+            if matches!(args[0], Value::Error(_)) {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "type mismatch converting Error to number",
+                    line,
+                ));
+            }
             if matches!(args[0], Value::Null) {
                 return Ok(Value::Null);
             }
@@ -4807,10 +4816,19 @@ fn call_builtin(
                     line,
                 ));
             }
+            // Not a conversion, so not one of the functions that reads an
+            // Error as its number: `Val(CVErr(2042))` is error 13.
+            if matches!(args[0], Value::Error(_)) {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    "type mismatch converting Error to number",
+                    line,
+                ));
+            }
             let source = text(&args[0])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             return parse_val(&source)
-                .map(numeric_literal)
+                .map(Value::Double)
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line));
         }
         if name == "ismissing" {
@@ -4864,11 +4882,7 @@ fn call_builtin(
                 "isempty" => Value::Boolean(matches!(value, Value::Empty)),
                 "iserror" => Value::Boolean(matches!(value, Value::Error(_))),
                 "isnull" => Value::Boolean(matches!(value, Value::Null)),
-                "isnumeric" => Value::Boolean(match value {
-                    Value::Integer(_) | Value::Double(_) => true,
-                    Value::String(value) => value.parse::<f64>().is_ok(),
-                    _ => false,
-                }),
+                "isnumeric" => Value::Boolean(reads_as_a_number(value)),
                 "isobject" => Value::Boolean(matches!(value, Value::Object(_) | Value::Nothing)),
                 "typename" => Value::String(value_type_name(value)),
                 "vartype" => Value::Integer(value_var_type(value)),
@@ -4928,14 +4942,37 @@ fn call_builtin(
         }
         let value = &args[0];
         let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+        // An Error variant is a NUMBER only to the conversions. Asked of
+        // Excel, `CDbl(CVErr(2042))` is 2042 as a Double and `CLng`, `CInt`,
+        // `CSng`, `CCur`, `CBool` and `CStr` take it too -- while
+        // `Abs(CVErr(2042))`, `Sgn`, `Int`, `Fix`, `Sqr`, `Hex`, `Val` and
+        // `Str` are all error 13, and so is `CVErr(2042) + 1`.
+        //
+        // The runtime's `number()` accepts one, which is what the conversions
+        // need; the strict callers say so here instead.
+        if matches!(value, Value::Error(_))
+            && matches!(
+                name.as_str(),
+                "abs" | "sgn" | "int" | "fix" | "sqr" | "hex"
+            )
+        {
+            return Err(mismatch(
+                "type mismatch converting Error to number".to_string(),
+            ));
+        }
         match name.as_str() {
+            // Abs keeps the type it was handed, the way Round does: asked of
+            // Excel, `Abs(-1)` is an Integer, because the literal -1 is one.
             "abs" => match value {
                 Value::Null => Ok(Value::Null),
                 Value::Integer(value) => value
                     .checked_abs()
                     .map(Value::Integer)
                     .ok_or_else(|| error(RuntimeErrorKind::Overflow, "overflow in Abs", line)),
-                _ => Ok(numeric_literal(number(value).map_err(mismatch)?.abs())),
+                _ => {
+                    let answer = number(value).map_err(mismatch)?.abs();
+                    Ok(keep_rank(answer, value).unwrap_or(Value::Double(answer)))
+                }
             },
             "atn" | "cos" | "sin" | "tan" => match value {
                 Value::Null => Ok(Value::Null),
@@ -4965,10 +5002,27 @@ fn call_builtin(
             // A Boolean converts by its BITS, not by its value: asked of
             // Excel, `CByte(True)` is 255 where `CByte(-1)` overflows, and
             // `CByte(False)` is 0. Every other shape goes by value.
+            // Each conversion answers with ITS OWN type, and the numeric
+            // builtins have types of their own too. Asked of Excel:
+            //
+            //     CInt(1)   Integer    Int(1.5)  Double
+            //     CByte(1)  Byte       Fix(1.5)  Double
+            //     CSng(1)   Single     Sqr(4)    Double
+            //     CCur(1)   Currency   Val("12") Double
+            //     CLng(1)   Long       Abs(-1)   Integer
+            //     CDbl(1)   Double     Sgn(-2)   Integer
+            //                          Asc("A")  Integer
+            //
+            // All of them answered Long or Double here, because they were
+            // written before the runtime had the narrow types and nothing
+            // went back over them afterwards. A generated case asking
+            // `VarType(CInt(1))` would have said so at once -- none ever did,
+            // because the corpus was drawn by how often real macros call a
+            // function and these are not the ones they call.
             "cbyte" => match value {
-                Value::Boolean(true) => Ok(Value::Integer(255)),
-                Value::Boolean(false) => Ok(Value::Integer(0)),
-                _ => Ok(Value::Integer(convert_integer(value, 0, 255, line)?)),
+                Value::Boolean(true) => Ok(Value::Byte(255)),
+                Value::Boolean(false) => Ok(Value::Byte(0)),
+                _ => Ok(Value::Byte(convert_integer(value, 0, 255, line)? as u8)),
             },
             "ccur" => {
                 let value = number(value).map_err(mismatch)?;
@@ -4980,9 +5034,7 @@ fn call_builtin(
                         line,
                     ))
                 } else {
-                    Ok(numeric_literal(
-                        (value * 10_000.0).round_ties_even() / 10_000.0,
-                    ))
+                    Ok(Value::Currency((value * 10_000.0).round_ties_even() as i64))
                 }
             }
             "cdec" => {
@@ -5001,9 +5053,9 @@ fn call_builtin(
             "cdbl" => Ok(Value::Double(
                 number(value).map_err(|message| coercion_error(value, message, line))?,
             )),
-            "cint" => Ok(Value::Integer(convert_integer(
-                value, -32_768, 32_767, line,
-            )?)),
+            "cint" => Ok(Value::Int16(
+                convert_integer(value, -32_768, 32_767, line)? as i16,
+            )),
             "clng" => Ok(Value::Integer(convert_integer(
                 value,
                 -2_147_483_648,
@@ -5034,7 +5086,7 @@ fn call_builtin(
                         line,
                     ))
                 } else {
-                    Ok(Value::Double(f64::from(value as f32)))
+                    Ok(Value::Single(value as f32))
                 }
             }
             "cstr" => match value {
@@ -5046,7 +5098,7 @@ fn call_builtin(
                 Value::Null => Ok(Value::Null),
                 _ => {
                     let value = number(value).map_err(mismatch)?;
-                    Ok(numeric_literal(if name == "int" {
+                    Ok(Value::Double(if name == "int" {
                         value.floor()
                     } else {
                         value.trunc()
@@ -5095,7 +5147,7 @@ fn call_builtin(
                 Value::Null => Ok(Value::Null),
                 _ => {
                     let value = number(value).map_err(mismatch)?;
-                    Ok(Value::Integer(if value > 0.0 {
+                    Ok(Value::Int16(if value > 0.0 {
                         1
                     } else if value < 0.0 {
                         -1
@@ -5114,7 +5166,7 @@ fn call_builtin(
                             line,
                         ))
                     } else {
-                        Ok(numeric_literal(value.sqrt()))
+                        Ok(Value::Double(value.sqrt()))
                     }
                 }
             },
@@ -5704,6 +5756,25 @@ fn call_text_conversion_builtin(
         "str" => {
             if args.len() != 1 {
                 return Err(count_error());
+            }
+            // A Null carries straight through, the way it does for the date
+            // parts: asked of Excel, `Str(Null)` is Null. An Error variant
+            // is refused outright -- `Str(CVErr(2042))` is error 13, even
+            // though `CDbl(CVErr(2042))` converts the same value happily.
+            if matches!(&args[0], Value::Null) {
+                return Ok(Value::Null);
+            }
+            if matches!(&args[0], Value::Error(_)) {
+                return Err(mismatch(
+                    "type mismatch converting Error to number".to_string(),
+                ));
+            }
+            // A Date and a Boolean say themselves, not the number underneath:
+            // asked of Excel, `Str(#1/2/2003#)` is `1/2/2003` and `Str(True)`
+            // is `True`, where `Str(37623)` is ` 37623` with the space Str
+            // puts in front of a number it is not ashamed of.
+            if matches!(&args[0], Value::Date(_) | Value::Boolean(_)) {
+                return Ok(Value::String(text(&args[0]).map_err(mismatch)?));
             }
             let value = number(&args[0]).map_err(mismatch)?;
             if !value.is_finite() {
@@ -6656,6 +6727,27 @@ fn custom_number(value: f64, pattern: &str) -> String {
     number_picture(value, pattern)
 }
 
+/// The date functions a Null passes straight through.
+///
+/// Not `CDate`, `CVDate`, `DateValue` or `TimeValue`, which refuse it with
+/// error 94, and not `IsDate`, which answers False about it. Nor
+/// `DateSerial`/`TimeSerial`, which take numbers rather than a date.
+fn propagates_a_null_date(name: &str) -> bool {
+    matches!(
+        name,
+        "year"
+            | "month"
+            | "day"
+            | "hour"
+            | "minute"
+            | "second"
+            | "weekday"
+            | "datepart"
+            | "dateadd"
+            | "datediff"
+    )
+}
+
 fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
     let wrong_count = |expected: &str| {
         error(
@@ -6665,6 +6757,16 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
         )
     };
     let mismatch = |message| error(RuntimeErrorKind::TypeMismatch, message, line);
+    // A Null date CARRIES THROUGH. Asked of Excel, Month, Year, Day, Hour,
+    // Minute, Second, Weekday, DatePart, DateAdd and DateDiff all answer Null
+    // when the date they are given is Null -- they do not refuse it.
+    //
+    // `CDate` is the exception and answers error 94, which is why this cannot
+    // live inside `value_date_serial` where they all meet: by then the
+    // question of WHICH function asked has been thrown away.
+    if propagates_a_null_date(name) && args.iter().any(|value| matches!(value, Value::Null)) {
+        return Ok(Value::Null);
+    }
     match name {
         "dateserial" | "timeserial" => {
             if args.len() != 3 {
@@ -6692,6 +6794,12 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
         "cdate" | "cvdate" | "datevalue" | "timevalue" | "isdate" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
+            }
+            // `CDate(Null)` is error 94, not the type mismatch a
+            // string that will not parse gets. Measured against Excel;
+            // `IsDate(Null)` is still just False.
+            if matches!(args[0], Value::Null) && name != "isdate" {
+                return Err(invalid_null(line));
             }
             let parsed = value_date_serial(&args[0]);
             if name == "isdate" {
@@ -6847,6 +6955,17 @@ fn value_date_serial(value: &Value) -> Result<f64, String> {
         Value::Date(value) | Value::Double(value) => *value,
         Value::Int16(_) | Value::Byte(_) | Value::Integer(_) | Value::Single(_)
         | Value::Currency(_) => number(value)?,
+        // A Boolean is a date too, being a number underneath. Asked of Excel,
+        // `Month(True)` is 12 and `Year(True)` is 1899 -- True is -1, which is
+        // the 29th of December 1899 -- while `Month(False)` is also 12,
+        // December 1899 being where the serials begin.
+        Value::Boolean(flag) => {
+            if *flag {
+                -1.0
+            } else {
+                0.0
+            }
+        }
         Value::String(value) => parse_date_text(value)?,
         Value::Empty => 0.0,
         Value::Null => return Err("invalid use of Null".to_string()),
@@ -7391,11 +7510,11 @@ fn call_string_builtin(
                 invalid_procedure_call(format!("{name} requires a non-empty String"), line)
             })?;
             let value = if name == "ascw" {
-                i64::from(unit as i16)
+                unit as i16
             } else {
-                i64::from(unit)
+                unit as i16
             };
-            Ok(Value::Integer(value))
+            Ok(Value::Int16(value))
         }
         "chr" | "chrw" => {
             if args.len() != 1 {
@@ -8318,6 +8437,77 @@ fn number(value: &Value) -> Result<f64, String> {
     }
 }
 
+/// What `IsNumeric` answers True to.
+///
+/// Every numeric subtype, a Boolean and Empty -- asked of Excel,
+/// `IsNumeric(1)`, `IsNumeric(32767)`, `IsNumeric(True)` and
+/// `IsNumeric(Empty)` are all True. A DATE is not: `IsNumeric(#1/2/2003#)` is
+/// False, for all it is a number underneath.
+///
+/// This arm used to name `Integer` and `Double` and nothing else, which was
+/// right until the numeric subtypes arrived and the literal 1 stopped being an
+/// `Integer` here. `IsNumeric(1)` answered False from then on, and no test
+/// caught it because nothing exercised the function -- 32 of the 111 functions
+/// in the corpus table had never been called by a generated case, and this was
+/// the first thing found when they were.
+fn reads_as_a_number(value: &Value) -> bool {
+    match value {
+        Value::Empty | Value::Boolean(_) => true,
+        Value::Date(_) => false,
+        Value::String(text) => numeric_text(text).is_some(),
+        value => any_number(value).is_some(),
+    }
+}
+
+/// Any of the numeric subtypes, as a Double.
+fn any_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Int16(value) => Some(f64::from(*value)),
+        Value::Byte(value) => Some(f64::from(*value)),
+        Value::Integer(value) => Some(*value as f64),
+        Value::Single(value) => Some(f64::from(*value)),
+        Value::Double(value) => Some(*value),
+        Value::Currency(value) => Some(*value as f64 / 10_000.0),
+        _ => None,
+    }
+}
+
+/// A string VBA reads as a number, and what it reads it as.
+///
+/// Wider than Rust's own parser. Asked of Excel, `IsNumeric` is True for
+/// `" 12 "` with its spaces, for `"&H10"` in hex, for `"1e5"`, and for
+/// `"12,3"` and `"$1"` with their grouping and currency marks -- and False for
+/// `"1%"`, `""` and `"abc"`.
+fn numeric_text(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(digits) = trimmed
+        .strip_prefix("&H")
+        .or_else(|| trimmed.strip_prefix("&h"))
+    {
+        return i64::from_str_radix(digits.trim_end_matches(['&', '%']), 16)
+            .ok()
+            .map(|value| value as f64);
+    }
+    if let Some(digits) = trimmed
+        .strip_prefix("&O")
+        .or_else(|| trimmed.strip_prefix("&o"))
+    {
+        return i64::from_str_radix(digits.trim_end_matches(['&', '%']), 8)
+            .ok()
+            .map(|value| value as f64);
+    }
+    // The grouping and currency marks Excel accepts, and nothing else -- a
+    // trailing `%` is refused, so they cannot simply all be stripped.
+    let bare: String = trimmed
+        .chars()
+        .filter(|character| *character != ',' && *character != '$')
+        .collect();
+    bare.parse::<f64>().ok()
+}
+
 fn truthy(value: &Value) -> Result<bool, String> {
     match value {
         Value::Empty | Value::Null | Value::Boolean(false) => Ok(false),
@@ -8345,7 +8535,9 @@ fn truthy(value: &Value) -> Result<bool, String> {
             .map_err(|_| "type mismatch converting String to Boolean".to_string()),
         Value::Array(_) => Err("type mismatch converting array to Boolean".to_string()),
         Value::Record(_) => Err("type mismatch converting a record to Boolean".to_string()),
-        Value::Error(_) => Err("type mismatch converting Error to Boolean".to_string()),
+        // An Error is a number to the conversions, and CBool is one of them:
+        // asked of Excel, `CBool(CVErr(2042))` is True.
+        Value::Error(value) => Ok(*value != 0),
         Value::Object(_) => Err("type mismatch converting object to Boolean".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Nothing => Err("object variable or With block variable not set".to_string()),
@@ -10433,8 +10625,13 @@ mod tests {
 
         assert_eq!(
             value,
+            // `IsNumeric(number)` is True: the cell holds 42, and reading
+            // through the default member is the whole point of this test.
+            // It said False here for as long as IsNumeric itself was broken --
+            // asked of Excel, a Range holding 42 answers True, and so does an
+            // EMPTY one.
             Value::String(
-                "2|8|0|4|TEXT|42|42|False|False|True|Cell|True".to_string()
+                "2|8|0|4|TEXT|42|42|True|False|True|Cell|True".to_string()
             )
         );
     }
@@ -13499,6 +13696,173 @@ mod tests {
         assert_eq!(ask("InStr(Empty, \"abc\", \"\")"), "0");
         assert_eq!(ask("InStr(True, \"abc\", \"\")"), "-1");
         assert_eq!(ask("InStr(\"2\", \"abc\", \"b\")"), "2");
+    }
+
+    /// Each function answers with the type Excel gives it.
+    ///
+    ///     CInt(1)   Integer    Int(1.5)  Double    Abs(-1)   Integer
+    ///     CByte(1)  Byte       Fix(1.5)  Double    Sgn(-2)   Integer
+    ///     CSng(1)   Single     Sqr(4)    Double    Asc("A")  Integer
+    ///     CCur(1)   Currency   Val("12") Double    Len("ab") Long
+    ///
+    /// All of the narrow ones answered Long or Double until now. They were
+    /// written before the runtime had the narrow types, and nothing went back
+    /// over them -- so `VarType(CInt(1))` said 3 where Excel says 2.
+    ///
+    /// `CDec` is the one that stays wrong: Excel answers Decimal and this
+    /// runtime has no Decimal to answer with. A known limit, not an oversight.
+    #[test]
+    fn a_conversion_answers_with_its_own_type() {
+        let kind = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Ask = TypeName({call})
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        for (call, expected) in [
+            ("CInt(1)", "Integer"),
+            ("CLng(1)", "Long"),
+            ("CSng(1)", "Single"),
+            ("CCur(1)", "Currency"),
+            ("CByte(1)", "Byte"),
+            ("CDbl(1)", "Double"),
+            ("CBool(1)", "Boolean"),
+            ("CDate(1)", "Date"),
+            ("CStr(1)", "String"),
+            ("Int(1.5)", "Double"),
+            ("Fix(1.5)", "Double"),
+            ("Sqr(4)", "Double"),
+            ("Val(\"12\")", "Double"),
+            ("Abs(-1)", "Integer"),
+            ("Sgn(-2)", "Integer"),
+            ("Asc(\"A\")", "Integer"),
+            ("Len(\"ab\")", "Long"),
+            ("InStr(\"ab\", \"b\")", "Long"),
+            ("Hex(255)", "String"),
+            ("RGB(1, 2, 3)", "Long"),
+        ] {
+            assert_eq!(kind(call), expected, "{call}");
+        }
+    }
+
+    /// `IsNumeric`, and what it says yes to.
+    ///
+    /// Every numeric subtype, a Boolean and Empty -- but NOT a Date, for all
+    /// it is a number underneath. Its string rule is wider than a plain parse:
+    /// spaces round the number, `&H` hex and grouping marks all pass, a
+    /// trailing `%` does not.
+    ///
+    /// This answered False for the literal 1 for as long as the numeric
+    /// subtypes have existed, because its match arm named `Integer` and
+    /// `Double` and was never revisited when the narrow types arrived.
+    #[test]
+    fn is_numeric_says_yes_to_every_kind_of_number() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Ask = CStr(IsNumeric({call}))
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        for call in [
+            "1", "32767", "-2.5", "CCur(1)", "CByte(1)", "CSng(1)", "True", "Empty",
+            "\"12\"", "\" 12 \"", "\"1e5\"", "\"&H10\"", "\"-3.5\"", "\"12,3\"", "\"$1\"",
+        ] {
+            assert_eq!(ask(call), "True", "{call}");
+        }
+        for call in ["#1/2/2003#", "Null", "\"\"", "\"abc\"", "\"1%\"", "CVErr(2042)", "Array(1)"] {
+            assert_eq!(ask(call), "False", "{call}");
+        }
+    }
+
+    /// A Null date carries through, and an Error is a number only to the
+    /// conversions.
+    ///
+    /// Month, Year, Day, Hour, Minute, Second, Weekday, DatePart, DateAdd,
+    /// DateDiff and Str all answer Null when handed one -- `CDate` is the
+    /// exception and answers 94. And `CDbl(CVErr(2042))` converts happily
+    /// where `Abs`, `Sgn`, `Int`, `Fix`, `Sqr`, `Hex`, `Val` and `Str` all
+    /// refuse with 13.
+    #[test]
+    fn a_null_date_carries_through_and_an_error_is_not_a_number() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   Dim e As Long
+                   On Error Resume Next
+                   r = {call}
+                   e = Err.Number
+                   Err.Clear
+                   If e <> 0 Then
+                     Ask = \"err\" & e
+                   Else
+                     Ask = TypeName(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        for call in [
+            "Str(Null)", "Month(Null)", "Year(Null)", "Day(Null)", "Hour(Null)",
+            "Minute(Null)", "Second(Null)", "Weekday(Null)", "DatePart(\"d\", Null)",
+            "DateAdd(\"d\", 1, Null)", "DateDiff(\"d\", Null, #1/2/2003#)",
+        ] {
+            assert_eq!(ask(call), "Null", "{call}");
+        }
+        assert_eq!(ask("CDate(Null)"), "err94");
+
+        for (call, expected) in [
+            ("CDbl(CVErr(2042))", "Double"),
+            ("CLng(CVErr(2042))", "Long"),
+            ("CInt(CVErr(2042))", "Integer"),
+            ("CBool(CVErr(2042))", "Boolean"),
+            ("CStr(CVErr(2042))", "String"),
+        ] {
+            assert_eq!(ask(call), expected, "{call}");
+        }
+        for call in [
+            "Abs(CVErr(2042))", "Sgn(CVErr(2042))", "Int(CVErr(2042))",
+            "Fix(CVErr(2042))", "Sqr(CVErr(2042))", "Hex(CVErr(2042))",
+            "Val(CVErr(2042))", "Str(CVErr(2042))", "CDate(CVErr(2042))",
+        ] {
+            assert_eq!(ask(call), "err13", "{call}");
+        }
+    }
+
+    /// A Boolean is a date, and Str says a Date as a date.
+    ///
+    /// True is -1, which is the 29th of December 1899, so `Month(True)` is 12
+    /// and `Year(True)` is 1899. And `Str(#1/2/2003#)` is `1/2/2003` where
+    /// `Str(37623)` is ` 37623` with the space Str puts before a number.
+    #[test]
+    fn a_boolean_is_a_date_and_str_says_a_date_as_one() {
+        let source = "Public Function Ask() As String
+                        Ask = Month(True) & \"|\" & Year(True) & \"|\" & Day(True) & \"|\" &                               Weekday(True) & \"|\" & Month(False) & \"|\" &                               Str(#1/2/2003#) & \"|\" & Str(37623) & \"|\" &                               Str(True) & \"|\" & Str(False)
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("12|1899|29|6|12|1/2/2003| 37623|True|False".to_string())
+        );
     }
 
     /// Which comparison each function accepts, measured one at a time.
