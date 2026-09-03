@@ -4500,7 +4500,7 @@ fn call_builtin(
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
             let right = text(&args[1])
                 .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?;
-            let text_compare = compare_mode(args.get(2), option_compare_text, line)?;
+            let text_compare = compare_mode(args.get(2), option_compare_text, line, false)?;
             let (left, right) = if text_compare {
                 (left.to_lowercase(), right.to_lowercase())
             } else {
@@ -4561,7 +4561,7 @@ fn call_builtin(
                 Some(value) => truthy(value)
                     .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))?,
             };
-            let text_compare = compare_mode(args.get(3), option_compare_text, line)?;
+            let text_compare = compare_mode(args.get(3), option_compare_text, line, false)?;
             let mut values = Vec::new();
             for value in &array.values {
                 let Value::String(value) = value else {
@@ -7495,35 +7495,51 @@ fn call_string_builtin(
             let Some(needle) = nullable_text(&args[needle_index])? else {
                 return Ok(Value::Null);
             };
-            // An EMPTY string on either side settles the answer before the
-            // start is ever looked at, so a start that would otherwise be
-            // error 5 goes unremarked. Asked of Excel:
+            // The start is READ first, whatever the strings hold, and only
+            // then judged. Asked of Excel:
             //
-            //     InStr(0, "abc", "b")   error 5
-            //     InStr(0, "abc", "")    0
-            //     InStr(0, "", "b")      0
-            //     InStr("-3.5", "", "x") 0
-            //     InStr(1, "abc", "")    1
+            //     InStr("x", "abc", "")   error 13   -- not a number
+            //     InStr("", "", "")       error 13   -- nor is the empty one
+            //     InStr(Null, "abc", "")  error 94
+            //     InStr(Empty, "abc", "") 0          -- Empty reads as 0
+            //     InStr(True, "abc", "")  -1         -- and True as -1
             //
-            // -- nothing to search, or nothing to search FOR, and the start
-            // is simply handed back. Both of those shapes turned up in
-            // generated macros, raising 5 here where Excel answered 0.
+            // Its RANGE is what an empty string excuses. With nothing to
+            // search, or nothing to search for, a start below 1 goes
+            // unremarked and the answer is settled without it:
+            //
+            //     InStr(0, "abc", "b")    error 5
+            //     InStr(0, "abc", "")     0
+            //     InStr(0, "", "b")       0
+            //     InStr("-3.5", "", "x")  0
+            //     InStr(3, "abc", "")     3          -- the start, handed back
+            //
+            // Reading the start only when it was going to be judged looked
+            // like the same thing and was not: it turned `InStr("", "abc", "")`
+            // from error 13 into 0.
             let start = if args.len() == 2 {
                 0
-            } else if source.is_empty() {
-                return Ok(Value::Integer(0));
-            } else if needle.is_empty() {
-                // The start itself is the answer, whatever it is.
-                return Ok(Value::Integer(
-                    integer_argument(&args[0], line).unwrap_or(0),
-                ));
             } else {
-                positive_position(&args[0], line)?
+                let start = integer_argument(&args[0], line)?;
+                if source.is_empty() {
+                    return Ok(Value::Integer(0));
+                }
+                if needle.is_empty() {
+                    return Ok(Value::Integer(start));
+                }
+                if start < 1 {
+                    return Err(invalid_procedure_call(
+                        "String position must be positive".to_string(),
+                        line,
+                    ));
+                }
+                usize::try_from(start - 1).unwrap_or(usize::MAX)
             };
             let compare = compare_mode(
                 compare_index.map(|index| &args[index]),
                 option_compare_text,
                 line,
+                false,
             )?;
             let source = source.encode_utf16().collect::<Vec<_>>();
             let needle = needle.encode_utf16().collect::<Vec<_>>();
@@ -7563,7 +7579,7 @@ fn call_string_builtin(
                     }
                 }
             };
-            let compare = compare_mode(args.get(3), option_compare_text, line)?;
+            let compare = compare_mode(args.get(3), option_compare_text, line, true)?;
             // An empty needle answers with the start position ITSELF, not the
             // position after it. Asked of Excel: `InStrRev("abcd", "")` is 4
             // where the string is four long, `InStrRev("abcd", "", 2)` is 2,
@@ -7608,7 +7624,7 @@ fn call_string_builtin(
                     }
                 }
             };
-            let compare = compare_mode(args.get(5), option_compare_text, line)?;
+            let compare = compare_mode(args.get(5), option_compare_text, line, true)?;
             Ok(Value::String(utf16_replace(
                 &source,
                 &needle,
@@ -7624,11 +7640,11 @@ fn call_string_builtin(
             }
             let source = nullable_text(&args[0])?
                 .ok_or_else(|| invalid_null(line))?;
-            let delimiter = match args.get(1) {
-                None | Some(Value::Missing) => " ".to_string(),
-                Some(value) => nullable_text(value)?
-                    .ok_or_else(|| invalid_null(line))?,
-            };
+            // The NUMBERS are judged before the delimiter is read as text, so
+            // a bad limit or compare beside a delimiter that is not a string
+            // answers 5 and not 13. Asked of Excel,
+            // `Split("a b", Array(1), -2)` is error 5 while
+            // `Split("a b", Array(1), 8, 0)` is error 13.
             let limit = match args.get(2) {
                 None | Some(Value::Missing) => usize::MAX,
                 Some(value) => {
@@ -7645,7 +7661,12 @@ fn call_string_builtin(
                     }
                 }
             };
-            let compare = compare_mode(args.get(3), option_compare_text, line)?;
+            let compare = compare_mode(args.get(3), option_compare_text, line, true)?;
+            let delimiter = match args.get(1) {
+                None | Some(Value::Missing) => " ".to_string(),
+                Some(value) => nullable_text(value)?
+                    .ok_or_else(|| invalid_null(line))?,
+            };
             let values = utf16_split(&source, &delimiter, limit, compare)
                 .into_iter()
                 .map(Value::String)
@@ -7843,24 +7864,46 @@ fn positive_position(value: &Value, line: Option<u32>) -> Result<usize, RuntimeE
     }
 }
 
+/// Which comparison a `compare` argument asks for.
+///
+/// The whole table, asked of Excel one function at a time:
+///
+/// ```text
+///              -1      0       1     2      3 and up
+///   InStr      err 5   binary  text  err 5  text
+///   InStrRev   err 5   binary  text  text   text
+///   Split      err 5   binary  text  text   text
+///   Replace    err 5   binary  text  text   text
+///   StrComp    err 5   -       -     err 5  -
+///   Filter     err 5   binary  text  err 5  text
+/// ```
+///
+/// Two things in it are not what the documentation suggests. `-1` is
+/// `vbUseCompareOption`, and every one of these refuses it -- it is not a way
+/// of asking for the module's `Option Compare`, which is what an ABSENT
+/// argument means. And 2, `vbDatabaseCompare`, is refused by three of them and
+/// quietly taken as a text compare by the other three; `database_ok` carries
+/// that split, which is a measured list and not a rule.
+///
+/// Anything from 3 upward is a text compare wherever it is allowed at all --
+/// `InStr(1, "ABC", "b", 100)` answers 2.
 fn compare_mode(
     value: Option<&Value>,
     option_compare_text: bool,
     line: Option<u32>,
+    database_ok: bool,
 ) -> Result<bool, RuntimeError> {
     let mode = match value {
         None | Some(Value::Missing) => return Ok(option_compare_text),
         Some(value) => integer_argument(value, line)?,
     };
-    match mode {
-        -1 => Ok(option_compare_text),
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(invalid_procedure_call(
+    if mode < 0 || (mode == 2 && !database_ok) {
+        return Err(invalid_procedure_call(
             format!("invalid VBA comparison mode: {mode}"),
             line,
-        )),
+        ));
     }
+    Ok(mode != 0)
 }
 
 fn invalid_procedure_call(message: String, line: Option<u32>) -> RuntimeError {
@@ -12630,7 +12673,7 @@ mod tests {
                Dim source As String\n\
                source = \"A😀B\"\n\
                TextTools = Left(source, 3) & \"|\" & Mid(source, 2, 2) & \"|\" & Right(source, 1) & \"|\" & Len(source) & \"|\"\n\
-               TextTools = TextTools & InStr(1, \"日本ABC\", \"abc\", vbUseCompareOption) & \"|\" & InStrRev(\"abAB\", \"ab\", -1, vbTextCompare) & \"|\"\n\
+               TextTools = TextTools & InStr(1, \"日本ABC\", \"abc\") & \"|\" & InStrRev(\"abAB\", \"ab\", -1, vbTextCompare) & \"|\"\n\
                TextTools = TextTools & Replace(\"xx-A-a\", \"a\", \"!\", 4, 1, vbTextCompare)\n\
              End Function\n",
             "TextTools",
@@ -13442,6 +13485,95 @@ mod tests {
         assert_eq!(ask("InStr(\"-3.5\", \"\", \"False\")"), "0");
         assert_eq!(ask("InStr(1, \"abc\", \"\")"), "1");
         assert_eq!(ask("InStr(3, \"abc\", \"\")"), "3");
+
+        // What an empty string does NOT excuse is a start that is not a
+        // number. It is read before anything else is decided, so these are
+        // type mismatches however empty the strings are -- and reading it
+        // only when it was going to be judged turned the first into 0.
+        assert_eq!(ask("InStr(\"\", \"abc\", \"\")"), "err13");
+        assert_eq!(ask("InStr(\"\", \"\", \"b\")"), "err13");
+        assert_eq!(ask("InStr(\"x\", \"\", \"b\")"), "err13");
+        assert_eq!(ask("InStr(\"\", \"\", \"\")"), "err13");
+        assert_eq!(ask("InStr(Null, \"abc\", \"\")"), "err94");
+        // Empty reads as 0 and True as -1, and both are handed back.
+        assert_eq!(ask("InStr(Empty, \"abc\", \"\")"), "0");
+        assert_eq!(ask("InStr(True, \"abc\", \"\")"), "-1");
+        assert_eq!(ask("InStr(\"2\", \"abc\", \"b\")"), "2");
+    }
+
+    /// Which comparison each function accepts, measured one at a time.
+    ///
+    ///     compare      -1      0       1     2      3 and up
+    ///     InStr        err 5   binary  text  err 5  text
+    ///     InStrRev     err 5   binary  text  text   text
+    ///     Split        err 5   binary  text  text   text
+    ///     Replace      err 5   binary  text  text   text
+    ///     StrComp      err 5   -       -     err 5  -
+    ///     Filter       err 5   binary  text  err 5  text
+    ///
+    /// Two things here are not what the documentation suggests. `-1` is
+    /// `vbUseCompareOption`, and all six refuse it -- Excel does not even
+    /// DEFINE that name, so a macro naming it will not compile there; an
+    /// omitted argument is how one asks for the module's `Option Compare`.
+    /// And 2, `vbDatabaseCompare`, is refused by three of them and quietly
+    /// taken as a text compare by the other three, which is a list and not a
+    /// rule.
+    ///
+    /// A test here used to pass `vbUseCompareOption` and expect it to work.
+    /// It was written from the documentation, and the documentation is wrong.
+    #[test]
+    fn each_function_accepts_its_own_set_of_comparison_modes() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        // Every one of them refuses a negative mode.
+        for call in [
+            "InStr(1, \"ABC\", \"b\", -1)",
+            "InStrRev(\"ABC\", \"b\", -1, -1)",
+            "Split(\"aXb\", \"x\", -1, -1)",
+            "Replace(\"ABC\", \"b\", \"-\", 1, -1, -1)",
+            "StrComp(\"A\", \"a\", -1)",
+            "Filter(Array(\"AB\"), \"b\", True, -1)",
+        ] {
+            assert_eq!(ask(call), "err5", "{call}");
+        }
+
+        // Three refuse 2, and three take it as a text compare.
+        assert_eq!(ask("InStr(1, \"ABC\", \"b\", 2)"), "err5");
+        assert_eq!(ask("StrComp(\"A\", \"a\", 2)"), "err5");
+        assert_eq!(ask("UBound(Filter(Array(\"AB\", \"cd\"), \"b\", True, 2))"), "err5");
+        assert_eq!(ask("InStrRev(\"ABC\", \"b\", -1, 2)"), "2");
+        assert_eq!(ask("UBound(Split(\"aXb\", \"x\", -1, 2))"), "1");
+        assert_eq!(ask("Replace(\"ABC\", \"b\", \"-\", 1, -1, 2)"), "A-C");
+
+        // 0 is binary, and anything from 1 up that is allowed is text.
+        assert_eq!(ask("InStr(1, \"ABC\", \"b\", 0)"), "0");
+        assert_eq!(ask("InStr(1, \"ABC\", \"b\", 1)"), "2");
+        assert_eq!(ask("InStr(1, \"ABC\", \"b\", 4)"), "2");
+        assert_eq!(ask("UBound(Filter(Array(\"AB\", \"cd\"), \"b\", True, 4))"), "0");
+        assert_eq!(ask("StrComp(\"A\", \"a\", 1)"), "0");
+
+        // Split judges its NUMBERS before it reads the delimiter as text, so a
+        // bad limit beside an array delimiter is 5 and not 13.
+        assert_eq!(ask("Split(\"a b\", Array(1), -2)"), "err5");
+        assert_eq!(ask("Split(\"a b\", Array(1), 8, 0)"), "err13");
     }
 
     /// An empty string is not a Boolean.
