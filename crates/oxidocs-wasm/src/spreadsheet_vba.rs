@@ -9506,11 +9506,24 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
             Some(text) => Ok(CellValue::Error(text.to_string())),
             None => Err(format!("{value} is not a spreadsheet error value")),
         },
-        // An empty string does not leave an empty string in the cell: asked of
-        // Excel, `Range("F1").Value = ""` leaves the cell Empty, and TypeName
-        // says so.
-        Value::String(value) if value.is_empty() => Ok(CellValue::Empty),
-        Value::String(value) => Ok(typed_from_text(&value)),
+        // A cell CUTS its text at the first NUL, and what is left decides the
+        // rest. Asked of Excel, `Range("A1").Value = "a" & Chr(0) & "b"`
+        // leaves the cell holding `a`, and a value that is nothing but NULs
+        // leaves it Empty -- the same as the empty string, which also does not
+        // stay a string: `Range("F1").Value = ""` leaves the cell Empty and
+        // TypeName says so.
+        //
+        // Every other control character goes in whole: Chr(1), Chr(9), Chr(10)
+        // and Chr(12) all leave a cell one character long. It is the NUL alone
+        // that ends the text.
+        Value::String(value) => {
+            let kept = text_a_cell_keeps(&value);
+            if kept.is_empty() {
+                Ok(CellValue::Empty)
+            } else {
+                Ok(typed_from_text(kept))
+            }
+        }
         Value::Array(_) => Err("a VBA array cannot be assigned to one cell".to_string()),
         Value::Record(_) => Err("a VBA Type cannot be assigned to one cell".to_string()),
         Value::Object(_) => Err("a VBA object cannot be assigned to one cell".to_string()),
@@ -9861,6 +9874,20 @@ impl InputBlock {
     }
 }
 
+/// How much of a string a cell keeps.
+///
+/// It CUTS at the first NUL. Asked of Excel, `Range("A1").Value = "a" &
+/// Chr(0) & "b"` leaves the cell holding `a`, and a value that is nothing but
+/// NULs leaves it Empty. Every other control character goes in whole -- Chr(1),
+/// Chr(9), Chr(10) and Chr(12) each leave a cell one character long, so it is
+/// the NUL alone that ends the text.
+fn text_a_cell_keeps(written: &str) -> &str {
+    match written.find('\0') {
+        Some(cut) => &written[..cut],
+        None => written,
+    }
+}
+
 /// Read an assigned value the way Excel reads it, whichever door it came
 /// through.
 ///
@@ -9876,10 +9903,12 @@ fn cell_input(value: Value) -> Result<CellInput, String> {
         }
     }
     if let Value::String(written) = &value {
+        let written = text_a_cell_keeps(written);
         if !written.is_empty() {
             let (cell, shown) = typed_from_written(written);
             return Ok(CellInput::Constant(cell, shown));
         }
+        return Ok(CellInput::Constant(CellValue::Empty, None));
     }
     to_cell_value(value).map(|cell| CellInput::Constant(cell, None))
 }
@@ -10307,6 +10336,41 @@ mod tests {
     /// and nothing else -- not the yen, euro or pound sign, and not a `$`
     /// behind an escape or inside a `[$...]` locale bracket, though one inside
     /// quotes does count.
+    /// A cell cuts its text at the first NUL.
+    ///
+    /// Asked of Excel, `Range("A1").Value = "a" & Chr(0) & "b"` leaves the
+    /// cell holding `a`, and a value that is nothing but NULs leaves it Empty.
+    /// Every other control character goes in whole -- Chr(1), Chr(9), Chr(10)
+    /// and Chr(12) each leave a cell one character long -- so it is the NUL
+    /// alone that ends the text.
+    ///
+    /// The rule sits in `text_a_cell_keeps` because there are two doors into a
+    /// cell and both have to use it. Writing it into `to_cell_value` alone did
+    /// nothing at all: `cell_input` takes every non-empty string before it
+    /// gets there, so the edit was in code this path never reaches.
+    #[test]
+    fn a_cell_cuts_its_text_at_the_first_nul() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String
+               Range(\"A1\").Value = Chr(0)
+               Range(\"A2\").Value = \"a\" & Chr(0) & \"b\"
+               Range(\"A3\").Value = Chr(0) & Chr(0)
+               Range(\"A4\").Value = \"a\" & Chr(0)
+               Range(\"A5\").Value = Chr(9)
+               Range(\"A6\").Value = Chr(12)
+               Ask = Len(CStr(Range(\"A1\").Value)) & TypeName(Range(\"A1\").Value) & \"|\" &                      CStr(Range(\"A2\").Value) & \"|\" &                      Len(CStr(Range(\"A3\").Value)) & TypeName(Range(\"A3\").Value) & \"|\" &                      CStr(Range(\"A4\").Value) & \"|\" &                      Len(CStr(Range(\"A5\").Value)) & \"|\" &                      Len(CStr(Range(\"A6\").Value))
+             End Function
+",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(answer, Value::String("0Empty|a|0Empty|a|1|1".to_string()));
+    }
+
     /// Only a real error code may be put in a cell.
     ///
     /// Asked of Excel, `Range("A1").Value = CVErr(2042)` leaves #N/A, and so
