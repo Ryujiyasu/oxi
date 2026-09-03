@@ -4393,78 +4393,96 @@ impl LayoutEngine {
             // i.e. natural 10.375 + ruby_expansion 3.75 = 14.1 > 12.8. The
             // expansion is the SAME `paragraph_ruby_expansion_pt` the
             // horizontal grid path uses (S752), so one rule covers both axes.
-            let s1185_cells: f32 = if std::env::var("OXI_S1185_DISABLE").is_err() {
-                if let Some(pitch) = page.grid_line_pitch {
-                    // An empty paragraph has no runs, so its fonts live in the
-                    // pPr/rPr mark properties — route it through the ¶-mark
-                    // resolution with ppr_rpr, the same convention as every
-                    // horizontal empty-para site (047ff775's empties are
-                    // メイリオ 10.5 → 83/64 natural 20.4 → 2 cells; the truth
-                    // x-walk shows every empty advancing 36).
-                    let (m, nat_fs) = if para_text.chars().all(|c| c.is_whitespace()) {
-                        let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
-                        let mark_fs = self.resolve_font_size(&rpr, &para.style);
-                        (self.metrics_for_para_mark(&rpr, &para.style), mark_fs)
-                    } else {
-                        (self.metrics_for_text(&para_text, &style, &para.style), fs)
-                    };
-                    let mut nat = m.word_line_height_no_grid(nat_fs);
-                    for run in &para.runs {
-                        if run.text.chars().all(|c| c.is_whitespace()) {
-                            continue;
-                        }
-                        let rfs = self.resolve_font_size(&run.style, &para.style);
-                        let rm = self.metrics_for_text(&run.text, &run.style, &para.style);
-                        nat = nat.max(rm.word_line_height_no_grid(rfs));
+            // S1296 (2026-09-03, opt-out `OXI_S1296_DISABLE`): the width belongs
+            // to the LINE, not to the paragraph. 01535587 p7 puts a classical
+            // line (メイリオ 10.5 + ruby → 2 cells) and its modern gloss
+            // (游明朝 9.0 → 1 cell) inside ONE paragraph, and Word gives that
+            // paragraph a 36pt column followed by an 18pt one — the horizontal
+            // rule "a line is as tall as the runs ON IT" turned on its side.
+            // The max over the whole paragraph charged both lines 36 and cost
+            // the page two cells. Truth: read each column's left edge off the
+            // PDF's glyph x's (glyph left − the centring inset); p7's 18
+            // paragraph columns then sum to 630pt and 742.5 − 630 = 112.5 =
+            // the last column's measured x, so the page closes at 0.00pt.
+            let s1185_on = std::env::var("OXI_S1185_DISABLE").is_err();
+            let per_line = std::env::var("OXI_S1296_DISABLE").is_err();
+            // Each run's own natural column width, so a line can be as wide as
+            // only the runs that land on it. A whitespace-only run measures
+            // nothing, exactly as the paragraph-wide max skipped it.
+            let run_nat: Vec<f32> = para
+                .runs
+                .iter()
+                .map(|run| {
+                    if run.text.chars().all(|c| c.is_whitespace()) {
+                        return 0.0;
                     }
-                    nat += ruby::paragraph_ruby_expansion_pt(&para.runs, fs);
-                    let h_tw = (nat * 20.0).round();
-                    let pitch_tw = (pitch * 20.0).round().max(1.0);
-                    let cells = (h_tw / pitch_tw).ceil().max(1.0);
-                    if std::env::var("OXI_DBGVERT").is_ok() {
-                        eprintln!(
-                            "[DBGVERT] blk={} fam={:?} 83/64={} fs={:.2} nat={:.3} \
-h_tw={} pitch_tw={} cells={} text={:?}",
-                            block_idx,
-                            m.family,
-                            m.is_cjk_83_64_font(),
-                            nat_fs,
-                            nat,
-                            h_tw,
-                            pitch_tw,
-                            cells,
-                            para_text.chars().take(14).collect::<String>()
-                        );
-                    }
-                    cells
-                } else {
-                    1.0
-                }
+                    let rfs = self.resolve_font_size(&run.style, &para.style);
+                    self.metrics_for_text(&run.text, &run.style, &para.style)
+                        .word_line_height_no_grid(rfs)
+                })
+                .collect();
+            // An empty paragraph has no runs, so its fonts live in the pPr/rPr
+            // mark properties — route it through the ¶-mark resolution with
+            // ppr_rpr, the same convention as every horizontal empty-para site
+            // (047ff775's empties are メイリオ 10.5 → 83/64 natural 20.4 → 2
+            // cells; the truth x-walk shows every empty advancing 36).
+            let (mark_m, mark_fs) = if para_text.chars().all(|c| c.is_whitespace()) {
+                let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+                let mark_fs = self.resolve_font_size(&rpr, &para.style);
+                (self.metrics_for_para_mark(&rpr, &para.style), mark_fs)
             } else {
-                1.0
+                (self.metrics_for_text(&para_text, &style, &para.style), fs)
             };
-            let pitch = if std::env::var("OXI_S1166_DISABLE").is_ok() {
-                page_pitch
-            } else {
+            // The paragraph-wide basis: what a line falls back to when none of
+            // its own runs measures, and the whole answer when S1296 is off.
+            let nat_base = mark_m.word_line_height_no_grid(mark_fs);
+            let nat_para = run_nat.iter().fold(nat_base, |a, b| a.max(*b))
+                + ruby::paragraph_ruby_expansion_pt(&para.runs, fs);
+            let cells_of = |nat: f32| -> f32 {
+                match page.grid_line_pitch {
+                    Some(grid) if s1185_on => {
+                        let h_tw = (nat * 20.0).round();
+                        let pitch_tw = (grid * 20.0).round().max(1.0);
+                        (h_tw / pitch_tw).ceil().max(1.0)
+                    }
+                    _ => 1.0,
+                }
+            };
+            let pitch_of = |cells: f32| -> f32 {
+                if std::env::var("OXI_S1166_DISABLE").is_ok() {
+                    return page_pitch;
+                }
                 match para.style.line_spacing_rule.as_deref() {
                     Some("exact") => para.style.line_spacing.unwrap_or(page_pitch).max(0.0),
-                    Some("atLeast") => para
-                        .style
-                        .line_spacing
-                        .unwrap_or(0.0)
-                        .max(page_pitch * s1185_cells),
+                    Some("atLeast") => para.style.line_spacing.unwrap_or(0.0).max(page_pitch * cells),
                     // auto (or absent): multiplier and cell count compete.
-                    _ => {
-                        page_pitch
-                            * para
-                                .style
-                                .line_spacing
-                                .unwrap_or(1.0)
-                                .max(0.0)
-                                .max(s1185_cells)
-                    }
+                    _ => page_pitch * para.style.line_spacing.unwrap_or(1.0).max(0.0).max(cells),
                 }
             };
+            // The width of a column whose characters came from runs `a..=b`.
+            let col_pitch = |a: usize, b: usize| -> f32 {
+                let mut nat = run_nat[a..=b].iter().fold(0.0f32, |m, v| m.max(*v));
+                if nat <= 0.0 {
+                    nat = nat_base;
+                }
+                nat += ruby::paragraph_ruby_expansion_pt(&para.runs[a..=b], fs);
+                pitch_of(cells_of(nat))
+            };
+            let pitch = pitch_of(cells_of(nat_para));
+            if std::env::var("OXI_DBGVERT").is_ok() {
+                eprintln!(
+                    "[DBGVERT] blk={} fam={:?} 83/64={} fs={:.2} nat={:.3} \
+cells={} pitch={:.2} text={:?}",
+                    block_idx,
+                    mark_m.family,
+                    mark_m.is_cjk_83_64_font(),
+                    mark_fs,
+                    nat_para,
+                    cells_of(nat_para),
+                    pitch,
+                    para_text.chars().take(14).collect::<String>()
+                );
+            }
 
             recipes.push(VertParaRecipe {
                 style,
@@ -4488,21 +4506,34 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                 continue;
             }
 
+            // Which run each character came from, so a finished column can name
+            // the runs that decide its width.
+            let char_run: Vec<usize> = para
+                .runs
+                .iter()
+                .enumerate()
+                .flat_map(|(i, r)| r.text.chars().map(move |_| i))
+                .collect();
             let mut buf: Vec<char> = Vec::new();
             let mut cur_y = 0.0f32;
             let mut first = true;
-            for ch in para_text.chars() {
+            let (mut lo, mut hi) = (0usize, 0usize);
+            for (ci, ch) in para_text.chars().enumerate() {
                 if cur_y + char_adv > band_h + 0.01 && !buf.is_empty() {
                     cols.push(VertColumn {
                         recipe,
                         text: buf.drain(..).collect(),
-                        pitch,
+                        pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                         blank: false,
                         hard_break: hard_break && first,
                     });
                     first = false;
                     cur_y = 0.0;
                 }
+                if buf.is_empty() {
+                    lo = char_run[ci];
+                }
+                hi = char_run[ci];
                 buf.push(ch);
                 cur_y += char_adv;
             }
@@ -4510,7 +4541,7 @@ h_tw={} pitch_tw={} cells={} text={:?}",
                 cols.push(VertColumn {
                     recipe,
                     text: buf.drain(..).collect(),
-                    pitch,
+                    pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                     blank: false,
                     hard_break: hard_break && first,
                 });
