@@ -1949,6 +1949,62 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// `Len` of a VARIABLE, which is a different question from `Len` of a
+    /// value, and is settled before the value is ever looked at.
+    ///
+    /// Asked of Excel: an `Integer` answers 2, a `Long` 4, a `Byte` 1, a
+    /// `Single` 4, a `Double` 8, a `Currency` 8, a `Date` 8 and a `Boolean` 2
+    /// -- the bytes it occupies. A `String` answers its CHARACTER count
+    /// instead, `String * 10` answers 10 however short what is in it, and a
+    /// `Variant` answers the length of its text: 1 for a Variant holding the
+    /// number 1, 3 for one holding 1.5.
+    ///
+    /// So an `Integer` holding 1 answers 2 while a `Variant` holding the same
+    /// 1 answers 1 -- and NOTHING in the value tells them apart, since VarType
+    /// says 2 for both. The declaration is the only place the answer lives.
+    ///
+    /// Which is exactly how VBA reads it: not by the value but by the SYNTAX.
+    /// `Len(x)` compiles and `Len(1)`, `Len(1.5)` and `Len(i + 1)` do not --
+    /// they are compile errors, so the byte-size reading takes a variable NAME
+    /// and nothing else. (Discovering that took a while: a compile error makes
+    /// Excel raise a modal dialog and stop answering, which reads exactly like
+    /// a hung machine.) A string literal is fine, because that is the other
+    /// reading, `Len` of a String.
+    ///
+    /// Answering `None` leaves the call to the ordinary path, which counts
+    /// characters -- the right answer for a String, a Variant and every
+    /// expression that is not a bare name.
+    fn storage_size_asked_of(
+        &self,
+        name: &str,
+        args: &[Argument],
+        frame: &Frame,
+    ) -> Option<i64> {
+        if !name.eq_ignore_ascii_case("len") {
+            return None;
+        }
+        let [argument] = args else {
+            return None;
+        };
+        let Some(Expr::Ident(variable, _) | Expr::TypedIdent { name: variable, .. }) =
+            argument.value.as_ref()
+        else {
+            return None;
+        };
+        // A fixed-width string answers its width, which is a length and not a
+        // size, and the ordinary path already has it.
+        if self.fixed_string_width(frame, variable).is_some() {
+            return None;
+        }
+        match self.declared_type(frame, variable)?.to_ascii_lowercase().as_str() {
+            "byte" => Some(1),
+            "integer" | "boolean" => Some(2),
+            "long" | "single" => Some(4),
+            "double" | "currency" | "date" | "longlong" => Some(8),
+            _ => None,
+        }
+    }
+
     fn declared_type(&self, frame: &Frame, name: &str) -> Option<String> {
         let name = key(name);
         frame
@@ -2365,6 +2421,11 @@ impl<'a> Runtime<'a> {
                             frame,
                             Some(span.line),
                         );
+                    }
+                }
+                if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
+                    if let Some(size) = self.storage_size_asked_of(name, args, frame) {
+                        return Ok(Value::Integer(size));
                     }
                 }
                 let mut values = Vec::with_capacity(args.len());
@@ -11937,6 +11998,82 @@ mod tests {
     /// This could not be answered honestly until the runtime had a Date of its
     /// own: both sides of the pair were a Double before, so it said True to
     /// anything that converted and got every number wrong.
+    /// `Len` of a variable is its SIZE; `Len` of anything else is a length.
+    ///
+    /// Asked of Excel, and the whole table agrees: Integer 2, Long 4, Byte 1,
+    /// Single 4, Double 8, Currency 8, Date 8, Boolean 2 -- the bytes each
+    /// occupies. A String answers its character count, `String * 10` answers
+    /// 10 however short what is in it, and a Variant answers the length of its
+    /// text, so a Variant holding 1 answers 1 and one holding 1.5 answers 3.
+    ///
+    /// An Integer holding 1 therefore answers 2 where a Variant holding the
+    /// same 1 answers 1, and no part of the VALUE tells them apart: VarType
+    /// says 2 for both. Only the declaration knows, which is why this is
+    /// settled from the argument's expression before it is evaluated.
+    #[test]
+    fn len_of_a_variable_is_its_size_and_of_anything_else_a_length() {
+        let source = "Public Function Ask() As String\n\
+                        Dim anInteger As Integer\n\
+                        Dim aLong As Long\n\
+                        Dim aByte As Byte\n\
+                        Dim aSingle As Single\n\
+                        Dim aDouble As Double\n\
+                        Dim aCurrency As Currency\n\
+                        Dim aDate As Date\n\
+                        Dim aBoolean As Boolean\n\
+                        Dim aString As String\n\
+                        Dim aFixed As String * 10\n\
+                        Dim vInt As Variant\n\
+                        Dim vStr As Variant\n\
+                        Dim vDate As Variant\n\
+                        Dim vDbl As Variant\n\
+                        Dim vEmpty As Variant\n\
+                        anInteger = 1: aLong = 1: aByte = 1: aSingle = 1\n\
+                        aDouble = 1: aCurrency = 1: aDate = #3/4/2003#\n\
+                        aBoolean = True: aString = \"hello\": aFixed = \"hi\"\n\
+                        vInt = 1: vStr = \"hello\": vDate = #3/4/2003#: vDbl = 1.5\n\
+                        Ask = Len(anInteger) & \"|\" & Len(aLong) & \"|\" & Len(aByte) & \"|\" & \
+                              Len(aSingle) & \"|\" & Len(aDouble) & \"|\" & Len(aCurrency) & \"|\" & \
+                              Len(aDate) & \"|\" & Len(aBoolean) & \"|\" & Len(aString) & \"|\" & \
+                              Len(aFixed) & \"|\" & Len(vInt) & \"|\" & Len(vStr) & \"|\" & \
+                              Len(vDate) & \"|\" & Len(vDbl) & \"|\" & Len(vEmpty) & \"|\" & \
+                              Len(\"abc\")\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("2|4|1|4|8|8|8|2|5|10|1|5|8|3|0|3".to_string())
+        );
+    }
+
+    /// Which arguments `Len` even accepts, and what the extra brackets do.
+    ///
+    /// VBA settles this at COMPILE time, and refuses what it can see is a
+    /// number with no variable to name: `Len(1)`, `Len(1.5)`, `Len(i + 1)` and
+    /// `Len(CInt(1))` are all compile errors, where `Len(CStr(1))` is 1 and
+    /// `Len(Range("A1").Value)` is the length of what the cell holds. A pair of
+    /// brackets round the name changes nothing -- `Len((i))` is still the size,
+    /// 2, not the length of "1".
+    ///
+    /// Finding that out was slow, because a compile error puts Excel behind a
+    /// modal dialog where it answers nothing at all, which reads exactly like a
+    /// machine that has hung.
+    ///
+    /// Nothing here refuses the numeric forms: this runtime has no compile
+    /// pass to refuse them in, and a macro carrying one would not have got past
+    /// Excel to reach us.
+    #[test]
+    fn brackets_round_the_name_do_not_change_what_len_answers() {
+        let source = "Public Function Ask() As String\n\
+                        Dim i As Integer\n\
+                        i = 1\n\
+                        Ask = Len((i)) & \"|\" & Len(CStr(1))\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("2|1".to_string())
+        );
+    }
+
     #[test]
     fn is_date_asks_whether_the_text_is_written_as_one() {
         let asked = |expression: &str| {
