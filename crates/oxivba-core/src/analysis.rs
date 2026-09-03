@@ -1138,7 +1138,13 @@ impl Walker {
             Statement::Dim(v) => self.walk_var_decl(v),
             Statement::ReDim { items, .. } => {
                 for item in items {
-                    self.walk_var_item(item);
+                    self.walk_expr(&item.target);
+                    for bound in &item.bounds {
+                        if let Some(lower) = &bound.lower {
+                            self.walk_expr(lower);
+                        }
+                        self.walk_expr(&bound.upper);
+                    }
                 }
             }
             Statement::Erase { targets, .. } => {
@@ -1861,7 +1867,7 @@ fn collect_declared_names(body: &[Statement], names: &mut BTreeSet<String>) {
                 names.extend(decl.items.iter().map(|item| item.name.to_ascii_lowercase()))
             }
             Statement::ReDim { items, .. } => {
-                names.extend(items.iter().map(|item| item.name.to_ascii_lowercase()));
+                names.extend(items.iter().map(|item| item.name().to_ascii_lowercase()));
             }
             Statement::If(if_statement) => {
                 collect_declared_names(&if_statement.then_body, names);
@@ -4467,6 +4473,8 @@ mod tests {
         assert_eq!(a.class, None);
         assert!(a.verdict().contains("unclassified"));
     }
+
+
 
 
 

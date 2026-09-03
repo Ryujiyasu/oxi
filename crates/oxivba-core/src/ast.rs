@@ -128,6 +128,28 @@ pub struct VarDecl {
     pub span: Span,
 }
 
+/// One array in a `ReDim`.
+///
+/// Its target is an EXPRESSION, not a name, because VBA lets a `ReDim` reach
+/// into a record: `ReDim Preserve This.objects(1 To ub * 2)` resizes a field,
+/// and inside a `With` block `ReDim .arrItems(0 To .ub + 1)` resizes one of
+/// the subject's. `Erase` has always taken an expression for the same reason;
+/// this brings `ReDim` alongside it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReDimItem {
+    pub target: Expr,
+    pub bounds: Vec<ArrayBound>,
+    pub type_name: TypeName,
+}
+
+impl ReDimItem {
+    /// The array's name for the readers that want one, dotted when the target
+    /// is a path.
+    pub fn name(&self) -> String {
+        self.target.dotted_name().unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarItem {
     pub name: String,
@@ -238,7 +260,7 @@ pub enum Statement {
     Dim(VarDecl),
     ReDim {
         preserve: bool,
-        items: Vec<VarItem>,
+        items: Vec<ReDimItem>,
         span: Span,
     },
     Erase {

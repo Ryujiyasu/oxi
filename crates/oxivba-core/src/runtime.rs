@@ -19,7 +19,8 @@ use std::{
 use crate::ast::{
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
-    OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ResumeTarget, SelectCaseStmt, Statement,
+    OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ReDimItem, ResumeTarget, SelectCaseStmt,
+    Statement,
     TypeDef, TypeName, UnaryOp, VarDecl, VarItem,
 };
 
@@ -1567,25 +1568,38 @@ impl<'a> Runtime<'a> {
 
     fn redim(
         &mut self,
-        item: &VarItem,
+        item: &ReDimItem,
         preserve: bool,
         frame: &mut Frame,
         line: u32,
     ) -> Result<(), RuntimeError> {
-        let bounds = item.array_bounds.as_ref().ok_or_else(|| {
-            error(
+        if item.bounds.is_empty() {
+            return Err(error(
                 RuntimeErrorKind::TypeMismatch,
                 "ReDim target must have array bounds",
                 Some(line),
-            )
-        })?;
-        if self.is_constant(frame, &item.name) {
-            return Err(constant_assignment_error(&item.name, line));
+            ));
         }
-        let existing_slot = self.lookup_slot(frame, &item.name);
+        let bounds = &item.bounds;
+        // A target that is a PATH -- `This.objects`, or `.arrItems` inside a
+        // `With` -- has no slot of its own to write into. It is read and
+        // written the way `Erase` reads and writes one, through the ordinary
+        // assignment path, which already knows how to reach into a record.
+        let name = item.name();
+        let plain_name = matches!(
+            &item.target,
+            Expr::Ident(_, _) | Expr::TypedIdent { .. }
+        );
+        if !plain_name {
+            return self.redim_through_path(item, preserve, frame, line);
+        }
+        if self.is_constant(frame, &name) {
+            return Err(constant_assignment_error(&name, line));
+        }
+        let existing_slot = self.lookup_slot(frame, &name);
         if let Some(existing) = &existing_slot {
             if matches!(&*existing.borrow(), Value::Array(array) if !array.resizable) {
-                return Err(fixed_array_error(&item.name, Some(line)));
+                return Err(fixed_array_error(&name, Some(line)));
             }
         }
         let mut replacement = match self.make_array(bounds, &item.type_name, frame, line, true)? {
@@ -1604,7 +1618,7 @@ impl<'a> Runtime<'a> {
             let existing = existing_slot.clone().ok_or_else(|| {
                 error(
                     RuntimeErrorKind::UndefinedVariable,
-                    format!("undefined VBA array: {}", item.name),
+                    format!("undefined VBA array: {name}"),
                     Some(line),
                 )
             })?;
@@ -1612,7 +1626,7 @@ impl<'a> Runtime<'a> {
             let Value::Array(existing) = &*existing else {
                 return Err(error(
                     RuntimeErrorKind::TypeMismatch,
-                    format!("ReDim Preserve target is not an array: {}", item.name),
+                    format!("ReDim Preserve target is not an array: {name}"),
                     Some(line),
                 ));
             };
@@ -1633,10 +1647,60 @@ impl<'a> Runtime<'a> {
             None => {
                 frame
                     .values
-                    .insert(key(&item.name), Rc::new(RefCell::new(replacement)));
+                    .insert(key(&name), Rc::new(RefCell::new(replacement)));
             }
         }
         Ok(())
+    }
+
+    /// `ReDim` whose target is a path rather than a plain name.
+    ///
+    /// Read what is there, build the new array beside it, and write it back
+    /// where it came from -- the same three steps `Erase` takes. A path always
+    /// names something that already exists, so there is no slot to create and
+    /// no implicit declaration to make.
+    fn redim_through_path(
+        &mut self,
+        item: &ReDimItem,
+        preserve: bool,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<(), RuntimeError> {
+        let existing = self.eval_expr(&item.target, frame)?;
+        if matches!(&existing, Value::Array(array) if !array.resizable) {
+            return Err(fixed_array_error(&item.name(), Some(line)));
+        }
+        let mut replacement = match self.make_array(&item.bounds, &item.type_name, frame, line, true)?
+        {
+            Value::Array(array) => array,
+            _ => unreachable!(),
+        };
+        if item.type_name.name.eq_ignore_ascii_case("variant") {
+            if let Value::Array(existing) = &existing {
+                replacement.element_default = existing.element_default.clone();
+                replacement.values.fill(*existing.element_default.clone());
+            }
+        }
+        if preserve {
+            let Value::Array(existing) = &existing else {
+                return Err(error(
+                    RuntimeErrorKind::TypeMismatch,
+                    format!("ReDim Preserve target is not an array: {}", item.name()),
+                    Some(line),
+                ));
+            };
+            if !existing.dimensions.is_empty()
+                && !preservable_dimensions(&existing.dimensions, &replacement.dimensions)
+            {
+                return Err(error(
+                    RuntimeErrorKind::SubscriptOutOfRange,
+                    "ReDim Preserve can only resize an array's last dimension",
+                    Some(line),
+                ));
+            }
+            preserve_array_values(existing, &mut replacement);
+        }
+        self.assign(&item.target, Value::Array(replacement), frame, line)
     }
 
     fn make_array(
@@ -13181,4 +13245,53 @@ mod tests {
             Value::String("True|False|True|False|True|True|False|True".to_string())
         );
     }
+    /// `ReDim` reaches into a record, the way `Erase` always has.
+    ///
+    /// `ReDim Preserve This.objects(1 To ub * 2)` is ordinary VBA and turns up
+    /// constantly in class modules that keep their state in one `Private Type`.
+    /// Asked of Excel, the whole sequence below answers `ab|4|d`.
+    ///
+    /// Only a plain name owns a slot, so a path is read, rebuilt and written
+    /// back through the assignment path instead -- the three steps `Erase`
+    /// takes.
+    #[test]
+    fn redim_resizes_an_array_inside_a_record() {
+        let source = "Private Type Holder
+                        objects() As String
+                        ub As Long
+                      End Type
+                      Public Function Ask() As String
+                        Dim This As Holder
+                        ReDim This.objects(1 To 2)
+                        This.objects(1) = \"a\"
+                        This.objects(2) = \"b\"
+                        ReDim Preserve This.objects(1 To 4)
+                        This.objects(4) = \"d\"
+                        Ask = This.objects(1) & This.objects(2) & \"|\" &                               UBound(This.objects) & \"|\" & This.objects(4)
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("ab|4|d".to_string())
+        );
+    }
+
+    /// A field of the record decides the new size, which is the shape the
+    /// corpus actually uses: `ReDim Preserve This.objects(1 To This.ub * 2)`.
+    #[test]
+    fn a_records_own_field_can_size_its_array() {
+        let source = "Private Type Holder
+                        objects() As String
+                        ub As Long
+                      End Type
+                      Public Function Ask() As String
+                        Dim This As Holder
+                        This.ub = 3
+                        ReDim This.objects(1 To This.ub * 2)
+                        Ask = CStr(UBound(This.objects))
+                      End Function
+";
+        assert_eq!(run(source, "Ask", vec![]).unwrap(), Value::String("6".to_string()));
+    }
+
 }

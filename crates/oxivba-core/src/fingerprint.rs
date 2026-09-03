@@ -336,7 +336,7 @@ impl LocalNames {
                 }
                 Statement::ReDim { items, .. } => {
                     for item in items {
-                        self.declared.insert(item.name.to_ascii_lowercase());
+                        self.declared.insert(item.name().to_ascii_lowercase());
                     }
                 }
                 Statement::For(s) => {
@@ -457,10 +457,10 @@ fn render_statement(stmt: &Statement, locals: &mut LocalNames, depth: usize, out
         } => {
             let _ = write!(out, "redim{}", if *preserve { " preserve" } else { "" });
             for item in items {
-                let name = locals.render(&item.name);
+                let name = locals.render(&item.name());
                 let _ = write!(out, " {name}:");
                 render_type_name(&item.type_name, locals, out);
-                render_array_bounds(&item.array_bounds, locals, out);
+                render_array_bounds(&Some(item.bounds.clone()), locals, out);
             }
         }
         Statement::Erase { targets, .. } => {

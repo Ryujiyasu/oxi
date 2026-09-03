@@ -1251,7 +1251,7 @@ impl<'a> Parser<'a> {
         let preserve = self.eat_kw("preserve");
         let mut items = Vec::new();
         loop {
-            let Some(item) = self.parse_var_item() else {
+            let Some(item) = self.parse_redim_item() else {
                 break;
             };
             items.push(item);
@@ -1265,6 +1265,69 @@ impl<'a> Parser<'a> {
             items,
             span,
         }
+    }
+
+    /// `ReDim`'s target may be a path, so it is read as an expression.
+    ///
+    /// `ReDim Preserve This.objects(1 To ub * 2)` resizes a field of a record,
+    /// and `ReDim .arrItems(0 To .ub + 1)` resizes one of the `With` subject's.
+    /// Reading only a plain name lost twenty-nine lines across twelve of the
+    /// 378 modules measured -- and with them whatever the parser swallowed
+    /// while it found its place again.
+    ///
+    /// The brackets are the array's bounds, not an index, so the expression is
+    /// read WITHOUT them and they are taken here.
+    fn parse_redim_item(&mut self) -> Option<ReDimItem> {
+        let target = self.parse_redim_target()?;
+        let bounds = if self.at_punct(Punct::LParen) {
+            self.parse_array_bounds()
+        } else {
+            Vec::new()
+        };
+        let type_name = self.parse_as_type().unwrap_or_else(TypeName::implicit);
+        Some(ReDimItem {
+            target,
+            bounds,
+            type_name,
+        })
+    }
+
+    /// The name or path a `ReDim` names, stopping before the bounds.
+    fn parse_redim_target(&mut self) -> Option<Expr> {
+        let span = self.span();
+        let mut expr = if self.at_punct(Punct::Dot) {
+            let name = match self.kind_at(1).clone() {
+                TokenKind::Ident(name) | TokenKind::BracketExpr(name) => name,
+                _ => return None,
+            };
+            self.pos += 2;
+            Expr::WithMember(name, span)
+        } else {
+            let (name, suffix) = self.parse_typed_ident()?;
+            match suffix {
+                Some(suffix) => Expr::TypedIdent {
+                    name,
+                    suffix,
+                    span,
+                },
+                None => Expr::Ident(name, span),
+            }
+        };
+        while self.at_punct(Punct::Dot) {
+            let name = match self.kind_at(1).clone() {
+                TokenKind::Ident(name) | TokenKind::BracketExpr(name) => name,
+                _ => break,
+            };
+            let span = self.span();
+            self.pos += 2;
+            expr = Expr::Member {
+                object: Box::new(expr),
+                name,
+                suffix: None,
+                span,
+            };
+        }
+        Some(expr)
     }
 
     fn invalid_statement(&mut self, start: Span) -> Statement {
