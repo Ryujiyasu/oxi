@@ -29017,7 +29017,19 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
             max_ascent = metrics.word_ascent_pt(font_size);
             max_descent = metrics.word_descent_pt(font_size);
         } else {
+            // S1298 THIRD site: this natural (ascent+descent) fold is what the
+            // emitted element's BOX height comes from, and it is separate from
+            // both folds inside `line_height_for_line`. With only those two
+            // wired, `d1e8ac8`'s 「　　…殿」 line kept its ADVANCE (the next line
+            // stayed at y=169.5 in both arms) while every element on it grew
+            // 14.27 -> 18.36, which is what moved the pixels. Three places
+            // compute "how tall is this line"; a rule wired into two of them
+            // looks inert.
+            let s1298_vis = Self::s1298_has_visible(&line.fragments);
             for frag in &line.fragments {
+                if s1298_vis && Self::s1298_glyphless(frag) {
+                    continue;
+                }
                 let font_size = frag.style.font_size.unwrap_or(para_font_size);
                 let metrics = self.metrics_for_text(&frag.text, &frag.style, para_style);
                 let mut asc = metrics.word_ascent_pt(font_size);
@@ -29773,7 +29785,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         let metrics = self.metrics_for_para_mark(&rpr_ref, para_style);
                         raw_max = metrics.word_line_height_no_grid(font_size);
                     } else {
+                        // S1298 FOURTH site. A snapToGrid=0 line in a typed grid
+                        // returns from HERE, before the folds above are consulted,
+                        // so the glyphless exclusion has to be repeated once more.
+                        // d1e8ac8's 「　　…殿」 is exactly this shape, which is why
+                        // wiring the other three left it at 18.36.
+                        let s1298_vis = Self::s1298_has_visible(&line.fragments);
                         for frag in &line.fragments {
+                            if s1298_vis && Self::s1298_glyphless(frag) {
+                                continue;
+                            }
                             let font_size = frag.style.font_size.unwrap_or(para_font_size);
                             let metrics =
                                 self.metrics_for_text(&frag.text, &frag.style, para_style);
