@@ -1963,6 +1963,25 @@ fn fdsynth_on() -> bool {
     std::env::var("OXI_FDSYNTH_DISABLE").is_err()
 }
 
+/// An ITALIC request takes the part its slot names, unless this is set.
+///
+/// Slot selection was written for upright requests only, so an italic run fell
+/// through to `resolve_part`, which matches a part by the family its own EOT
+/// header claims. d50 files a boldItalic part that calls itself "Montserrat"
+/// while the run asks for "Montserrat Medium", so the match failed, the plain
+/// italic part (weight 500) answered, and GDI synthesised the bold over it.
+/// PowerPoint took the slot: its truth PDF draws those runs in `223,BoldItalic`.
+///
+/// GATE, over the two decks it reaches (114 decks, 9 paragraphs, no break
+/// changes -- `pptx_dump_ab.py`):
+///
+///     50   width  3 lines over 2% -> **0**, median +0.03 -> +0.01pt
+///     50   pixels 0.954244 -> 0.954546 (+0.000302), 2 slides up, 0 down
+///     d16  line left  1 line over 3pt (-11.84pt) -> **0**
+fn slotital_on() -> bool {
+    std::env::var("OXI_SLOTITAL_DISABLE").is_err()
+}
+
 /// Parts are selected by SLOT only when this is set.
 ///
 /// Gate (2026-08-26), every deck whose render changes:
@@ -2173,6 +2192,19 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
                 let w = if bold && !slotnat_on() { 700 } else { 400 };
                 return (slot, w, false);
             }
+        }
+    }
+    // ★The SLOT decides for an italic request too, when the deck filed a part
+    // there. Slot selection was written for upright requests only, so a bold
+    // italic run fell through to `resolve_part`, which matches on the part's own
+    // header -- and d50's boldItalic part calls itself "Montserrat" while the
+    // run asks for "Montserrat Medium". The match failed, the plain italic part
+    // (weight 500) answered instead, and GDI synthesised the bold over it. Its
+    // truth PDF draws those runs in `223,BoldItalic`: PowerPoint took the slot.
+    if italic && slotital_on() && embedstyle_on() {
+        let name = embedded_face_name(family, bold, italic);
+        if EMBEDDED_FACES.with(|f| f.borrow().contains(&name)) {
+            return (name, 400, false);
         }
     }
     if let Some((face, weight)) = resolve_part(family, bold, italic) {
@@ -2392,9 +2424,14 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             let face_dbg = face.clone();
             if face != font.typeface {
                 if sf_debug() {
+                    // ★And what the part's own header claims, beside the slot
+                    // it was filed in: `resolve_part` picks by the header, so a
+                    // part that under-states its weight is invisible to a bold
+                    // request even though the deck filed it in the bold slot.
                     eprintln!(
-                        "INSTALL typeface={:?} bold={} italic={} -> own name {face:?}",
-                        font.typeface, font.bold, font.italic
+                        "INSTALL typeface={:?} bold={} italic={} -> own name {face:?} header={:?}",
+                        font.typeface, font.bold, font.italic,
+                        eot_identity(&font.data)
                     );
                 }
                 EMBEDDED_FACES.with(|f| f.borrow_mut().insert(face.clone()));
