@@ -4594,16 +4594,29 @@ fn call_builtin(
                     line,
                 ));
             }
+            // Every component is READ before any of them is judged, so a
+            // component that is not a number at all decides the answer over
+            // one that is merely out of range. Asked of Excel,
+            // `RGB(-2.5, "ABC", "")` is error 13 while `RGB(-2.5, 1, 2)` is
+            // error 5 -- the same bad first argument, and a different answer
+            // because of what came after it.
+            //
+            // Above 255 is not an error either way: `RGB(300, 1, 2)` is the
+            // same as `RGB(255, 1, 2)`.
             let mut components = [0_i64; 3];
             for (component, value) in components.iter_mut().zip(args) {
-                let value = integer_argument(value, line)?;
-                if value < 0 {
+                *component = integer_argument(value, line)?;
+            }
+            for component in &components {
+                if *component < 0 {
                     return Err(invalid_procedure_call(
                         "RGB components cannot be negative".to_string(),
                         line,
                     ));
                 }
-                *component = value.min(255);
+            }
+            for component in components.iter_mut() {
+                *component = (*component).min(255);
             }
             return Ok(Value::Integer(
                 components[0] + components[1] * 256 + components[2] * 65_536,
@@ -6346,7 +6359,7 @@ fn month_name(month: u32) -> &'static str {
 }
 
 fn weekday_name(serial: f64) -> &'static str {
-    weekday_name_by_number(weekday_number(serial.floor() as i64, 1))
+    weekday_name_by_number(weekday_number(serial.trunc() as i64, 1))
 }
 
 fn weekday_name_by_number(weekday: i64) -> &'static str {
@@ -6801,6 +6814,34 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             if matches!(args[0], Value::Null) && name != "isdate" {
                 return Err(invalid_null(line));
             }
+            // The two that read a date OUT OF TEXT read text and nothing
+            // else. Anything that is not already a Date is WRITTEN OUT first
+            // and the writing is what gets parsed, so a number is not a serial
+            // to them. Asked of Excel:
+            //
+            //     DateValue(11)     error 13   -- "11" is not a date
+            //     DateValue(-1)     error 13
+            //     DateValue(True)   error 13
+            //     DateValue(Empty)  error 13   -- "" is not a date either
+            //     TimeValue(0.5)    12:05 AM   -- "0.5" IS a time: 0 past 0
+            //
+            // That last one is the proof: half a day would be midday, and
+            // Excel answers five past midnight. `CDate` is not one of these --
+            // it takes a Boolean and a number as the serial they are -- which
+            // is why this cannot live in `value_date_serial` where they meet.
+            if matches!(name, "datevalue" | "timevalue")
+                && !matches!(args[0], Value::Date(_) | Value::String(_))
+            {
+                let written = text(&args[0]).map_err(mismatch)?;
+                // The WRITTEN-OUT reading, with no numeric fallback behind it:
+                // "11" has to be a date to count, and it is not.
+                let serial = parse_written_date_text(&written).map_err(mismatch)?;
+                return Ok(Value::Date(if name == "datevalue" {
+                    serial.floor()
+                } else {
+                    serial.rem_euclid(1.0)
+                }));
+            }
             let parsed = value_date_serial(&args[0]);
             if name == "isdate" {
                 // A Date, or text that reads as one. NEVER a number, however
@@ -6911,7 +6952,12 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             let serial = value_date_serial(&args[0]).map_err(mismatch)?;
             let first_day = first_day_of_week(args.get(1), line)?;
             Ok(Value::Int16(
-                weekday_number(serial.floor() as i64, first_day) as i16
+                // Truncated, not floored. An OLE serial's date is its whole
+                // part and its time the size of the fraction, so -0.5 is
+                // midday on day 0 and not any part of day -1. Asked of
+                // Excel, `Weekday(-0.5)` is 7, the same as `Weekday(0)`,
+                // where flooring answered 6.
+                weekday_number(serial.trunc() as i64, first_day) as i16
             ))
         }
         _ => unreachable!(),
@@ -7011,6 +7057,16 @@ fn parse_written_date_text(source: &str) -> Result<f64, String> {
     let first = pieces.next().unwrap_or_default();
     if first.contains(':') {
         return parse_time_text(source);
+    }
+    // A dot may be a clock too, and when it is not the reading simply carries
+    // on. Asked of Excel, `"3.5"` is 3:05 AM and `"1.2.3"` is 1:02:03 AM,
+    // while `"25.5"` and `"3.70"` are the numbers 25.5 and 3.70 -- neither an
+    // hour and a minute -- and `"3.5.2003"` is error 13, being three parts
+    // whose last is no kind of second.
+    if first.contains('.') {
+        if let Ok(serial) = parse_time_text(source) {
+            return Ok(serial);
+        }
     }
     let date = parse_date_part(first)?;
     let time_text = pieces.collect::<Vec<_>>().join(" ");
@@ -7118,8 +7174,18 @@ fn parse_time_text(source: &str) -> Result<f64, String> {
     } else {
         (upper.as_str(), None)
     };
+    // A DOT separates a time as readily as a colon. Asked of Excel,
+    // `CDate("3.5")` is 3:05 AM, `"1.2.3"` is 1:02:03 AM and `"3.5 PM"` is
+    // 3:05 PM -- and when the parts do not fit a clock the whole thing goes
+    // back to being a number: `"25.5"` is the serial 25.5 and `"3.70"` is
+    // 3.70, neither being an hour and a minute.
+    //
+    // Which is why `TimeValue(0.5)` is five past midnight rather than midday:
+    // TimeValue writes its argument out and reads the writing, and `"0.5"` is
+    // a time.
+    let separator = if clock.contains(':') { ':' } else { '.' };
     let values = clock
-        .split(':')
+        .split(separator)
         .map(|part| {
             part.parse::<u32>()
                 .map_err(|_| format!("invalid Time component: {part}"))
@@ -7509,10 +7575,25 @@ fn call_string_builtin(
             let unit = value.encode_utf16().next().ok_or_else(|| {
                 invalid_procedure_call(format!("{name} requires a non-empty String"), line)
             })?;
+            // `AscW` hands back the UTF-16 unit as a SIGNED sixteen bits, so
+            // 65535 answers -1. `Asc` is not that: it puts the character
+            // through the host's ANSI code page first, and anything that does
+            // not fit comes back as 63, the question mark. Measured against
+            // Excel: `Asc(ChrW(300))`, `Asc(ChrW(32767))` and
+            // `Asc(ChrW(65535))` are all 63, where AscW gives 300, 32767
+            // and -1.
+            //
+            // WHICH characters fit is the code page's business and so depends
+            // on the machine -- the second thing on this surface that does,
+            // after the text of an Error variant. Single-byte range and
+            // nothing else is the en-US reading, and the only one available in
+            // a browser.
             let value = if name == "ascw" {
                 unit as i16
-            } else {
+            } else if unit < 256 {
                 unit as i16
+            } else {
+                63
             };
             Ok(Value::Int16(value))
         }
@@ -13696,6 +13777,151 @@ mod tests {
         assert_eq!(ask("InStr(Empty, \"abc\", \"\")"), "0");
         assert_eq!(ask("InStr(True, \"abc\", \"\")"), "-1");
         assert_eq!(ask("InStr(\"2\", \"abc\", \"b\")"), "2");
+    }
+
+    /// `DateValue` and `TimeValue` read TEXT, and nothing but.
+    ///
+    /// Anything that is not already a Date is written out first and the
+    /// WRITING is parsed, so a number is not a serial to them. Asked of Excel:
+    ///
+    ///     DateValue(11)     error 13   -- "11" is no date
+    ///     DateValue(-1)     error 13
+    ///     DateValue(True)   error 13
+    ///     DateValue(Empty)  error 13
+    ///     TimeValue(0.5)    12:05 AM   -- "0.5" IS a time: 0 past 0
+    ///
+    /// That last one is the proof. Half a day would be midday.
+    ///
+    /// `CDate` is not one of these -- it takes a Boolean and a number as the
+    /// serial they are -- so the rule cannot live in `value_date_serial`,
+    /// where all of them meet. Putting it there made `TimeValue(True)` answer
+    /// midnight.
+    #[test]
+    fn date_value_and_time_value_read_only_what_is_written() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        for call in [
+            "DateValue(11)", "DateValue(-1)", "DateValue(True)", "DateValue(Empty)",
+            "TimeValue(-1)", "TimeValue(True)", "TimeValue(Empty)",
+        ] {
+            assert_eq!(ask(call), "err13", "{call}");
+        }
+        assert_eq!(ask("DateValue(\"1/2/2003\")"), "1/2/2003");
+        assert_eq!(ask("DateValue(#1/2/2003#)"), "1/2/2003");
+        assert_eq!(ask("TimeValue(\"3:04 PM\")"), "3:04:00 PM");
+        assert_eq!(ask("TimeValue(0.5)"), "12:05:00 AM");
+        // CDate takes what they refuse.
+        assert_eq!(ask("CDate(True)"), "12/29/1899");
+        assert_eq!(ask("CDate(11)"), "1/10/1900");
+    }
+
+    /// A dot separates a time as readily as a colon.
+    ///
+    /// Asked of Excel: `"3.5"` is 3:05 AM, `"1.2.3"` is 1:02:03 AM, `"3.5 PM"`
+    /// is 3:05 PM. When the parts do not fit a clock the whole thing goes back
+    /// to being a number -- `"25.5"` is the serial 25.5 and `"3.70"` is 3.70,
+    /// neither an hour and a minute -- and three parts whose last is no second
+    /// is error 13.
+    #[test]
+    fn a_dot_separates_a_time_as_readily_as_a_colon() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        assert_eq!(ask("CDate(\"3.5\")"), "3:05:00 AM");
+        assert_eq!(ask("CDate(\"0.5\")"), "12:05:00 AM");
+        assert_eq!(ask("CDate(\"12.30\")"), "12:30:00 PM");
+        assert_eq!(ask("CDate(\"1.2.3\")"), "1:02:03 AM");
+        assert_eq!(ask("CDate(\"3.5.6\")"), "3:05:06 AM");
+        assert_eq!(ask("CDate(\"3.5 PM\")"), "3:05:00 PM");
+        assert_eq!(ask("TimeValue(\"3.5\")"), "3:05:00 AM");
+        assert_eq!(ask("IsDate(\"3.5\")"), "True");
+        // Out of a clock's range, and back to being a number.
+        assert_eq!(ask("CDate(\"25.5\")"), "1/24/1900 12:00:00 PM");
+        assert_eq!(ask("CDate(\"3.70\")"), "1/2/1900 4:48:00 PM");
+        assert_eq!(ask("CDate(\"3.5.2003\")"), "err13");
+    }
+
+    /// RGB reads every component before it judges any of them.
+    ///
+    /// A component that is not a number at all decides the answer over one
+    /// that is merely out of range: asked of Excel, `RGB(-2.5, "ABC", "")` is
+    /// error 13 while `RGB(-2.5, 1, 2)` is error 5 -- the same bad first
+    /// argument, answered differently because of what came after it. Above 255
+    /// is not an error at all.
+    ///
+    /// And Weekday truncates its serial rather than flooring it, so
+    /// `Weekday(-0.5)` is 7, the same as `Weekday(0)`: an OLE serial's date is
+    /// its whole part and its time the SIZE of the fraction.
+    #[test]
+    fn rgb_reads_before_it_judges_and_weekday_truncates() {
+        let ask = |call: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = {call}
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{call}: {other:?}"),
+            }
+        };
+
+        assert_eq!(ask("RGB(-2.5, \"ABC\", \"\")"), "err13");
+        assert_eq!(ask("RGB(1, \"ABC\", 2)"), "err13");
+        assert_eq!(ask("RGB(-2.5, 1, 2)"), "err5");
+        assert_eq!(ask("RGB(1, 2, 3)"), "197121");
+        assert_eq!(ask("RGB(300, 1, 2)"), "131583");
+        assert_eq!(ask("RGB(\"1\", \"2\", \"3\")"), "197121");
+
+        assert_eq!(ask("Weekday(0)"), "7");
+        assert_eq!(ask("Weekday(-0.5)"), "7");
+        assert_eq!(ask("Weekday(0.5)"), "7");
+        assert_eq!(ask("Weekday(-1)"), "6");
+        assert_eq!(ask("Weekday(-2)"), "5");
+        assert_eq!(ask("Weekday(1)"), "1");
     }
 
     /// Each function answers with the type Excel gives it.
