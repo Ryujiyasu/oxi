@@ -260,6 +260,19 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
                                             para_json["marker"] = json!(marker.map(|m| m.text));
                                             para_json["measured_family"] = json!(mfam);
                                             para_json["measured_bold"] = json!(mbold);
+                                            // Whether that bold is one GDI
+                                            // SYNTHESISES. PowerPoint's line box
+                                            // for such a run measures the
+                                            // stroke, not the advances -- deck
+                                            // 40 s11's 'WEBSITE' steps sum to
+                                            // the engine's 79.52pt in
+                                            // PowerPoint's own characters and
+                                            // its box says 83.64 -- so a width
+                                            // audit has to leave those lines
+                                            // out rather than read the stroke
+                                            // as an error.
+                                            para_json["faux_bold"] =
+                                                json!(mbold && needs_faux_bold(&mfam, false));
                                             para_json["line_baselines"] = json!(
                                                 bases
                                                     .iter()

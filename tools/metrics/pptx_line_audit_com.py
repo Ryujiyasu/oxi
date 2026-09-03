@@ -88,6 +88,20 @@ So the mark is taken off wherever PowerPoint's own LINE TEXT carries it, which
 is the only place it shows. That accounted for 8 of the 12 lines this gate had
 outstanding -- 2 in deck 5 and 6 in deck 35 -- and both decks now read 0 over 2%.
 
+★TWO more box properties the listing must not read as errors, both found by
+following the corpus's own offenders (2026-09-03):
+
+    a SYNTHESISED bold   PowerPoint's box measures the STROKE. Deck 40 s11's
+                         'WEBSITE' in Bebas Neue: PowerPoint's own character
+                         steps sum to the engine's 79.52pt and its box says
+                         83.64. The advances agree; only the ink is heavier.
+                         Excluded, using the engine's `faux_bold`.
+    a SCRIPT face's tail Deck 40's Grand Hotel lines read +5.75 and +5.77pt on
+                         244 and 281pt lines -- the same CONSTANT, which is the
+                         last glyph's ink running past its advance. Still listed,
+                         because it cannot be told from a real error without the
+                         face's own bearings.
+
 ★What the box IS, settled by `gen_pptx_boundwidth.py` (one word, one face,
 one size, one property changed per arm):
 
@@ -263,7 +277,8 @@ def engine_paras(dump: dict) -> dict[int, list]:
                              p.get("line_x_offsets") or [], text,
                              p.get("line_baselines") or [], widths,
                              p.get("measured_family") or "",
-                             float(p.get("space_pt") or 0.0), texts))
+                             float(p.get("space_pt") or 0.0), texts,
+                             bool(p.get("faux_bold"))))
             # ★The dump's line offsets are measured from the TEXT AREA, while
             # PowerPoint's `BoundLeft` is measured from the slide. The engine
             # STATES where its text area starts (`text_left`) rather than this
@@ -459,7 +474,7 @@ def audit(doc) -> dict | None:
                     quart = round(rot / 90.0) * 90 % 360
                     axis = (None if abs(rot - quart) > 0.5
                             else (0 if quart in (0, 180) else 1))
-                    for (cn, cx, ctext, cy, cw, chh, clines, cface),                             (en, ex, etext, ey, ew, eface, espace, elines) in zip(
+                    for (cn, cx, ctext, cy, cw, chh, clines, cface),                             (en, ex, etext, ey, ew, eface, espace, elines, ebold) in zip(
                             c["paras"], m["paras"]):
                         got["paras"] += 1
                         if not geom:
@@ -625,7 +640,17 @@ def audit(doc) -> dict | None:
                                 last = min(len(box), len(ew)) - 1
                                 for j, (a, b) in enumerate(zip(box, ew)):
                                     a -= mark
-                                    if j != last or axis is None or skip:
+                                    # ★A line whose bold GDI SYNTHESISES is left
+                                    # out: PowerPoint's box there measures the
+                                    # stroke and not the advances. Deck 40 s11's
+                                    # 'WEBSITE' is the proof -- PowerPoint's own
+                                    # character steps sum to the engine's
+                                    # 79.52pt while its box says 83.64, so the
+                                    # advances agree and only the ink is
+                                    # heavier. Every one of the corpus's
+                                    # remaining offenders outside deck 47 is
+                                    # such a line.
+                                    if j != last or axis is None or skip or ebold:
                                         continue
                                     if b > 40.0:
                                         wide.append((b, a - b))
@@ -640,7 +665,8 @@ def audit(doc) -> dict | None:
                                         if abs(a - b) / b > 0.02 and abs(a - b) > 1.0:
                                             wfar.append((si, round(a - b, 2),
                                                          round(100.0 * (a - b) / b, 1),
-                                                         ctext[:28], cface, eface))
+                                                         ctext[:28], cface, eface,
+                                                         ebold))
                         else:
                             got["diff"] += 1
                             worst.append((si, cn, en, ctext[:44]))
@@ -709,14 +735,15 @@ def audit(doc) -> dict | None:
         print(f"      line width: {n} lines, PowerPoint's ink minus the engine's pen "
               f"median {med:+.2f}pt; fit = {slope * 1000.0:+.2f} per mille of the "
               f"line + {icept:+.2f}pt, {len(wfar)} over 2%", flush=True)
-        for si, d, pct, t, cf, ef in sorted(wfar, key=lambda r: -abs(r[2]))[:6]:
+        for si, d, pct, t, cf, ef, eb in sorted(wfar, key=lambda r: -abs(r[2]))[:6]:  # noqa: E501
             # An EMPTY name is COM declining to answer (a line whose runs
             # disagree), not a mismatch -- flagging it as one turned d32's
             # whole listing into a false "different face".
             same = ("" if not cf or cf.lower() == ef.lower()
                     else "   <-- measured a different face")
             print(f"        s{si:<3} {d:+7.2f}pt ({pct:+.1f}%)  {t!r}  "
-                  f"asks {cf!r}, measured {ef!r}{same}", flush=True)
+                  f"asks {cf!r}, measured {ef!r}{' BOLD' if eb else ''}{same}",
+                  flush=True)
     return got
 
 
