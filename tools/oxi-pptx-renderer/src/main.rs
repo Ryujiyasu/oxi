@@ -12869,6 +12869,22 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     } else {
         weight
     };
+    // ★The same file-measured tables the BREAK chain consults (`localadv_on`).
+    // When GDI's image of an installed face is wrong, its ABC widths are wrong
+    // here too -- and this is the chain that decides where each glyph is drawn,
+    // so the error lands in the pixels as well as in the break. Only when the
+    // resolved face IS the requested family: an embedded part is not in the
+    // table and must never be answered by an installed face of a like name.
+    if localadv_on()
+        && face.eq_ignore_ascii_case(family)
+        && gdi_style_broken(family, weight >= 700, italic)
+    {
+        if let Some(em) =
+            oxislides_core::font_adv_local::local_advance_em(family, weight >= 700, italic, ch)
+        {
+            return Some(em);
+        }
+    }
     ADVANCE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let per_font = cache.entry(key).or_default();
@@ -13147,7 +13163,102 @@ fn style_installed(family: &str, bold: bool, italic: bool) -> bool {
             0,
         );
     }
+    // ★Enumerating the family is not the same question as being able to SELECT
+    // one of its faces. This machine lists all four Caladea faces with the right
+    // flags, yet `CreateFontW` answers every request -- upright and bold alike --
+    // with the Italic file: 'Y' comes back 0.548 em, which is
+    // `Caladea-Italic.ttf`'s advance, where the upright file says 0.570. The
+    // family's registration is intact (correct `name`/`macStyle` in all four
+    // files, no FontSubstitutes entry); the mapper is what is broken, and only
+    // for this family -- Carlito, Cambria and Arial all answer correctly.
+    //
+    // So ask the mapper for the face and check what came back. GDI SYNTHESISES
+    // the styles it lacks, so a `true` where we wanted `false` is the only
+    // reliable direction: it never fakes an upright out of an italic, nor a
+    // regular out of a bold. When that happens the family cannot serve this
+    // style, and a deck that embeds the face should keep its own copy.
+    if want.found && styleverify_on() && !selectable_style(family, bold, italic) {
+        return false;
+    }
     want.found
+}
+
+/// Whether GDI can actually SELECT `family` at this style, as opposed to merely
+/// listing it. Answers `false` only when the face that comes back is slanted or
+/// heavier than what was asked for -- the two things GDI never fabricates.
+#[cfg(windows)]
+fn selectable_style(family: &str, bold: bool, italic: bool) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    let dc = probe_dc();
+    let wide: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let font = CreateFontW(
+            -64,
+            0,
+            0,
+            0,
+            if bold { 700 } else { 400 },
+            u32::from(italic),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            return true;
+        }
+        let old = SelectObject(dc, font);
+        let mut tm = TEXTMETRICW::default();
+        let ok = GetTextMetricsW(dc, &mut tm).as_bool();
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        if !ok {
+            return true;
+        }
+        let got_italic = tm.tmItalic != 0;
+        let got_bold = tm.tmWeight >= 600;
+        if sf_debug() && ((got_italic && !italic) || (got_bold && !bold)) {
+            eprintln!(
+                "SELECT {family:?} bold={bold} italic={italic} -> tmWeight={} tmItalic={} MISMATCH",
+                tm.tmWeight, tm.tmItalic
+            );
+        }
+        !(got_italic && !italic) && !(got_bold && !bold)
+    }
+}
+
+/// Whether this machine cannot serve `family` at this style, memoised for the
+/// run. Asking costs a `CreateFontW`, and the advance chain asks per character.
+#[cfg(windows)]
+fn gdi_style_broken(family: &str, bold: bool, italic: bool) -> bool {
+    thread_local! {
+        static BROKEN: std::cell::RefCell<
+            std::collections::HashMap<(String, bool, bool), bool>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    BROKEN.with(|cache| {
+        *cache
+            .borrow_mut()
+            .entry((family.to_string(), bold, italic))
+            .or_insert_with(|| !selectable_style(family, bold, italic))
+    })
+}
+
+/// The installed-family test also SELECTS the face and checks what came back,
+/// when this is set. **Parked opt-in: it fires but cannot finish the job.** On
+/// deck 47 it correctly refuses to skip Caladea's two upright parts, and then
+/// `TTLoadEmbeddedFont` rejects both with `0x10f` -- a face called "Caladea"
+/// already exists, and `embedded_face_name` only aliases ITALIC parts. Fixing
+/// the OUTLINES (as opposed to the advances S-LOCALADV fixes) needs an upright
+/// alias plus a `styled_face` branch that prefers it, and cannot be judged on
+/// the stored truth for this deck, whose export froze the same broken state.
+fn styleverify_on() -> bool {
+    std::env::var("OXI_STYLEVERIFY_ENABLE").is_ok()
 }
 
 /// The skip is decided per STYLE unless this is set, which restores the
@@ -14240,6 +14351,39 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     })
 }
 
+/// S-LOCALADV: the advances measured from this machine's font FILES answer
+/// before GDI does, for a family GDI cannot serve at the asked-for style.
+///
+/// Deck 47, the blind corpus's worst at 0.9043, is the one deck where that
+/// happens: `CreateFontW("Caladea")` returns the ITALIC file for every request,
+/// upright and bold alike, so both `GetCharABCWidths` and `GetFontData` answer
+/// 0.548 em for 'Y' where `Caladea-Regular.ttf` -- the very file the registry
+/// names -- says 0.570. Nothing about the family is malformed: all four files
+/// carry the right `name` and `macStyle`, there is no FontSubstitutes entry,
+/// and `EnumFontFamiliesEx` lists all four styles with the right flags. Only
+/// the mapper is wrong, and only for this family (Carlito, Cambria and Arial
+/// answer correctly on the same call).
+///
+///     deck 47, against live PowerPoint through COM
+///       break agreement   99.26% (2 differ)  ->  100.00% (0 differ)
+///       line left         p95 3.75pt, 24 over 3pt  ->  p95 0.19pt, 4 over 3pt
+///       line width        median +1.62pt, 55 of 105 over 2%  ->  -0.01pt, 1 over 2%
+///     deck 47, against the stored truth PDF
+///       0.904255 -> 0.928550 (+0.024295), floor 0.8169 -> 0.8907, 32 up 3 down
+///     the other 113 decks: byte-identical (`pptx_dump_ab.py`, 48365 paragraphs)
+///
+/// The stored truth is worth a note, because reading it wrong nearly buried
+/// this: deck 47's truth PDF embeds `Caladea-Regular` at `/ItalicAngle -9` with
+/// a `/Widths` array of 548/540/507 -- the italic file's advances. That says
+/// PowerPoint's exporter was in the same broken state, and it predicts this fix
+/// LOSING pixels. It gains 0.024. **`/Widths` is a declaration for text
+/// extraction; the advances the page actually uses are the offsets in the
+/// content stream.** PowerPoint positioned at the upright advances while
+/// declaring the italic ones.
+fn localadv_on() -> bool {
+    std::env::var("OXI_LOCALADV_DISABLE").is_err()
+}
+
 /// PowerPoint's break test measures in master units unless this is set.
 fn masterunit_on() -> bool {
     std::env::var("OXI_MASTERUNIT_DISABLE").is_err()
@@ -14284,6 +14428,22 @@ impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
         cloudadv_on()
             .then(|| cloud_advance_em(family, bold, italic, ch))
             .flatten()
+            // ★The tables measured from the machine's own font FILES, which
+            // the browser build has consulted since it was written and this
+            // one never has. It matters where GDI's view of a face is wrong:
+            // this machine serves "Caladea" 3.9% narrow -- 'Y' comes back
+            // 0.548 em from both `GetCharABCWidths` and `GetFontData` while
+            // Caladea-Regular.ttf says 0.570 -- and deck 47, the corpus's
+            // worst at 0.9043, is the deck that uses it. The table is
+            // style-aware and refuses a style it did not measure, so it cannot
+            // answer a bold request from an upright face.
+            .or_else(|| {
+                (localadv_on() && gdi_style_broken(family, bold, italic))
+                    .then(|| oxislides_core::font_adv_local::local_advance_em(
+                        family, bold, italic, ch,
+                    ))
+                    .flatten()
+            })
             .or_else(|| font_adv::hmtx_advance_em(family, ch))
             .or_else(|| fdbreak_on().then(|| fontdata_advance_em(family, bold, italic, ch)).flatten())
             .or_else(|| precise_advance_em(family, bold, italic, ch))
