@@ -1830,6 +1830,18 @@ impl<'a> Runtime<'a> {
             .unwrap_or(0)
     }
 
+    /// What year it is, for the written dates that leave the year out.
+    ///
+    /// Asked of Excel, `CDate("3/4")` is the 4th of March of the CURRENT year,
+    /// and so are `"Mar 4"`, `"4-Mar"` and `"3,4"`. It comes from the same
+    /// clock `Now` reads, so a runtime given a fixed time parses those dates
+    /// against that time and not against the wall.
+    fn this_year(&self) -> i64 {
+        serial_date_parts(self.current_time)
+            .map(|parts| parts.year)
+            .unwrap_or(1900)
+    }
+
     fn option_compare_text(&self) -> bool {
         self.module.items.iter().any(|item| {
             matches!(
@@ -2972,6 +2984,7 @@ impl<'a> Runtime<'a> {
             read_args.as_deref().unwrap_or(&args),
             line,
             self.option_compare_text(),
+            self.this_year(),
         ) {
             return result;
         }
@@ -4396,6 +4409,7 @@ fn call_builtin(
     args: &[Value],
     line: Option<u32>,
     option_compare_text: bool,
+    this_year: i64,
 ) -> Option<Result<Value, RuntimeError>> {
     let name = name.to_ascii_lowercase();
     if !is_builtin_function(&name) {
@@ -4406,7 +4420,7 @@ fn call_builtin(
             name.as_str(),
             "format" | "formatcurrency" | "formatdatetime" | "formatnumber" | "formatpercent"
         ) {
-            return call_format_builtin(&name, args, line);
+            return call_format_builtin(&name, args, line, this_year);
         }
         if matches!(
             name.as_str(),
@@ -4483,7 +4497,7 @@ fn call_builtin(
                 | "weekday"
                 | "year"
         ) {
-            return call_date_builtin(&name, args, line);
+            return call_date_builtin(&name, args, line, this_year);
         }
         if name == "strcomp" {
             if !(2..=3).contains(&args.len()) {
@@ -5202,6 +5216,7 @@ fn call_format_builtin(
     name: &str,
     args: &[Value],
     line: Option<u32>,
+    this_year: i64,
 ) -> Result<Value, RuntimeError> {
     let count_error = || {
         error(
@@ -5222,7 +5237,7 @@ fn call_format_builtin(
             };
             let first_day = first_day_of_week(args.get(2), line)?;
             let first_week = first_week_of_year(args.get(3), line)?;
-            format_value(&args[0], &pattern, first_day, first_week)
+            format_value(&args[0], &pattern, first_day, first_week, this_year)
                 .map(Value::String)
                 .map_err(mismatch)
         }
@@ -5248,7 +5263,7 @@ fn call_format_builtin(
                 }
             };
             format_date(
-                value_date_serial(&args[0]).map_err(mismatch)?,
+                value_date_serial(&args[0], this_year).map_err(mismatch)?,
                 pattern,
                 1,
                 1,
@@ -6109,6 +6124,7 @@ fn format_value(
     pattern: &str,
     first_day: i64,
     first_week: i64,
+    this_year: i64,
 ) -> Result<String, String> {
     // Neither Null nor Empty is written by a picture: asked of Excel,
     // `Format(Empty, "000")` is the empty string, the same as
@@ -6143,7 +6159,7 @@ fn format_value(
             | "on/off"
     );
     if named_date || (!named_number && reads_as_date(pattern)) {
-        return format_date(value_date_serial(value)?, pattern, first_day, first_week);
+        return format_date(value_date_serial(value, this_year)?, pattern, first_day, first_week);
     }
     if let Value::String(value) = value {
         return Ok(match pattern {
@@ -6761,7 +6777,12 @@ fn propagates_a_null_date(name: &str) -> bool {
     )
 }
 
-fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Value, RuntimeError> {
+fn call_date_builtin(
+    name: &str,
+    args: &[Value],
+    line: Option<u32>,
+    this_year: i64,
+) -> Result<Value, RuntimeError> {
     let wrong_count = |expected: &str| {
         error(
             RuntimeErrorKind::ArgumentCount,
@@ -6835,14 +6856,14 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
                 let written = text(&args[0]).map_err(mismatch)?;
                 // The WRITTEN-OUT reading, with no numeric fallback behind it:
                 // "11" has to be a date to count, and it is not.
-                let serial = parse_written_date_text(&written).map_err(mismatch)?;
+                let serial = parse_written_date_text(&written, this_year).map_err(mismatch)?;
                 return Ok(Value::Date(if name == "datevalue" {
                     serial.floor()
                 } else {
                     serial.rem_euclid(1.0)
                 }));
             }
-            let parsed = value_date_serial(&args[0]);
+            let parsed = value_date_serial(&args[0], this_year);
             if name == "isdate" {
                 // A Date, or text that reads as one. NEVER a number, however
                 // date-like: asked of Excel, `IsDate(37684)` is False and so
@@ -6861,7 +6882,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
                 // AS a Date.
                 return Ok(Value::Boolean(match &args[0] {
                     Value::Date(_) => true,
-                    Value::String(text) => parse_written_date_text(text).is_ok(),
+                    Value::String(text) => parse_written_date_text(text, this_year).is_ok(),
                     _ => false,
                 }));
             }
@@ -6887,7 +6908,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             // A PIECE of a date is an Integer, not a Long: asked of Excel,
             // `VarType` of Year, Weekday and DatePart is 2 for every one of
             // them. They all fit, the largest being a year of 9999.
-            let serial = value_date_serial(&args[0]).map_err(mismatch)?;
+            let serial = value_date_serial(&args[0], this_year).map_err(mismatch)?;
             let parts = serial_date_parts(serial).map_err(mismatch)?;
             Ok(Value::Int16(match name {
                 "year" => parts.year as i16,
@@ -6905,7 +6926,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             }
             let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
             let amount = integer_argument(&args[1], line)?;
-            let serial = value_date_serial(&args[2]).map_err(mismatch)?;
+            let serial = value_date_serial(&args[2], this_year).map_err(mismatch)?;
             date_add(&interval, amount, serial)
                 .map(Value::Date)
                 .map_err(|message| invalid_procedure_call(message, line))
@@ -6915,8 +6936,8 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
                 return Err(wrong_count("3 to 5 arguments"));
             }
             let interval = text(&args[0]).map_err(mismatch)?.to_ascii_lowercase();
-            let first = value_date_serial(&args[1]).map_err(mismatch)?;
-            let second = value_date_serial(&args[2]).map_err(mismatch)?;
+            let first = value_date_serial(&args[1], this_year).map_err(mismatch)?;
+            let second = value_date_serial(&args[2], this_year).map_err(mismatch)?;
             let first_day = first_day_of_week(args.get(3), line)?;
             first_week_of_year(args.get(4), line)?;
             date_diff(&interval, first, second, first_day)
@@ -6938,7 +6959,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
                     line,
                 ));
             }
-            let serial = value_date_serial(&args[1]).map_err(mismatch)?;
+            let serial = value_date_serial(&args[1], this_year).map_err(mismatch)?;
             let first_day = first_day_of_week(args.get(2), line)?;
             let first_week = first_week_of_year(args.get(3), line)?;
             date_part(&interval, serial, first_day, first_week)
@@ -6949,7 +6970,7 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             if !(1..=2).contains(&args.len()) {
                 return Err(wrong_count("1 or 2 arguments"));
             }
-            let serial = value_date_serial(&args[0]).map_err(mismatch)?;
+            let serial = value_date_serial(&args[0], this_year).map_err(mismatch)?;
             let first_day = first_day_of_week(args.get(1), line)?;
             Ok(Value::Int16(
                 // Truncated, not floored. An OLE serial's date is its whole
@@ -6996,7 +7017,7 @@ fn date_serial(year: i64, month: i64, day: i64) -> Result<f64, String> {
     Ok((days - ole_epoch_days()) as f64)
 }
 
-fn value_date_serial(value: &Value) -> Result<f64, String> {
+fn value_date_serial(value: &Value, this_year: i64) -> Result<f64, String> {
     let serial = match value {
         Value::Date(value) | Value::Double(value) => *value,
         Value::Int16(_) | Value::Byte(_) | Value::Integer(_) | Value::Single(_)
@@ -7012,7 +7033,7 @@ fn value_date_serial(value: &Value) -> Result<f64, String> {
                 0.0
             }
         }
-        Value::String(value) => parse_date_text(value)?,
+        Value::String(value) => parse_date_text(value, this_year)?,
         Value::Empty => 0.0,
         Value::Null => return Err("invalid use of Null".to_string()),
         _ => return Err("value cannot be converted to a Date".to_string()),
@@ -7037,20 +7058,22 @@ fn value_date_serial(value: &Value) -> Result<f64, String> {
 /// Which way round they are tried is measured too. `CDate("3.5")` is 3:05 AM,
 /// a TIME, not the serial 3.5 -- so the written-out reading comes first and the
 /// number is the fallback, not the other way about.
-fn parse_date_text(source: &str) -> Result<f64, String> {
-    parse_written_date_text(source).or_else(|written| {
+fn parse_date_text(source: &str, this_year: i64) -> Result<f64, String> {
+    parse_written_date_text(source, this_year).or_else(|written| {
         let source = source.trim().trim_matches('#').trim();
-        source.parse::<f64>().map_err(|_| written)
+        // The same numeric spellings `IsNumeric` accepts, so `&H10` is
+        // sixteen here too: asked of Excel, `CDate("&H10")` is 1/15/1900.
+        numeric_text(source).ok_or(written)
     })
 }
 
 /// A date written out as a date, with no numeric fallback behind it.
-fn parse_written_date_text(source: &str) -> Result<f64, String> {
+fn parse_written_date_text(source: &str, this_year: i64) -> Result<f64, String> {
     let source = source.trim().trim_matches('#').trim();
     if source.is_empty() {
         return Err("Date string is empty".to_string());
     }
-    if let Some(value) = parse_named_date_text(source) {
+    if let Some(value) = parse_named_date_text(source, this_year) {
         return value;
     }
     let mut pieces = source.split_whitespace();
@@ -7068,8 +7091,17 @@ fn parse_written_date_text(source: &str) -> Result<f64, String> {
             return Ok(serial);
         }
     }
-    let date = parse_date_part(first)?;
-    let time_text = pieces.collect::<Vec<_>>().join(" ");
+    // Two numbers with a SPACE between them are a date too: asked of Excel,
+    // `"3 4"` is the 4th of March of this year, the same as `"3/4"`.
+    let rest: Vec<&str> = pieces.collect();
+    if rest.len() == 1
+        && first.parse::<i64>().is_ok()
+        && rest[0].parse::<i64>().is_ok()
+    {
+        return parse_date_part(&format!("{first}/{}", rest[0]), this_year);
+    }
+    let date = parse_date_part(first, this_year)?;
+    let time_text = rest.join(" ");
     if time_text.is_empty() {
         Ok(date)
     } else {
@@ -7077,11 +7109,30 @@ fn parse_written_date_text(source: &str) -> Result<f64, String> {
     }
 }
 
-fn parse_date_part(source: &str) -> Result<f64, String> {
+/// A date written as numbers.
+///
+/// Three numbers are month, day and year -- unless the FIRST is four digits
+/// long, when it is the year leading. Two numbers leave something out, and
+/// which one depends on their size. Asked of Excel:
+///
+/// ```text
+/// "3/4"     4 March, this year     -- both fit a month and a day
+/// "3-4"     the same
+/// "3,4"     the same
+/// "31/12"   31 December, this year -- 31 is no month, so it is the day
+/// "2003/3"  1 March 2003           -- 2003 is no day, so it is the year
+/// "1,234"   1 January 234          -- and the day falls back to 1
+/// ```
+///
+/// So a number over 31 is a year, a first number over 12 is a day, and the
+/// piece nobody claimed is 1.
+fn parse_date_part(source: &str, this_year: i64) -> Result<f64, String> {
     let delimiter = if source.contains('/') {
         '/'
     } else if source.contains('-') {
         '-'
+    } else if source.contains(',') {
+        ','
     } else {
         return Err(format!("unsupported Date string: {source}"));
     };
@@ -7092,15 +7143,34 @@ fn parse_date_part(source: &str) -> Result<f64, String> {
                 .map_err(|_| format!("invalid Date component: {part}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if values.len() == 2 {
+        let (first, second) = (values[0], values[1]);
+        let (year, month, day) = if second > 31 {
+            (second, first, 1)
+        } else if first > 31 {
+            (first, second, 1)
+        } else if first > 12 {
+            (this_year, second, first)
+        } else {
+            (this_year, first, second)
+        };
+        return strict_date_serial(year, month, day, source);
+    }
     if values.len() != 3 {
         return Err(format!("Date requires three components: {source}"));
     }
-    let (year, month, day) =
-        if delimiter == '-' && source.split('-').next().is_some_and(|v| v.len() == 4) {
-            (values[0], values[1], values[2])
-        } else {
-            (values[2], values[0], values[1])
-        };
+    // A four-digit leader is the YEAR, whatever joins the parts: asked of
+    // Excel, `"2003/3/4"` is the 4th of March 2003, the same as `"2003-3-4"`.
+    // Only the hyphen was admitted here, so the slash form was refused.
+    let year_leads = source
+        .split(delimiter)
+        .next()
+        .is_some_and(|leader| leader.len() == 4);
+    let (year, month, day) = if year_leads {
+        (values[0], values[1], values[2])
+    } else {
+        (values[2], values[0], values[1])
+    };
     strict_date_serial(year, month, day, source)
 }
 
@@ -7119,9 +7189,31 @@ fn strict_date_serial(year: i64, month: i64, day: i64, source: &str) -> Result<f
     Ok(serial)
 }
 
-fn parse_named_date_text(source: &str) -> Option<Result<f64, String>> {
-    let normalized = source.replace(',', " ");
+/// A date with a MONTH NAME in it.
+///
+/// Two pieces or three, and the hyphen joins them as readily as a space:
+/// asked of Excel, `"March 2003"` and `"Mar 2003"` are the 1st of March 2003,
+/// `"Mar 4"`, `"4 Mar"`, `"4-Mar"` and `"Mar-4"` are the 4th of March of the
+/// CURRENT year, and `"March"` alone is error 13. The number beside the name
+/// is a year when it is too big to be a day, and the day is 1 when the year
+/// took its place.
+fn parse_named_date_text(source: &str, this_year: i64) -> Option<Result<f64, String>> {
+    let normalized = source.replace([',', '-'], " ");
     let pieces = normalized.split_whitespace().collect::<Vec<_>>();
+    if pieces.len() == 2 {
+        let (month, other) = match (month_number(pieces[0]), month_number(pieces[1])) {
+            (Some(month), _) => (month, pieces[1]),
+            (_, Some(month)) => (month, pieces[0]),
+            _ => return None,
+        };
+        let number = other.parse::<i64>().ok()?;
+        let (year, day) = if (1..=31).contains(&number) {
+            (this_year, number)
+        } else {
+            (number, 1)
+        };
+        return Some(strict_date_serial(year, i64::from(month), day, source));
+    }
     if pieces.len() < 3 {
         return None;
     }
@@ -8271,7 +8363,9 @@ fn literal_value(literal: &Literal) -> Value {
         //
         // A literal the lexer accepted but this cannot read stays as the text
         // it was written as, which is what it did before.
-        Literal::Date(value) => match parse_date_text(value) {
+        // A date LITERAL carries its own year, so the one it would fall back
+        // on never comes up; 0 stands for a year that is never read.
+        Literal::Date(value) => match parse_date_text(value, 0) {
             Ok(serial) => Value::Date(serial),
             Err(_) => Value::String(value.clone()),
         },
@@ -13777,6 +13871,78 @@ mod tests {
         assert_eq!(ask("InStr(Empty, \"abc\", \"\")"), "0");
         assert_eq!(ask("InStr(True, \"abc\", \"\")"), "-1");
         assert_eq!(ask("InStr(\"2\", \"abc\", \"b\")"), "2");
+    }
+
+    /// The written-date grammar, and the year it borrows when one is missing.
+    ///
+    /// Every form here was asked of Excel. A month NAME takes two pieces or
+    /// three, and a hyphen joins them as readily as a space. Numbers take two
+    /// or three, joined by a slash, a hyphen, a comma or a space. What is left
+    /// out is filled in by size: a number over 31 is a year, a first number
+    /// over 12 is a day, a missing day is 1, and a missing year is THIS year.
+    ///
+    /// That last one is why the parser had to be given a clock. It reads the
+    /// runtime's own, so a fixed time fixes the dates too -- these run against
+    /// the 29th of February 2024, and `"3/4"` is March 2024 because of it.
+    #[test]
+    fn a_date_may_leave_out_what_can_be_worked_out() {
+        let clock = date_serial(2024, 2, 29).unwrap();
+        let ask = |written: &str| {
+            let source = format!(
+                "Public Function Ask() As String
+                   Dim r As Variant
+                   On Error Resume Next
+                   r = CDate(\"{written}\")
+                   If Err.Number <> 0 Then
+                     Ask = \"err\" & Err.Number
+                   Else
+                     Ask = CStr(r)
+                   End If
+                 End Function
+"
+            );
+            let module = parse_module(&source).unwrap();
+            match Runtime::new(&module)
+                .with_current_time(clock)
+                .call("Ask", vec![])
+            {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{written}: {other:?}"),
+            }
+        };
+
+        // A month name, with the year given.
+        assert_eq!(ask("March 2003"), "3/1/2003");
+        assert_eq!(ask("Mar 2003"), "3/1/2003");
+        assert_eq!(ask("March 4, 2003"), "3/4/2003");
+        assert_eq!(ask("4 March 2003"), "3/4/2003");
+        // ... and with the year left out.
+        assert_eq!(ask("Mar 4"), "3/4/2024");
+        assert_eq!(ask("4 Mar"), "3/4/2024");
+        assert_eq!(ask("4-Mar"), "3/4/2024");
+        assert_eq!(ask("Mar-4"), "3/4/2024");
+        // A name on its own is not a date.
+        assert_eq!(ask("March"), "err13");
+
+        // Numbers, with every separator.
+        assert_eq!(ask("3/4"), "3/4/2024");
+        assert_eq!(ask("3-4"), "3/4/2024");
+        assert_eq!(ask("3,4"), "3/4/2024");
+        assert_eq!(ask("3 4"), "3/4/2024");
+        // A first number too big for a month is the day.
+        assert_eq!(ask("31/12"), "12/31/2024");
+        // A number too big for a day is the year, and the day falls to 1.
+        assert_eq!(ask("2003/3"), "3/1/2003");
+        assert_eq!(ask("2003-3"), "3/1/2003");
+        assert_eq!(ask("1,234"), "1/1/234");
+        // Three numbers, with the year at either end.
+        assert_eq!(ask("2003/3/4"), "3/4/2003");
+        assert_eq!(ask("3/4/03"), "3/4/2003");
+        assert_eq!(ask("1,2,3"), "1/2/2003");
+
+        // And the numeric fallback reads what VBA reads.
+        assert_eq!(ask("&H10"), "1/15/1900");
+        assert_eq!(ask("&O10"), "1/7/1900");
     }
 
     /// `DateValue` and `TimeValue` read TEXT, and nothing but.
