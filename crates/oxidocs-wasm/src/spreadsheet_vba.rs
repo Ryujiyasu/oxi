@@ -12,7 +12,7 @@ use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
 #[cfg(test)]
 use oxivba_core::execute_with_host;
 use oxivba_core::{
-    parse_module, vba_number_text, ArrayDimension, ArrayValue, Host, ModuleItem, ObjectRef,
+    parse_module, vba_date_text, vba_number_text, ArrayDimension, ArrayValue, Host, ModuleItem, ObjectRef,
     Runtime, Value,
 };
 use serde::{Deserialize, Serialize};
@@ -2035,6 +2035,33 @@ impl<'a> WorkbookHost<'a> {
             .unwrap_or(Value::Empty)
     }
 
+    /// A cell's value AS THE MACRO RECEIVES IT, which its display format has a
+    /// say in. See `shown_as`: a date-formatted cell hands over a Date and a
+    /// dollar-formatted one a Currency, and only a number in a cell whose
+    /// format claims neither arrives as a plain Double.
+    fn cell_value_as_shown(&self, address: CellAddress) -> Value {
+        let Some(cell) = self
+            .workbook
+            .sheets
+            .get(address.sheet)
+            .and_then(|sheet| sheet.rows.iter().find(|row| row.index == address.row))
+            .and_then(|row| row.cells.iter().find(|cell| cell.col == address.column))
+        else {
+            return Value::Empty;
+        };
+        let value = from_cell_value(&cell.value);
+        let CellValue::Number(number) = cell.value else {
+            return value;
+        };
+        match shown_as(cell.style.number_format.as_deref()) {
+            ShownAs::Plain => value,
+            ShownAs::Moment => Value::Date(number),
+            // Four places is all a Currency keeps: asked of Excel, 1.23456789
+            // under `$0.00` comes back as 1.2346.
+            ShownAs::Money => Value::Currency((number * 10_000.0).round_ties_even() as i64),
+        }
+    }
+
     fn range_cell_count(range: CellRange) -> Result<usize, String> {
         let count = Self::range_cell_count_large(range)?;
         if count > 1_000_000 {
@@ -2053,7 +2080,7 @@ impl<'a> WorkbookHost<'a> {
     fn range_value(&self, range: CellRange) -> Result<Value, String> {
         Self::range_cell_count(range)?;
         if range.is_single() {
-            return Ok(self.cell_value(range.addresses().next().unwrap()));
+            return Ok(self.cell_value_as_shown(range.addresses().next().unwrap()));
         }
         Ok(Value::Array(ArrayValue {
             dimensions: vec![
@@ -2068,7 +2095,7 @@ impl<'a> WorkbookHost<'a> {
             ],
             values: range
                 .addresses()
-                .map(|address| self.cell_value(address))
+                .map(|address| self.cell_value_as_shown(address))
                 .collect(),
             element_default: Box::new(Value::Empty),
             resizable: true,
@@ -7214,7 +7241,7 @@ fn format_debug_value(value: &Value) -> String {
         Value::Integer(value) => value.to_string(),
         Value::Single(value) => vba_number_text(*value as f64),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
-        Value::Date(value) => vba_number_text(*value),
+        Value::Date(value) => vba_date_text(*value),
         // The same digits `CStr` and `&` give, and the same the `Print`
         // statement writes -- measured at all three. What is NOT copied is
         // Print's spacing, which puts a space in front of every positive
@@ -7942,6 +7969,99 @@ fn numeric_result(value: f64) -> Value {
 /// The text a value shows under a number format. Only numbers are formatted;
 /// text comes back as it is, and a Boolean reads TRUE or FALSE whatever the
 /// format says.
+/// What a cell's own display format says its value IS, over and above the
+/// number underneath.
+///
+/// Asked of Excel, `VarType(Range("A1").Value)` is not 5 for every number in a
+/// cell: a cell showing a date hands back a Date and a cell showing dollars
+/// hands back a Currency, rounded to the four places a Currency keeps. So the
+/// format is not decoration -- it decides the TYPE the macro receives, which
+/// is in turn what `IsDate` answers about.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ShownAs {
+    Plain,
+    Moment,
+    Money,
+}
+
+/// Read a display format for the two things that change a number's type.
+///
+/// Swept against Excel over 50 format codes. What was learnt:
+///
+/// - A DATE needs a day, month or year field. A time-only format is NOT a
+///   date: `h:mm:ss`, `h:mm AM/PM`, `[h]:mm:ss` and `mm:ss.0` all hand back a
+///   plain Double, where `d`, `yy`, `mmm`, `ddd` and `m` alone hand back Dates.
+/// - An `m` is a MINUTE, not a month, when the nearest field letter before it
+///   is `h` or the nearest one after it is `s` -- so `h:m`, `m:ss` and `mm:ss`
+///   are times while `m`, `m/d` and `d-m` are dates.
+/// - MONEY is the ASCII `$` and nothing else. `¥`, `€`, `£`, `₩` and a
+///   trailing `"円"` all leave it a plain Double, and so does the `$` inside a
+///   `[$¥-411]` locale bracket or behind a `\` escape. A `$` inside quotes
+///   DOES count: `"$"#,##0.00` hands back a Currency.
+/// - Quoted runs and bracketed runs carry no fields at all, so `"d"0` is
+///   plain, while `\dm` is a date -- the escape kills the `d` and the `m`
+///   after it is still a month.
+fn shown_as(format: Option<&str>) -> ShownAs {
+    let Some(format) = format else {
+        return ShownAs::Plain;
+    };
+    // Field letters in the order they appear, with everything that cannot
+    // carry a field already dropped. `m` is left undecided until its
+    // neighbours are known.
+    let mut fields: Vec<char> = Vec::new();
+    let mut money = false;
+    let mut characters = format.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                characters.next();
+            }
+            '"' => {
+                for quoted in characters.by_ref() {
+                    if quoted == '"' {
+                        break;
+                    }
+                    money |= quoted == '$';
+                }
+            }
+            '[' => {
+                for bracketed in characters.by_ref() {
+                    if bracketed == ']' {
+                        break;
+                    }
+                }
+            }
+            '$' => money = true,
+            _ => {
+                let letter = character.to_ascii_lowercase();
+                if matches!(letter, 'y' | 'd' | 'm' | 'h' | 's') {
+                    fields.push(letter);
+                }
+            }
+        }
+    }
+    for (place, letter) in fields.iter().enumerate() {
+        let dated = match letter {
+            'y' | 'd' => true,
+            // A month unless a clock is standing next to it.
+            'm' => {
+                let before = fields[..place].iter().rev().find(|near| **near != 'm');
+                let after = fields[place + 1..].iter().find(|near| **near != 'm');
+                before != Some(&'h') && after != Some(&'s')
+            }
+            _ => false,
+        };
+        if dated {
+            return ShownAs::Moment;
+        }
+    }
+    if money {
+        ShownAs::Money
+    } else {
+        ShownAs::Plain
+    }
+}
+
 fn shown_text(value: &Value, format: Option<&str>) -> String {
     match value {
         Value::Integer(number) => oxicells_core::format_number(
@@ -10110,6 +10230,7 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+
     fn workbook() -> Workbook {
         Workbook {
             sheets: vec![Sheet {
@@ -10137,6 +10258,94 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    /// A cell's display format decides the TYPE its value arrives as.
+    ///
+    /// Swept against Excel over 50 format codes. The surprise is that a
+    /// time-only format is NOT a date: what makes a Date is a day, month or
+    /// year field, and `h:mm:ss` carries none of them. Money is the ASCII `$`
+    /// and nothing else -- not the yen, euro or pound sign, and not a `$`
+    /// behind an escape or inside a `[$...]` locale bracket, though one inside
+    /// quotes does count.
+    #[test]
+    fn a_display_format_says_what_kind_of_value_a_cell_holds() {
+        for format in [
+            "m/d/yyyy", "d-mmm-yy", "yyyy", "mmm", "ddd", "yy", "m/d/yyyy h:mm",
+            "[$-409]m/d/yyyy", "\"on \"m/d", "d", "m", "mm", "m/d", "d-m", "y",
+            // The escape kills the `d`; the `m` after it is still a month.
+            "\\dm",
+            // A date field outranks a currency symbol.
+            "$m/d/yyyy",
+        ] {
+            assert_eq!(shown_as(Some(format)), ShownAs::Moment, "{format}");
+        }
+
+        for format in [
+            // A clock beside an `m` makes it a minute, so none of these carry
+            // a date field at all.
+            "h:mm:ss", "h:mm AM/PM", "[h]:mm:ss", "mm:ss.0", "m:ss", "h:m",
+            "mm:ss", "hh:mm", "s",
+            // And these were never dates.
+            "General", "0", "0.00", "@", "0.00%", "0;;;", "0.0000",
+            // A `d` inside quotes names nothing.
+            "\"d\"0",
+            "#,##0.00", "#,##0.00;[Red]#,##0.00", "[$$-409]#,##0.00",
+            "\\$#,##0.00", "\u{a5}#,##0", "\u{20ac}#,##0.00", "\u{a3}#,##0.00",
+            "0.00\"\u{5186}\"",
+        ] {
+            assert_eq!(shown_as(Some(format)), ShownAs::Plain, "{format}");
+        }
+
+        for format in [
+            "$#,##0.00", "\"$\"#,##0.00", "$#,##0", "0.00$", "$0",
+            "#,##0.00 $", "_($* #,##0.00_)", "$#,##0.00;[Red]$#,##0.00", "0%$",
+        ] {
+            assert_eq!(shown_as(Some(format)), ShownAs::Money, "{format}");
+        }
+
+        assert_eq!(shown_as(None), ShownAs::Plain);
+    }
+
+    /// And the macro receives what the format says it holds.
+    ///
+    /// VarType 5 Double, 6 Currency, 7 Date. A Currency keeps four places:
+    /// asked of Excel, 1.23456789 under `$0.00` comes back as 1.2346.
+    ///
+    /// This is what makes `IsDate(Range("A1").Value)` answerable at all. The
+    /// runtime cannot tell a date from the number 37684.5 -- only the cell can,
+    /// and only through the format it shows it in.
+    #[test]
+    fn a_dated_cell_hands_over_a_date_and_a_dollar_cell_a_currency() {
+        let mut workbook = workbook();
+        let module = parse_module(
+            "Public Function Ask() As String\n\
+               Range(\"A1\").Value = 37684.5\n\
+               Range(\"A1\").NumberFormat = \"m/d/yyyy\"\n\
+               Range(\"A2\").Value = 37684.5\n\
+               Range(\"A3\").Value = 1.23456789\n\
+               Range(\"A3\").NumberFormat = \"$0.00\"\n\
+               Range(\"A4\").Value = 37684.5\n\
+               Range(\"A4\").NumberFormat = \"h:mm:ss\"\n\
+               Ask = VarType(Range(\"A1\").Value) & \"|\" & \
+                     VarType(Range(\"A2\").Value) & \"|\" & \
+                     VarType(Range(\"A3\").Value) & \"|\" & \
+                     VarType(Range(\"A4\").Value) & \"|\" & \
+                     CStr(Range(\"A1\").Value) & \"|\" & \
+                     CStr(Range(\"A3\").Value) & \"|\" & \
+                     IsDate(Range(\"A1\").Value) & \"|\" & \
+                     IsDate(Range(\"A2\").Value)\n\
+             End Function\n",
+        )
+        .unwrap();
+        let answer = {
+            let mut host = WorkbookHost::new(&mut workbook, 0).unwrap();
+            execute_with_host(&module, "Ask", vec![], &mut host).unwrap()
+        };
+        assert_eq!(
+            answer,
+            Value::String("7|5|6|5|3/4/2003 12:00:00 PM|1.2346|True|False".to_string())
+        );
     }
 
     #[test]

@@ -6450,15 +6450,26 @@ fn call_date_builtin(name: &str, args: &[Value], line: Option<u32>) -> Result<Va
             }
             let parsed = value_date_serial(&args[0]);
             if name == "isdate" {
-                // Asked of Excel, `IsDate(37623)` is False and
-                // `IsDate(#1/2/2003#)` is True -- and those two cannot both
-                // hold here, because both are a Double once this runtime has
-                // them and it has no Date of its own to tell them apart.
-                // Answering True to anything that converts keeps the common
-                // case right: a macro asks `IsDate(Range("A1").Value)` about a
-                // cell holding a date, which Excel hands over AS a Date and
-                // which arrives here as a serial.
-                return Ok(Value::Boolean(parsed.is_ok()));
+                // A Date, or text that reads as one. NEVER a number, however
+                // date-like: asked of Excel, `IsDate(37684)` is False and so
+                // are `IsDate(37684.5)`, `IsDate(0)` and `IsDate("37684")`,
+                // while `IsDate(#3/4/2003#)`, `IsDate(Now)`, `IsDate("3/4/
+                // 2003")` and `IsDate("3:04 PM")` are all True. Empty, Null
+                // and a Boolean are False.
+                //
+                // This is a question the runtime could not answer honestly
+                // until it had a Date of its own -- both sides of the pair
+                // were a Double before, so it answered True to anything that
+                // converted, and got every number wrong. The case that made
+                // the old guess worth making, a macro asking
+                // `IsDate(Range("A1").Value)` about a date-formatted cell, is
+                // now right for the real reason: the host hands that cell over
+                // AS a Date.
+                return Ok(Value::Boolean(match &args[0] {
+                    Value::Date(_) => true,
+                    Value::String(text) => parse_written_date_text(text).is_ok(),
+                    _ => false,
+                }));
             }
             // Everything that makes a MOMENT hands back a Date. Asked of
             // Excel, `VarType` is 7 for CDate, CVDate, DateValue, TimeValue,
@@ -6603,13 +6614,31 @@ fn value_date_serial(value: &Value) -> Result<f64, String> {
     Ok(serial)
 }
 
+/// What `CDate` accepts: a date WRITTEN OUT, or failing that a number read as
+/// the serial it stands for.
+///
+/// The two are separate on purpose, because `IsDate` asks only the first
+/// question. Asked of Excel, `CDate("37684")` is 3/4/2003 while
+/// `IsDate("37684")` is False, and the same holds for `2003`, `12`, `0`, `-1`,
+/// `1e5`, `&H10`, `+1` and a padded ` 37684 `: every one converts and none of
+/// them IS a date. So `IsDate` is not "would CDate manage it" -- it is "is this
+/// text written as a date".
+///
+/// Which way round they are tried is measured too. `CDate("3.5")` is 3:05 AM,
+/// a TIME, not the serial 3.5 -- so the written-out reading comes first and the
+/// number is the fallback, not the other way about.
 fn parse_date_text(source: &str) -> Result<f64, String> {
+    parse_written_date_text(source).or_else(|written| {
+        let source = source.trim().trim_matches('#').trim();
+        source.parse::<f64>().map_err(|_| written)
+    })
+}
+
+/// A date written out as a date, with no numeric fallback behind it.
+fn parse_written_date_text(source: &str) -> Result<f64, String> {
     let source = source.trim().trim_matches('#').trim();
     if source.is_empty() {
         return Err("Date string is empty".to_string());
-    }
-    if let Ok(value) = source.parse::<f64>() {
-        return Ok(value);
     }
     if let Some(value) = parse_named_date_text(source) {
         return value;
@@ -8571,14 +8600,7 @@ fn text(value: &Value) -> Result<String, String> {
         Value::Single(value) => vba_number_text(single_text_value(*value)),
         Value::Double(value) => vba_number_text(*value),
         Value::Currency(value) => vba_number_text(*value as f64 / 10_000.0),
-        // A Date says itself as a date, not as the serial underneath:
-        // asked of Excel, `CStr(#1/2/2003#)` is `1/2/2003`, a time alone
-        // is `12:00:00 PM`, and the two together are both. The same as the
-        // named General Date, which is what `&` gives too.
-        Value::Date(value) => match serial_date_parts(*value) {
-            Ok(parts) => general_date(*value, parts),
-            Err(_) => vba_number_text(*value),
-        },
+        Value::Date(value) => vba_date_text(*value),
         // The ONE string on this whole surface that follows the Office UI
         // language rather than always being US English. Measured against a
         // Japanese Excel: the month names, the weekday names, Long Date,
@@ -8630,6 +8652,22 @@ fn single_text_value(value: f32) -> f64 {
 /// they do not pad the exponent, so the same number can come out three ways:
 /// `1234567890123456` is `1.23456789012346E+15` here and `1234567890123460`
 /// there. One question, three answers, three functions.
+/// A moment written the way VBA writes one.
+///
+/// A Date says itself as a date, not as the serial underneath: asked of Excel,
+/// `CStr(#1/2/2003#)` is `1/2/2003`, a time alone is `12:00:00 PM`, and the two
+/// together are both. That is the named General Date form, and `&`, `CStr` and
+/// `Print` all give it.
+///
+/// Public because the host crate writes values out too, and had its own Date
+/// arm saying the serial -- one rule in two places is one rule that drifts.
+pub fn vba_date_text(serial: f64) -> String {
+    match serial_date_parts(serial) {
+        Ok(parts) => general_date(serial, parts),
+        Err(_) => vba_number_text(serial),
+    }
+}
+
 pub fn vba_number_text(value: f64) -> String {
     if value == 0.0 {
         return "0".to_string();
@@ -11887,6 +11925,78 @@ mod tests {
     /// one of these was asked of Excel. The two that are NOT 7 are the
     /// interesting ones: DateDiff counts intervals rather than naming a moment,
     /// and Timer is seconds since midnight.
+    /// `IsDate` asks whether the text IS a date, not whether CDate could cope.
+    ///
+    /// The two come apart on every numeric string. Asked of Excel,
+    /// `CDate("37684")` is 3/4/2003 while `IsDate("37684")` is False, and the
+    /// same holds for `2003`, `12`, `0`, `-1`, `1e5` and a padded ` 37684 `.
+    /// A number in a cell is not a date either, however date-like -- only the
+    /// format the cell shows it in makes it one, and that is the host's answer
+    /// to give.
+    ///
+    /// This could not be answered honestly until the runtime had a Date of its
+    /// own: both sides of the pair were a Double before, so it said True to
+    /// anything that converted and got every number wrong.
+    #[test]
+    fn is_date_asks_whether_the_text_is_written_as_one() {
+        let asked = |expression: &str| {
+            let source = format!(
+                "Public Function Ask() As String\n\
+                   Ask = CStr(IsDate({expression}))\n\
+                 End Function\n"
+            );
+            match run(&source, "Ask", vec![]) {
+                Ok(Value::String(answer)) => answer,
+                other => panic!("{expression}: {other:?}"),
+            }
+        };
+
+        for expression in [
+            "#3/4/2003#",
+            "CDate(\"3/4/2003\")",
+            "Now",
+            "\"3/4/2003\"",
+            "\"3:04 PM\"",
+            "\"2003-03-04\"",
+            "\"12:00\"",
+        ] {
+            assert_eq!(asked(expression), "True", "{expression}");
+        }
+
+        for expression in [
+            // A number is never a date, whatever serial it stands for.
+            "37684",
+            "37684.5",
+            "0",
+            "-1",
+            // Nor is a number WRITTEN OUT, even though CDate converts it.
+            "\"37684\"",
+            "\"2003\"",
+            "\"12\"",
+            "\"0\"",
+            "\"-1\"",
+            "\"1e5\"",
+            "\" 37684 \"",
+            "\"+1\"",
+            // Nor these.
+            "\"not a date\"",
+            "Empty",
+            "Null",
+            "True",
+        ] {
+            assert_eq!(asked(expression), "False", "{expression}");
+        }
+
+        // And CDate still converts the numbers IsDate turned down.
+        let source = "Public Function Ask() As String\n\
+                        Ask = CStr(CDate(\"37684\")) & \"|\" & CStr(CDate(\"0\"))\n\
+                      End Function\n";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("3/4/2003|12:00:00 AM".to_string())
+        );
+    }
+
     #[test]
     fn everything_that_makes_a_moment_says_it_is_a_date() {
         let kind = |expression: &str| {
