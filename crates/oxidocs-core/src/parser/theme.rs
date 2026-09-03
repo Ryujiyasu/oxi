@@ -148,6 +148,11 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     // fall through to rPrDefault instead". Env-gated to preserve baseline.
     let mut ea_empty_major = false;
     let mut ea_empty_minor = false;
+    // S1297 (2026-09-03, opt-out OXI_S1297_DISABLE): the script entry itself,
+    // remembered so the precedence between it and <a:ea> is decided ONCE, at
+    // end of parse, instead of by whichever element the reader met first.
+    let mut jpan_major: Option<String> = None;
+    let mut jpan_minor: Option<String> = None;
     // S327 (2026-05-26): DEFAULT-ON. Explicit <a:ea typeface=""/> suppresses
     // the Jpan-script font fallback for that font slot. End-of-parse fallback
     // changes from "Meiryo" to "MS Mincho" for empty-ea slots (closer to
@@ -306,6 +311,12 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                             }
                         }
                         if script == "Jpan" && !typeface.is_empty() {
+                            if in_major_font && jpan_major.is_none() {
+                                jpan_major = Some(typeface.clone());
+                            }
+                            if in_minor_font && jpan_minor.is_none() {
+                                jpan_minor = Some(typeface.clone());
+                            }
                             // S492e (2026-06-03, Lever E) — for empty-ea MAJOR, USE the
                             // Jpan font: Word renders 1ec1's title/headings in the Jpan
                             // MS Gothic, NOT the rPrDefault Mincho (visually confirmed:
@@ -334,7 +345,7 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
                                 theme.major_font_ea = Some(typeface.clone());
                             }
                             if in_minor_font && theme.minor_font_ea.is_none() && !suppress_minor {
-                                theme.minor_font_ea = Some(typeface);
+                                theme.minor_font_ea = Some(typeface.clone());
                             }
                         }
                     }
@@ -391,6 +402,55 @@ pub fn parse_theme(xml: &str) -> ThemeColors {
     // blocker is a MS-Gothic render-layer issue (likely a GDI width-table horizontal
     // mis-positioning — a position shift hurts SSIM more than Mincho's shape mismatch);
     // flip default-ON once that is fixed. See [[gen2_vertical_drift]].
+    // S1297 (2026-09-03, opt-out OXI_S1297_DISABLE) — the script entry WINS.
+    //
+    // S323 read an explicit `<a:ea typeface=""/>` as "do not fall through to
+    // `<a:font script=...>`", from d1e8ac8 whose Word COM Font.NameFarEast is
+    // ＭＳ 明朝. But that document -- and 1636d28e, the other evidence --
+    // inherits a LITERAL `w:eastAsia="ＭＳ 明朝"` from docDefaults, so NOTHING in
+    // either of them ever asks the theme (`_theme_ea_reach.py`: 0 CJK characters
+    // resolve through the theme in both). ＭＳ 明朝 was rPrDefault answering, as
+    // S323's own note says. The measured gain came from the OTHER half of that
+    // change (the no-Jpan fallback moving Meiryo -> MS Mincho), which this keeps.
+    //
+    // `_pb_themeea_gen.py`, 8 arms, truth = the face in Word's exported PDF:
+    //     <a:ea>      Jpan        themeFontLang   Word paints
+    //     ""          游明朝       ja-JP           Yu Mincho
+    //     ""          游ゴシック    ja-JP           Yu Gothic
+    //     ""          (none)      ja-JP           MS Mincho     <- the fallback
+    //     メイリオ      游明朝       ja-JP           Yu Mincho     <- Jpan beats a
+    //     メイリオ      游ゴシック    ja-JP           Yu Gothic        NAMED <a:ea>
+    //     メイリオ      (none)      ja-JP           Meiryo
+    //     ""          游明朝       (omitted)       Yu Mincho     <- and the lang
+    //     ""          游明朝       en-US only      Yu Mincho        does not gate it
+    // One rule covers all eight: the Jpan entry wins whenever it exists; `<a:ea>`
+    // answers only when there is none; the fallback answers when neither does.
+    // Real-document confirmation: 12 of 12 corpus documents whose text actually
+    // resolves through the theme and that have a Word truth PDF paint the Jpan
+    // face (`_theme_ea_census.py`), with no counterexample. The "named <a:ea>
+    // beside a different Jpan" half rests on the repro alone -- no document in
+    // the corpus has that shape (0 of 652, both slots), so it is corpus-inert
+    // and is written as one rule rather than as a carve-out.
+    // ★HELD OPT-IN (`OXI_S1297=1`), default OFF. The rule is measured, but
+    // turning it on costs SSIM with nothing to set against it: the sentinel
+    // moves 6 bases, 5 REGRESS and 0 improve (net -0.1531; d1e8ac8 -0.0742,
+    // b5f706e9 -0.0580, f16f228a -0.0113, albalunaSS_a6 -0.0080,
+    // albalunaTaidan -0.0015). Those three kyodokenkyuyoushiki documents each
+    // have ONE theme-resolved run holding nothing but ideographic spaces, and
+    // Word paints their visible text in the docDefaults literal ＭＳ 明朝 (PDF
+    // span font, measured) -- so the regression is Oxi giving that invisible
+    // run a taller line box than Word gives the line. Whether Word resolves an
+    // EMPTY run through the theme at all, and what height it charges for it, is
+    // the open question; until that compensating partner is pinned, "disagrees
+    // with Word" and "shipping it helps" are different claims.
+    if std::env::var("OXI_S1297").is_ok() {
+        if let Some(j) = jpan_major {
+            theme.major_font_ea = Some(j);
+        }
+        if let Some(j) = jpan_minor {
+            theme.minor_font_ea = Some(j);
+        }
+    }
     let major_ea_empty_fallback = if std::env::var("OXI_S613").is_ok() {
         "MS Gothic"
     } else {
