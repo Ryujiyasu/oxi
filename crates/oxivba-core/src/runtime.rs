@@ -75,13 +75,46 @@ pub struct RecordValue {
 /// Whether an expression could name a record field: a member reach or a
 /// subscript, either of which may sit on top of the other.
 fn is_place_expression(expr: &Expr) -> bool {
-    matches!(expr, Expr::Member { .. } | Expr::Index { .. })
+    matches!(
+        expr,
+        Expr::Member { .. } | Expr::Index { .. } | Expr::WithMember(_, _) | Expr::WithBangMember(_, _)
+    )
 }
 
 /// One step down into a record place: a named field, or array subscripts.
+#[derive(Clone)]
 enum RecordStep {
     Field(String),
     Index(Vec<i64>),
+}
+
+/// Where a `With` block's subject lives while its body runs.
+enum WithSubject {
+    /// A host object, which carries a reference of its own.
+    Object(ObjectRef),
+    /// A record, which carries none. VBA's `With` takes a user-defined type as
+    /// readily as an object -- `With This` over a `Private Type` is how half
+    /// the class modules in the wild are written -- so the PLACE is kept
+    /// instead: the root variable, and the steps down to it with every
+    /// subscript already worked out.
+    ///
+    /// Frozen rather than re-walked, because VBA binds the subject ONCE.
+    /// Asked of Excel, `With arr(i)` followed by `i = 1` inside the block
+    /// still reads `arr(0)`.
+    Record {
+        root: String,
+        steps: Vec<RecordStep>,
+    },
+}
+
+/// Whether a chain bottoms out at the `With` subject rather than at a name.
+fn stands_on_the_with_subject(expr: &Expr) -> bool {
+    match expr {
+        Expr::WithMember(_, _) | Expr::WithBangMember(_, _) => true,
+        Expr::Member { object, .. } => stands_on_the_with_subject(object),
+        Expr::Index { target, .. } => stands_on_the_with_subject(target),
+        _ => false,
+    }
 }
 
 impl RecordValue {
@@ -273,7 +306,7 @@ struct Frame {
     declared: BTreeMap<String, String>,
     variants: BTreeSet<String>,
     static_procedure: bool,
-    with_objects: Vec<ObjectRef>,
+    with_objects: Vec<WithSubject>,
     error_mode: ErrorMode,
     error_state: ErrorState,
     error_handler_active: bool,
@@ -957,8 +990,21 @@ impl<'a> Runtime<'a> {
                 span,
             } => self.exec_while(condition, body, frame, span.line),
             Statement::With { subject, body, .. } => {
-                let receiver = self.eval_object(subject, frame, subject.span().line)?;
-                frame.with_objects.push(receiver);
+                let line = subject.span().line;
+                // A record first, because `eval_object` cannot make one into an
+                // object and would refuse the whole block.
+                let held = if self.record_rooted(frame, subject) {
+                    let mut steps = Vec::new();
+                    self.record_steps(subject, frame, line, &mut steps)?
+                        .map(|root| WithSubject::Record { root, steps })
+                } else {
+                    None
+                };
+                let held = match held {
+                    Some(held) => held,
+                    None => WithSubject::Object(self.eval_object(subject, frame, line)?),
+                };
+                frame.with_objects.push(held);
                 let result = self.exec_body(body, frame);
                 frame.with_objects.pop();
                 result
@@ -1810,6 +1856,9 @@ impl<'a> Runtime<'a> {
     /// as `Cells(Next()).Value` does not evaluate its arguments twice on the
     /// way to being handled as a host property.
     fn record_rooted(&self, frame: &Frame, expr: &Expr) -> bool {
+        if stands_on_the_with_subject(expr) {
+            return matches!(frame.with_objects.last(), Some(WithSubject::Record { .. }));
+        }
         let Some(name) = Self::place_root(expr) else {
             return false;
         };
@@ -1893,6 +1942,18 @@ impl<'a> Runtime<'a> {
                     return Ok(None);
                 };
                 steps.push(RecordStep::Index(self.array_arguments(args, frame, line)?));
+                Ok(Some(root))
+            }
+            // `.field` inside `With aRecord` picks up where the subject left
+            // off: its frozen steps, then this field.
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                let Some(WithSubject::Record { root, steps: held }) = frame.with_objects.last()
+                else {
+                    return Ok(None);
+                };
+                let root = root.clone();
+                steps.extend(held.iter().cloned());
+                steps.push(RecordStep::Field(name.clone()));
                 Ok(Some(root))
             }
             _ => Ok(None),
@@ -3896,13 +3957,21 @@ fn expr_name(expr: &Expr) -> Option<&str> {
 }
 
 fn current_with_object(frame: &Frame, line: u32) -> Result<ObjectRef, RuntimeError> {
-    frame.with_objects.last().cloned().ok_or_else(|| {
-        error(
+    match frame.with_objects.last() {
+        Some(WithSubject::Object(receiver)) => Ok(receiver.clone()),
+        // A record has fields, not members to call. Anything reaching here
+        // asked one for something only an object can give.
+        Some(WithSubject::Record { root, .. }) => Err(error(
+            RuntimeErrorKind::TypeMismatch,
+            format!("With subject {root} is a Type, which has no such member"),
+            Some(line),
+        )),
+        None => Err(error(
             RuntimeErrorKind::Unsupported,
             "With member used outside a With block",
             Some(line),
-        )
-    })
+        )),
+    }
 }
 
 fn dictionary_array(values: Vec<Value>) -> Value {
@@ -13245,6 +13314,95 @@ mod tests {
             Value::String("True|False|True|False|True|True|False|True".to_string())
         );
     }
+    /// `With` takes a record as readily as an object.
+    ///
+    /// VBA's `With` accepts a user-defined type, which is how most class
+    /// modules that keep their state in one `Private Type` are written. This
+    /// runtime only ever took an object, so `With This` failed on its first
+    /// line -- and with it every `.field` the block contained.
+    ///
+    /// Everything below is Excel's answer, `7t|t|3|zero|Bt|z1`.
+    #[test]
+    fn a_with_block_can_stand_on_a_record() {
+        let source = "Private Type Holder
+                        ub As Long
+                        tag As String
+                        items() As String
+                      End Type
+                      Public Function Ask() As String
+                        Dim This As Holder
+                        Dim other As Holder
+                        Dim arr(0 To 1) As Holder
+                        Dim i As Long
+                        Dim out As String
+                        With This
+                          .ub = 7
+                          .tag = \"t\"
+                          out = CStr(.ub) & .tag
+                        End With
+                        out = out & \"|\" & This.tag
+                        This.ub = 3
+                        With This
+                          out = out & \"|\" & CStr(.ub)
+                        End With
+                        arr(0).tag = \"zero\"
+                        arr(1).tag = \"one\"
+                        i = 0
+                        With arr(i)
+                          i = 1
+                          out = out & \"|\" & .tag
+                        End With
+                        other.tag = \"B\"
+                        With This
+                          With other
+                            out = out & \"|\" & .tag
+                          End With
+                          out = out & .tag
+                        End With
+                        With This
+                          ReDim .items(0 To 1)
+                          .items(0) = \"z\"
+                          out = out & \"|\" & .items(0) & CStr(UBound(.items))
+                        End With
+                        Ask = out
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("7t|t|3|zero|Bt|z1".to_string())
+        );
+    }
+
+    /// The subject is bound ONCE, so moving the index afterwards moves nothing.
+    ///
+    /// `With arr(i)` then `i = 1` inside the block still reads `arr(0)` --
+    /// asked of Excel. Re-walking the path each time would have answered
+    /// `one`, which is why the steps are frozen when the block opens.
+    #[test]
+    fn a_with_subject_is_bound_once_and_does_not_follow_its_index() {
+        let source = "Private Type Holder
+                        tag As String
+                      End Type
+                      Public Function Ask() As String
+                        Dim arr(0 To 1) As Holder
+                        Dim i As Long
+                        arr(0).tag = \"zero\"
+                        arr(1).tag = \"one\"
+                        i = 0
+                        With arr(i)
+                          i = 1
+                          .tag = .tag & \"!\"
+                          Ask = .tag
+                        End With
+                        Ask = Ask & \"|\" & arr(0).tag & \"|\" & arr(1).tag
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("zero!|zero!|one".to_string())
+        );
+    }
+
     /// `ReDim` reaches into a record, the way `Erase` always has.
     ///
     /// `ReDim Preserve This.objects(1 To ub * 2)` is ordinary VBA and turns up
