@@ -16542,12 +16542,17 @@ fn layout_paragraph_baselines(
     // second paragraph, a step of 3.87 against Arial's 3.889pt space at 14pt).
     // Without it the audit has to drop every multi-paragraph shape, which is
     // most of the corpus.
-    let space_pt = hmtx_width_styled(" ", fs, &family, bold, italic, 0.0)
-        .or_else(|| {
-            runtime_width_px(dc, " ", fs, &family, bold, italic, scale, 0.0)
-                .map(|px| px as f32 / scale as f32)
-        })
-        .unwrap_or(0.0);
+    // ★Asked of the ADVANCE chain, not of a width function: every width path
+    // here excludes trailing spaces, so measuring the string " " with one
+    // returns 0.0 -- which it did, silently, until deck 34's marks refused to
+    // subtract.
+    let space_pt = {
+        use oxislides_core::layout::FaceMetrics;
+        GdiFaceMetrics
+            .advance_em(&family, bold, italic, ' ')
+            .map(|em| em * fs)
+            .unwrap_or(0.0)
+    };
     let mut out = Vec::with_capacity(n_lines);
     let mut align_at = 0usize; // char offset of this line within the paragraph
     for (i, line) in lines.iter().enumerate() {

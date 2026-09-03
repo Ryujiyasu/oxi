@@ -81,7 +81,8 @@ with four identical shapes: same words, same face, same size, same character
 steps, and
 
     'NAME'    box 40.88      the engine says 40.80
-    'NAME'  box **43.87**  the same 40.80, and Rubik's space at 14pt is 2.99
+    'NAME
+'  box **43.87**  the same 40.80, and Rubik's space at 14pt is 2.99
 
 So the mark is taken off wherever PowerPoint's own LINE TEXT carries it, which
 is the only place it shows. That accounted for 8 of the 12 lines this gate had
@@ -159,7 +160,10 @@ ROTATED = True
 WIDTH_ROWS: list | None = None
 
 # Whether to compare multi-paragraph shapes by subtracting the paragraph mark.
-MARK_CORRECT = False
+# ON by default since 2026-09-03: the mark is one space wide and the engine now
+# states that space per paragraph, so those shapes can be compared instead of
+# dropped. It nearly doubles the population -- deck 9 goes from 78 lines to 124.
+MARK_CORRECT = True
 
 REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / "pipeline_data" / "pptx_benchmark"
@@ -728,13 +732,13 @@ def main() -> None:
                     help="drop turned shapes entirely, as this did before")
     ap.add_argument("--dump-widths", default="",
                     help="write every compared line's width pair to this JSONL")
-    ap.add_argument("--mark-correct", action="store_true",
-                    help="also compare single-line paragraphs in multi-paragraph "
-                         "shapes, taking the paragraph mark off the box")
+    ap.add_argument("--no-mark-correct", action="store_true",
+                    help="drop multi-paragraph shapes from the width comparison, "
+                         "as this did before the mark was measured")
     args = ap.parse_args()
     global ROTATED, WIDTH_ROWS, MARK_CORRECT
     ROTATED = not args.no_rotated
-    MARK_CORRECT = args.mark_correct
+    MARK_CORRECT = not args.no_mark_correct
     if args.dump_widths:
         WIDTH_ROWS = []
     docs = args.docs
