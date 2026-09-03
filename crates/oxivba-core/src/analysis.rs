@@ -4438,20 +4438,27 @@ mod tests {
         assert!(a.api_names.is_empty());
     }
 
+    /// Directives cost nothing here, because they are gone before this runs.
+    ///
+    /// They used to be reported as findings of their own. They are not input
+    /// any more -- the parser settles them and hands over the branch Excel
+    /// would compile -- so what is left to check is that the live branch
+    /// arrived and nothing went unread.
     #[test]
-    fn module_comments_and_directives_are_not_unparsed() {
+    fn a_settled_directive_leaves_its_live_branch_and_nothing_unread() {
         let a = analyse_src(
             "' platform declaration\n\
              #If Win64 Then\n\
              Private value As LongLong\n\
+             #Else\n\
+             Private value As Long\n\
              #End If\n",
         );
         assert_eq!(a.metrics.unparsed, 0);
-        assert!(a
+        assert!(!a
             .findings
             .iter()
-            .any(|finding| finding.what == "#If Win64 Then"));
-        assert!(a.findings.iter().any(|finding| finding.what == "#End If"));
+            .any(|finding| finding.what.starts_with('#')));
     }
 
     #[test]
@@ -4460,4 +4467,9 @@ mod tests {
         assert_eq!(a.class, None);
         assert!(a.verdict().contains("unclassified"));
     }
+
+
+
+
+
 }

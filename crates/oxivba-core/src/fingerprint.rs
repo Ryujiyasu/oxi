@@ -1838,13 +1838,26 @@ Sub D()\nx = 4\nEnd Sub";
         );
     }
 
+    /// A directive changes a fingerprint only when it changes the CODE.
+    ///
+    /// Two modules that differ only in which true condition guards the same
+    /// nothing compile to the same module, and now fingerprint the same -- the
+    /// directives are settled before anything is hashed. Two that select
+    /// different code still differ, which is the distinction worth keeping.
     #[test]
-    fn compiler_directives_change_module_fingerprints() {
+    fn a_directive_changes_a_fingerprint_only_when_it_changes_the_code() {
         let win64 = "#If Win64 Then\n#End If\nSub T()\nEnd Sub";
         let vba7 = "#If VBA7 Then\n#End If\nSub T()\nEnd Sub";
-        assert_ne!(
+        assert_eq!(
             fp(win64, Strength::Loosest).combined,
             fp(vba7, Strength::Loosest).combined
+        );
+
+        let wide = "#If Win64 Then\nSub T()\nDim x As LongLong\nEnd Sub\n#End If";
+        let narrow = "#If Mac Then\nSub T()\nDim x As LongLong\nEnd Sub\n#End If";
+        assert_ne!(
+            fp(wide, Strength::Loosest).combined,
+            fp(narrow, Strength::Loosest).combined
         );
     }
 

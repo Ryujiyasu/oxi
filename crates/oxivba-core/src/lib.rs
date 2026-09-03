@@ -32,6 +32,7 @@ pub mod ast;
 pub mod fingerprint;
 pub mod lexer;
 pub mod parser;
+pub mod precompile;
 pub mod runtime;
 pub mod safety;
 

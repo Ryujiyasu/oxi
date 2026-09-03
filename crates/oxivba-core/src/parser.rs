@@ -53,7 +53,12 @@ pub fn parse_module(source: &str) -> Result<Module, LexError> {
         }
         None => source,
     };
-    let tokens = tokenize(code)?;
+    // Conditional compilation is settled here, before a token is read: a
+    // branch VBA would not compile need not be VBA at all, so it cannot be
+    // allowed to reach the lexer. `live_source` blanks the dead lines the same
+    // way the designer block above is blanked, keeping every byte position.
+    let live = crate::precompile::live_source(code);
+    let tokens = tokenize(&live)?;
     let mut parser = Parser {
         src: source,
         tokens,
@@ -983,7 +988,26 @@ impl<'a> Parser<'a> {
             Some("seek") if !matches!(self.kind_at(1), TokenKind::Punct(Punct::LParen)) => {
                 return self.parse_file_seek(span);
             }
-            Some("name") => return self.parse_file_rename(span),
+            // `Name` is a statement only when a path follows it. `Name = x`
+            // is an ordinary assignment to a variable called Name, which
+            // Excel compiles and runs -- asked of it, `Dim Name As String:
+            // Name = "hello"` answers hello. Reading it as the rename
+            // statement lost the line, and with it the rest of the procedure
+            // around it: seventeen lines across eleven of the 378 modules
+            // measured, mostly classes with a Name of their own.
+            //
+            // The same guard `Seek` already carries above, for the same
+            // reason: these old file-I/O keywords are ordinary words too.
+            Some("name")
+                if !matches!(
+                    self.kind_at(1),
+                    TokenKind::Punct(Punct::Eq)
+                        | TokenKind::Punct(Punct::Dot)
+                        | TokenKind::Punct(Punct::LParen)
+                ) =>
+            {
+                return self.parse_file_rename(span);
+            }
             Some("filecopy") => return self.parse_file_copy(span),
             Some("kill") => return self.parse_file_system_unary(span, FileSystemUnaryKind::Kill),
             Some("mkdir") => {
@@ -2276,7 +2300,15 @@ impl<'a> Parser<'a> {
         loop {
             let span = self.span();
             if self.at_punct(Punct::Dot) {
-                if let TokenKind::Ident(name) = self.kind_at(1).clone() {
+                // Brackets round a member name are how VBA spells one that is
+                // not a legal identifier: `coll.[_NewEnum]`, whose leading
+                // underscore no plain name may carry, or `Me.[Order Date]`
+                // with a space in it. The name inside is the member's own, so
+                // this is an ordinary member access however it is spelt --
+                // which is already how `!` reads its brackets, just below.
+                if let TokenKind::Ident(name) | TokenKind::BracketExpr(name) =
+                    self.kind_at(1).clone()
+                {
                     self.pos += 2;
                     let suffix = if let TokenKind::TypeSuffix(suffix) = self.kind() {
                         let suffix = *suffix;
@@ -2377,7 +2409,22 @@ impl<'a> Parser<'a> {
             });
         }
         let file_number = self.eat_punct(Punct::Hash);
-        let force_by_value = self.at_punct(Punct::LParen);
+        // `ByVal` and `ByRef` may stand at the CALL as well as the
+        // declaration: `CopyMemory ByVal VarPtr(x), y, n` overrides how this
+        // one argument travels, whatever the parameter asked for. Almost every
+        // use is a Win32 call passing a pointer where the Declare says the
+        // thing itself, and it is the single commonest line this parser could
+        // not read -- around a hundred of them across twenty of the 378
+        // modules measured.
+        //
+        // `ByVal` here means the same as the extra brackets already understood
+        // above, so it is recorded the same way. A trailing `ByRef` asks for
+        // the ordinary passing and needs nothing recorded.
+        let by_value = self.eat_kw("byval");
+        if !by_value {
+            self.eat_kw("byref");
+        }
+        let force_by_value = by_value || self.at_punct(Punct::LParen);
         let value = self.parse_expr()?;
         Some(Argument {
             name: None,
@@ -2433,8 +2480,12 @@ impl<'a> Parser<'a> {
                 Some(inner)
             }
             // `.Value` with no object: a member of the enclosing `With`.
+            // Brackets permit a member name that is not a legal identifier,
+            // the same as they do after an object.
             TokenKind::Punct(Punct::Dot) => {
-                if let TokenKind::Ident(name) = self.kind_at(1).clone() {
+                if let TokenKind::Ident(name) | TokenKind::BracketExpr(name) =
+                    self.kind_at(1).clone()
+                {
                     self.pos += 2;
                     Some(Expr::WithMember(name, span))
                 } else {
@@ -3573,22 +3624,82 @@ mod tests {
         ));
     }
 
+    /// A procedure whose HEADER is split across a directive survives.
+    ///
+    /// This is the shape that cost the most, taken from real code: two headers
+    /// with no `End Function` between them, so reading both loses the second
+    /// and everything after it -- the body, the `End Function`, and whatever
+    /// procedure follows. Measured over 378 real modules, settling directives
+    /// took the modules read end to end from 296 to 336.
     #[test]
-    fn module_comments_and_compiler_directives_are_structured() {
+    fn a_procedure_split_across_a_directive_is_still_one_procedure() {
+        let m = module(
+            "#If VBA7 Then
+             Private Function MouseProc(ByVal nCode As Long) As LongPtr
+             #Else
+             Private Function MouseProc(ByVal nCode As Long) As Long
+             #End If
+                 MouseProc = nCode
+             End Function
+             Public Sub After()
+             End Sub
+",
+        );
+        let procedures: Vec<&str> = m
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ModuleItem::Procedure(procedure) => Some(procedure.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(procedures, vec!["MouseProc", "After"]);
+        let ModuleItem::Procedure(first) = &m.items[0] else {
+            panic!("{:?}", m.items[0]);
+        };
+        // The live branch's return type, not the other one's.
+        assert_eq!(
+            first.return_type.as_ref().map(|t| t.name.as_str()),
+            Some("LongPtr")
+        );
+        assert_eq!(first.body.len(), 1);
+    }
+
+    /// A comment is kept; a compilation directive is SETTLED and gone.
+    ///
+    /// The directives used to arrive as items of their own, both branches
+    /// intact behind them. That is not what Excel compiles: it takes one
+    /// branch and never reads the other, so the parser now does too, and what
+    /// reaches this point is the module Excel would have built.
+    #[test]
+    fn a_comment_is_kept_and_a_directive_is_already_settled() {
         let m = module(
             "' platform declaration\n\
              #If Win64 Then\n\
+             Private wide As Long\n\
              #Else\n\
+             Private narrow As Integer\n\
              #End If\n",
         );
         assert!(matches!(&m.items[0], ModuleItem::Comment { text, .. }
             if text == " platform declaration"));
-        assert!(matches!(&m.items[1], ModuleItem::Directive { text, .. }
-            if text == "#If Win64 Then"));
-        assert!(matches!(&m.items[2], ModuleItem::Directive { text, .. }
-            if text == "#Else"));
-        assert!(matches!(&m.items[3], ModuleItem::Directive { text, .. }
-            if text == "#End If"));
+        assert!(
+            !m.items
+                .iter()
+                .any(|item| matches!(item, ModuleItem::Directive { .. })),
+            "a directive survived: {:?}",
+            m.items
+        );
+        // The live branch, and only it.
+        let declared: Vec<&str> = m
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ModuleItem::Variables(decl) => decl.items.first().map(|v| v.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(declared, vec!["wide"]);
     }
 
     #[test]
