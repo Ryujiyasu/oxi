@@ -2099,6 +2099,51 @@ impl<'a> Runtime<'a> {
     /// Answering `None` leaves the call to the ordinary path, which counts
     /// characters -- the right answer for a String, a Variant and every
     /// expression that is not a bare name.
+    /// Whether this call is a `Format` that will leave Null behind it.
+    ///
+    /// `Format` takes its first argument ByRef, and when what it receives is
+    /// Empty it stores Null there. Asked of Excel, an untouched Variant `v` is
+    /// `Empty`, and after `r = Format(v, 1)` it is `Null` -- the answer `r` is
+    /// the empty string either way, so the only trace is in the caller's own
+    /// variable. It happens whatever the format is (`1`, `"0"`, `0`, `2`, a
+    /// variable) and reaches a bare variable, an array element and a record
+    /// field alike.
+    ///
+    /// It is really the ByRef parameter showing through, and two measurements
+    /// say so: `Format((v), 1)` with the brackets that force by-value leaves
+    /// `v` Empty, and a value that is not Empty -- a number, a string -- comes
+    /// back untouched. Nothing else does this; `CStr`, `UCase` and `Trim` of
+    /// the same Empty all leave it Empty.
+    fn format_empties_its_argument<'args>(
+        name: &str,
+        args: &'args [Argument],
+        values: &[Value],
+    ) -> Option<&'args Expr> {
+        if !name.eq_ignore_ascii_case("format") {
+            return None;
+        }
+        if !matches!(values.first(), Some(Value::Empty)) {
+            return None;
+        }
+        let first = args.first()?;
+        if first.force_by_value {
+            return None;
+        }
+        let target = first.value.as_ref()?;
+        is_place_expression(target)
+            .then_some(target)
+            .or_else(|| matches!(target, Expr::Ident(_, _) | Expr::TypedIdent { .. }).then_some(target))
+    }
+
+    /// Put the Null where `Format` would have put it.
+    ///
+    /// A target that cannot hold one -- a `Dim s As String` -- keeps what it
+    /// had, which is what Excel does too: measured, a String variable comes
+    /// back a String. So a refused write is not an error, it is the answer.
+    fn write_null_back(&mut self, target: &Expr, frame: &mut Frame, line: u32) {
+        let _ = self.assign(target, Value::Null, frame, line);
+    }
+
     fn storage_size_asked_of(
         &self,
         name: &str,
@@ -2564,7 +2609,13 @@ impl<'a> Runtime<'a> {
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
-                        self.call_named(name, values, &argument_names, Some(span.line), frame)
+                        let emptied = Self::format_empties_its_argument(name, args, &values);
+                        let answer =
+                            self.call_named(name, values, &argument_names, Some(span.line), frame);
+                        if let Some(target) = emptied {
+                            self.write_null_back(target, frame, span.line);
+                        }
+                        answer
                     }
                     Expr::Member { object, name, .. } => {
                         let receiver = self.eval_object(object, frame, span.line)?;
@@ -13314,6 +13365,61 @@ mod tests {
             Value::String("True|False|True|False|True|True|False|True".to_string())
         );
     }
+    /// `Format` leaves Null behind in the variable it was handed.
+    ///
+    /// Its first parameter is ByRef, and when what arrives is Empty it stores
+    /// Null there. Asked of Excel, an untouched Variant is Empty, and after
+    /// `r = Format(v, 1)` it is Null -- the answer is the empty string either
+    /// way, so the caller's own variable is the only trace.
+    ///
+    /// Two measurements say this is the ByRef parameter and not a rule about
+    /// Format's answer: brackets that force by-value, `Format((v), 1)`, leave
+    /// v Empty, and a value that is not Empty comes back untouched. Nothing
+    /// else does it -- `CStr`, `UCase` and `Trim` of the same Empty leave it
+    /// Empty. A target that cannot hold a Null, `Dim s As String`, keeps what
+    /// it had, which is Excel's answer too.
+    ///
+    /// It surfaced through a generated case where `CStr(v1)` raised 94 two
+    /// lines after a `Format(v1, 1)`. The wrong answer was not CStr's.
+    #[test]
+    fn format_leaves_null_in_the_variable_it_was_given() {
+        let source = "Private Type Holder
+                        slot As Variant
+                      End Type
+                      Public Function Ask() As String
+                        Dim v As Variant
+                        Dim arr(0 To 1) As Variant
+                        Dim rec As Holder
+                        Dim s As String
+                        Dim r As Variant
+                        Dim out As String
+                        On Error Resume Next
+                        r = Format(v, 1)
+                        out = TypeName(v)
+                        r = Format(arr(0), 1)
+                        out = out & \"|\" & TypeName(arr(0))
+                        r = Format(rec.slot, 1)
+                        out = out & \"|\" & TypeName(rec.slot)
+                        r = Format(s, 1)
+                        out = out & \"|\" & TypeName(s)
+                        v = Empty
+                        r = Format((v), 1)
+                        out = out & \"|\" & TypeName(v)
+                        v = 5
+                        r = Format(v, 1)
+                        out = out & \"|\" & TypeName(v)
+                        v = Empty
+                        r = CStr(v)
+                        out = out & \"|\" & TypeName(v)
+                        Ask = out
+                      End Function
+";
+        assert_eq!(
+            run(source, "Ask", vec![]).unwrap(),
+            Value::String("Null|Null|Null|String|Empty|Integer|Empty".to_string())
+        );
+    }
+
     /// `With` takes a record as readily as an object.
     ///
     /// VBA's `With` accepts a user-defined type, which is how most class
