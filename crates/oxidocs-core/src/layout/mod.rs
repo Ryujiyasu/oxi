@@ -34879,8 +34879,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             f32,
                                             f32,
                                             bool,
+                                            Option<String>,
                                         )>,
                                     > = Vec::new();
+                                    // S1299 (2026-09-04): the LAST field is the run's own
+                                    // `w:eastAsia` family. Without it the cell path rebuilt a
+                                    // RunStyle from this tuple carrying only size/bold/italic/
+                                    // ascii-family, so `metrics_for_text` resolved the East
+                                    // Asian face from the PARAGRAPH instead — i.e. through
+                                    // docDefaults' `eastAsiaTheme` to the theme — even for a run
+                                    // that names ＭＳ 明朝 outright. b5f706e9 is the witness: its
+                                    // cells say `w:eastAsia="ＭＳ 明朝"` on every run, yet 391 of
+                                    // its glyphs moved 1.5pt when the theme's EA font changed.
                                     let mut current_line: Vec<(
                                         String,
                                         f32,
@@ -34896,6 +34906,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         f32,
                                         f32,
                                         bool,
+                                        Option<String>,
                                     )> = Vec::new();
                                     // Task P (2026-07-22, default ON, opt-out OXI_S982_DISABLE): a cell-inline OLE object
                                     // (Equation.DSMT4, step 3 routed it to run.style.inline_object_*)
@@ -35136,6 +35147,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     0.0,
                                                     100.0,
                                                     std::mem::take(&mut s993_lrpb_pending),
+                                                    run.style.font_family_east_asia.clone(),
                                                 ));
                                                 line_x += ow;
                                                 continue;
@@ -35178,6 +35190,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     0.0,
                                                     100.0,
                                                     std::mem::take(&mut s993_lrpb_pending),
+                                                    run.style.font_family_east_asia.clone(),
                                                 ));
                                                 line_x += ow;
                                             }
@@ -35234,6 +35247,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 0.0,
                                                 100.0,
                                                 std::mem::take(&mut s993_lrpb_pending),
+                                                run.style.font_family_east_asia.clone(),
                                             ));
                                             line_x += cw;
                                             continue;
@@ -35288,6 +35302,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         cs,
                                                         run.style.text_scale.unwrap_or(100.0),
                                                         std::mem::take(&mut s993_lrpb_pending),
+                                                        run.style.font_family_east_asia.clone(),
                                                     ));
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -36932,6 +36947,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                     std::mem::take(
                                                                         &mut s993_lrpb_pending,
                                                                     ),
+                                                                    run.style.font_family_east_asia.clone(),
                                                                 ));
                                                                 buf.clear();
                                                                 buf_w = 0.0;
@@ -36978,6 +36994,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                             cs,
                                                             run.style.text_scale.unwrap_or(100.0),
                                                             std::mem::take(&mut s993_lrpb_pending),
+                                                            run.style.font_family_east_asia.clone(),
                                                         ));
                                                         buf.clear();
                                                         buf_w = 0.0;
@@ -37152,6 +37169,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                     std::mem::take(
                                                                         &mut s993_lrpb_pending,
                                                                     ),
+                                                                    run.style.font_family_east_asia.clone(),
                                                                 ));
                                                                 buf.clear();
                                                                 buf_w = 0.0;
@@ -37212,6 +37230,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         cs,
                                                         run.style.text_scale.unwrap_or(100.0),
                                                         std::mem::take(&mut s993_lrpb_pending),
+                                                        run.style.font_family_east_asia.clone(),
                                                     ));
                                                     buf.clear();
                                                     buf_w = 0.0;
@@ -37264,6 +37283,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         cs,
                                                         run.style.text_scale.unwrap_or(100.0),
                                                         false,
+                                                        run.style.font_family_east_asia.clone(),
                                                     ));
                                                     prev_char_emitted = Some(ch);
                                                     continue;
@@ -37299,6 +37319,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 cs,
                                                 run.style.text_scale.unwrap_or(100.0),
                                                 std::mem::take(&mut s993_lrpb_pending),
+                                                run.style.font_family_east_asia.clone(),
                                             ));
                                             line_x += buf_w;
                                             current_line_chars.extend(buf_chars.drain(..));
@@ -37651,6 +37672,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     _,
                                                     _,
                                                     _,
+                                                    _,
                                                 )| {
                                                     let metrics = match font_family.as_deref() {
                                                         Some(ff) => self.registry.get(ff),
@@ -37703,7 +37725,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             .fold(0.0_f32, f32::max);
                                         if lh == 0.0 {
                                             // whitespace-only line: fall back to all fragments
-                                            lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
+                                            lh = line.iter().map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _)| {
                                     let metrics = match font_family.as_deref() {
                                         Some(ff) => self.registry.get(ff),
                                         None => self.registry.default_metrics(),
@@ -37738,7 +37760,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             // 15.56 against Word's 13.8 on this very boundary).
                                             lh = lines.iter().flat_map(|l| l.iter())
                                     .filter(|(text, ..)| !text.trim().is_empty())
-                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _)| {
+                                    .map(|(_text, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _)| {
                                         let metrics = match font_family.as_deref() {
                                             Some(ff) => self.registry.get(ff),
                                             None => self.registry.default_metrics(),
@@ -37785,7 +37807,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             let mut s1125_asc: f32 = 0.0;
                                             let mut s1125_best_sum: f32 = 0.0;
                                             let mut s1125_ext: f32 = 0.0;
-                                            for (t, fs, _, _, _, _, _, _, font_family, _, _, _, _, _) in
+                                            for (t, fs, _, _, _, _, _, _, font_family, _, _, _, _, _, _) in
                                                 line.iter()
                                             {
                                                 if t.trim().is_empty() {
@@ -37905,7 +37927,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // Calculate line total width for alignment
                                         let line_total_w: f32 = line
                                             .iter()
-                                            .map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _, _)| tw)
+                                            .map(|(_, _, tw, _, _, _, _, _, _, _, _, _, _, _, _)| tw)
                                             .sum();
                                         // S502 (2026-06-08, FALSIFIED as a clean win — NOT shipped):
                                         // hypothesized that docGrid linesAndChars cells must center/right-align
@@ -37993,7 +38015,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             if slack < 0.0 {
                                                 for (
                                                     fi,
-                                                    (text, fs, _, _, _, _, _, _, _, _, _, _, _, _),
+                                                    (text, fs, _, _, _, _, _, _, _, _, _, _, _, _, _),
                                                 ) in line.iter().enumerate()
                                                 {
                                                     for ch in text.chars() {
@@ -38017,7 +38039,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             if slack > 0.0 {
                                                 let space_count = line.iter()
                                         .enumerate()
-                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty())
                                         .count();
                                                 if space_count > 0 {
                                                     let per_space = slack / space_count as f32;
@@ -38025,6 +38047,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                         fi,
                                                         (
                                                             text,
+                                                            _,
                                                             _,
                                                             _,
                                                             _,
@@ -38078,7 +38101,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     // Only activate when line is noticeably short (>10% slack);
                                                     // COM-confirmed 2026-04-19: for b35 "法令の理解" row with
                                                     // 4% slack Word does NOT distribute, showing natural widths.
-                                                    let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
+                                                    let has_cjk = line.iter().any(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().any(|c| kinsoku::is_cjk(c)));
                                                     let slack_ratio = if effective_wrap > 0.0 {
                                                         slack / effective_wrap
                                                     } else {
@@ -38086,7 +38109,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                     };
                                                     if has_cjk && slack_ratio > 0.10 {
                                                         let total_chars: usize = line.iter()
-                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
+                                                .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
                                                 .sum();
                                                         if total_chars > 1 {
                                                             let per_char_gap =
@@ -38095,6 +38118,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                                 fi,
                                                                 (
                                                                     text,
+                                                                    _,
                                                                     _,
                                                                     _,
                                                                     _,
@@ -38136,7 +38160,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                         // the character cell; for exact spacing, bottom-aligns.
                                         let cell_max_fs: f32 = line
                                             .iter()
-                                            .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
+                                            .map(|(_, fs, _, _, _, _, _, _, _, _, _, _, _, _, _)| *fs)
                                             .fold(0.0_f32, f32::max);
                                         // S175 (2026-05-22): match body's S166 fix — use word_line_height_table_cell
                                         // (font's natural height incl. ascent+descent) as centering height,
@@ -38151,12 +38175,22 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                             cell_max_fs
                                         } else {
                                             line.iter()
-                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _)| {
+                                    .map(|(text, fs, _, bold, italic, _underline, _us, _strikethrough, font_family, _color, _hl, _cs, _ts, _, ea)| {
                                         let mut rs = RunStyle::default();
                                         rs.font_size = Some(*fs);
                                         rs.bold = *bold;
                                         rs.italic = *italic;
                                         if let Some(ff) = font_family { rs.font_family = Some(ff.clone()); }
+                                        // S1299: give back the run's OWN eastAsia face. Without
+                                        // it `metrics_for_text` resolves the East Asian family
+                                        // from the paragraph — through docDefaults' eastAsiaTheme
+                                        // to the theme — for a run that names one outright.
+                                        if let (Some(e), true) =
+                                            (ea, std::env::var("OXI_S1299_DISABLE").is_err())
+                                        {
+                                            rs.font_family_east_asia = Some(e.clone());
+                                            rs.has_explicit_east_asia = true;
+                                        }
                                         let m = self.metrics_for_text(text, &rs, &para.style);
                                         m.word_line_height_table_cell(*fs)
                                     })
@@ -38310,6 +38344,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 _cs,
                                                 _ts,
                                                 _,
+                                                ea,
                                             ) in line.iter()
                                             {
                                                 let mut rs = RunStyle::default();
@@ -38318,6 +38353,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 rs.italic = *italic;
                                                 if let Some(f) = ff {
                                                     rs.font_family = Some(f.clone());
+                                                }
+                                                // S1299: the run's own eastAsia face.
+                                                if let (Some(e), true) =
+                                                    (ea, std::env::var("OXI_S1299_DISABLE").is_err())
+                                                {
+                                                    rs.font_family_east_asia = Some(e.clone());
+                                                    rs.has_explicit_east_asia = true;
                                                 }
                                                 let m =
                                                     self.metrics_for_text(text, &rs, &para.style);
@@ -38391,6 +38433,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 _cs,
                                                 _ts,
                                                 _,
+                                                ea,
                                             ) in line.iter()
                                             {
                                                 let mut rs = RunStyle::default();
@@ -38399,6 +38442,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 rs.italic = *italic;
                                                 if let Some(f) = ff {
                                                     rs.font_family = Some(f.clone());
+                                                }
+                                                // S1299: the run's own eastAsia face.
+                                                if let (Some(e), true) =
+                                                    (ea, std::env::var("OXI_S1299_DISABLE").is_err())
+                                                {
+                                                    rs.font_family_east_asia = Some(e.clone());
+                                                    rs.has_explicit_east_asia = true;
                                                 }
                                                 if self
                                                     .metrics_for_text(text, &rs, &para.style)
@@ -38515,6 +38565,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                                 cs,
                                                 ts,
                                                 lrpb_before,
+                                                _,
                                             ),
                                         ) in line.iter().enumerate()
                                         {
