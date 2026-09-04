@@ -102,6 +102,16 @@ body {
 .msg[hidden] { display: none }
 @media (max-width: 720px) { .rail { display: none !important } }
 
+/* ---- editing ---- */
+body.editing .slide-shape span[contenteditable] { outline: 1px dashed rgba(31,42,68,.28);
+                                                  outline-offset: 1px; cursor: text }
+body.editing .slide-shape span[contenteditable]:hover { outline-color: rgba(183,65,14,.55) }
+body.editing .slide-shape span[contenteditable]:focus { outline: 2px solid #B7410E;
+                                                        outline-offset: 1px }
+#btnSave[hidden], #btnEdit[hidden] { display: none }
+#btnSave { font-weight: 600 }
+.dirty::after { content: '•'; color: #B7410E; margin-left: 6px }
+
 /* ---- presenting ---- */
 #btnPresent { font-weight: 600 }
 body.presenting { overflow: hidden; background: #000 }
@@ -134,6 +144,8 @@ body.presenting #presrail { display: block }
   <span class="sp"></span>
   <button id="btnOpen" data-i18n="open">Open</button>
   <button id="btnPresent" data-i18n="present" disabled>Present</button>
+  <button id="btnEdit" data-i18n="edit" hidden>Edit</button>
+  <button id="btnSave" data-i18n="save" hidden>Save a copy</button>
   <button id="btnClose" data-i18n="close" hidden>Close</button>
   <a class="btn" href="./docs.html" data-i18n="wordApp">Word app</a>
   <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
@@ -177,6 +189,10 @@ const I18N = {
     note: 'Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
     loading: 'Loading the engine…', parsing: 'Parsing…',
     prev: 'Previous', next: 'Next', present: 'Present', close: 'Close',
+    edit: 'Edit', editing: 'Done editing', save: 'Save a copy',
+    saved: 'Saved. The file was written in your browser.',
+    noEdits: 'Nothing has been changed yet.',
+    saveFailed: 'Could not save: ',
     slideOf: (a, b) => `Slide ${a} / ${b}`,
     badType: 'That is not a .pptx file.',
     failed: 'Could not open the presentation: ',
@@ -189,6 +205,10 @@ const I18N = {
     note: 'Oxi はオープンソースです。このページの描画エンジンは PowerPoint 自身の出力とスライド単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     prev: '前へ', next: '次へ', present: 'プレゼン開始', close: '閉じる',
+    edit: '編集', editing: '編集を終える', save: '保存',
+    saved: '保存しました。ファイルはブラウザの中で作られています。',
+    noEdits: 'まだ変更がありません。',
+    saveFailed: '保存できませんでした: ',
     slideOf: (a, b) => `${a} / ${b} 枚目`,
     badType: '.pptx ファイルではありません。',
     failed: 'プレゼンテーションを開けませんでした: ',
@@ -449,8 +469,38 @@ function buildChart(chart, shape, scale) {
   return cv;
 }
 
+/* ---- editing --------------------------------------------------------------
+   The page already draws each run as its own <span>, so the browser's own
+   caret and selection can do the work: a run becomes `contenteditable` and
+   what is typed is remembered against the run it belongs to. Saving hands
+   those edits to the engine, which rewrites the .pptx -- the same call the
+   desktop editor makes -- so the file that comes out is a real .pptx and not
+   a re-export.
+
+   Enter is refused for now: a new paragraph is a structural change with its
+   own call, and silently dropping it would be worse than saying no. */
+
+let editing = false;
+const edits = new Map();
+
+function slideIndexOf(slide) {
+  return pres ? pres.slides.indexOf(slide) : 0;
+}
+
+function editKey(si, shape, pi, ri) {
+  const sh = (shape.sp_index === undefined || shape.sp_index === null)
+    ? shape.__i : shape.sp_index;
+  return si + '/' + sh + '/' + pi + '/' + ri;
+}
+
+function markDirty() {
+  const n = document.getElementById('docName');
+  n.classList.toggle('dirty', edits.size > 0);
+}
+
 function buildSlide(container, slide, scale) {
-  slide.shapes.forEach(shape => {
+  slide.shapes.forEach((shape, __i) => {
+    shape.__i = __i;
     const div = document.createElement('div');
     div.className = 'slide-shape';
     div.style.left = (shape.x * scale) + 'px';
@@ -489,7 +539,7 @@ function buildSlide(container, slide, scale) {
     // text lives in one.
     const paragraphs = c && (c.TextBox ? c.TextBox.paragraphs : (c.AutoShape ? c.AutoShape.paragraphs : null));
     if (paragraphs) {
-      paragraphs.forEach(para => {
+      paragraphs.forEach((para, pi) => {
         const p = document.createElement('p');
         const lvl = levelFor(shape, para);
         const align = para.alignment || (lvl && lvl.algn);
@@ -497,9 +547,16 @@ function buildSlide(container, slide, scale) {
         else if (align === 'Right') p.style.textAlign = 'right';
         else if (align === 'Justify') p.style.textAlign = 'justify';
         if (lvl && lvl.line_spacing) p.style.lineHeight = lvl.line_spacing * 1.2;
-        para.runs.forEach(run => {
+        para.runs.forEach((run, ri) => {
           const span = document.createElement('span');
-          span.textContent = run.text;
+          // What the file says, unless this run has been edited in the page.
+          const key = editKey(slideIndexOf(slide), shape, pi, ri);
+          span.textContent = edits.has(key) ? edits.get(key) : run.text;
+          if (editing) {
+            span.contentEditable = 'true';
+            span.spellcheck = false;
+            span.dataset.key = key;
+          }
           span.style.fontSize = ((run.font_size || (lvl && lvl.font_size) || 18) * scale) + 'px';
           if (run.bold) span.style.fontWeight = 'bold';
           if (run.italic) span.style.fontStyle = 'italic';
@@ -534,7 +591,7 @@ function buildSlide(container, slide, scale) {
 }
 
 // ---- page state ------------------------------------------------------------
-let pres = null, current = 0;
+let pres = null, current = 0, bytes = null;
 const canvas = document.getElementById('canvas');
 const rail = document.getElementById('rail');
 
@@ -598,7 +655,7 @@ function render() {
 }
 
 // ---- engine ----------------------------------------------------------------
-import init, { parse_presentation } from './oxidocs_wasm.js';
+import init, { parse_presentation, edit_pptx_with_splits } from './oxidocs_wasm.js';
 
 const btnSample = document.getElementById('btnSample');
 say(t('loading'));
@@ -658,10 +715,13 @@ async function forgetDeck() {
   try { localStorage.removeItem('oxislides.slide'); } catch (e) {}
 }
 
-async function open(name, bytes, opts) {
+async function open(name, data, opts) {
   try {
     say(t('parsing'));
-    pres = parse_presentation(bytes);
+    bytes = data;
+    edits.clear();
+    markDirty();
+    pres = parse_presentation(data);
     current = (opts && opts.at) || 0;
     if (current >= pres.slides.length) current = 0;
     document.getElementById('docName').textContent = name;
@@ -671,9 +731,10 @@ async function open(name, bytes, opts) {
     msgEl.hidden = true;
     document.getElementById('btnPresent').disabled = false;
     document.getElementById('btnClose').hidden = false;
+    document.getElementById('btnEdit').hidden = false;
     document.getElementById('prestot').textContent = pres.slides.length;
     render();
-    if (!(opts && opts.restored)) keepDeck(name, bytes);
+    if (!(opts && opts.restored)) keepDeck(name, data);
   } catch (e) {
     say(t('failed') + e.message, true);
   }
@@ -747,6 +808,12 @@ setInterval(presTick, 500);
 
 function startPresenting() {
   if (!pres) return;
+  if (editing) {
+    editing = false;
+    document.body.classList.remove('editing');
+    document.getElementById('btnEdit').textContent = t('edit');
+    document.getElementById('btnSave').hidden = true;
+  }
   presenting = true;
   presStart = Date.now();
   document.body.classList.add('presenting');
@@ -779,6 +846,65 @@ document.getElementById('canvas').addEventListener('mousemove', () => {
 let rt;
 window.addEventListener('resize', () => { if (pres) { clearTimeout(rt); rt = setTimeout(render, 120); } });
 
+document.getElementById('btnEdit').onclick = () => {
+  editing = !editing;
+  document.body.classList.toggle('editing', editing);
+  document.getElementById('btnEdit').textContent = t(editing ? 'editing' : 'edit');
+  document.getElementById('btnSave').hidden = !editing;
+  render();
+};
+
+// One listener on the canvas, so a re-render never leaves a run unwired.
+document.getElementById('canvas').addEventListener('input', e => {
+  const span = e.target.closest ? e.target.closest('span[data-key]') : null;
+  if (!span) return;
+  edits.set(span.dataset.key, span.textContent);
+  markDirty();
+});
+document.getElementById('canvas').addEventListener('keydown', e => {
+  if (!editing) return;
+  if (e.key === 'Enter') e.preventDefault();
+  e.stopPropagation();                       // arrows move the caret, not the deck
+});
+document.getElementById('canvas').addEventListener('paste', e => {
+  if (!editing) return;
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData('text').replace(/[\r\n]+/g, ' ');
+  document.execCommand('insertText', false, text);
+});
+
+document.getElementById('btnSave').onclick = async () => {
+  if (!edits.size) { say(t('noEdits')); return; }
+  const list = [];
+  for (const [key, text] of edits) {
+    const [si, sh, pi, ri] = key.split('/').map(Number);
+    list.push({ slide_index: si, shape_index: sh, paragraph_index: pi,
+                run_index: ri, new_text: text });
+  }
+  try {
+    const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], []);
+    const name = (document.getElementById('docName').textContent || 'slides')
+      .replace(/\.pptx$/i, '') + '-edited.pptx';
+    const url = URL.createObjectURL(new Blob([out], {
+      type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    // The page now shows what the saved file holds, so further edits stack on
+    // top of it rather than being applied twice.
+    bytes = out;
+    edits.clear();
+    markDirty();
+    pres = parse_presentation(new Uint8Array(bytes));
+    render();
+    keepDeck(document.getElementById('docName').textContent, bytes);
+    say(t('saved'));
+  } catch (e) {
+    say(t('saveFailed') + e.message, true);
+  }
+};
+
 document.getElementById('btnClose').onclick = async () => {
   await forgetDeck();
   pres = null;
@@ -786,6 +912,12 @@ document.getElementById('btnClose').onclick = async () => {
   document.getElementById('docName').textContent = t('noFile');
   document.getElementById('btnPresent').disabled = true;
   document.getElementById('btnClose').hidden = true;
+  document.getElementById('btnEdit').hidden = true;
+  document.getElementById('btnSave').hidden = true;
+  editing = false;
+  edits.clear();
+  document.body.classList.remove('editing');
+  markDirty();
   document.getElementById('canvas').innerHTML = '';
   rail.innerHTML = '';
   rail.style.display = 'none';
